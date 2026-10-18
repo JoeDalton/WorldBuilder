@@ -1,0 +1,17 @@
+# Per-biome texture tuning. Put each biome's PBR maps in a sibling folder named
+# after it (snow, rock, grass, forest, desert, beach); see materials.py for the
+# file names recognised. A biome with no folder uses a procedural placeholder.
+#
+# tile_m: metres per texture repeat; a power of two, at most 512.
+# normal: gl (OpenGL, green up) or dx (DirectX, green down); detected from
+#         "dx" in the file name when omitted.
+# tint:   RGB multiplier on the albedo.
+
+max_size: 2048   # every layer is resized to one power-of-two size
+
+snow:   {tile_m: 4}
+rock:   {tile_m: 4}
+grass:  {tile_m: 2}
+forest: {tile_m: 8}
+desert: {tile_m: 8}
+beach:  {tile_m: 4}

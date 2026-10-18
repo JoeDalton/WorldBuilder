@@ -1,0 +1,105 @@
+[tool.poetry]
+name = "world_builder"
+version = "0.0.0"
+description = "Procedural planetary terrain, ocean and volumetric clouds for Panda3D"
+authors = ["Guilhem Lavabre"]
+license = ""
+readme = "README.md"
+homepage = "https://github.com/JoeDalton/WorldBuilder"
+repository = "https://github.com/JoeDalton/WorldBuilder"
+include = ["src/world_builder/_version.py", "scripts"]
+
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.15"
+numpy = "^2.3.5"
+scipy = "^1.13.1"
+Panda3D = "^1.10.15"
+pyyaml = "^6.0.3"
+
+[tool.poetry.group.dev.dependencies]
+invoke = "^2.2.0"
+tox = "^4.11.4"
+ruff = "^0.16.9"
+twine = "^7.0.0"
+pre-commit = "^3.5.0"
+
+[tool.poetry.group.test.dependencies]
+pytest = "^9.0.3"
+pytest-cov = "^4.1.0"
+pytest-xdist = "^3.8.0"
+typing-extensions = "^4.15.0"
+
+
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+sphinx = "^7.3.7"
+sphinx-book-theme = "^1.1.2"
+sphinx-autodoc2 = "^0.5.0"
+sphinx-copybutton = "^0.5.2"
+myst-parser = "^3.0.1"
+
+[tool.poetry-dynamic-versioning]
+enable = true
+vcs = "git"
+bump = false
+style = "pep440"
+pattern = "(?P<base>\\d+\\.\\d+\\.\\d+)"
+format-jinja = """
+    {%- if distance == 0 and dirty -%}
+      {{ serialize_pep440(base, stage, revision, metadata=["dirty"]) }}
+    {%- elif distance == 0 and not dirty -%}
+        {{ serialize_pep440(base, stage, revision) }}
+    {%- elif branch == "main" and dirty -%}
+        {{ serialize_pep440(bump_version(base), stage, revision, dev=distance, metadata=["dirty"]) }}
+    {%- elif branch == "main" and not dirty -%}
+        {{ serialize_pep440(bump_version(base), stage, revision, dev=distance) }}
+    {%- elif branch != "main" and dirty -%}
+        {{ serialize_pep440(bump_version(base), stage, revision, dev=distance, metadata=[commit, "dirty"]) }}
+    {%- elif branch != "main" and not dirty -%}
+        {{ serialize_pep440(bump_version(base), stage, revision, dev=distance, metadata=[commit]) }}
+    {%- endif -%}
+"""
+
+
+
+[build-system]
+requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
+build-backend = "poetry_dynamic_versioning.backend"
+
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E203", "E701"]
+
+[tool.tox]
+legacy_tox_ini = """
+    [tox]
+    envlist =
+        py312
+        py313
+        py314
+
+    [testenv]
+    allowlist_externals = poetry
+    commands_pre = poetry install --only test
+    commands = pytest tests/ -n auto
+"""
+
+[tool.poetry-dynamic-versioning.substitution]
+folders = [
+  { path = "src/world_builder"}
+]
+
+[tool.poetry-dynamic-versioning.files."src/world_builder/_version.py"]
+persistent-substitution = true
+initial-content = """
+  # These version placeholders will be replaced later during substitution.
+  __version__ = "0.0.0"
+  __version_tuple__ = (0, 0, 0)
+"""
