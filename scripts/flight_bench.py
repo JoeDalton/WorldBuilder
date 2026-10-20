@@ -6,7 +6,8 @@ flies fixed paths, reporting frame times and where the main thread spends
 them::
 
     python scripts/flight_bench.py [--flight low cruise descent] [--seconds S]
-        [--profile] [--size "1280 720"] [--workers N] [--offscreen]
+        [--profile] [--size "1600 900"] [--workers N] [--offscreen]
+        [--cloud-quality high|mid|low|off] [--cloud-debug BITS]
 
 Flights (camera level, boosted, along the coast of the demo level):
     low      300 m above the ground, ~750 m/s
@@ -27,11 +28,15 @@ import time
 from pathlib import Path
 
 import numpy as np
-from panda3d.core import loadPrcFileData
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_terrain import TerrainDemo  # noqa: E402
+from demo_terrain import (  # noqa: E402
+    CLOUD_QUALITIES,
+    TerrainDemo,
+    describe_window,
+    window_config,
+)
 
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 
@@ -139,31 +144,29 @@ def main():
     parser.add_argument("--flight", nargs="*", default=list(FLIGHTS))
     parser.add_argument("--seconds", type=float, default=15.0)
     parser.add_argument("--profile", action="store_true")
-    parser.add_argument("--size", default="1280 720")
+    parser.add_argument("--size", default="1600 900")
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument(
         "--offscreen",
         action="store_true",
         help="render to an offscreen buffer: no display refresh cap or throttling",
     )
-    args = parser.parse_args()
-    loadPrcFileData(
-        "",
-        "\n".join(
-            [
-                "window-title Flight benchmark",
-                f"win-size {args.size}",
-                "audio-library-name null",
-                "framebuffer-multisample 1",
-                "multisamples 4",
-                "depth-bits 24",
-                "sync-video false",
-                *(["window-type offscreen"] if args.offscreen else []),
-            ]
-        ),
+    parser.add_argument("--cloud-quality", default="high", choices=CLOUD_QUALITIES)
+    parser.add_argument(
+        "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"
     )
-    demo = TerrainDemo(str(DEMO_LEVEL), "process", None, workers=args.workers)
+    args = parser.parse_args()
+    window_config("Flight benchmark", args.size, args.offscreen, vsync=False)
+    demo = TerrainDemo(
+        str(DEMO_LEVEL),
+        "process",
+        None,
+        workers=args.workers,
+        cloud_quality=args.cloud_quality,
+        cloud_debug=args.cloud_debug,
+    )
     demo.setFrameRateMeter(False)
+    print(describe_window(demo), f"clouds {args.cloud_quality}")
     try:
         for flight in args.flight:
             run(demo, flight, args.seconds, args.profile)

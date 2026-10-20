@@ -6,7 +6,14 @@ this drives the real demo: for each pose it waits until the terrain has
 finished refining (or a timeout), then saves a screenshot::
 
     python scripts/terrain_shots.py [--out DIR] [--radius METRES]
-        [--pose NAME ...] [--timeout SECONDS]
+        [--pose NAME ...] [--timeout SECONDS] [--size "1600 900"]
+        [--offscreen] [--cloud-quality high|mid|low|off] [--cloud-debug BITS]
+        [--frames N]
+
+Once a pose has settled, N frames are timed (vsync off), each waiting for
+the GPU to finish (a one-pixel read back): CPU and GPU time in series, so a
+difference between two runs is the difference in work. Without the wait,
+an offscreen frame is not held back by the GPU at all.
 
 Every pose is lit by the same local sun (azimuth 210, elevation 35), but
 sunset (the sun 3 degrees up in the west, looked at) and night_orbit.
@@ -30,18 +37,21 @@ import time
 from pathlib import Path
 
 import numpy as np
-from panda3d.core import Filename, loadPrcFileData
+from panda3d.core import Filename
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_terrain import TerrainDemo  # noqa: E402
+from demo_terrain import (  # noqa: E402
+    CLOUD_QUALITIES,
+    TerrainDemo,
+    describe_window,
+    window_config,
+)
 
 from world_builder.terrain.chart import latlon  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 
 CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
-#: Frames timed once a pose has settled (vsync is off for the shots).
-FPS_FRAMES = 60
 #: Sun (azimuth, elevation) per pose, as seen there; default (210, 35).
 SUNS = {"sunset": (270.0, 3.0), "night_orbit": (90.0, -60.0)}
 
@@ -113,26 +123,29 @@ def main():
     parser.add_argument("--radius", type=float, default=None)
     parser.add_argument("--pose", nargs="*", default=None)
     parser.add_argument("--timeout", type=float, default=90.0)
-    parser.add_argument("--size", default="1280 720")
-    args = parser.parse_args()
-    loadPrcFileData(
-        "",
-        "\n".join(
-            [
-                "window-title Terrain shots",
-                f"win-size {args.size}",
-                "audio-library-name null",
-                "framebuffer-multisample 1",
-                "multisamples 4",
-                "depth-bits 24",
-                "show-frame-rate-meter false",
-                "sync-video false",
-            ]
-        ),
+    parser.add_argument("--size", default="1600 900")
+    parser.add_argument("--offscreen", action="store_true")
+    parser.add_argument("--cloud-quality", default="high", choices=CLOUD_QUALITIES)
+    parser.add_argument(
+        "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"
     )
+    parser.add_argument(
+        "--frames", type=int, default=60, help="frames timed once settled"
+    )
+    args = parser.parse_args()
+    window_config("Terrain shots", args.size, args.offscreen, vsync=False)
     args.out.mkdir(parents=True, exist_ok=True)
-    demo = TerrainDemo(args.level, "process", args.radius)
+    demo = TerrainDemo(
+        args.level,
+        "process",
+        args.radius,
+        cloud_quality=args.cloud_quality,
+        cloud_debug=args.cloud_debug,
+    )
     demo.setFrameRateMeter(False)
+    print(describe_window(demo), f"clouds {args.cloud_quality}")
+    win = demo.win
+    probe = win.make_display_region(0, 1 / win.get_x_size(), 0, 1 / win.get_y_size())
     poses = _poses(demo)
     for name in args.pose or list(poses):
         lat, lon, alt, heading, pitch, view, body = poses[name]
@@ -142,17 +155,22 @@ def main():
         settled = _settle(demo, args.timeout)
         for _ in range(3):  # let the last uploads reach the screen
             demo.taskMgr.step()
-        start = time.perf_counter()
-        for _ in range(FPS_FRAMES):  # the settled view's frame rate
+        times = []
+        for _ in range(args.frames):  # the settled view's frame time
+            start = time.perf_counter()
             demo.taskMgr.step()
-        fps = FPS_FRAMES / (time.perf_counter() - start)
+            probe.get_screenshot()  # waits for the GPU
+            times.append(time.perf_counter() - start)
+        median = float(np.median(times)) * 1e3
         path = args.out / f"{name}.png"
         demo.win.save_screenshot(Filename.from_os_specific(str(path)))
         s = demo.bodies[body].terrain.stats
+        clouds = demo.clouds.stats if demo.clouds is not None else None
+        billboards = f"{clouds['billboards'] / 1e3:.0f}k bb, " if clouds else ""
         print(
             f"{name:<13} {'settled' if settled else 'TIMEOUT'}  {s['shown']} chunks, "
-            f"finest {s['finest']}, LOD {s['select_ms']:.1f} ms, {fps:.0f} fps "
-            f"-> {path}"
+            f"finest {s['finest']}, {billboards}LOD {s['select_ms']:.1f} ms, "
+            f"{median:.2f} ms ({1e3 / median:.0f} fps) -> {path}"
         )
     demo.destroy_terrain()
 

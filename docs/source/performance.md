@@ -395,6 +395,75 @@ Settled views, offscreen at 1280×720 (MSAA 4×), the demo's start area:
   against ~6.5 s for terrain alone; clouds arrive within the first 4 s.
 - Fast flight (§12) with clouds: 67 fps flying low (89 without), offscreen.
 
+### Multisampling: the window was at ×16
+
+The demo asked for 4 samples and got 16. Panda scores framebuffer configs
+higher the more samples they have, and GLX offers every config with at least
+the count asked for, so a GTX 1070 window gets 16 whatever count is
+requested (2, 4 or 8: always 16). At 1600×900 that put the start view at
+40 ms (25 fps) in the window, against 20 ms (the display's 50 Hz cap) with
+an exact ×4 drawn into an offscreen buffer. Blending hundreds of thousands
+of translucent billboards into 16 samples per pixel was most of the clouds'
+cost.
+
+The demo and the scripts now ask for **no multisampling** (`window_config`
+in `demo_terrain.py`). An exact count would need the scene drawn into an
+offscreen buffer (an FBO gets exactly what it asks for) and shown on a
+full-screen quad; that was tried and works, and was left out for now.
+
+### Measuring the GPU
+
+An offscreen frame is not held back by the GPU: the same poses timed
+identically at 1600×900 and 3200×1800. `terrain_shots.py` now waits for the
+GPU after every timed frame (a one-pixel read back), so a frame is CPU plus
+GPU in series, and the difference between two runs is the difference in
+work. Its options: `--size`, `--offscreen`, `--cloud-quality
+high|mid|low|off`, `--cloud-debug BITS` (cloud.frag's `uCloudDebug`: 1 no
+sun march, 2 no atmosphere, 4 two octaves only, 8 flat colour), `--frames
+N`. `flight_bench.py` takes the same.
+
+### Cheaper clouds, and the weather
+
+Settled frames, offscreen at 1600×900, no MSAA, waiting for the GPU (median
+of 150; clouds off: ground 10.2 ms, in the deck 7.2 ms, 20 km up 5.3 ms).
+The **cloud cost** is the frame time minus that.
+
+| Version | Start (1.3 km) | Inside the deck (2.7 km) | 20 km up |
+|---|---|---|---|
+| Before, its own weather (185k / 152k / 62k billboards) | 5.1 ms | 5.9 ms | 2.0 ms |
+| Before, uniform coverage 0.3 (82k / 80k / 31k) | 3.3 ms | 4.5 ms | 2.2 ms |
+| New shaders, old overlap 2.5, uniform 0.3 (81k / 79k / 31k) | 3.2 ms | 4.0 ms | 1.5 ms |
+| New, first-pass HIGH (overlap 2.0 / 1.5, octaves 4-3-3-2), uniform 0.3 (57k / 55k / 18k) | 2.1 ms | 2.8 ms | 1.2 ms |
+| New, first-pass HIGH, the new weather (53k / 60k / 17k) | 1.7 ms | 3.1 ms | 1.2 ms |
+| New, first-pass MID (23k / 26k / 7k) | 1.2 ms | 2.0 ms | 1.1 ms |
+
+At equal coverage, the shader work (an exact early-out after one or two
+octaves, fewer octaves in the far shells, 4 air samples per billboard vertex
+instead of 8) saves 3–30 %, most where the far shells dominate; less overlap
+saves as much again. The old weather happened to put twice the uniform
+coverage over the start area, hence its 185k billboards.
+
+What did not work: **the sun march per vertex** for the far shells. Marched
+at a billboard's centre, every far billboard was lit flat (a white or blue
+disc); at its corners, the corners sit in clear air and nothing was shaded.
+The per-fragment march on every shell costs 0.2–0.9 ms in these views, so it
+stays.
+
+**HIGH restored.** Those HIGH settings (overlap 2.0 / 1.5, three octaves
+from shell 1) looked lumpier and blander than before, so HIGH is back to
+the old overlap (2.5) and keeps all four octaves to shell 2; the cheaper
+settings are MID's. Measured on a busier machine (clouds off took 0.4–1.5 ms
+longer than above): HIGH ~3.9 ms at the start, ~6.5 ms in the deck, ~1 ms at
+20 km, about what it cost before.
+
+The debug switches confirm where the rest goes: with no MSAA, no single cost
+dominates. Overdraw is what is left, and the quality presets (F5) trade it.
+
+Fast flight (§12) is unchanged: 61 fps flying low offscreen (59 before),
+CPU-bound. The weather map costs ~2 s of main-thread time when the clouds
+are built (startup, a planet change), then is cached; each worker builds its
+own copy once.
+
 ## Not covered
 
 The ocean and clouds were moved from SpaceFlight unchanged and were not

@@ -6,8 +6,12 @@ tall, the reference point marked), then maps centred on the planet's
 reference point at three scales: 100 km, 20 km and 1 km. The maps are biome
 colour times hillshade, with water drawn blue on planets with an ocean.
 
+With --weather, each row is instead the globe under its clouds' weather
+(clouds.weather: white where the sky is covered), then the coverage alone, to
+tune the weather systems::
+
     python -m world_builder.terrain.preview [--seed N] [--radius M] [--out DIR]
-        [--preset NAME ...] [--size PX]
+        [--preset NAME ...] [--size PX] [--weather]
 """
 
 from __future__ import annotations
@@ -98,22 +102,30 @@ def render_map(planet: Planet, extent: float, size: int) -> np.ndarray:
     return _to_image(color[border:-border, border:-border])
 
 
-def render_globe(planet: Planet, height: int) -> np.ndarray:
+def _globe_dirs(height: int) -> np.ndarray:
+    """:returns: (height, 2 * height, 3) directions of an equirectangular map,
+    the southmost row first"""
+    lat = np.linspace(-90.0, 90.0, height)
+    lon = np.linspace(-180.0, 180.0, 2 * height)
+    glon, glat = np.meshgrid(lon, lat)
+    return dirs_from_latlon(glat.ravel(), glon.ravel()).reshape(height, -1, 3)
+
+
+def render_globe(planet: Planet, height: int, linear: bool = False) -> np.ndarray:
     """The whole planet, equirectangular (longitude across, latitude up).
 
     :param planet: the planet
     :param height: pixels pole to pole; the map is twice as wide
+    :param linear: return the linear colour (southmost row first) instead
     :returns: (height, 2 * height, 3) uint8, with the reference point marked
     """
     spec = planet.spec
-    lat = np.linspace(-90.0, 90.0, height)
-    lon = np.linspace(-180.0, 180.0, 2 * height)
-    glon, glat = np.meshgrid(lon, lat)
-    dirs = dirs_from_latlon(glat.ravel(), glon.ravel())
+    dirs = _globe_dirs(height)
+    shape = dirs.shape[:2]
+    dirs = dirs.reshape(-1, 3)
     # One pixel spans this much ground at the equator; detail below it is noise.
     spacing = np.pi * spec.radius / height
     elevation, temperature, humidity = planet.sample_dirs(dirs, 2.0 * spacing)
-    shape = glat.shape
     color = _shade(
         planet,
         elevation.reshape(shape),
@@ -126,7 +138,24 @@ def render_globe(planet: Planet, height: int) -> np.ndarray:
     row = int(round((spec.reference_lat + 90.0) / 180.0 * (height - 1)))
     col = int(round((spec.reference_lon + 180.0) / 360.0 * (2 * height - 1)))
     color[max(row - 2, 0) : row + 3, max(col - 2, 0) : col + 3] = (1.0, 0.0, 0.0)
-    return _to_image(color)
+    return color if linear else _to_image(color)
+
+
+def render_weather(planet: Planet, height: int, seed: int = 11) -> np.ndarray:
+    """The globe under its weather, then the coverage alone (white =
+    overcast), side by side.
+
+    :returns: (height, 4 * height + 4, 3) uint8
+    """
+    from world_builder.clouds.weather import WeatherSpec, coverage_map, sample_cube
+
+    spec = WeatherSpec(planet.spec, seed=seed)
+    cover = sample_cube(coverage_map(spec), _globe_dirs(height))[..., None]
+    ground = render_globe(planet, height, linear=True)
+    under = ground * (1.0 - 0.85 * cover) + 0.85 * cover
+    pad = np.full((height, 4, 3), 255, dtype=np.uint8)
+    alone = _to_image(np.repeat(cover, 3, axis=2) ** 2.2)
+    return np.hstack([_to_image(under), pad, alone])
 
 
 def render_sheet(specs: list[PlanetSpec], size: int) -> np.ndarray:
@@ -157,6 +186,9 @@ def main():
     parser.add_argument("--size", type=int, default=320)
     parser.add_argument("--preset", nargs="*", default=list(PRESETS))
     parser.add_argument("--out", type=Path, default=Path("terrain_preview"))
+    parser.add_argument(
+        "--weather", action="store_true", help="the clouds' weather map instead"
+    )
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     specs = []
@@ -165,6 +197,18 @@ def main():
         if args.radius is not None:
             spec = replace(spec, radius=args.radius)
         specs.append(spec)
+    if args.weather:
+        rows = []
+        for spec in specs:
+            if spec.climate.humidity_mean <= 0.0:
+                continue  # airless: no weather
+            start = time.perf_counter()
+            rows.append(render_weather(Planet(spec), args.size))
+            print(f"  {spec.name:<10} {time.perf_counter() - start:.1f} s")
+        path = args.out / f"weather_seed{args.seed}.png"
+        write_png(path, np.vstack(rows))
+        print(f"wrote {path}  (columns: globe under the weather, coverage)")
+        return
     print(f"rendering {len(specs)} presets at {args.size} px ...")
     sheet = render_sheet(specs, args.size)
     radius_km = specs[0].radius / 1e3

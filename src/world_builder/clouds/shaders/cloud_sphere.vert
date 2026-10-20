@@ -1,5 +1,6 @@
 #version 330
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
+#pragma include "cloud_field.glsl"
 // Planet-mode billboards (clouds.sphere): one tile's particles, positioned
 // relative to the tile node, which sits on the planet. The quad faces the
 // camera, upright against the local vertical. Outputs as cloud.vert, with
@@ -10,7 +11,6 @@ uniform mat4 p3d_ViewProjectionMatrix;
 uniform vec3 uCamRender;               // camera, render frame
 uniform vec3 uPlanetCentre;            // planet centre, render frame
 uniform float nearFadeRadii;
-uniform vec3 sunDir;
 uniform int uOwnAtmosphere;
 
 in vec4 p3d_Vertex;                    // particle position relative to the tile
@@ -32,8 +32,9 @@ out vec3 vAtmoS;
 out vec3 vSunTint;
 out float vSkyTint;
 
-const int LAYER_VEC4S = 12;
-uniform vec4 layerParams[96];
+// Samples of the air per vertex (8 per pixel elsewhere): it barely changes
+// across a billboard.
+const int AIR_STEPS = 4;
 
 void main() {
     vLayer = int(i_layer + 0.5);
@@ -59,7 +60,11 @@ void main() {
     vRadius = i_radius;
     vec3 rel = wp - uCamRender;
     float dist = max(length(rel), 1e-3);
-    atmosphereAlong(rel / dist, dist, sunDir, vAtmoT, vAtmoS);
+    vAtmoT = vec3(1.0);
+    vAtmoS = vec3(0.0);
+    if ((uCloudDebug & 2) == 0) {
+        atmosphereAlong(rel / dist, dist, sunDir, AIR_STEPS, vAtmoT, vAtmoS);
+    }
     vSunTint = vec3(1.0);
     vSkyTint = 1.0;
     if (uOwnAtmosphere >= 0) {

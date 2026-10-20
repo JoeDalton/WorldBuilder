@@ -340,16 +340,31 @@ def sample_volume(volume: np.ndarray, coords: np.ndarray) -> np.ndarray:
     return c0 + (c1 - c0) * tz
 
 
-def fbm(volume: np.ndarray, coords: np.ndarray, spec: DensityField) -> np.ndarray:
+def fbm(
+    volume: np.ndarray,
+    coords: np.ndarray,
+    spec: DensityField,
+    octaves: int = 4,
+    octave_mean: float | None = None,
+) -> np.ndarray:
     """The four-octave fbm of the shader's ``cloudFbm``.
 
     :param coords: (..., 3) noise coords (world * noise_scale + offset)
+    :param octaves: octaves evaluated (2-4); the finer ones count as their
+        mean, so dropping them keeps the coverage (the far shells' saving)
+    :param octave_mean: the noise's mean; None = *volume*'s
     """
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
     total = np.zeros(np.shape(coords)[:-1], dtype=np.float64)
-    for scale, weight, offset in zip(
-        spec.octave_scales, spec.octave_weights, OCTAVE_OFFSETS
+    for index, (scale, weight, offset) in enumerate(
+        zip(spec.octave_scales, spec.octave_weights, OCTAVE_OFFSETS)
     ):
-        total += sample_volume(volume, coords * scale + np.asarray(offset)) * weight
+        if index < octaves:
+            sample = sample_volume(volume, coords * scale + np.asarray(offset))
+            total += sample * weight
+        else:
+            total += octave_mean * weight
     return total
 
 
@@ -404,6 +419,41 @@ def column_peaks(
     points[..., 2] = base + h[None, :] * thickness
     coords = points * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
     peaks = (fbm(volume, coords, spec) - threshold_lift(spec, h)[None, :]).max(axis=1)
+    peaks.sort()
+    return peaks
+
+
+def sphere_column_peaks(
+    volume: np.ndarray,
+    spec: DensityField,
+    radius: float,
+    octaves: int = 4,
+    columns: int = COVERAGE_GRID * COVERAGE_GRID,
+    levels: int = COVERAGE_LEVELS,
+) -> np.ndarray:
+    """:func:`column_peaks` for a planet: radial columns through the slab
+    above a sphere, spread evenly over it (a Fibonacci lattice).
+
+    Not the flat measurement: flat columns all cross the same band of the
+    noise volume's z, planet columns cross it at every phase and angle, and
+    the noise's lattice makes those statistics differ (the flat peaks put
+    27 % of a planet's columns under cloud for 30 %).
+
+    :param radius: sea-level radius, metres
+    :param octaves: octaves evaluated (see :func:`fbm`)
+    :returns: (columns,) sorted peaks, in raw fbm units
+    """
+    index = np.arange(columns) + 0.5
+    z = 1.0 - 2.0 * index / columns
+    angle = np.pi * (1.0 + 5.0**0.5) * index
+    ring = np.sqrt(1.0 - z * z)
+    dirs = np.stack([ring * np.cos(angle), ring * np.sin(angle), z], axis=1)
+    base, thickness = spec.slab
+    h = (np.arange(levels) + 0.5) / levels
+    points = dirs[:, None, :] * (radius + base + h * thickness)[None, :, None]
+    coords = points * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    raw = fbm(volume, coords, spec, octaves)
+    peaks = (raw - threshold_lift(spec, h)[None, :]).max(axis=1)
     peaks.sort()
     return peaks
 
@@ -523,6 +573,7 @@ def pack_layer_params(
     aspect: float = 1.0,
     fade_in: tuple | None = None,
     fade_out: tuple | None = None,
+    octaves: int = 4,
 ) -> np.ndarray:
     """Flatten one type into its LAYER_VEC4S rows of the layerParams array.
 
@@ -536,6 +587,8 @@ def pack_layer_params(
     :param aspect: billboard long:short ratio (area-preserving, so no recalibration)
     :param fade_in: (lo, hi) camera distances the layer fades in over, None = none
     :param fade_out: (lo, hi) it fades out over, None = to the horizon haze
+    :param octaves: octaves evaluated (the rest count as *octave_mean*; see
+        :func:`fbm`)
     :returns: a (LAYER_VEC4S, 4) float32 array
     """
     _require_resolved(spec)
@@ -558,7 +611,7 @@ def pack_layer_params(
             (spec.top_exponent, gain, bias, o.max_optical_depth),
             (o.sun_steps, o.sun_step_length, o.shadow_strength, o.multiple_scattering),
             (o.powder_strength, o.powder_length, forward, backward),
-            (isotropic, clamped_anisotropy(o), 0.0, 0.0),
+            (isotropic, clamped_anisotropy(o), octaves, octave_mean),
             (aspect, *streak_direction(spec), 0.0),
             (*fade_in, *fade_out),
         ],
@@ -568,64 +621,6 @@ def pack_layer_params(
 
 # ── On a planet ────────────────────────────────────────────────────────────────
 
-#: Side of the weather volume: a low-frequency field over the cube [-1, 1]^3
-#: that the unit sphere of directions samples (texel ~ 1/24 of the radius).
-WEATHER_SIZE = 48
-
-
-def weather_volume(seed: int, size: int = WEATHER_SIZE, wavelength: float = 0.45):
-    """Large-scale cloudiness over a planet: clear regions, overcast regions.
-
-    A smooth field of the DIRECTION from the planet centre (sampled on the
-    unit sphere, so it scales with the planet and has no seams), quantised to
-    8 bits like the GPU texture it becomes.
-
-    :param seed: noise seed
-    :param size: texels per side over [-1, 1]^3
-    :param wavelength: largest feature, in planet radii
-    :returns: (size, size, size) float array in [0, 1], indexed [z, y, x]
-    """
-    from world_builder.terrain.noise import fbm as simplex_fbm
-
-    c = (np.arange(size) + 0.5) / size * 2.0 - 1.0
-    z, y, x = np.meshgrid(c, c, c, indexing="ij")
-    points = np.stack([x, y, z], axis=-1).reshape(-1, 3) * 1000.0
-    value = simplex_fbm(points, wavelength * 1000.0, 4, seed)
-    field = np.clip(0.5 + 0.9 * value, 0.0, 1.0).reshape(size, size, size)
-    return quantise(field)
-
-
-def sample_weather(volume: np.ndarray, dirs: np.ndarray) -> np.ndarray:
-    """``texture(weatherNoise, dir * 0.5 + 0.5)`` on the CPU: trilinear,
-    clamped at the edges, with hardware linear's half-texel offset.
-
-    :param dirs: (..., 3) unit directions
-    :returns: (...) in [0, 1]
-    """
-    size = volume.shape[0]
-    texel = (np.asarray(dirs, dtype=np.float64) * 0.5 + 0.5) * size - 0.5
-    texel = np.clip(texel, 0.0, size - 1.0)
-    base = np.minimum(np.floor(texel).astype(np.int64), size - 2)
-    frac = texel - base
-    x0, y0, z0 = base[..., 0], base[..., 1], base[..., 2]
-    tx, ty, tz = frac[..., 0], frac[..., 1], frac[..., 2]
-    c00 = volume[z0, y0, x0] + (volume[z0, y0, x0 + 1] - volume[z0, y0, x0]) * tx
-    c01 = (
-        volume[z0, y0 + 1, x0]
-        + (volume[z0, y0 + 1, x0 + 1] - volume[z0, y0 + 1, x0]) * tx
-    )
-    c10 = (
-        volume[z0 + 1, y0, x0]
-        + (volume[z0 + 1, y0, x0 + 1] - volume[z0 + 1, y0, x0]) * tx
-    )
-    c11 = (
-        volume[z0 + 1, y0 + 1, x0]
-        + (volume[z0 + 1, y0 + 1, x0 + 1] - volume[z0 + 1, y0 + 1, x0]) * tx
-    )
-    c0 = c00 + (c01 - c00) * ty
-    c1 = c10 + (c11 - c10) * ty
-    return c0 + (c1 - c0) * tz
-
 
 def density_on_sphere(
     volume: np.ndarray,
@@ -633,47 +628,52 @@ def density_on_sphere(
     spec: DensityField,
     points: np.ndarray,
     radius: float,
-    weather_gain: float,
+    octaves: int = 4,
+    early_out: bool = False,
 ) -> np.ndarray:
     """The shader's ``cloudDensity`` in planet mode (``uSpherical``): the slab
     is a height above the sea-level sphere, the noise is sampled in 3D at the
-    planet-frame position (seamless on a sphere), and the weather field shifts
+    planet-frame position (seamless on a sphere), and the weather map shifts
     the fbm up (overcast) or down (clear) by direction.
 
-    :param weather: :func:`weather_volume`
+    :param weather: (6, n, n, 2) cube map of coverage and shift
+        (:func:`weather.weather_cube`)
     :param points: (..., 3) planet-frame positions, metres
     :param radius: sea-level radius, metres
-    :param weather_gain: fbm shift between the clearest and cloudiest weather
+    :param octaves: octaves evaluated (the shell's; see :func:`fbm`)
+    :param early_out: evaluate as the shader does, stopping where the octaves
+        still to come cannot reach the threshold (the same result, which a
+        test checks; on the CPU only slower)
     :returns: (...) density in [0, 1]
     """
+    from world_builder.clouds.weather import sample_cube
+
     _require_resolved(spec)
     points = np.asarray(points, dtype=np.float64)
     r = np.linalg.norm(points, axis=-1)
     base, thickness = spec.slab
     h = (r - radius - base) / max(thickness, 1e-3)
     coords = points * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    dirs = points / np.maximum(r, 1e-9)[..., None]
-    raw = fbm(volume, coords, spec) + weather_gain * (
-        sample_weather(weather, dirs) - 0.5
-    )
+    shift = sample_cube(weather[..., 1], points)
     lift = threshold_lift(spec, h)
     lo, hi = spec.threshold[0] + lift, spec.threshold[1] + lift
+    inside = (h > 0.0) & (h < 1.0)
+    raw = fbm(volume, coords, spec, octaves) + shift
+    if early_out:
+        # cloud_field.glsl's cloudDensity: what is still to come at most.
+        mean = float(volume.mean())
+        w = spec.octave_weights
+        rest = sum((1.0 if k < octaves else mean) * w[k] for k in (2, 3))
+        first = sample_volume(volume, coords * spec.octave_scales[0]) * w[0] + shift
+        second = (
+            sample_volume(
+                volume, coords * spec.octave_scales[1] + np.asarray(OCTAVE_OFFSETS[1])
+            )
+            * w[1]
+        )
+        alive = (first + w[1] + rest > lo) & (first + second + rest > lo)
+        raw = np.where(alive, raw, -np.inf)
     t = np.clip((raw - lo) / np.maximum(hi - lo, 1e-9), 0.0, 1.0)
     coverage = t * t * (3.0 - 2.0 * t)
     base_fill = 1.0 - np.exp2(-spec.base_ramp * np.clip(h, 0.0, 1.0))
-    inside = (h > 0.0) & (h < 1.0)
     return np.where(inside, coverage * base_fill, 0.0)
-
-
-def build_weather_texture(volume: np.ndarray) -> Texture:
-    """The weather volume as an R8 3D texture, linearly filtered and clamped."""
-    size = volume.shape[0]
-    tex = Texture("cloud_weather")
-    tex.setup_3d_texture(size, size, size, Texture.T_unsigned_byte, Texture.F_red)
-    data = np.clip(np.rint(volume * 255.0), 0, 255).astype(np.uint8)
-    tex.set_ram_image(np.ascontiguousarray(data).tobytes())
-    tex.set_magfilter(SamplerState.FT_linear)
-    tex.set_minfilter(SamplerState.FT_linear)
-    for setter in (tex.set_wrap_u, tex.set_wrap_v, tex.set_wrap_w):
-        setter(SamplerState.WM_clamp)
-    return tex

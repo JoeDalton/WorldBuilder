@@ -4,26 +4,33 @@ Clouds over a whole planet, from inside the deck to orbit, with one pattern.
 The density field is the billboard field's (:mod:`noise`), moved onto the
 planet: the slab is a height above the sea-level sphere, the tileable noise is
 sampled at planet-frame positions (3D, so it has no seam anywhere on the
-sphere), and a weather field of direction (:func:`noise.weather_volume`)
-shifts the fbm, so some regions are clear and others overcast. Every view of
-the clouds evaluates that same function, so the pattern seen from orbit is the
-one you fly into:
+sphere), and the weather (:mod:`weather`: a cube map of coverage following the
+planet's circulation, weather systems, climate and terrain) shifts the fbm by
+exactly what gives its coverage there. Every view of the clouds evaluates that
+same function, so the pattern seen from orbit is the one you fly into:
 
 * **near** (the inner LOD shells): volumetric billboards, as the flat field
   draws them, generated per cube-sphere tile in the shared worker pool by
   rejection sampling of the density. Each shell doubles the billboards' size
   and the tiles' (``lod_shells``' trade: each shell costs half the previous)
-  and crossfades with the next by distance, on optical depth.
+  and crossfades with the next by distance, on optical depth. The far shells
+  are cheaper per pixel: fewer octaves (the dropped ones count as their mean,
+  so the coverage holds) and fewer overlapping billboards
+  (:data:`VOLUME_FRACTIONS`).
 * **far** (beyond the last shell, up to orbit): the *deck*, a sphere at
   mid-slab height whose fragments evaluate the density through the slab's
   depth. Billboards would thin out at that scale (their covered area falls as
   1 / size); the deck covers the planet with a few thousand triangles.
 
 The clouds are geometry that depth-tests against the scene, like the flat
-field: terrain occludes them with no depth plumbing. Tiles sort back to front
-in their own bin; particles are re-sorted within each tile, a few tiles per
-frame. Seen through the atmospheres (``atmosphere.Atmospheres``), lit by
-sunlight reddened by the planet's own air. Static: no wind yet.
+field: terrain occludes them with no depth plumbing. Premultiplied "over"
+needs back to front: the deck draws first, then each shell in its own
+back-to-front bin, coarsest first (a coarse tile holding the camera has its
+centre near it, but its visible billboards are all farther than the finer
+shells'); within a tile the particles are re-sorted, the tiles the camera
+has moved past most first. Seen through the atmospheres
+(``atmosphere.Atmospheres``), lit by sunlight reddened by the planet's own
+air. Static: no wind yet.
 """
 
 from __future__ import annotations
@@ -48,7 +55,6 @@ from panda3d.core import (
     GeomVertexData,
     GeomVertexFormat,
     InternalName,
-    LVecBase2f,
     LVecBase3f,
     LVecBase4f,
     NodePath,
@@ -77,34 +83,63 @@ from world_builder.clouds.noise import (
     NOISE_SIZE,
     DensityField,
     build_noise_texture,
-    build_weather_texture,
-    column_peaks,
     density_on_sphere,
     fbm_sigma,
     pack_layer_params,
     quantise,
+    sphere_column_peaks,
     value_noise_volume,
-    weather_volume,
     with_threshold,
 )
+from world_builder.clouds.weather import (
+    WeatherSpec,
+    build_weather_texture,
+    shift_table,
+    weather_cube,
+)
 from world_builder.terrain.cubesphere import QUADS, CubeGrid, face_dirs, grid_for
+from world_builder.terrain.planet import PlanetSpec
 from world_builder.terrain.quadtree import LodSelector
 
 _SHADERS = Path(__file__).parent / "shaders"
-#: Back to front by node: the deck (centred on the planet) first, then tiles.
+#: Cull bins, between opaque (20) and transparent (30): the deck's first,
+#: then one back-to-front bin per shell, the coarsest first (sort
+#: ``_SHELL_BIN_SORT - shell``).
 CLOUD_BIN = "cloud_sphere"
-_CLOUD_BIN_SORT = 25
+_CLOUD_BIN_SORT = 21
+_SHELL_BIN_SORT = 28
 #: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box).
 BASE_TILE_SIZE = 8000.0
-#: Tiles uploaded and re-sorted per frame.
+#: Tiles uploaded per frame, and re-sorted per frame (the stalest: new tiles,
+#: then those the camera moved past most, relative to their distance).
 UPLOADS_PER_FRAME = 3
-RESORTS_PER_FRAME = 3
+RESORTS_PER_FRAME = 4
 #: Tiles kept (shown or not) beyond those wanted, for flying back and forth.
 TILE_CACHE = 160
 #: Quads per face edge of the deck sphere.
 DECK_QUADS = 48
 #: The deck's optical depth cap (the billboards' is ~1.5 per quad).
 DECK_MAX_OPTICAL_DEPTH = 6.0
+#: Billboard volume per unit of cloud volume, per shell (the last repeats),
+#: by quality: how many billboards overlap. Opacity does not depend on it
+#: (the extinction is divided by it), the cost does; the near shell keeps
+#: the most, where overlap shows as smoothness.
+VOLUME_FRACTIONS = {
+    CloudQuality.ULTRA: (2.5, 2.5),
+    CloudQuality.HIGH: (2.5, 2.5),
+    CloudQuality.MID: (2.0, 1.5),
+    CloudQuality.LOW: (1.5, 1.0),
+}
+#: Noise octaves per shell (the last repeats, and goes to the deck), by
+#: quality. The finest octave (~125 m features for cumulus) is still ~6 px
+#: at shell 1's far edge (27 km) at 1600x900, ~3 px at shell 2's (54 km), so
+#: dropping it is only invisible from shell 3 on.
+SHELL_OCTAVES = {
+    CloudQuality.ULTRA: (4,),
+    CloudQuality.HIGH: (4, 4, 4, 3),
+    CloudQuality.MID: (4, 4, 3, 3),
+    CloudQuality.LOW: (4, 3, 3, 2),
+}
 
 Key = tuple[int, int, int, int]
 _CORNERS = np.array([(-1, -1), (1, -1), (1, 1), (-1, 1)], dtype=np.float32)
@@ -121,11 +156,22 @@ class ShellSpec:
     :ivar level: cube-sphere level of its tiles
     :ivar radius: (min, max) billboard radius, metres
     :ivar volume_fraction: billboard sphere volume per unit cloud volume
+    :ivar octaves: noise octaves evaluated (placement and drawing agree)
+    :ivar threshold_offset: added to the field's threshold, so the coverage
+        holds with fewer octaves (:func:`octave_offset`)
     """
 
     level: int
     radius: tuple
     volume_fraction: float
+    octaves: int = 4
+    threshold_offset: float = 0.0
+
+    def field_of(self, field: DensityField) -> DensityField:
+        """:returns: *field* as this shell evaluates it"""
+        lo, hi = field.threshold
+        offset = self.threshold_offset
+        return replace(field, threshold=(lo + offset, hi + offset))
 
 
 @dataclass(frozen=True)
@@ -135,16 +181,16 @@ class SphereCloudSpec:
     :ivar radius: the planet's sea-level radius, metres
     :ivar field: the cloud type's density field, threshold resolved
     :ivar noise_seed: seed of the shared noise volume
-    :ivar weather_seed: seed of the weather volume
-    :ivar weather_gain: fbm shift between the clearest and cloudiest weather
+    :ivar weather: the planet's weather (each worker builds its map once)
+    :ivar shift_table: the fbm shift per coverage (:func:`weather.shift_table`)
     :ivar shells: the billboard shells, innermost first
     """
 
     radius: float
     field: DensityField
     noise_seed: int
-    weather_seed: int
-    weather_gain: float
+    weather: WeatherSpec
+    shift_table: tuple
     shells: tuple
 
     def shell_of(self, level: int) -> int:
@@ -177,8 +223,34 @@ def _noise(seed: int) -> np.ndarray:
 
 
 @functools.cache
-def _weather(seed: int) -> np.ndarray:
-    return weather_volume(seed)
+def _weather(weather: WeatherSpec, table: tuple) -> np.ndarray:
+    return weather_cube(weather, np.asarray(table))
+
+
+def _peaks(seed: int, field: DensityField, radius: float, octaves: int) -> np.ndarray:
+    """The planet's column peaks (the threshold does not change them)."""
+    return _cached_peaks(seed, replace(field, threshold=None), radius, octaves)
+
+
+@functools.cache
+def _cached_peaks(seed, field, radius, octaves) -> np.ndarray:
+    return sphere_column_peaks(_noise(seed), field, radius, octaves)
+
+
+def octave_offset(full: np.ndarray, fewer: np.ndarray) -> float:
+    """How far to move the threshold of a field evaluated with fewer octaves
+    so its coverage matches the full field's.
+
+    The dropped octaves count as their mean, which keeps the fbm's mean but
+    not its spread: the columns' peaks sit lower, and the coverage drops a
+    few percent. Matching the peaks' quantiles over the useful range of
+    coverage gives it back (within 2 %, tested).
+
+    :param full: the full field's sorted column peaks
+    :param fewer: the same columns' with fewer octaves
+    """
+    q = np.linspace(0.05, 0.95, 19)
+    return float(np.mean(np.quantile(fewer, q) - np.quantile(full, q)))
 
 
 @functools.cache
@@ -218,8 +290,8 @@ def generate_cloud_tile(
     shell = spec.shells[spec.shell_of(level)]
     grid = grid_for(spec.radius)
     volume = _noise(spec.noise_seed)
-    weather = _weather(spec.weather_seed)
-    field = spec.field
+    weather = _weather(spec.weather, spec.shift_table)
+    field = shell.field_of(spec.field)
     base, thickness = field.slab
     span = 2.0 * (QUADS << level) / grid.n0
     a0, b0 = -1.0 + i * span, -1.0 + j * span
@@ -239,7 +311,7 @@ def generate_cloud_tile(
         points = face_dirs(face, a, b) * (spec.radius + height)[:, None]
         inside = points[
             density_on_sphere(
-                volume, weather, field, points, spec.radius, spec.weather_gain
+                volume, weather, field, points, spec.radius, shell.octaves
             )
             > 0.0
         ]
@@ -273,10 +345,21 @@ def generate_cloud_tile(
 # ── Drawing ────────────────────────────────────────────────────────────────────
 
 
+def _shell_bin(shell: int) -> str:
+    return f"{CLOUD_BIN}_{shell}"
+
+
 def _ensure_bin():
     manager = CullBinManager.get_global_ptr()
     if manager.find_bin(CLOUD_BIN) == -1:
         manager.add_bin(CLOUD_BIN, CullBinManager.BT_back_to_front, _CLOUD_BIN_SORT)
+    for shell in range(MAX_LAYERS - 1):
+        if manager.find_bin(_shell_bin(shell)) == -1:
+            manager.add_bin(
+                _shell_bin(shell),
+                CullBinManager.BT_back_to_front,
+                _SHELL_BIN_SORT - shell,
+            )
 
 
 @functools.cache
@@ -382,6 +465,10 @@ class _Tile:
     node: NodePath
     tris: GeomTriangles
     data: CloudTile
+    #: farthest particle reach from the centre, metres
+    reach: float = 0.0
+    #: camera position (planet frame) of the last re-sort; None = never
+    sorted_from: np.ndarray | None = None
 
 
 class SphericalClouds:
@@ -406,16 +493,18 @@ class SphericalClouds:
         cloud_type: CloudType = CloudType.CUMULUS,
         altitude: float | None = None,
         shells: int = 4,
-        coverage: float | None = None,
-        weather_gain: float = 0.55,
+        planet: PlanetSpec | None = None,
+        weather: WeatherSpec | None = None,
         seed: int = 7,
         weather_seed: int = 11,
         quality: CloudQuality = CloudQuality.HIGH,
+        volume_fractions: tuple | None = None,
         sun_brightness: float = 2.8,
         sky_strength: float = 0.35,
         sky_occlusion: float = 0.55,
         exposure: float = 1.15,
         near_fade_radii: float = 2.5,
+        channel: str | None = None,
         game: Any = None,
     ):
         """
@@ -433,12 +522,17 @@ class SphericalClouds:
             keeps the type's
         :param shells: billboard LOD shells before the deck takes over (at
             most :data:`noise.MAX_LAYERS` - 1)
-        :param coverage: overrides the type's mean coverage (0-1)
-        :param weather_gain: how strongly the weather field opens or closes
-            the deck by region (fbm units; 0 = the same everywhere)
+        :param planet: the planet the weather follows (climate, terrain);
+            None = an earthlike one of this radius
+        :param weather: the weather in full; None = the defaults for
+            *planet* with *weather_seed*
         :param seed: noise seed (field and placement)
-        :param weather_seed: weather pattern seed
+        :param weather_seed: weather systems' seed
         :param quality: billboard budget (see :class:`cloud.CloudQuality`)
+        :param volume_fractions: billboard overlap per shell, the last
+            repeating; None = :data:`VOLUME_FRACTIONS` at *quality*
+        :param channel: the executor channel for the tiles; None = one of its
+            own. Reusing a removed instance's channel cancels its work
         :param game: the game object, for its asset manager (None: from disk)
         """
         if not 1 <= shells < MAX_LAYERS:
@@ -447,23 +541,28 @@ class SphericalClouds:
         self.radius = float(radius)
         self.position = np.asarray(position, dtype=np.float64)
         self.executor = executor
-        self._channel = f"clouds-{id(self):x}"
+        self._channel = channel or f"clouds-{id(self):x}"
         self.grid: CubeGrid = grid_for(self.radius)
         self.stats = {"tiles": 0, "billboards": 0, "pending": 0, "gen_ms": 0.0}
 
         preset = PRESETS[cloud_type]
-        field = (
-            preset.field
-            if coverage is None
-            else replace(preset.field, coverage=coverage)
-        )
+        field = preset.field
         if altitude is not None:
             field = replace(field, slab=(float(altitude), field.slab[1]))
         volume = _noise(seed)
         sigma = fbm_sigma(volume, field)
-        field = with_threshold(field, column_peaks(volume, field), sigma)
+        peaks = _peaks(seed, field, self.radius, 4)
+        field = with_threshold(field, peaks, sigma)
         self.field = field
-        fbm_mean = float(volume.mean()) * float(sum(field.octave_weights))
+        if weather is None:
+            planet = planet or PlanetSpec(name="clouds", radius=self.radius)
+            weather = WeatherSpec(planet, seed=weather_seed)
+        table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
+        #: (6, n, n, 2): coverage and fbm shift (the workers rebuild it)
+        self.weather = _weather(weather, table)
+        fractions = volume_fractions or VOLUME_FRACTIONS[quality]
+        schedule = SHELL_OCTAVES[quality]
+        octave_mean = float(volume.mean())
         base_level = max(0, round(math.log2(BASE_TILE_SIZE / self.grid.chunk_size(0))))
         tile0 = self.grid.chunk_size(base_level)
 
@@ -490,37 +589,53 @@ class SphericalClouds:
                 ),
                 quality,
             )
-            shell_specs.append(
-                ShellSpec(base_level + k, spec.radius, spec.volume_fraction)
+            fraction = fractions[min(k, len(fractions) - 1)]
+            octaves = schedule[min(k, len(schedule) - 1)]
+            shell = ShellSpec(
+                base_level + k,
+                spec.radius,
+                fraction,
+                octaves,
+                octave_offset(peaks, _peaks(seed, field, self.radius, octaves)),
             )
+            shell_specs.append(shell)
             params[k] = pack_layer_params(
-                field,
-                extinction=field.density / max(spec.volume_fraction * sprite, 1e-6),
+                shell.field_of(field),
+                extinction=field.density / max(fraction * sprite, 1e-6),
                 wrap_radius=1e12,
                 wrap_fade_band=0.0,
-                octave_mean=float(volume.mean()),
+                octave_mean=octave_mean,
                 optics=spec.optics,
                 aspect=spec.aspect,
                 fade_in=bands[k - 1] if k > 0 else None,
                 fade_out=bands[k],
+                octaves=octaves,
             )
         self._deck_layer = shells
+        deck = ShellSpec(
+            0,
+            (0.0, 0.0),
+            1.0,
+            schedule[-1],
+            octave_offset(peaks, _peaks(seed, field, self.radius, schedule[-1])),
+        )
         params[shells] = pack_layer_params(
-            field,
+            deck.field_of(field),
             extinction=field.density,  # per metre of the slab's path
             wrap_radius=1e12,
             wrap_fade_band=0.0,
-            octave_mean=float(volume.mean()),
+            octave_mean=octave_mean,
             optics=replace(preset.optics, max_optical_depth=DECK_MAX_OPTICAL_DEPTH),
             fade_in=bands[-1],
+            octaves=schedule[-1],
         )
         self._bands = bands
         self.spec = SphereCloudSpec(
             radius=self.radius,
             field=field,
             noise_seed=seed,
-            weather_seed=weather_seed,
-            weather_gain=weather_gain,
+            weather=weather,
+            shift_table=table,
             shells=tuple(shell_specs),
         )
         self._version = executor.set_spec(
@@ -571,8 +686,7 @@ class SphericalClouds:
             cloudNoise=build_noise_texture(volume),
             noiseSize=float(NOISE_SIZE),
             noiseOffset=Vec3(0, 0, 0),
-            weatherNoise=build_weather_texture(_weather(weather_seed)),
-            weatherGain=float(weather_gain),
+            weatherMap=build_weather_texture(self.weather),
             uSpherical=1,
             planetRadius=self.radius,
             uOwnAtmosphere=-1 if atmosphere is None else int(atmosphere),
@@ -589,10 +703,10 @@ class SphericalClouds:
             skyOcclusion=float(sky_occlusion),
             exposure=float(exposure),
             horizonFade=0.0,
-            uDeckStats=LVecBase2f(fbm_mean, sigma),
             uPixelAngle=0.001,
             earthCurvature=0.0,
             nearFadeRadii=float(near_fade_radii),
+            uCloudDebug=0,
         )
 
         self._tiles: dict[Key, _Tile] = {}
@@ -602,7 +716,6 @@ class SphericalClouds:
         self._origin = None
         self._camera = np.zeros(3)
         self._last_select = None
-        self._resort_cursor = 0
         self._frame = 0
         self._selector = LodSelector(self.grid)
         self._slab_box = (field.slab[0], field.slab[0] + field.slab[1])
@@ -656,7 +769,14 @@ class SphericalClouds:
             billboards=sum(len(self._tiles[k].data.particles) for k in self._shown),
         )
 
+    def set_debug(self, flags: int) -> None:
+        """Profiling switches (cloud.frag's ``uCloudDebug`` bits): 1 no sun
+        march, 2 no atmosphere, 4 no high octaves, 8 flat colour."""
+        self.root.set_shader_input("uCloudDebug", int(flags))
+
     def remove(self) -> None:
+        """Take the clouds off the scene and drop their queued tiles."""
+        self.executor.request([], self._channel)
         self.root.remove_node()
 
     # ── internals ─────────────────────────────────────────────────────────────
@@ -739,12 +859,18 @@ class SphericalClouds:
                 continue
             if tile.version != self._version:
                 continue
+            reach = 0.0
             if len(tile.particles) == 0:
                 node, tris = NodePath("empty"), None
             else:
                 node, tris = _tile_node(tile)
+                node.set_bin(_shell_bin(self.spec.shell_of(key[0])), 0)
+                p = tile.particles
+                reach = float(
+                    np.sqrt((p[:, 0:3] ** 2).sum(axis=1).max()) + p[:, 3].max()
+                )
             node.set_pos(*(tile.centre - self._origin))
-            self._tiles[key] = _Tile(node, tris, tile)
+            self._tiles[key] = _Tile(node, tris, tile, reach)
             if tris is not None:
                 node.reparent_to(self.tiles_root)
                 self._shown.add(key)
@@ -754,15 +880,33 @@ class SphericalClouds:
             del self._ready[key]
 
     def _resort(self, cam) -> None:
-        """Back to front within a few shown tiles per frame (premultiplied over
-        needs it; the bin sorts the tiles themselves)."""
-        shown = [k for k in self._shown if self._tiles[k].tris is not None]
-        if not shown:
-            return
-        shown.sort()
-        for _ in range(min(RESORTS_PER_FRAME, len(shown))):
-            self._resort_cursor = (self._resort_cursor + 1) % len(shown)
-            tile = self._tiles[shown[self._resort_cursor]]
+        """Back to front within the stalest few shown tiles (premultiplied over
+        needs it; the bins sort the tiles themselves).
+
+        A tile's order goes stale as the camera moves past it: by the
+        distance moved since its last sort over its distance now (an angle).
+        A stale order composites a cloud's far side over its near side, which
+        reads as shadows sliding across it. New tiles come first.
+        """
+        stale = []
+        for key in self._shown:
+            tile = self._tiles[key]
+            if tile.tris is None:
+                continue
+            if tile.sorted_from is None:
+                stale.append((np.inf, key))
+                continue
+            moved = float(np.linalg.norm(cam - tile.sorted_from))
+            if moved == 0.0:
+                continue
+            gap = float(np.linalg.norm(tile.data.centre - cam)) - tile.reach
+            stale.append((moved / max(gap, 0.05 * tile.reach, 1.0), key))
+        stale.sort(reverse=True)
+        for score, key in stale[:RESORTS_PER_FRAME]:
+            if score < 1e-3:  # a tenth of a degree: nothing visible changes
+                break
+            tile = self._tiles[key]
+            tile.sorted_from = cam.copy()
             p = tile.data.particles
             offset = tile.data.centre - cam
             distance = np.einsum("ij,ij->i", p[:, 0:3] + offset, p[:, 0:3] + offset)

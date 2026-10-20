@@ -583,6 +583,18 @@ def test_pack_layer_params_round_trips_the_field():
     # is scaled by 1/(volume fraction) for a sum over chords, while the sun march
     # is a continuous path integral and must use the field's own density.
     np.testing.assert_allclose(rows[5], (0.09, 0.037, 8000.0, 0.0))
+    # Octaves evaluated and their mean (cloud_field.glsl's highOctaves): all
+    # four by default.
+    np.testing.assert_allclose(rows[9][2:], (4.0, 0.5))
+    far = pack_layer_params(
+        spec,
+        extinction=0.09,
+        wrap_radius=8000.0,
+        wrap_fade_band=0.0,
+        octave_mean=0.47,
+        octaves=2,
+    )
+    np.testing.assert_allclose(far[9][2:], (2.0, 0.47), rtol=1e-6)
 
 
 def test_pack_layer_params_carries_the_types_optics():
@@ -615,7 +627,7 @@ def test_pack_layer_params_carries_the_types_optics():
     # shader evaluates the basis and needs no normalising divide.
     forward, backward, isotropic = phase_weights(optics)
     np.testing.assert_allclose(rows[8], (0.4, 250.0, forward, backward), rtol=1e-6)
-    np.testing.assert_allclose(rows[9], (isotropic, 0.55, 0.0, 0.0), rtol=1e-6)
+    np.testing.assert_allclose(rows[9], (isotropic, 0.55, 4.0, 0.5), rtol=1e-6)
 
 
 # ── The phase function ─────────────────────────────────────────────────────────
@@ -765,10 +777,11 @@ def test_both_shaders_size_layerparams_for_every_layer():
       * different between the two stages, and the shared uniform fails to LINK
         ("has different type across different shaders") and nothing draws at all.
 
-    Both stages must declare exactly MAX_LAYERS * LAYER_VEC4S.
+    Both stages must declare exactly MAX_LAYERS * LAYER_VEC4S (cloud.frag and
+    cloud_sphere.vert through their shared include, cloud_field.glsl).
     """
     expected = MAX_LAYERS * LAYER_VEC4S
-    for name in ("cloud.frag", "cloud.vert"):
+    for name in ("cloud_field.glsl", "cloud.vert"):
         source = Path(_SHADERS / name).read_text()
         match = re.search(r"uniform\s+vec4\s+layerParams\[(\d+)\]", source)
         assert match, f"layerParams declaration not found in {name}"

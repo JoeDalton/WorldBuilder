@@ -44,6 +44,7 @@ Controls (AZERTY):
     L               reload the level file (edit stamps live)
     O               toggle the ocean
     C               toggle the clouds
+    F5              cycle the cloud quality: high / mid / low / off
     M               toggle the terrain in the ocean's reflection
     , / ;           sharper / softer biome transitions
     T               toggle textures (off: flat biome colours)
@@ -89,6 +90,7 @@ from panda3d.core import (
 )
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
+from world_builder.clouds.cloud import CloudQuality
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.sky import Sky, make_starfield_texture
@@ -155,7 +157,45 @@ _CONTROLS = (
     "shift",
     *(key for row in (*_ROTATIONS, *_TRANSLATIONS, *_SUN_KEYS) for key in row[:2]),
 )
+#: F5 cycles the clouds through these.
+CLOUD_QUALITIES = ("high", "mid", "low", "off")
 _DEBUG_VIEWS = ("shaded", "LOD", "biomes", "slope", "normals", "skirts")
+
+
+def window_config(
+    title: str, size: str = "1600 900", offscreen: bool = False, vsync: bool = True
+) -> None:
+    """Load the window's PRC settings (before ShowBase opens it).
+
+    No multisampling: the driver's choice of sample count is not ours to
+    make (Panda picks the config with the most samples, x16 on a GTX 1070,
+    whatever count is asked for), and it was most of the clouds' cost.
+
+    :param size: "width height"
+    :param offscreen: an offscreen buffer (no display refresh cap or
+        throttling: timings are the GPU's)
+    """
+    lines = [
+        f"window-title {title}",
+        f"win-size {size}",
+        "audio-library-name null",
+        "framebuffer-multisample 0",
+        "multisamples 0",
+        "depth-bits 24",
+    ]
+    if not vsync:
+        lines.append("sync-video false")
+    if offscreen:
+        lines.append("window-type offscreen")
+    loadPrcFileData("", "\n".join(lines))
+
+
+def describe_window(demo) -> str:
+    """:returns: the window's kind, size and samples per pixel"""
+    win = demo.win
+    kind = "window" if isinstance(win, GraphicsWindow) else "offscreen"
+    samples = max(1, win.get_fb_properties().get_multisamples())
+    return f"{kind} {win.get_x_size()}x{win.get_y_size()}, MSAA x{samples}"
 
 
 def sun_lighting(azimuth: float, elevation: float):
@@ -226,6 +266,8 @@ class TerrainDemo(ShowBase):
         radius: float | None,
         moon_distance: float | None = MOON_DISTANCE_M,
         workers: int | None = None,
+        cloud_quality: str = "high",
+        cloud_debug: int = 0,
     ):
         """
         :param level_path: the planet's level file
@@ -233,6 +275,9 @@ class TerrainDemo(ShowBase):
         :param radius: overrides the level's planet radius, metres
         :param moon_distance: centre-to-centre, metres; None = no moon
         :param workers: generation processes; None = the machine's default
+        :param cloud_quality: one of :data:`CLOUD_QUALITIES`
+        :param cloud_debug: the clouds' profiling switches
+            (:meth:`SphericalClouds.set_debug`)
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -292,16 +337,10 @@ class TerrainDemo(ShowBase):
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
         self.sky = Sky(self.render, make_starfield_texture(), self.atmospheres)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
-        self.clouds = SphericalClouds(
-            self.render,
-            spec.radius,
-            self.executor,
-            atmospheres=self.atmospheres,
-            atmosphere=0,
-            altitude=CLOUD_BASE,
-        )
-        # Not in the ocean's mirror: it would draw every billboard twice.
-        self.clouds.root.hide(REFLECTION_CAMERA_BITS)
+        self.clouds = None
+        self._clouds_shown = True
+        self._cloud_debug = cloud_debug
+        self.set_cloud_quality(cloud_quality)
         # Built before the depth split changes the lens: the ocean's
         # reflection camera copies it once.
         self.ocean = self._make_ocean()
@@ -330,6 +369,7 @@ class TerrainDemo(ShowBase):
             ("l", self._reload, []),
             ("o", self._toggle_ocean, []),
             ("c", self._toggle_clouds, []),
+            ("f5", self._cycle_cloud_quality, []),
             ("m", self._toggle_reflection, []),
             ("t", self._toggle_textures, []),
             ("b", self._toggle_wireframe, []),
@@ -495,7 +535,7 @@ class TerrainDemo(ShowBase):
         home_altitude = float(np.linalg.norm(self._relative(self.home))) - self.radius
         self.atmospheres.update(self.cam_world)
         self.sky.update((0.0, 0.0, 0.0), far)
-        if not self.clouds.root.is_hidden():
+        if self.clouds is not None and self._clouds_shown:
             fov = math.radians(self.camLens.get_fov()[1])
             self.clouds.set_pixel_angle(fov / max(self.win.get_y_size(), 1))
             self.clouds.update(self.cam_world)
@@ -555,7 +595,8 @@ class TerrainDemo(ShowBase):
     def _update_sun(self):
         # Sunlight above the air: the atmosphere reddens it where it must.
         self.sky.set_sun(self._sun)
-        self.clouds.set_sun(self._sun)
+        if self.clouds is not None:
+            self.clouds.set_sun(self._sun)
         for body in self.bodies:
             ambient = SKY_AMBIENT if body.atmosphere else SPACE_AMBIENT
             body.terrain.set_sun(tuple(self._sun), SUN_COLOR, ambient)
@@ -659,7 +700,14 @@ class TerrainDemo(ShowBase):
         face_name = FACE_NAMES[int(face[0])]
         speed = self.speed / SPEED
         split_km, far_km = self.depth.split / 1e3, self.depth.far / 1e3
-        cs = self.clouds.stats
+        cs = self.clouds.stats if self.clouds is not None else None
+        clouds = (
+            f"clouds {self._cloud_quality}: {cs['tiles']} tiles, "
+            f"{cs['billboards']:,} billboards, {cs['pending']} generating "
+            f"({cs['gen_ms']:.0f} ms/tile)"
+            if cs is not None
+            else "clouds off"
+        )
         others = "   ".join(
             f"{b.name} {np.linalg.norm(self._relative(b)) / 1e3:,.0f} km "
             f"({b.terrain.stats['shown']} chunks)"
@@ -683,8 +731,7 @@ class TerrainDemo(ShowBase):
             f"({self.executor.workers} workers)   "
             f"upload {s['upload_ms']:.2f} ms/chunk   LOD pass {s['select_ms']:.1f} ms"
             f"   depth split {split_km:,.1f} km, far {far_km:,.0f} km",
-            f"clouds: {cs['tiles']} tiles, {cs['billboards']:,} billboards, "
-            f"{cs['pending']} generating ({cs['gen_ms']:.0f} ms/tile)",
+            clouds + ("" if self._clouds_shown else " (hidden)"),
         ]
         self._hud.setText("\n".join(lines))
 
@@ -708,8 +755,9 @@ class TerrainDemo(ShowBase):
         )
 
     def _set_spec(self, spec):
-        """Replace the planet (the moon stays)."""
+        """Replace the planet (the moon stays) and its weather."""
         self.terrain.set_spec(spec)
+        self.set_cloud_quality(self._cloud_quality)
         for mark, body, _ in list(self._laser_marks):
             if body is self.home:
                 mark.remove_node()
@@ -751,11 +799,45 @@ class TerrainDemo(ShowBase):
         self._apply_ocean()
 
     def _toggle_clouds(self):
-        if self.clouds.root.is_hidden():
-            self.clouds.root.show()
-            self.clouds.root.hide(REFLECTION_CAMERA_BITS)
-        else:
+        self._clouds_shown = not self._clouds_shown
+        self._apply_clouds()
+
+    def _apply_clouds(self):
+        if self.clouds is None:
+            return
+        self.clouds.root.show()
+        # Not in the ocean's mirror: it would draw every billboard twice.
+        self.clouds.root.hide(REFLECTION_CAMERA_BITS)
+        if not self._clouds_shown:
             self.clouds.root.hide()
+
+    def set_cloud_quality(self, name: str):
+        """Rebuild the planet's clouds at a quality level (or none: "off").
+        The new clouds take over the old ones' worker channel, which drops
+        their tiles; the new tiles arrive in a few seconds."""
+        if self.clouds is not None:
+            self.clouds.remove()
+            self.clouds = None
+        self._cloud_quality = name
+        if name != "off":
+            self.clouds = SphericalClouds(
+                self.render,
+                self.radius,
+                self.executor,
+                atmospheres=self.atmospheres,
+                atmosphere=0,
+                altitude=CLOUD_BASE,
+                planet=self.terrain.spec,
+                quality=CloudQuality(name),
+                channel="clouds",
+            )
+            self.clouds.set_debug(self._cloud_debug)
+            self.clouds.set_sun(self._sun)
+            self._apply_clouds()
+
+    def _cycle_cloud_quality(self):
+        index = CLOUD_QUALITIES.index(self._cloud_quality)
+        self.set_cloud_quality(CLOUD_QUALITIES[(index + 1) % len(CLOUD_QUALITIES)])
 
     def _toggle_reflection(self):
         self._reflected = not self._reflected
@@ -949,19 +1031,7 @@ def main():
         "--backend", default="process", choices=("process", "thread", "inline")
     )
     args = parser.parse_args()
-    loadPrcFileData(
-        "",
-        "\n".join(
-            [
-                "window-title Procedural terrain demo",
-                "win-size 1600 900",
-                "audio-library-name null",
-                "framebuffer-multisample 1",
-                "multisamples 4",
-                "depth-bits 24",
-            ]
-        ),
-    )
+    window_config("Procedural terrain demo")
     moon = None if args.no_moon else args.moon_distance
     TerrainDemo(args.level, args.backend, args.radius, moon, args.workers).run()
 

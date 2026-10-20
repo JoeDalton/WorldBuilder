@@ -149,12 +149,14 @@ def test_shader_octave_offsets_match_the_placement_fbm():
     """noise.py's fbm decides WHERE billboards go and the shader's decides where
     cloud is DRAWN, so their octave offsets must be identical. If they drifted,
     billboards would sit in clear air while cloud went undrawn — a failure that no
-    other test here could see, since one side lives in GLSL."""
-    source = Path(_SHADERS / "cloud.frag").read_text()
+    other test here could see, since one side lives in GLSL (cloud_field.glsl,
+    which cloud.frag includes)."""
+    source = Path(_SHADERS / "cloud_field.glsl").read_text()
+    assert '#pragma include "cloud_field.glsl"' in (_SHADERS / "cloud.frag").read_text()
     found = []
     for index in (2, 3, 4):
         match = re.search(rf"OCTAVE_{index}_OFFSET\s*=\s*vec3\(([^)]*)\)", source)
-        assert match, f"OCTAVE_{index}_OFFSET not found in cloud.frag"
+        assert match, f"OCTAVE_{index}_OFFSET not found in cloud_field.glsl"
         found.append(tuple(float(v) for v in match.group(1).split(",")))
     assert found == list(OCTAVE_OFFSETS[1:])
 

@@ -78,7 +78,7 @@ bool atmoSphere(vec3 o, vec3 dir, float c, out float t0, out float t1) {
 // One atmosphere's effect on the segment [0, tmax] of a view ray: what the
 // background is multiplied by, and the light scattered toward the eye. near is
 // where the segment starts (for ordering several atmospheres).
-void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir,
+void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
                  out vec3 transmittance, out vec3 inscatter, out float near) {
     transmittance = vec3(1.0);
     inscatter = vec3(0.0);
@@ -108,12 +108,12 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir,
     float betaM = uAtmoScatter[i].a;
     float betaMExt = uAtmoMie[i].x;
 
-    float ds = (t1 - t0) / float(ATMO_STEPS);
+    float ds = (t1 - t0) / float(steps);
     float depthR = 0.0;
     float depthM = 0.0;
     vec3 sumR = vec3(0.0);
     vec3 sumM = vec3(0.0);
-    for (int k = 0; k < ATMO_STEPS; ++k) {
+    for (int k = 0; k < steps; ++k) {
         vec3 p = o + dir * (t0 + (float(k) + 0.5) * ds);
         float r = length(p);
         float densityR = exp(-(r - R) / Hr) * ds;
@@ -143,7 +143,8 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir,
 // What every atmosphere along a view ray does to whatever lies at distance
 // dist in direction dir: seen = background * transmittance + inscatter.
 // Atmospheres are composed far to near (they normally do not overlap).
-void atmosphereAlong(vec3 dir, float dist, vec3 sunDir,
+// steps: samples per atmosphere (ATMO_STEPS per pixel; fewer per vertex).
+void atmosphereAlong(vec3 dir, float dist, vec3 sunDir, int steps,
                      out vec3 transmittance, out vec3 inscatter) {
     transmittance = vec3(1.0);
     inscatter = vec3(0.0);
@@ -155,7 +156,7 @@ void atmosphereAlong(vec3 dir, float dist, vec3 sunDir,
     float near[MAX_ATMOSPHERES];
     for (int i = 0; i < MAX_ATMOSPHERES; ++i) {
         if (i < uAtmoCount) {
-            atmoSegment(i, dir, dist, sunDir, t[i], s[i], near[i]);
+            atmoSegment(i, dir, dist, sunDir, steps, t[i], s[i], near[i]);
         } else {
             t[i] = vec3(1.0);
             s[i] = vec3(0.0);
@@ -166,6 +167,11 @@ void atmosphereAlong(vec3 dir, float dist, vec3 sunDir,
     int second = 1 - first;
     transmittance = t[first] * t[second];
     inscatter = s[first] + t[first] * s[second];
+}
+
+void atmosphereAlong(vec3 dir, float dist, vec3 sunDir,
+                     out vec3 transmittance, out vec3 inscatter) {
+    atmosphereAlong(dir, dist, sunDir, ATMO_STEPS, transmittance, inscatter);
 }
 
 // The colour seen through every atmosphere along a view ray: background
@@ -179,7 +185,8 @@ vec3 applyAtmospheres(vec3 background, vec3 dir, float dist, vec3 sunDir) {
     float near[MAX_ATMOSPHERES];
     for (int i = 0; i < MAX_ATMOSPHERES; ++i) {
         if (i < uAtmoCount) {
-            atmoSegment(i, dir, dist, sunDir, transmittance[i], inscatter[i], near[i]);
+            atmoSegment(i, dir, dist, sunDir, ATMO_STEPS, transmittance[i], inscatter[i],
+                        near[i]);
         } else {
             transmittance[i] = vec3(1.0);
             inscatter[i] = vec3(0.0);

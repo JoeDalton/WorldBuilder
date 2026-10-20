@@ -101,12 +101,47 @@ The billboard field's density (`clouds.noise`) is moved onto the planet:
   base);
 - the tileable noise is sampled at **planet-frame positions in 3D**, so it has
   no seam anywhere on the sphere;
-- a **weather** field of direction (`noise.weather_volume`, a 48³ volume over
-  the unit cube sampled on the unit sphere) shifts the fbm, so some regions
-  are clear and others overcast (`weather_gain`).
+- the **weather** (below) shifts the fbm by direction, by exactly what gives
+  the coverage it asks for there.
 
 `noise.density_on_sphere` is the CPU copy, exact to the shader's texture
-filtering, which places the billboards where the shader draws cloud.
+filtering, which places the billboards where the shader draws cloud. The
+field's code is one include, `clouds/shaders/cloud_field.glsl`, shared by the
+fragment stage and the billboards' vertex stage.
+
+### The weather
+
+`clouds.weather` builds a cube map (6 × 256², ~3.7 km a texel on a 600 km
+planet) of **target coverage**, the share of the slab's columns that hold
+cloud, from the planet's own `PlanetSpec` and a `WeatherSpec` (seed and
+tunables):
+
+| Component | What it does |
+|---|---|
+| Zonal circulation | A curve of latitude: wet equatorial band (~0.7), dry subtropical highs (~0.15 at 20–35°), storm tracks (~0.55 at 50–60°), polar caps (~0.4). `season` moves it north or south. |
+| Extratropical cyclones | A few in the storm tracks (6 on the 600 km planet, scaled by area in features). Each is a vortex that winds the mesoscale texture into spiral arms (counter-clockwise in the north, clockwise in the south), plus a comma of cloud along one wound arm: its head curls poleward of the low, its tail trails equatorward and west as the cold front, with clear air behind it. |
+| Tropical cyclones | One or two over open sea at 10–25°: a tight two-armed spiral, an eyewall and a clear eye. None on a planet without sea. |
+| Mesoscale texture | fbm (160 km and finer) wound by the same vortices: ragged edges, streaks around the systems. |
+| Climate | The planet's humidity scales the cover (a dry planet is nearly clear); hot, dry land loses most of what is left (deserts stay clear); the sea adds a little. |
+| Terrain | Slopes facing the prevailing wind (easterly trades, westerlies, polar easterlies) gain cloud, their lee loses it, in proportion to the humidity. Only the ranges count: the relief is band-limited to 60 km. |
+
+Lengths follow the planet's feature scale, like the terrain's. The climate is
+sampled on a coarse 6 × 64² grid and upsampled; the whole map takes ~3 s,
+once per process (the main thread for the textures, each worker for
+placement, cached by spec).
+
+**Coverage to the field, exactly.** The clouds never use coverage directly.
+The sorted column peaks of the field (`noise.column_peaks`, the coverage
+calibration) are the inverse of the coverage function: a column is cloud when
+its peak plus the shift clears the threshold, so
+`shift(c) = threshold_lo − quantile(peaks, 1 − c)`. `weather.shift_table`
+tabulates it at 256 coverages; the texture holds both the coverage (r) and
+its shift (g, through the table), so the shader pays one fetch. The far deck
+reads the coverage, the near field the shift, and the two agree by
+construction (a test checks the round trip within 3 % at 0.1–0.9).
+
+`python -m world_builder.terrain.preview --weather` draws each preset's globe
+under its weather, and the coverage alone, for tuning.
 
 ### Near: billboard shells
 
@@ -117,9 +152,44 @@ first) and billboards twice the size of shell *k − 1*; adjacent shells
 crossfade by distance on optical depth (the flat field's `lod_shells`
 layout). Each shell costs about half the previous.
 
-Tiles hang under a root moved by `origin − camera` (the terrain's rebasing),
-sort back to front between them in their own bin, and re-sort their
-particles a few tiles per frame.
+Per pixel, the cost depends on the quality (`CloudQuality`: HIGH, MID,
+LOW; the demo's F5 cycles them and off), which sets the billboard sizes, the
+sun march's steps, and:
+
+- **Octaves per shell** (`sphere.SHELL_OCTAVES`): HIGH evaluates all 4 up to
+  shell 2 and drops the finest from shell 3 on; MID and LOW drop more,
+  sooner. The finest cumulus octave (~125 m features) is still ~6 px wide at
+  27 km at 1600×900, so dropping it nearer shows as smoother, blander
+  clouds. A dropped octave counts as its mean, and the shell's threshold is
+  moved to make up for the lost spread (`octave_offset`), so the coverage
+  holds within 2 % (tested) and the crossfades still agree; the placement
+  evaluates the same octaves and threshold.
+- **Overlap** (`sphere.VOLUME_FRACTIONS`): billboard volume per unit of
+  cloud volume, 2.5 at HIGH (the flat field's), less at MID and LOW. The
+  extinction is divided by it, so the mean opacity holds, but fewer, more
+  opaque billboards look lumpier and hit the per-billboard optical-depth cap
+  sooner (thinner dense cores).
+
+At every quality:
+
+- **Early-out:** every density evaluation stops after one or two octaves
+  where the rest cannot reach the threshold (they add at most their
+  weights). It is exact: the same densities, fewer fetches in clear air, which
+  is most of a billboard quad.
+- **The atmosphere** in front of a billboard takes 4 samples per vertex
+  (`atmosphereAlong(..., steps, ...)`), against 8 per pixel elsewhere.
+
+Tiles hang under a root moved by `origin − camera` (the terrain's rebasing).
+
+**Draw order.** Premultiplied "over" needs back to front. The deck draws
+first, then each shell in its own back-to-front bin, the coarsest first.
+One bin for all tiles was wrong: a coarse tile holding the camera has its
+centre near it, so it drew late, and its billboards, all farther than the
+finer shells' (its near ones are faded out), covered nearer clouds. Within
+a tile the particles are re-sorted, a few tiles per frame, the stalest first:
+new tiles, then those the camera has moved past most relative to their
+distance. A stale order composites a cloud's far side over its near side,
+which reads as shadows sliding over it.
 
 ### Far: the deck
 
@@ -129,9 +199,10 @@ mid-slab height whose fragments evaluate the same density through the
 slab's depth (thickness / |cos|). Where a pixel spans more than the clouds'
 features (from orbit, a pixel is a kilometre or two), the deck fades from the
 sampled field to its **expected coverage**, the share of the pixel's columns
-that hold cloud, from the field's calibrated statistics and the local
-weather. Self-shadowing goes first (it is smaller than the cloud). So the
-pattern from orbit is the one you fly into, without the speckle.
+that hold cloud: the weather map's coverage, which the near field reproduces
+by construction. Self-shadowing goes first (it is smaller than the
+cloud). So the pattern from orbit is the one you fly into, without the
+speckle.
 
 ### Not yet
 
@@ -140,4 +211,7 @@ pattern from orbit is the one you fly into, without the speckle.
 - **Reflections:** the demo keeps clouds out of the ocean's mirror (it would
   draw every billboard twice).
 - **One cloud type per planet** (cumulus in the demo); the flat field mixes
-  types, the planet field could take one per slab.
+  types, the planet field could take one per slab (the weather map could
+  then say which).
+- **Weather that moves:** the map is fixed; the cyclones could drift with the
+  zonal wind and the map be rebuilt (a few seconds) or advected.

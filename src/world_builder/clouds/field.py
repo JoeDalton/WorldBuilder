@@ -37,7 +37,6 @@ from panda3d.core import (
     GeomVertexData,
     GeomVertexFormat,
     InternalName,
-    LVecBase2f,
     LVecBase4f,
     NodePath,
     OmniBoundingVolume,
@@ -228,10 +227,10 @@ def _calibration(seed: int, field: DensityField) -> tuple[np.ndarray, float]:
 
 @functools.cache
 def _no_weather() -> Texture:
-    """A 1-texel weather volume, for shaders that never read it."""
+    """A 1-texel weather cube map, for shaders that never read it."""
     tex = Texture("no_weather")
-    tex.setup_3d_texture(1, 1, 1, Texture.T_unsigned_byte, Texture.F_red)
-    tex.set_ram_image(bytes([128]))
+    tex.setup_cube_map(1, Texture.T_unsigned_byte, Texture.F_rg)
+    tex.set_ram_image(bytes(12))
     return tex
 
 
@@ -243,11 +242,10 @@ def flat_mode_inputs(node: NodePath) -> None:
         uSpherical=0,
         uDeck=0,
         planetRadius=0.0,
-        weatherNoise=_no_weather(),
-        weatherGain=0.0,
+        weatherMap=_no_weather(),
         uOwnAtmosphere=-1,
-        uDeckStats=LVecBase2f(0.0, 1.0),
         uPixelAngle=0.001,
+        uCloudDebug=0,
     )
 
 
