@@ -10,9 +10,20 @@ tinted by the air in front of it, and stars fade out by day.
 
 from world_builder.sky.sky import Sky
 from world_builder.sky.starfield import (
+    NEBULA_PALETTES,
+    NebulaStyle,
+    Starfield,
     load_cube_map,
-    make_starfield,
-    make_starfield_texture,
+    make_glow,
+    make_stars,
 )
 
-__all__ = ["Sky", "load_cube_map", "make_starfield", "make_starfield_texture"]
+__all__ = [
+    "NEBULA_PALETTES",
+    "NebulaStyle",
+    "Sky",
+    "Starfield",
+    "load_cube_map",
+    "make_glow",
+    "make_stars",
+]

@@ -81,12 +81,27 @@ would plug into.
 camera only (`hide(HIDE_FROM_NEAR)`), and scales it inside the far camera's
 range every frame. Its shader shows:
 
-- **the star field**, a cube map: `make_starfield_texture()` builds one with
-  numpy at startup (stars with a power law of brightness and colour
-  temperatures, more of them toward a Milky Way band with dust lanes, faint
-  nebulae; under a second at 1024 px), or `load_cube_map(pattern, loader)`
-  loads a painted one (SpaceFlight's `models/skyboxes/purple_#.png`). Rotate
-  it with `star_hpr`;
+- **the procedural star field** (`Starfield`), in two parts:
+  - **point stars** (`make_stars`: 14,000 by default, more toward a Milky
+    Way band, a power law of brightness; most white, a share slightly red
+    and a share slightly blue, `red=` / `blue=`). Each is a 3×3-pixel point
+    whose shader lights at most 2×2 pixels: a tent of one pixel's radius
+    around the star's true position, which sums to 1 over the pixels it
+    touches, so a star keeps its brightness as it moves across them (no
+    twinkling) and keeps its size at any resolution. A cube map would need
+    ~4096 px a face to keep stars that small at 1920×1080. Each point carries
+    the sky behind it (air, glow) and adds exactly what it changes once
+    tonemapped. `star_brightness` scales them (`Sky.set_star_brightness`).
+  - **the diffuse light** (`make_glow`): the band, its dust lanes and
+    nebulae, smooth, so a 256 px cube map holds it, as parameters (band, nebula
+    density, palette coordinate) that the shader colours. The colours are
+    live uniforms: a `NebulaStyle` (a three-stop `palette`, `intensity`, the
+    Milky Way's colour; `NEBULA_PALETTES` has a few) set with
+    `Sky.set_nebula`. The demo's F6 cycles the palettes, F7 / F8 dim and
+    brighten. The nebulae's size and coverage are generation parameters
+    (`nebula_scale`, `nebula_coverage`).
+- or **a painted cube map**: `load_cube_map(pattern, loader)` (SpaceFlight's
+  `models/skyboxes/purple_#.png`). Rotate either with `star_hpr`;
 - **the sun's disc**, twice its real size so it reads at any resolution,
   reddened by the air at sunset;
 - through every atmosphere, then the terrain's tonemap.

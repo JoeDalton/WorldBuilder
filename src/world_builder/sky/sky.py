@@ -5,24 +5,34 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import numpy as np
 from panda3d.core import (
+    ColorBlendAttrib,
     Geom,
+    GeomEnums,
     GeomNode,
+    GeomPoints,
     GeomTriangles,
+    GeomVertexArrayFormat,
     GeomVertexData,
     GeomVertexFormat,
     GeomVertexWriter,
+    InternalName,
     LMatrix4f,
     LVecBase3f,
     NodePath,
     OmniBoundingVolume,
     PTA_LVecBase3f,
     Shader,
+    ShaderAttrib,
+    TexGenAttrib,
     Texture,
+    TextureStage,
     Vec3,
 )
 
 from world_builder.atmosphere import Atmospheres, bind_defaults
+from world_builder.sky.starfield import NebulaStyle, StarCatalogue, Starfield
 
 SHADER_PATH = Path(__file__).parent / "shaders"
 #: The sun's angular radius as drawn (about twice the real one: a disc that
@@ -40,9 +50,11 @@ class Sky:
     def __init__(
         self,
         parent: NodePath,
-        stars: Texture,
+        stars: Starfield | Texture,
         atmospheres: Atmospheres | None = None,
         star_intensity: float = 0.6,
+        star_brightness: float = 8.0,
+        nebula: NebulaStyle = NebulaStyle(),
         sun_radiance=(4000.0, 3800.0, 3500.0),
         exposure: float = 0.9,
         star_hpr=(0.0, 0.0, 0.0),
@@ -50,9 +62,14 @@ class Sky:
     ):
         """
         :param parent: usually ``render``; the sphere is placed at the camera
-        :param stars: a cube map (see :mod:`starfield`)
+        :param stars: a procedural :class:`starfield.Starfield` (point stars
+            and the diffuse light), or a painted cube map
+            (:func:`starfield.load_cube_map`)
         :param atmospheres: the world's atmospheres (bound here); None = space
-        :param star_intensity: linear radiance of a full-white star texel
+        :param star_intensity: a painted map's linear radiance of full white
+        :param star_brightness: procedural stars: scales their flux (the
+            linear radiance of a pixel a star covers whole)
+        :param nebula: procedural glow: its colours (live: :meth:`set_nebula`)
         :param sun_radiance: the disc's linear radiance before the air
         :param exposure: as the terrain's (they share the tonemap)
         :param star_hpr: rotation of the star map in the world, degrees
@@ -80,16 +97,64 @@ class Sky:
             atmospheres.bind(self.node)
         self._sun = PTA_LVecBase3f.empty_array(1)
         self._sun[0] = LVecBase3f(0.0, 0.0, 1.0)
+        procedural = isinstance(stars, Starfield)
         self.node.set_shader_inputs(
-            uStars=stars,
+            uStars=stars.glow if procedural else stars,
+            uGlowMode=1 if procedural else 0,
             uStarIntensity=float(star_intensity),
+            uStarBrightness=float(star_brightness),
             uSunDir=self._sun,
             uSunRadiance=LVecBase3f(*sun_radiance),
             uSunCos=math.cos(SUN_ANGULAR_RADIUS),
             uExposure=float(exposure),
             uStarAdaptation=float(star_adaptation),
         )
+        self.set_nebula(nebula)
         self.set_star_rotation(star_hpr)
+        self.stars = None
+        if procedural:
+            self.stars = self.node.attach_new_node(_star_points(stars.catalogue))
+            self.stars.set_shader(
+                Shader.load(
+                    Shader.SL_GLSL,
+                    vertex=SHADER_PATH / "stars.vert",
+                    fragment=SHADER_PATH / "stars.frag",
+                )
+            )
+            attrib = self.stars.get_attrib(ShaderAttrib)
+            self.stars.set_attrib(
+                attrib.set_flag(ShaderAttrib.F_shader_point_size, True)
+            )
+            # Point sprites on, or gl_PointCoord is undefined (Panda's GL
+            # context is a compatibility one).
+            self.stars.set_tex_gen(
+                TextureStage.get_default(), TexGenAttrib.M_point_sprite
+            )
+            # Just after the sphere, added to it.
+            self.stars.set_bin("background", 1)
+            self.stars.set_attrib(
+                ColorBlendAttrib.make(
+                    ColorBlendAttrib.M_add,
+                    ColorBlendAttrib.O_one,
+                    ColorBlendAttrib.O_one,
+                )
+            )
+
+    def set_nebula(self, style: NebulaStyle) -> None:
+        """Colour the procedural glow (no effect on a painted map)."""
+        self.nebula = style
+        self.node.set_shader_inputs(
+            uMilkyWay=LVecBase3f(*style.milky_way),
+            uNebulaIntensity=float(style.intensity),
+        )
+        palette = PTA_LVecBase3f.empty_array(3)
+        for index, colour in enumerate(style.palette):
+            palette[index] = LVecBase3f(*colour)
+        self.node.set_shader_input("uNebulaPalette", palette)
+
+    def set_star_brightness(self, brightness: float) -> None:
+        """Scale the procedural stars' flux."""
+        self.node.set_shader_input("uStarBrightness", float(brightness))
 
     def set_star_rotation(self, hpr) -> None:
         """Turn the star map in the world (degrees)."""
@@ -117,6 +182,39 @@ class Sky:
 
     def remove(self) -> None:
         self.node.remove_node()
+
+
+def _star_points(catalogue: StarCatalogue) -> GeomNode:
+    """One point per star: its direction (on the unit sphere, in the star
+    map's frame) and (tint, flux)."""
+    fmt = GeomVertexArrayFormat()
+    fmt.add_column(
+        InternalName.get_vertex(), 3, GeomEnums.NT_float32, GeomEnums.C_point
+    )
+    fmt.add_column(
+        InternalName.make("star"), 4, GeomEnums.NT_float32, GeomEnums.C_other
+    )
+    combined = GeomVertexFormat()
+    combined.add_array(fmt)
+    n = len(catalogue.flux)
+    data = np.empty((n, 7), dtype=np.float32)
+    data[:, 0:3] = catalogue.dirs
+    data[:, 3:6] = catalogue.colour
+    data[:, 6] = catalogue.flux
+    vdata = GeomVertexData(
+        "stars", GeomVertexFormat.register_format(combined), Geom.UH_static
+    )
+    vdata.unclean_set_num_rows(n)
+    memoryview(vdata.modify_array(0)).cast("B")[:] = data.tobytes()
+    points = GeomPoints(Geom.UH_static)
+    points.add_next_vertices(n)
+    geom = Geom(vdata)
+    geom.add_primitive(points)
+    node = GeomNode("stars")
+    node.add_geom(geom)
+    node.set_bounds(OmniBoundingVolume())
+    node.set_final(True)
+    return node
 
 
 def _sphere(segments: int, rings: int) -> GeomNode:

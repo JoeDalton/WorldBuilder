@@ -4,8 +4,6 @@ Unit tests for the atmospheres (world_builder.atmosphere) and the star field
 scripts/terrain_shots.py); these check the CPU side.
 """
 
-import math
-
 import numpy as np
 import pytest
 from panda3d.core import NodePath, Texture
@@ -16,11 +14,15 @@ from world_builder.atmosphere import (
     Atmospheres,
     bind_defaults,
 )
+from world_builder.sky import NEBULA_PALETTES, NebulaStyle, Sky, Starfield
 from world_builder.sky.starfield import (
+    STAR_BLUE,
+    STAR_RED,
     cube_directions,
     directions_to_texels,
-    make_starfield,
-    make_starfield_texture,
+    glow_texture,
+    make_glow,
+    make_stars,
 )
 
 R = 600e3
@@ -109,22 +111,63 @@ def test_faces_follow_opengl_order():
     np.testing.assert_allclose(centres, axes, atol=1e-12)
 
 
-def test_starfield_has_stars_and_a_band():
-    image = make_starfield(size=64, seed=1, stars=3000)
-    assert image.shape == (6, 64, 64, 3)
-    assert image.min() >= 0.0
-    brightest = np.sort(image.max(axis=-1).ravel())[::-1]
-    # Points of light over a dark sky: a few bright texels, most near black.
-    assert brightest[20] > 10.0 * np.median(brightest)
+def test_stars_crowd_the_band_and_are_mostly_faint():
+    pole = np.array([0.0, 0.0, 1.0])
+    stars = make_stars(seed=1, count=20000, galactic_pole=pole)
+    assert stars.dirs.shape == (20000, 3) and stars.dirs.dtype == np.float32
+    np.testing.assert_allclose(np.linalg.norm(stars.dirs, axis=1), 1.0, atol=1e-6)
+    near_band = np.abs(stars.dirs[:, 2]) < 0.1
+    near_pole = np.abs(stars.dirs[:, 2]) > 0.9
+    # Equal areas of sky (bands of equal z width): the band holds more.
+    assert near_band.sum() > 1.5 * near_pole.sum()
+    # A power law: a few bright stars, most faint.
+    assert np.percentile(stars.flux, 99) > 5.0 * np.median(stars.flux)
 
 
-def test_starfield_texture_is_a_cube_map():
-    tex = make_starfield_texture(size=32, seed=2, stars=500)
+def test_some_stars_are_slightly_red_and_some_slightly_blue():
+    stars = make_stars(seed=2, count=10000, red=0.25, blue=0.2)
+    c = stars.colour
+    reddish = (c[:, 0] > c[:, 2] + 0.05).mean()
+    bluish = (c[:, 2] > c[:, 0] + 0.05).mean()
+    white = np.all(np.abs(c - 1.0) < 1e-6, axis=1).mean()
+    assert reddish == pytest.approx(0.25, abs=0.02)
+    assert bluish == pytest.approx(0.2, abs=0.02)
+    assert white == pytest.approx(0.55, abs=0.02)
+    # Slightly: never past the full tint.
+    assert c.max() <= max(STAR_RED.max(), STAR_BLUE.max()) + 1e-6
+    assert c.min() >= min(STAR_RED.min(), STAR_BLUE.min()) - 1e-6
+
+
+def test_glow_holds_the_band_and_nebula_parameters():
+    pole = np.array([0.0, 0.0, 1.0])
+    glow = make_glow(size=32, seed=1, galactic_pole=pole)
+    assert glow.shape == (6, 32, 32, 3)
+    assert glow.min() >= 0.0 and glow.max() <= 1.0
+    # The band (r) along the galactic equator, not at the poles (+Z, -Z).
+    equator = glow[0:4, 14:18, 14:18, 0].mean()
+    poles = glow[4:6, 14:18, 14:18, 0].mean()
+    assert equator > 5.0 * poles
+    # More coverage, more nebula.
+    thin = make_glow(size=32, seed=1, nebula_coverage=0.3)[..., 1]
+    thick = make_glow(size=32, seed=1, nebula_coverage=0.8)[..., 1]
+    assert (thick > 0).mean() > (thin > 0).mean() + 0.2
+
+
+def test_glow_texture_is_a_cube_map():
+    tex = glow_texture(make_glow(size=16, seed=2))
     assert tex.get_texture_type() == Texture.TT_cube_map
-    assert tex.get_x_size() == 32
-    assert len(tex.get_ram_image()) == 6 * 32 * 32 * 3
+    assert tex.get_x_size() == 16
+    assert len(tex.get_ram_image()) == 6 * 16 * 16 * 3
 
 
-def test_angular_scale_is_sane():
-    # A 1024 cube map resolves ~0.1 degree at a face centre: stars are points.
-    assert math.degrees(2.0 * math.atan(1.0 / 1024)) < 0.12
+def test_sky_draws_point_stars_and_tunes_the_nebula(showbase):
+    sky = Sky(showbase.render, Starfield(stars=500, glow_size=16))
+    try:
+        assert sky.stars is not None
+        geom = sky.stars.node().get_geom(0)
+        assert geom.get_vertex_data().get_num_rows() == 500
+        style = NebulaStyle(palette=NEBULA_PALETTES["ember"], intensity=0.05)
+        sky.set_nebula(style)
+        assert sky.nebula == style
+    finally:
+        sky.remove()

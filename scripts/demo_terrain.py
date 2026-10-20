@@ -45,6 +45,8 @@ Controls (AZERTY):
     O               toggle the ocean
     C               toggle the clouds
     F5              cycle the cloud quality: high / mid / low / off
+    F6              cycle the nebula's palette
+    F7 / F8         dimmer / brighter nebula
     M               toggle the terrain in the ocean's reflection
     , / ;           sharper / softer biome transitions
     T               toggle textures (off: flat biome colours)
@@ -93,7 +95,7 @@ from world_builder.atmosphere import AtmosphereParams, Atmospheres
 from world_builder.clouds.cloud import CloudQuality
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
-from world_builder.sky import Sky, make_starfield_texture
+from world_builder.sky import NEBULA_PALETTES, Sky, Starfield
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import (
     AzimuthalEquidistantChart,
@@ -335,7 +337,8 @@ class TerrainDemo(ShowBase):
         self.body = self.home  # the nearest body, updated every frame
 
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
-        self.sky = Sky(self.render, make_starfield_texture(), self.atmospheres)
+        self.sky = Sky(self.render, Starfield(), self.atmospheres)
+        self._palette = 0
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.clouds = None
         self._clouds_shown = True
@@ -370,6 +373,9 @@ class TerrainDemo(ShowBase):
             ("o", self._toggle_ocean, []),
             ("c", self._toggle_clouds, []),
             ("f5", self._cycle_cloud_quality, []),
+            ("f6", self._cycle_nebula_palette, []),
+            ("f7", self._scale_nebula, [1 / 1.5]),
+            ("f8", self._scale_nebula, [1.5]),
             ("m", self._toggle_reflection, []),
             ("t", self._toggle_textures, []),
             ("b", self._toggle_wireframe, []),
@@ -834,6 +840,17 @@ class TerrainDemo(ShowBase):
             self.clouds.set_debug(self._cloud_debug)
             self.clouds.set_sun(self._sun)
             self._apply_clouds()
+
+    def _cycle_nebula_palette(self):
+        self._palette = (self._palette + 1) % len(NEBULA_PALETTES)
+        name = list(NEBULA_PALETTES)[self._palette]
+        self.sky.set_nebula(replace(self.sky.nebula, palette=NEBULA_PALETTES[name]))
+        print(f"nebula: {name}, intensity {self.sky.nebula.intensity:.3g}")
+
+    def _scale_nebula(self, factor):
+        intensity = self.sky.nebula.intensity * factor
+        self.sky.set_nebula(replace(self.sky.nebula, intensity=intensity))
+        print(f"nebula intensity {intensity:.3g}")
 
     def _cycle_cloud_quality(self):
         index = CLOUD_QUALITIES.index(self._cloud_quality)
