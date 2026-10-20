@@ -37,6 +37,7 @@ from panda3d.core import (
     GeomVertexData,
     GeomVertexFormat,
     InternalName,
+    LVecBase2f,
     LVecBase4f,
     NodePath,
     OmniBoundingVolume,
@@ -49,6 +50,7 @@ from panda3d.core import (
 )
 
 from world_builder import PLANET_RADIUS_M
+from world_builder.atmosphere import bind_defaults
 from world_builder.clouds.cloud import (
     PRESETS,
     CloudQuality,
@@ -222,6 +224,31 @@ def _calibration(seed: int, field: DensityField) -> tuple[np.ndarray, float]:
     determined by field and seed alone, so shared across shells, scenes and tests."""
     volume = _noise_volume(seed)
     return column_peaks(volume, field), fbm_sigma(volume, field)
+
+
+@functools.cache
+def _no_weather() -> Texture:
+    """A 1-texel weather volume, for shaders that never read it."""
+    tex = Texture("no_weather")
+    tex.setup_3d_texture(1, 1, 1, Texture.T_unsigned_byte, Texture.F_red)
+    tex.set_ram_image(bytes([128]))
+    return tex
+
+
+def flat_mode_inputs(node: NodePath) -> None:
+    """cloud.frag's planet-mode inputs, switched off (the flat field): the
+    shader reads them, so they must be set even when unused."""
+    bind_defaults(node)
+    node.set_shader_inputs(
+        uSpherical=0,
+        uDeck=0,
+        planetRadius=0.0,
+        weatherNoise=_no_weather(),
+        weatherGain=0.0,
+        uOwnAtmosphere=-1,
+        uDeckStats=LVecBase2f(0.0, 1.0),
+        uPixelAngle=0.001,
+    )
 
 
 #: Floats per vertex, and per cell in cellParams ([x, y, z, layerId]); the latter
@@ -539,6 +566,7 @@ class CloudField:
             noiseOffset=Vec3(0, 0, 0),
             nearFadeRadii=float(self._near_fade_radii),
         )
+        flat_mode_inputs(self.node)
         self.set_sun(
             self._sun_direction,
             self._sun_color_arg,

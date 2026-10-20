@@ -5,7 +5,10 @@ WorldBuilder: procedural worlds for Panda3D.
              orbit to the ground: biomes, hand-made stamps, cube-sphere
              LOD, collision queries
     ocean    camera-locked reflective ocean with an optional geometric swell
-    clouds   volumetric billboard clouds
+    clouds   volumetric billboard clouds: a flat field, or a whole planet's
+             (clouds.sphere: billboards near, a deck far, one pattern)
+    atmosphere  single-scattering atmospheres, applied by every shader
+    sky      star field (procedural or painted) and the sun, through the air
     depth    near/far camera split, for views from the ground to orbit
 
 The ocean and clouds are flat-world objects that curve with the planet by a

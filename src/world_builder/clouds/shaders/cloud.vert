@@ -28,6 +28,11 @@ out vec3  worldPos;
 out float vRadius;
 out float vFade;        // recycle-boundary and near-camera fade
 flat out int vLayer;
+// Planet-mode billboards' per-vertex air (cloud_sphere.vert); unused here.
+out vec3 vAtmoT;
+out vec3 vAtmoS;
+out vec3 vSunTint;
+out float vSkyTint;
 
 const int CELL_PARAMS_STRIDE = 4;
 // Rows keep the texture under GL_MAX_TEXTURE_DIMENSION. Must match field.py.
@@ -101,4 +106,8 @@ void main() {
         float toCamera = length(camPos - pworld);
         vFade *= smoothstep(0.0, nearFadeRadii * i_radius, toCamera);
     }
+    vAtmoT = vec3(1.0);
+    vAtmoS = vec3(0.0);
+    vSunTint = vec3(1.0);
+    vSkyTint = 1.0;
 }

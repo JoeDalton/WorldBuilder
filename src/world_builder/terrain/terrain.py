@@ -44,6 +44,7 @@ from panda3d.core import (
     Vec3,
 )
 
+from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.terrain.biomes import BIOME_COLORS
 from world_builder.terrain.chunkgen import ChunkData
 from world_builder.terrain.materials import (
@@ -62,9 +63,6 @@ SHADER_PATH = Path(__file__).parent / "shaders"
 #: The terrain root is re-based to the camera snapped to this grid, metres;
 #: above ORIGIN_SNAP * 16 of altitude the grid grows to altitude / 16.
 ORIGIN_SNAP = 4096.0
-#: Height of the haze shell above sea level, metres: the path length of a
-#: line of sight inside it is what fades terrain to the haze colour.
-HAZE_HEIGHT = 12000.0
 #: Generated chunks kept in memory (about 205 KB each), at most.
 STORE_SIZE = 2000
 #: Uploaded chunks kept on the GPU, shown or not, at most.
@@ -96,9 +94,8 @@ class Terrain:
         spec: PlanetSpec,
         backend: str = "process",
         workers: int | None = None,
-        haze_color=(0.55, 0.65, 0.8),
-        haze_distance: float | None = 150000.0,
-        haze_height: float = HAZE_HEIGHT,
+        atmospheres: Atmospheres | None = None,
+        atmosphere: int | None = None,
         max_distance: float | None = None,
         sun_direction=(0.4, 0.5, 0.6),
         sun_color=(2.4, 2.25, 2.0),
@@ -115,15 +112,15 @@ class Terrain:
         :param spec: the planet
         :param backend: chunk generation backend, see :class:`ChunkExecutor`
         :param workers: generation worker count
-        :param haze_color: colour distant terrain fades to (display space)
-        :param haze_distance: metres of line of sight inside the haze shell
-            over which terrain reaches the haze fully; None = no atmosphere
-        :param haze_height: top of the haze shell above sea level, metres
+        :param atmospheres: the world's atmospheres: the terrain is seen
+            through all of them (aerial perspective); None = no air anywhere
+        :param atmosphere: index of this planet's own atmosphere in
+            *atmospheres* (reddens its sunlight); None = airless
         :param max_distance: terrain beyond this 3D distance is not drawn;
             None = out to the horizon
         :param sun_direction: toward the sun
-        :param sun_color: direct light, linear (may exceed 1)
-        :param ambient: sky light, linear
+        :param sun_color: direct light above any air, linear (may exceed 1)
+        :param ambient: sky light, linear (near zero on an airless body)
         :param exposure: pre-tonemap exposure, as the ocean's
         :param materials: biome textures; loaded from the textures folder if None
         :param min_level: finest LOD level drawn (0 = full detail, about 2 m
@@ -142,13 +139,17 @@ class Terrain:
                 fragment=SHADER_PATH / "terrain.frag",
             )
         )
-        self.haze_distance = haze_distance
-        self.haze_height = haze_height
         self.max_distance = max_distance
         self.materials = materials or load_materials()
         self.blend_depth = DEFAULT_BLEND_DEPTH
         self.min_level = min_level
-        self._set_static_inputs(haze_color, sun_direction, sun_color, ambient, exposure)
+        self._set_static_inputs(sun_direction, sun_color, ambient, exposure)
+        bind_defaults(self.root)
+        if atmospheres is not None:
+            atmospheres.bind(self.root)
+        self.root.set_shader_input(
+            "uOwnAtmosphere", -1 if atmosphere is None else int(atmosphere)
+        )
 
         self.position = np.asarray(position, dtype=np.float64)
         self._owns_executor = executor is None
@@ -264,14 +265,9 @@ class Terrain:
         ):
             self._select(cam)
 
-        rho = float(np.linalg.norm(cam))
-        shell = self.spec.radius + self.haze_height
         frame = self._frame_inputs
         frame["uCamPos"][0] = LVecBase3f(*render_cam)
         frame["uPlanetCentre"][0] = LVecBase3f(*(render_cam - cam))
-        frame["uCamFromCentre"][0] = LVecBase3f(*cam)
-        # In float64: as a float32 difference of squares it would be noise.
-        frame["uCamShellC"][0] = float((rho - shell) * (rho + shell))
         self.stats.update(
             shown=len(self.shown),
             stored=len(self.store),
@@ -313,7 +309,7 @@ class Terrain:
         the swell ocean is not shown), instead of the bare seabed."""
         self.root.set_shader_input("uSeaSurface", 1 if on else 0)
 
-    def set_sun(self, direction, color, ambient, haze_color=None) -> None:
+    def set_sun(self, direction, color, ambient) -> None:
         """Relight the terrain (no rebuild).
 
         :param direction: toward the sun, planet frame (the render frame's
@@ -323,8 +319,6 @@ class Terrain:
         frame["uSunDir"][0] = Vec3(*direction).normalized()
         frame["uSunColor"][0] = LVecBase3f(*color)
         frame["uAmbient"][0] = LVecBase3f(*ambient)
-        if haze_color is not None:
-            frame["uHazeColor"][0] = LVecBase3f(*haze_color)
 
     def set_debug_mode(self, mode: int) -> None:
         """0 shaded, 1 LOD level, 2 biomes, 3 slope, 4 normals, 5 skirts."""
@@ -378,9 +372,7 @@ class Terrain:
 
     # ── internals ──────────────────────────────────────────────────────────────
 
-    def _set_static_inputs(
-        self, haze_color, sun_direction, sun_color, ambient, exposure
-    ):
+    def _set_static_inputs(self, sun_direction, sun_color, ambient, exposure):
         root = self.root
         m = self.materials
         root.set_shader_input(
@@ -404,9 +396,6 @@ class Terrain:
         root.set_shader_input("uDetailFar", 4000.0)
         root.set_shader_input("uBlendDepth", self.blend_depth)
         root.set_shader_input("uExposure", float(exposure))
-        # No atmosphere: a haze distance nothing reaches.
-        haze = self.haze_distance if self.haze_distance is not None else 1e30
-        root.set_shader_input("uHazeDistance", float(haze))
         root.set_shader_input("uDebugMode", 0)
         root.set_shader_input("uLevel", 0)
         root.set_shader_input("uMaxLevel", 0)
@@ -419,20 +408,14 @@ class Terrain:
         for name, value in (
             ("uCamPos", (0.0, 0.0, 0.0)),
             ("uPlanetCentre", (0.0, 0.0, -1.0)),
-            ("uCamFromCentre", (0.0, 0.0, 1.0)),
             ("uSunDir", (0.0, 0.0, 1.0)),
             ("uSunColor", (1.0, 1.0, 1.0)),
             ("uAmbient", (0.0, 0.0, 0.0)),
-            ("uHazeColor", haze_color),
         ):
             array = PTA_LVecBase3f.empty_array(1)
             array[0] = LVecBase3f(*value)
             self._frame_inputs[name] = array
             root.set_shader_input(name, array)
-        shell = PTA_float.empty_array(1)
-        shell[0] = -1.0
-        self._frame_inputs["uCamShellC"] = shell
-        root.set_shader_input("uCamShellC", shell)
         root.set_shader_input("uSeaSurface", 0)
         root.set_shader_input("uDepthBias", 6.0)
         self.set_sun(sun_direction, sun_color, ambient)

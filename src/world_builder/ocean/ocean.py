@@ -55,6 +55,7 @@ from panda3d.core import (
 )
 
 from world_builder import PLANET_RADIUS_M
+from world_builder.atmosphere import bind_defaults
 from world_builder.utils import compute_next_power_of_2
 
 _SHADERS = Path(__file__).parent / "shaders"
@@ -375,6 +376,12 @@ class Ocean:
         # Aerial perspective, to meet the cloud haze at the horizon.
         self.ocean_node.setShaderInput("uHazeColor", haze_color)
         self.ocean_node.setShaderInput("uHazeDistance", float(haze_distance))
+        # No atmosphere unless a world binds its own (atmosphere.Atmospheres):
+        # then they replace the haze. The base frame's rotation and the sun
+        # are the binder's to keep current (set_atmosphere_frame).
+        bind_defaults(self.ocean_node)
+        self.ocean_node.setShaderInput("uBaseToWorld", LMatrix4f.identMat())
+        self.ocean_node.setShaderInput("uAtmoSunDir", LVecBase3f(0.0, 0.0, 1.0))
         # Hide the ocean from the reflection camera
         self.ocean_node.hide(_OCEAN_BIT)
 
@@ -420,6 +427,18 @@ class Ocean:
         self.ocean_node.setShaderInput("iTime", current_time)
         self.ocean_node.setShaderInput("iCameraPos", camera_pos)
         self.ocean_node.setShaderInput("uReflMVP", mvp)
+
+    def set_atmosphere_frame(self, base_to_world, sun_direction) -> None:
+        """For a bound atmosphere: how the base node's axes sit in the world
+        (the atmospheres work in world axes) and where the sun is.
+
+        :param base_to_world: the base node's transform relative to render
+            (an LMatrix4f, e.g. ``base_node.get_mat(render)``; only its
+            rotation is used)
+        :param sun_direction: toward the sun, world axes
+        """
+        self.ocean_node.setShaderInput("uBaseToWorld", base_to_world)
+        self.ocean_node.setShaderInput("uAtmoSunDir", LVecBase3f(*sun_direction))
 
     def set_wave_iterations(self, iterations: int):
         """Adjust wave-detail quality at runtime (e.g. from a settings menu).

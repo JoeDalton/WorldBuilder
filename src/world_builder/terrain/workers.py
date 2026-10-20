@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -85,7 +86,15 @@ def default_workers() -> int:
 
 @dataclass
 class _Channel:
-    spec: PlanetSpec | None = None
+    spec: object | None = None
+    #: Top-level (picklable) function(spec, key, version) -> result with
+    #: ``key`` and ``version`` attributes; None = terrain chunks
+    #: (:func:`generate_chunk`, looked up when called).
+    generator: Callable | None = None
+
+    def run(self):
+        return self.generator or generate_chunk
+
     version: int = 0
     #: Keys to generate, most urgent first (a dict: ordered, O(1) removal).
     wanted: dict[Key, None] = field(default_factory=dict)
@@ -159,15 +168,27 @@ class ChunkExecutor:
         found = self._channels.get(channel)
         return len(found.pending) if found is not None else 0
 
-    def set_spec(self, spec: PlanetSpec, channel: str = DEFAULT_CHANNEL) -> int:
+    def set_spec(
+        self,
+        spec: PlanetSpec,
+        channel: str = DEFAULT_CHANNEL,
+        generator: Callable | None = None,
+    ) -> int:
         """Switch a channel's planet: cancel its queued work, bump its version.
 
-        :param spec: the new planet; resolved here (sea bias) if needed
+        :param spec: the new planet; resolved here (sea bias) if needed. Any
+            picklable spec goes with a matching *generator*
         :param channel: which planet slot
+        :param generator: what the workers run, ``generator(spec, key,
+            version)``, a top-level function; None keeps the channel's
+            (terrain chunks by default). Clouds use their own
         :returns: the new version (unique across channels)
         """
         ch = self._channels.setdefault(channel, _Channel())
-        ch.spec = spec.resolved()
+        if generator is not None:
+            ch.generator = generator
+        resolve = getattr(spec, "resolved", None)
+        ch.spec = resolve() if resolve is not None else spec
         self._last_version += 1
         ch.version = self._last_version
         for future in ch.pending.values():
@@ -189,7 +210,7 @@ class ChunkExecutor:
             return
         if self._pool is None:
             for key in wanted[: self.inline_budget]:
-                ch.done.append(generate_chunk(ch.spec, key, ch.version))
+                ch.done.append(ch.run()(ch.spec, key, ch.version))
             return
         ch.wanted = dict.fromkeys(wanted)
         for key in list(ch.pending):
@@ -241,9 +262,7 @@ class ChunkExecutor:
             if key is None:
                 del queues[id(ch)]
                 continue
-            ch.pending[key] = self._pool.submit(
-                generate_chunk, ch.spec, key, ch.version
-            )
+            ch.pending[key] = self._pool.submit(ch.run(), ch.spec, key, ch.version)
             total += 1
 
 

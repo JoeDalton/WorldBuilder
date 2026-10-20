@@ -8,7 +8,9 @@ finished refining (or a timeout), then saves a screenshot::
     python scripts/terrain_shots.py [--out DIR] [--radius METRES]
         [--pose NAME ...] [--timeout SECONDS]
 
-Every pose is lit by the same local sun (azimuth 210, elevation 35).
+Every pose is lit by the same local sun (azimuth 210, elevation 35), but
+sunset (the sun 3 degrees up in the west, looked at) and night_orbit.
+in_clouds flies through the cloud deck.
 Poses: ground (the level's start), coast (2 km up over the reference point),
 high (20 km up), swell / sea_surface (either side of the ocean handover at
 15 km: the swell ocean, then the terrain's own flat sea), stratosphere (200 km
@@ -38,6 +40,10 @@ from world_builder.terrain.chart import latlon  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 
 CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
+#: Frames timed once a pose has settled (vsync is off for the shots).
+FPS_FRAMES = 60
+#: Sun (azimuth, elevation) per pose, as seen there; default (210, 35).
+SUNS = {"sunset": (270.0, 3.0), "night_orbit": (90.0, -60.0)}
 
 
 def _poses(demo: TerrainDemo) -> dict:
@@ -68,6 +74,10 @@ def _poses(demo: TerrainDemo) -> dict:
         "corner": (corner_lat, corner_lon, 3000.0, 30.0, -30.0, 0, 0),
         "lod": (lat0, lon0, 20000.0, 0.0, -25.0, 1, 0),
     }
+    # Inside the cloud deck (2.2-3.2 km above sea level).
+    poses["in_clouds"] = (ref_lat, ref_lon, 2700.0, 0.0, 0.0, 0, 0)
+    # The sun low in the west, looking at it (heading 90 = west).
+    poses["sunset"] = (ref_lat, ref_lon, 600.0, 90.0, 2.0, 0, 0)
     if len(demo.bodies) > 1:
         moon = demo.bodies[1]
         poses["moonrise"] = (ref_lat, ref_lon, 1500.0, 0.0, 6.0, 0, 0)
@@ -76,6 +86,8 @@ def _poses(demo: TerrainDemo) -> dict:
         lat, lon = (float(v[0]) for v in latlon(facing[None, :]))
         poses["moon_orbit"] = (lat, lon, 3.0 * moon.radius, 0.0, -89.9, 0, 1)
         poses["moon_ground"] = (lat + 1.0, lon, 2000.0, 0.0, -15.0, 0, 1)
+    # The terminator from orbit: the sun set an hour ago at the nadir.
+    poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     return poses
 
 
@@ -114,6 +126,7 @@ def main():
                 "multisamples 4",
                 "depth-bits 24",
                 "show-frame-rate-meter false",
+                "sync-video false",
             ]
         ),
     )
@@ -125,16 +138,21 @@ def main():
         lat, lon, alt, heading, pitch, view, body = poses[name]
         demo.set_debug_view(view)
         demo._place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])
-        demo.set_local_sun(210.0, 35.0)  # the same light everywhere
+        demo.set_local_sun(*SUNS.get(name, (210.0, 35.0)))
         settled = _settle(demo, args.timeout)
         for _ in range(3):  # let the last uploads reach the screen
             demo.taskMgr.step()
+        start = time.perf_counter()
+        for _ in range(FPS_FRAMES):  # the settled view's frame rate
+            demo.taskMgr.step()
+        fps = FPS_FRAMES / (time.perf_counter() - start)
         path = args.out / f"{name}.png"
         demo.win.save_screenshot(Filename.from_os_specific(str(path)))
         s = demo.bodies[body].terrain.stats
         print(
             f"{name:<13} {'settled' if settled else 'TIMEOUT'}  {s['shown']} chunks, "
-            f"finest {s['finest']}, LOD {s['select_ms']:.1f} ms -> {path}"
+            f"finest {s['finest']}, LOD {s['select_ms']:.1f} ms, {fps:.0f} fps "
+            f"-> {path}"
         )
     demo.destroy_terrain()
 

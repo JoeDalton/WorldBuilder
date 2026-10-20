@@ -1,7 +1,8 @@
 # Welcome to the WorldBuilder documentation!
 
-WorldBuilder procedurally builds worlds in Panda3D: planetary terrain, a
-curved reflective ocean and volumetric billboard clouds. It started inside
+WorldBuilder procedurally builds worlds in Panda3D: planetary terrain seen
+from orbit to the ground, atmospheres and a star field, a curved reflective
+ocean, and volumetric billboard clouds (flat, or over a whole planet). It started inside
 [SpaceFlight](https://github.com/JoeDalton/SpaceFlight), which uses it for its
 ocean and clouds.
 
@@ -14,6 +15,7 @@ it works. The per-class API is in the auto-generated
 :caption: Contents
 
 terrain
+atmosphere
 ocean
 clouds
 performance

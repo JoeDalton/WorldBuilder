@@ -24,7 +24,7 @@ All of them take `--radius` (metres) where it applies.
 |---|---|---|
 | Planet definition | `noise`, `chart`, `planet`, `biomes`, `stamps`, `level` | Pure functions of a **direction on the unit sphere**, in float64 numpy. The renderer and the collision queries read the same planet. |
 | Chunks | `cubesphere`, `chunkgen`, `quadtree`, `workers` | The six faces of a cube pushed onto the sphere, each a quadtree of tiles with 65×65 vertices plus skirts. Generated coarse-first in spawned worker processes. |
-| Rendering | `mesh`, `materials`, `terrain`, `shaders/`, `world_builder.depth` | Panda3D. True geometry, camera-relative placement, depth split between two cameras, biome texture arrays, the ocean's tonemap, and haze measured through a shell over the planet. |
+| Rendering | `mesh`, `materials`, `terrain`, `shaders/`, `world_builder.depth` | Panda3D. True geometry, camera-relative placement, depth split between two cameras, biome texture arrays, the ocean's tonemap, and every atmosphere along the sight line (`world_builder.atmosphere`). |
 | Queries | `query` | `height_at`, `altitude`, `normal_at`, `sphere_contact`, `segment_intersect`, `material_at` on planet-frame positions, all on the same triangles that are drawn. |
 
 ### Planet scale
@@ -166,12 +166,16 @@ same camera.
 
 ```python
 executor = ChunkExecutor()                      # one worker pool for all
-planet = Terrain(render, spec, executor=executor)
+atmospheres = Atmospheres()                     # the planet's air
+atmospheres.add(spec.radius, AtmosphereParams())
+planet = Terrain(render, spec, executor=executor,
+                 atmospheres=atmospheres, atmosphere=0)
 moon = Terrain(render, replace(PRESETS["moon"], seed=7), executor=executor,
-               position=(3.0e6, 9.0e6, 1.0e6), haze_distance=None,
-               materials=planet.materials)
+               atmospheres=atmospheres,         # seen through the planet's air
+               position=(3.0e6, 9.0e6, 1.0e6), materials=planet.materials)
 for terrain in (planet, moon):                  # every frame
     terrain.update(camera_world)                # float64, world frame
+atmospheres.update(camera_world)
 ```
 
 - **Frames.**
@@ -194,32 +198,33 @@ for terrain in (planet, moon):                  # every frame
   steps up close only depend on the split, so reaching a moon 10,000 km
   away costs nothing on the ground; on the moon itself steps are a few km,
   narrower than a pixel at that range.
-- **No atmosphere:** `haze_distance=None`. Give such a body bare sunlight
-  and almost no ambient light (`set_sun`).
+- **No atmosphere:** leave `atmosphere=` unset (no air of its own). Give
+  such a body bare sunlight and almost no ambient light (`set_sun`); it is
+  still seen through the other bodies' air when a sight line crosses it.
 - **Barren worlds:** `PlanetSpec.has_vegetation=False` removes grass and
   forest, and desert takes whatever snow leaves. The `moon` preset is a
   200 km airless ball of sand, with rock only on cliffs.
 
-Not handled yet: one body seen through another's atmosphere. From the
-planet's surface the moon is drawn crisp over the sky, untouched by the
-planet's haze.
+A body seen through another's air is dimmed and tinted by it: from the
+planet's surface by day the moon is a pale disc in a blue sky (see
+[Atmosphere, sky and planet clouds](atmosphere.md)).
 
-## Ocean and sky in the demo
+## Ocean, sky and clouds in the demo
 
 - **The swell ocean is a flat-world object.** The demo puts it in a frame
   that follows the point under the camera: the tangent plane at sea level.
   Its xy are anchored to the ground through a chart that re-centres every
   50 km, at which point the wave pattern jumps once. Its droop uses the
-  terrain's radius (`Ocean(planet_radius=...)`).
+  terrain's radius (`Ocean(planet_radius=..., exact_sphere=True)`), and it is
+  seen through the atmosphere like everything else.
 - **Above 15 km the swell ocean is hidden.** The terrain draws the sea itself
   instead (`Terrain.set_sea_surface`): seabed vertices are lifted to sea
   level and shaded as water, tinted by depth.
-- **The sky dome** is drawn by the far camera only. It follows the local
-  vertical and fades to black between 20 and 80 km.
-- **The planet's limb** gets its glow from the haze shell. Haze is the length
-  of the sight line inside a shell 12 km above sea level. Near the ground
-  that is the whole distance, as before; from orbit only the limb hazes.
-- Proper ocean, atmosphere and cloud rendering from orbit are future work.
+- **Sky, haze and the limb** come from the planet's atmosphere (single
+  scattering), and the clouds from one planet-wide density field: see
+  [Atmosphere, sky and planet clouds](atmosphere.md). The terrain takes
+  `atmospheres=` (the world's) and `atmosphere=` (its own index, for its
+  sunlight); there is no separate haze any more.
 
 ## Textures
 

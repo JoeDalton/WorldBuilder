@@ -1,5 +1,7 @@
 #version 330
 
+#pragma include "../../atmosphere/shaders/atmosphere.glsl"
+
 // Terrain fragment shader: biome texture blending, lighting, ACES tonemap and
 // haze. The tonemap and the post-tonemap haze match ocean.frag, so terrain,
 // sea and cloud meet cleanly at the horizon. "Up" is the local vertical of
@@ -27,13 +29,10 @@ uniform float uBlendDepth;        // biome transition softness: ~0.1 crisp
                                   // height-cut edges, >= 1 smooth crossfades
 
 uniform vec3  uSunDir;            // toward the sun, render frame
-uniform vec3  uSunColor;
-uniform vec3  uAmbient;
+uniform vec3  uSunColor;          // sunlight above any air
+uniform vec3  uAmbient;           // sky light (none on an airless body)
 uniform float uExposure;
-uniform vec3  uHazeColor;
-uniform float uHazeDistance;      // metres of sight line in the haze shell to full haze
-uniform vec3  uCamFromCentre;     // camera relative to the planet centre
-uniform float uCamShellC;         // |camera|^2 - shell radius^2 (float64 on the CPU)
+uniform int   uOwnAtmosphere;     // this planet's atmosphere index, -1 = airless
 uniform int   uSeaSurface;
 
 uniform int   uDebugMode;  // 0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts
@@ -80,26 +79,6 @@ vec4 sampleLayer(sampler2DArray s, vec2 uv, vec2 gx, vec2 gy, float scale, int l
 
 vec3 hue(float t) {
     return clamp(abs(fract(t + vec3(0.0, 2.0, 1.0) / 3.0) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
-}
-
-// Length of the sight line from the camera to this fragment that lies inside
-// the haze shell. Near the ground (camera inside the shell) it is the whole
-// distance; from orbit only the part through the shell counts, so the limb
-// glows and the disc below stays clear.
-float hazePath(float dist) {
-    vec3 d = vRelPos / max(dist, 1e-3);
-    float b = dot(uCamFromCentre, d);
-    float c = uCamShellC;
-    float disc = b * b - c;
-    if (disc <= 0.0) return 0.0;
-    // Roots of t^2 + 2bt + c, the stable way round.
-    float q = b >= 0.0 ? -b - sqrt(disc) : -b + sqrt(disc);
-    float t0 = q;
-    float t1 = c / q;
-    if (t0 > t1) {
-        float t = t0; t0 = t1; t1 = t;
-    }
-    return max(0.0, min(t1, dist) - max(t0, 0.0));
 }
 
 void main() {
@@ -238,21 +217,32 @@ void main() {
 
     vec3 V = normalize(-vRelPos);
     vec3 H = normalize(L + V);
-    float lambert = max(dot(surfaceN, L), 0.0) * day;
+    // Sunlight through this planet's own air: reddened low, gone in its
+    // shadow. An airless body just has the day/night line.
+    vec3 sunlight = uSunColor;
+    float sunDay = day;
+    if (uOwnAtmosphere >= 0) {
+        sunlight *= atmoSunlight(uOwnAtmosphere, uAtmoCam[uOwnAtmosphere].xyz + vRelPos, L);
+        sunDay = 1.0;
+    }
+    // Sky light fades through twilight.
+    vec3 skylight = uAmbient * smoothstep(-0.2, 0.2, dot(up, L));
+    float lambert = max(dot(surfaceN, L), 0.0) * sunDay;
     float gloss = 1.0 - roughness;
     float specular = gloss * gloss * 0.3 * pow(max(dot(surfaceN, H), 0.0), mix(8.0, 96.0, gloss));
-    vec3 C = albedo * (uSunColor * lambert + uAmbient * (0.55 + 0.45 * dot(surfaceN, up)) * ao * day)
-           + uSunColor * specular * lambert;
+    vec3 C = albedo * (sunlight * lambert + skylight * (0.55 + 0.45 * dot(surfaceN, up)) * ao)
+           + sunlight * specular * lambert;
     if (water) {
         // Sky reflected at grazing angles (Schlick).
         float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(surfaceN, V), 0.0), 5.0);
-        C += fresnel * uAmbient * 0.8 * day;
+        C += fresnel * skylight * 0.8;
     }
 
     if (uDebugMode == 5) {
         C = mix(C, hue(float(uLevel) / float(uMaxLevel + 1)), 0.5);
     }
-    vec3 display = aces_tonemap(C * uExposure);
-    float haze = clamp(hazePath(dist) / uHazeDistance, 0.0, 1.0);
-    fragColor = vec4(mix(display, uHazeColor * mix(0.02, 1.0, day), haze), 1.0);
+    // Aerial perspective: the air between the camera and the ground, of
+    // every atmosphere the sight line crosses.
+    C = applyAtmospheres(C, vRelPos / max(dist, 1e-3), dist, L);
+    fragColor = vec4(aces_tonemap(C * uExposure), 1.0);
 }

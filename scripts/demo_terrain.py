@@ -43,6 +43,7 @@ Controls (AZERTY):
     N               next seed (the planet)
     L               reload the level file (edit stamps live)
     O               toggle the ocean
+    C               toggle the clouds
     M               toggle the terrain in the ocean's reflection
     , / ;           sharper / softer biome transitions
     T               toggle textures (off: flat biome colours)
@@ -76,12 +77,6 @@ from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
     ClockObject,
-    Geom,
-    GeomNode,
-    GeomTriangles,
-    GeomVertexData,
-    GeomVertexFormat,
-    GeomVertexWriter,
     GraphicsWindow,
     LineSegs,
     LMatrix3f,
@@ -93,7 +88,10 @@ from panda3d.core import (
     loadPrcFileData,
 )
 
+from world_builder.atmosphere import AtmosphereParams, Atmospheres
+from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.sky import Sky, make_starfield_texture
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import (
     AzimuthalEquidistantChart,
@@ -104,10 +102,12 @@ from world_builder.terrain.cubesphere import FACE_NAMES, dirs_to_face
 from world_builder.terrain.level import DEMO_LEVEL, load_level
 from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
+from world_builder.terrain.terrain import REFLECTION_CAMERA_BITS
 
 INITIAL_FAR_M = 600000.0  # the lens the ocean's reflection camera copies
-HAZE_COLOR = (0.62, 0.71, 0.84)  # display space; sky at the horizon
-ZENITH_COLOR = (0.28, 0.45, 0.76)
+# The ocean's own haze (it blends to this by distance where no atmosphere
+# is bound; the demo binds one).
+HAZE_COLOR = (0.62, 0.71, 0.84)
 HAZE_DISTANCE = 150000.0
 SPEED = 300.0  # metres/second at low altitude
 BOOST = 5.0
@@ -127,10 +127,12 @@ OCEAN_HANDOVER = (14000.0, 16000.0)
 # The ocean's wave pattern is anchored to the ground through a chart around
 # this point, re-anchored (a jump in the pattern) past this distance.
 OCEAN_ANCHOR_RANGE = 50000.0
-SKY_FADE = (20000.0, 80000.0)  # altitudes over which the sky dome fades to black
-# Airless bodies: sunlight unfiltered, next to no ambient light (a black sky).
-SPACE_SUN = (2.6, 2.45, 2.2)
+# Sunlight above the air (the atmosphere reddens it), the planet's sky light,
+# and an airless body's next to no ambient light (a black sky).
+SUN_COLOR = (2.6, 2.5, 2.35)
+SKY_AMBIENT = (0.34, 0.44, 0.64)
 SPACE_AMBIENT = (0.025, 0.025, 0.03)
+CLOUD_BASE = 2200.0  # metres above sea level: above the start pose
 HUD_PERIOD = 0.2  # seconds between HUD refreshes
 PROBE_RADIUS = 20.0
 PROBE_DISTANCE = 60.0
@@ -258,12 +260,17 @@ class TerrainDemo(ShowBase):
 
         print("starting terrain workers ...")
         self.executor = ChunkExecutor(backend=backend, workers=workers)
+        # The planet's air: everything is seen through it, the moon included.
+        self.atmospheres = Atmospheres()
+        self.atmospheres.add(spec.radius, AtmosphereParams())
         self.terrain = Terrain(
             parent=self.render,
             spec=spec,
             executor=self.executor,
-            haze_color=HAZE_COLOR,
-            haze_distance=HAZE_DISTANCE,
+            atmospheres=self.atmospheres,
+            atmosphere=0,
+            sun_color=SUN_COLOR,
+            ambient=SKY_AMBIENT,
         )
         self.home = Body("planet", self.terrain, atmosphere=True)
         self.bodies = [self.home]
@@ -272,7 +279,9 @@ class TerrainDemo(ShowBase):
                 parent=self.render,
                 spec=replace(PRESETS["moon"], seed=MOON_SEED),
                 executor=self.executor,
-                haze_distance=None,
+                atmospheres=self.atmospheres,  # seen through the planet's
+                sun_color=SUN_COLOR,
+                ambient=SPACE_AMBIENT,
                 position=self._moon_position(spec, moon_distance),
                 materials=self.terrain.materials,
             )
@@ -281,7 +290,18 @@ class TerrainDemo(ShowBase):
         self.body = self.home  # the nearest body, updated every frame
 
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
-        self._sky = self._make_sky()
+        self.sky = Sky(self.render, make_starfield_texture(), self.atmospheres)
+        self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
+        self.clouds = SphericalClouds(
+            self.render,
+            spec.radius,
+            self.executor,
+            atmospheres=self.atmospheres,
+            atmosphere=0,
+            altitude=CLOUD_BASE,
+        )
+        # Not in the ocean's mirror: it would draw every billboard twice.
+        self.clouds.root.hide(REFLECTION_CAMERA_BITS)
         # Built before the depth split changes the lens: the ocean's
         # reflection camera copies it once.
         self.ocean = self._make_ocean()
@@ -309,6 +329,7 @@ class TerrainDemo(ShowBase):
             ("n", self._next_seed, []),
             ("l", self._reload, []),
             ("o", self._toggle_ocean, []),
+            ("c", self._toggle_clouds, []),
             ("m", self._toggle_reflection, []),
             ("t", self._toggle_textures, []),
             ("b", self._toggle_wireframe, []),
@@ -412,7 +433,7 @@ class TerrainDemo(ShowBase):
             method_lists={},
             game_time=SimpleNamespace(get_current_time=self._clock.get_frame_time),
         )
-        return Ocean(
+        ocean = Ocean(
             game=self._game,
             geometric_swell=True,
             # The game's 20 m swell lifts the water up to 20 m near the camera,
@@ -425,49 +446,8 @@ class TerrainDemo(ShowBase):
             planet_radius=self.radius,
             exact_sphere=True,
         )
-
-    def _make_sky(self):
-        """A unit gradient dome: haze at and below the horizon, blue overhead.
-
-        The planet's sky: recentred on the camera, aligned with the planet's
-        local vertical and scaled inside the far camera's range every frame;
-        drawn by the far camera only, first, without depth writes. It fades
-        out with altitude above the planet.
-        """
-        rings, segments = 24, 48
-        vdata = GeomVertexData("sky", GeomVertexFormat.get_v3c4(), Geom.UH_static)
-        vertex = GeomVertexWriter(vdata, "vertex")
-        color = GeomVertexWriter(vdata, "color")
-        for ring in range(rings + 1):
-            el = -0.25 * math.pi + 0.75 * math.pi * ring / rings
-            t = max(0.0, math.sin(el)) ** 0.6
-            c = [h + (z - h) * t for h, z in zip(HAZE_COLOR, ZENITH_COLOR)]
-            for seg in range(segments + 1):
-                az = 2.0 * math.pi * seg / segments
-                vertex.add_data3(
-                    math.cos(el) * math.cos(az),
-                    math.cos(el) * math.sin(az),
-                    math.sin(el),
-                )
-                color.add_data4(*c, 1.0)
-        tris = GeomTriangles(Geom.UH_static)
-        for ring in range(rings):
-            for seg in range(segments):
-                a = ring * (segments + 1) + seg
-                b = a + segments + 1
-                tris.add_vertices(a, a + 1, b)  # seen from inside
-                tris.add_vertices(a + 1, b + 1, b)
-        geom = Geom(vdata)
-        geom.add_primitive(tris)
-        node = GeomNode("sky")
-        node.add_geom(geom)
-        sky = self.render.attach_new_node(node)
-        sky.set_bin("background", 0)
-        sky.set_depth_write(False)
-        sky.set_light_off()
-        sky.set_two_sided(True)
-        sky.hide(HIDE_FROM_NEAR)
-        return sky
+        self.atmospheres.bind(ocean.ocean_node)
+        return ocean
 
     def _make_probe(self):
         # Under render, re-placed every frame from planet-frame positions.
@@ -513,8 +493,13 @@ class TerrainDemo(ShowBase):
 
         home_up = self._relative(self.home) / np.linalg.norm(self._relative(self.home))
         home_altitude = float(np.linalg.norm(self._relative(self.home))) - self.radius
-        self._update_sky(home_up, home_altitude, far)
-        self._update_sun(home_up, home_altitude)
+        self.atmospheres.update(self.cam_world)
+        self.sky.update((0.0, 0.0, 0.0), far)
+        if not self.clouds.root.is_hidden():
+            fov = math.radians(self.camLens.get_fov()[1])
+            self.clouds.set_pixel_angle(fov / max(self.win.get_y_size(), 1))
+            self.clouds.update(self.cam_world)
+        self._update_sun()
         self._update_ocean(home_altitude, home_up)
         if not self._probe.is_hidden():
             self._update_probe()
@@ -567,35 +552,13 @@ class TerrainDemo(ShowBase):
             self.cam_world *= self.max_range / distance
         self._ground = ground
 
-    def _update_sky(self, up, altitude, far):
-        east = np.cross(np.array([0.0, 0.0, 1.0]), up)
-        if np.linalg.norm(east) < 1e-6:  # over a pole: any east will do
-            east = np.array([1.0, 0.0, 0.0])
-        east /= np.linalg.norm(east)
-        self._sky.set_pos(0.0, 0.0, 0.0)
-        self._sky.set_quat(self.render, _quat_from_axes(east, np.cross(up, east), up))
-        self._sky.set_scale(0.9 * far)
-        bright = 1.0 - _smoothstep(*SKY_FADE, altitude)
-        day = _smoothstep(-0.15, 0.1, float(self._sun @ up))
-        k = bright * (0.05 + 0.95 * day)
-        self._sky.set_color_scale(k, k, k, 1.0)
-
-    def _update_sun(self, home_up, home_altitude):
-        # The planet's light follows the sun's height under the camera (a red
-        # low sun, a dim sky), fading to plain daylight seen from space, where
-        # the shader's day/night line does the work. Airless bodies get bare
-        # sunlight and a black sky.
-        elevation = math.degrees(math.asin(np.clip(self._sun @ home_up, -1.0, 1.0)))
-        _, sun_low, sky_low = sun_lighting(0.0, elevation)
-        _, sun_high, sky_high = sun_lighting(0.0, 90.0)
-        space = _smoothstep(*SKY_FADE, home_altitude)
-        sun = tuple(a + (b - a) * space for a, b in zip(sun_low, sun_high))
-        sky = tuple(a + (b - a) * space for a, b in zip(sky_low, sky_high))
+    def _update_sun(self):
+        # Sunlight above the air: the atmosphere reddens it where it must.
+        self.sky.set_sun(self._sun)
+        self.clouds.set_sun(self._sun)
         for body in self.bodies:
-            if body.atmosphere:
-                body.terrain.set_sun(tuple(self._sun), sun, sky)
-            else:
-                body.terrain.set_sun(tuple(self._sun), SPACE_SUN, SPACE_AMBIENT)
+            ambient = SKY_AMBIENT if body.atmosphere else SPACE_AMBIENT
+            body.terrain.set_sun(tuple(self._sun), SUN_COLOR, ambient)
 
     def set_local_sun(self, azimuth: float, elevation: float):
         """Put the sun at an azimuth/elevation (degrees) as seen from the
@@ -646,6 +609,9 @@ class TerrainDemo(ShowBase):
         n = np.cross(up, e)
         sea_point = self.terrain.to_render(up * self.radius)
         self._sea_frame.set_quat(self.render, _quat_from_axes(e, n, up))
+        self.ocean.set_atmosphere_frame(
+            self.ocean.base_node.get_mat(self.render), self._sun
+        )
         self._sea_frame.set_pos(*(sea_point - gx * e - gy * n))
         for methods in list(self._game.method_lists.values()):
             for method in methods:
@@ -693,6 +659,7 @@ class TerrainDemo(ShowBase):
         face_name = FACE_NAMES[int(face[0])]
         speed = self.speed / SPEED
         split_km, far_km = self.depth.split / 1e3, self.depth.far / 1e3
+        cs = self.clouds.stats
         others = "   ".join(
             f"{b.name} {np.linalg.norm(self._relative(b)) / 1e3:,.0f} km "
             f"({b.terrain.stats['shown']} chunks)"
@@ -716,6 +683,8 @@ class TerrainDemo(ShowBase):
             f"({self.executor.workers} workers)   "
             f"upload {s['upload_ms']:.2f} ms/chunk   LOD pass {s['select_ms']:.1f} ms"
             f"   depth split {split_km:,.1f} km, far {far_km:,.0f} km",
+            f"clouds: {cs['tiles']} tiles, {cs['billboards']:,} billboards, "
+            f"{cs['pending']} generating ({cs['gen_ms']:.0f} ms/tile)",
         ]
         self._hud.setText("\n".join(lines))
 
@@ -780,6 +749,13 @@ class TerrainDemo(ShowBase):
     def _toggle_ocean(self):
         self._ocean_wanted = not self._ocean_wanted
         self._apply_ocean()
+
+    def _toggle_clouds(self):
+        if self.clouds.root.is_hidden():
+            self.clouds.root.show()
+            self.clouds.root.hide(REFLECTION_CAMERA_BITS)
+        else:
+            self.clouds.root.hide()
 
     def _toggle_reflection(self):
         self._reflected = not self._reflected

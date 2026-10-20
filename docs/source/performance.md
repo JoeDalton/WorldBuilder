@@ -372,6 +372,29 @@ What remains per frame flying low: ~4.7 ms of Python (LOD passes ~1 ms,
 uploads ~0.7 ms, the ocean and the rest) and ~6 ms of rendering, two cameras
 plus the ocean's reflection pass.
 
+## 13. Atmosphere, sky and clouds
+
+Settled views, offscreen at 1280×720 (MSAA 4×), the demo's start area:
+
+| View | Clouds on | Clouds off | Billboards |
+|---|---|---|---|
+| Start (1.3 km, deck overhead) | 166 fps | 226 fps | 185 k |
+| Inside the deck (2.7 km) | 187 fps | 255 fps | 152 k |
+| 20 km up | 415 fps | 601 fps | 62 k |
+| Orbit (deck only) | 1079 fps | 1181 fps | 0 |
+
+- **The atmosphere** costs 8 samples per pixel of terrain, sky and deck: a
+  fraction of a millisecond on a GTX 1070.
+- **Billboards evaluate it per vertex.** Per fragment, under the deck's
+  overdraw, it took a flight skimming the slab to 4 fps; per vertex the same
+  flight is GPU-cheap. Their own shading (4-octave density plus a 4-step sun
+  march per fragment) is the flat field's, unchanged.
+- **Cloud tiles** take ~20 ms each in the workers, alongside terrain chunks;
+  the pool gives each free slot to the channel with the fewest in flight. The
+  initial fill (88 cloud tiles and ~610 chunks) takes ~12–16 s with 3 workers,
+  against ~6.5 s for terrain alone; clouds arrive within the first 4 s.
+- Fast flight (§12) with clouds: 67 fps flying low (89 without), offscreen.
+
 ## Not covered
 
 The ocean and clouds were moved from SpaceFlight unchanged and were not

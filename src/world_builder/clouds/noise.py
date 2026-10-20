@@ -564,3 +564,116 @@ def pack_layer_params(
         ],
         dtype=np.float32,
     )
+
+
+# ── On a planet ────────────────────────────────────────────────────────────────
+
+#: Side of the weather volume: a low-frequency field over the cube [-1, 1]^3
+#: that the unit sphere of directions samples (texel ~ 1/24 of the radius).
+WEATHER_SIZE = 48
+
+
+def weather_volume(seed: int, size: int = WEATHER_SIZE, wavelength: float = 0.45):
+    """Large-scale cloudiness over a planet: clear regions, overcast regions.
+
+    A smooth field of the DIRECTION from the planet centre (sampled on the
+    unit sphere, so it scales with the planet and has no seams), quantised to
+    8 bits like the GPU texture it becomes.
+
+    :param seed: noise seed
+    :param size: texels per side over [-1, 1]^3
+    :param wavelength: largest feature, in planet radii
+    :returns: (size, size, size) float array in [0, 1], indexed [z, y, x]
+    """
+    from world_builder.terrain.noise import fbm as simplex_fbm
+
+    c = (np.arange(size) + 0.5) / size * 2.0 - 1.0
+    z, y, x = np.meshgrid(c, c, c, indexing="ij")
+    points = np.stack([x, y, z], axis=-1).reshape(-1, 3) * 1000.0
+    value = simplex_fbm(points, wavelength * 1000.0, 4, seed)
+    field = np.clip(0.5 + 0.9 * value, 0.0, 1.0).reshape(size, size, size)
+    return quantise(field)
+
+
+def sample_weather(volume: np.ndarray, dirs: np.ndarray) -> np.ndarray:
+    """``texture(weatherNoise, dir * 0.5 + 0.5)`` on the CPU: trilinear,
+    clamped at the edges, with hardware linear's half-texel offset.
+
+    :param dirs: (..., 3) unit directions
+    :returns: (...) in [0, 1]
+    """
+    size = volume.shape[0]
+    texel = (np.asarray(dirs, dtype=np.float64) * 0.5 + 0.5) * size - 0.5
+    texel = np.clip(texel, 0.0, size - 1.0)
+    base = np.minimum(np.floor(texel).astype(np.int64), size - 2)
+    frac = texel - base
+    x0, y0, z0 = base[..., 0], base[..., 1], base[..., 2]
+    tx, ty, tz = frac[..., 0], frac[..., 1], frac[..., 2]
+    c00 = volume[z0, y0, x0] + (volume[z0, y0, x0 + 1] - volume[z0, y0, x0]) * tx
+    c01 = (
+        volume[z0, y0 + 1, x0]
+        + (volume[z0, y0 + 1, x0 + 1] - volume[z0, y0 + 1, x0]) * tx
+    )
+    c10 = (
+        volume[z0 + 1, y0, x0]
+        + (volume[z0 + 1, y0, x0 + 1] - volume[z0 + 1, y0, x0]) * tx
+    )
+    c11 = (
+        volume[z0 + 1, y0 + 1, x0]
+        + (volume[z0 + 1, y0 + 1, x0 + 1] - volume[z0 + 1, y0 + 1, x0]) * tx
+    )
+    c0 = c00 + (c01 - c00) * ty
+    c1 = c10 + (c11 - c10) * ty
+    return c0 + (c1 - c0) * tz
+
+
+def density_on_sphere(
+    volume: np.ndarray,
+    weather: np.ndarray,
+    spec: DensityField,
+    points: np.ndarray,
+    radius: float,
+    weather_gain: float,
+) -> np.ndarray:
+    """The shader's ``cloudDensity`` in planet mode (``uSpherical``): the slab
+    is a height above the sea-level sphere, the noise is sampled in 3D at the
+    planet-frame position (seamless on a sphere), and the weather field shifts
+    the fbm up (overcast) or down (clear) by direction.
+
+    :param weather: :func:`weather_volume`
+    :param points: (..., 3) planet-frame positions, metres
+    :param radius: sea-level radius, metres
+    :param weather_gain: fbm shift between the clearest and cloudiest weather
+    :returns: (...) density in [0, 1]
+    """
+    _require_resolved(spec)
+    points = np.asarray(points, dtype=np.float64)
+    r = np.linalg.norm(points, axis=-1)
+    base, thickness = spec.slab
+    h = (r - radius - base) / max(thickness, 1e-3)
+    coords = points * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    dirs = points / np.maximum(r, 1e-9)[..., None]
+    raw = fbm(volume, coords, spec) + weather_gain * (
+        sample_weather(weather, dirs) - 0.5
+    )
+    lift = threshold_lift(spec, h)
+    lo, hi = spec.threshold[0] + lift, spec.threshold[1] + lift
+    t = np.clip((raw - lo) / np.maximum(hi - lo, 1e-9), 0.0, 1.0)
+    coverage = t * t * (3.0 - 2.0 * t)
+    base_fill = 1.0 - np.exp2(-spec.base_ramp * np.clip(h, 0.0, 1.0))
+    inside = (h > 0.0) & (h < 1.0)
+    return np.where(inside, coverage * base_fill, 0.0)
+
+
+def build_weather_texture(volume: np.ndarray) -> Texture:
+    """The weather volume as an R8 3D texture, linearly filtered and clamped."""
+    size = volume.shape[0]
+    tex = Texture("cloud_weather")
+    tex.setup_3d_texture(size, size, size, Texture.T_unsigned_byte, Texture.F_red)
+    data = np.clip(np.rint(volume * 255.0), 0, 255).astype(np.uint8)
+    tex.set_ram_image(np.ascontiguousarray(data).tobytes())
+    tex.set_magfilter(SamplerState.FT_linear)
+    tex.set_minfilter(SamplerState.FT_linear)
+    for setter in (tex.set_wrap_u, tex.set_wrap_v, tex.set_wrap_w):
+        setter(SamplerState.WM_clamp)
+    return tex

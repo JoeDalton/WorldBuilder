@@ -147,7 +147,6 @@ def two_bodies(showbase, planet_spec, moon_spec):
         moon_spec,
         executor=executor,
         position=moon_position,
-        haze_distance=None,
         materials=planet.materials,
         min_level=7,
     )
@@ -226,3 +225,25 @@ def test_a_pool_always_has_a_worker(asked):
         assert executor.workers == 1 and executor.max_inflight >= 1
     finally:
         executor.shutdown()
+
+
+def _square(spec, key, version):
+    """A stand-in generator: any top-level function(spec, key, version)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(key=key, version=version, value=spec * key[0])
+
+
+def test_a_channel_runs_its_own_generator(planet_spec):
+    executor = ChunkExecutor(backend="thread", workers=2)
+    executor.set_spec(planet_spec, "terrain")
+    executor.set_spec(3, "custom", generator=_square)
+    executor.request([(4, 0, 0, 0)], "custom")
+    done = []
+    for _ in range(400):
+        done += executor.collect("custom")
+        if done:
+            break
+        time.sleep(0.01)
+    executor.shutdown()
+    assert done[0].value == 12

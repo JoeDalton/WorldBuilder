@@ -1,5 +1,9 @@
 #version 140
 
+// Optional: seen through the atmospheres when they are bound (uAtmoCount > 0;
+// the default, set by Ocean, is none, and the distance haze below applies).
+#pragma include "../../atmosphere/shaders/atmosphere.glsl"
+
 uniform float     iTime;
 uniform vec3      iCameraPos;
 uniform vec3      iWaterColor;
@@ -31,6 +35,8 @@ uniform float     uWaveFadeK2;    // exponential decay rate for iteration count:
 // Aerial perspective: distant water loses contrast to the air in front of it and
 // tends to the horizon's own colour. Must agree with what the cloud field fades
 // to, or the sea and the sky above it disagree at the horizon.
+uniform mat3      uBaseToWorld;   // base frame -> world axes, for the atmospheres
+uniform vec3      uAtmoSunDir;    // toward the sun, world axes
 uniform vec3      uHazeColor;
 uniform float     uHazeDistance;  // metres over which the water reaches it fully
 
@@ -312,6 +318,13 @@ void main() {
     // between the eye and the water, so it is not something the water scatters.
     // The cloud field does the same, which is what lets the two meet cleanly at
     // the horizon despite using different tonemap operators.
+    if (uAtmoCount > 0) {
+        // The atmospheres replace the haze (in linear light, before the
+        // tonemap, as the terrain does).
+        vec3 seen = applyAtmospheres(C, uBaseToWorld * V, dist, uAtmoSunDir);
+        fragColor = vec4(aces_tonemap(seen * uExposure), 1.0);
+        return;
+    }
     vec3 display = aces_tonemap(C * uExposure);
     fragColor = vec4(
         mix(display, uHazeColor, clamp(dist / uHazeDistance, 0.0, 1.0)), 1.0);
