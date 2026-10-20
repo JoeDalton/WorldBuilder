@@ -8,7 +8,7 @@ orbit down to the ground of either. Run it from an environment where
 world_builder is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--radius METRES]
-        [--moon-distance METRES] [--no-moon]
+        [--moon-distance METRES] [--no-moon] [--workers N]
         [--backend process|thread|inline]
 
 The default backend generates terrain in spawned worker processes, which
@@ -109,7 +109,7 @@ INITIAL_FAR_M = 600000.0  # the lens the ocean's reflection camera copies
 HAZE_COLOR = (0.62, 0.71, 0.84)  # display space; sky at the horizon
 ZENITH_COLOR = (0.28, 0.45, 0.76)
 HAZE_DISTANCE = 150000.0
-SPEED = 150.0  # metres/second at low altitude
+SPEED = 300.0  # metres/second at low altitude
 BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground
 ORBIT_RADII = 3.0  # HOME and TAB jump this high
@@ -131,6 +131,7 @@ SKY_FADE = (20000.0, 80000.0)  # altitudes over which the sky dome fades to blac
 # Airless bodies: sunlight unfiltered, next to no ambient light (a black sky).
 SPACE_SUN = (2.6, 2.45, 2.2)
 SPACE_AMBIENT = (0.025, 0.025, 0.03)
+HUD_PERIOD = 0.2  # seconds between HUD refreshes
 PROBE_RADIUS = 20.0
 PROBE_DISTANCE = 60.0
 LASER_RANGE = 30000.0
@@ -222,12 +223,14 @@ class TerrainDemo(ShowBase):
         backend: str,
         radius: float | None,
         moon_distance: float | None = MOON_DISTANCE_M,
+        workers: int | None = None,
     ):
         """
         :param level_path: the planet's level file
         :param backend: chunk generation backend, see ChunkExecutor
         :param radius: overrides the level's planet radius, metres
         :param moon_distance: centre-to-centre, metres; None = no moon
+        :param workers: generation processes; None = the machine's default
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -254,7 +257,7 @@ class TerrainDemo(ShowBase):
         from world_builder.terrain.workers import ChunkExecutor
 
         print("starting terrain workers ...")
-        self.executor = ChunkExecutor(backend=backend)
+        self.executor = ChunkExecutor(backend=backend, workers=workers)
         self.terrain = Terrain(
             parent=self.render,
             spec=spec,
@@ -340,6 +343,7 @@ class TerrainDemo(ShowBase):
             align=TextNode.ALeft,
             mayChange=True,
         )
+        self._hud_time = -1.0
         self._reset_camera()
         self.taskMgr.add(self._update, "terrain_demo_update")
         print(__doc__)
@@ -516,7 +520,12 @@ class TerrainDemo(ShowBase):
             self._update_probe()
         for mark, body, point in self._laser_marks:
             mark.set_pos(*body.terrain.to_render(point))
-        self._update_hud()
+        # Text geometry is rebuilt on every change: a few times a second is
+        # plenty to read, and saves ~1 ms a frame.
+        now = self._clock.get_frame_time()
+        if now - self._hud_time >= HUD_PERIOD:
+            self._hud_time = now
+            self._update_hud()
         return task.cont
 
     def _fly(self, dt: float):
@@ -958,6 +967,9 @@ def main():
     )
     parser.add_argument("--no-moon", action="store_true")
     parser.add_argument(
+        "--workers", type=int, default=None, help="generation processes"
+    )
+    parser.add_argument(
         "--backend", default="process", choices=("process", "thread", "inline")
     )
     args = parser.parse_args()
@@ -975,7 +987,7 @@ def main():
         ),
     )
     moon = None if args.no_moon else args.moon_distance
-    TerrainDemo(args.level, args.backend, args.radius, moon).run()
+    TerrainDemo(args.level, args.backend, args.radius, moon, args.workers).run()
 
 
 if __name__ == "__main__":

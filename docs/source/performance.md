@@ -6,7 +6,10 @@ the measurements behind them. Frame rate in the demo is currently high (GTX
 records where the time goes, what was tried, and what to look at first if it
 becomes a problem.
 
-Measured with `python -m world_builder.terrain.bench` and headless demo runs.
+Measured with `python -m world_builder.terrain.bench`, headless demo runs,
+and `python scripts/flight_bench.py` (frame times in scripted fast flights,
+`--profile` for the main thread, `--offscreen` to avoid the display's refresh
+cap or throttling).
 CPU timings on this machine are noisy (frequency scaling): treat them as
 ±30 %. Since the move to the cube-sphere (600 km planet by default), the
 figures in §3–5 and §10 are re-measured; §1, §2 and §6–9 still hold as written.
@@ -15,18 +18,36 @@ figures in §3–5 and §10 are re-measured; §1, §2 and §6–9 still hold as 
 
 | # | Concern | Where | Impact today | Status |
 |---|---|---|---|---|
-| 1 | Worker pool tops out at ~50–60 chunks/s | `workers.py` | Detail lags behind when boosting low | Open, investigation interrupted |
+| 1 | Worker pool throughput vs the render loop | `workers.py` | Too many workers slowed the frame | Default: physical cores − 1, lower priority |
 | 2 | glibc returns numpy temporaries to the OS | worker processes | Workers ~40 ms/chunk instead of ~24 | Fix found, **not applied** |
 | 3 | numpy per-octave cost | `noise.py`, `planet.py` | ~25 ms per chunk | Accepted (numba not wanted) |
-| 4 | LOD pass in Python | `quadtree.py` | 2–6 ms per pass, up to every frame | Accepted |
+| 4 | LOD pass in Python | `quadtree.py` | ~1 ms per pass, not every frame | Optimised |
 | 5 | Chunk and triangle counts | `quadtree.py` (K=2) | ~600 draws, ~5 M triangles, twice with the reflection | Fine on desktop GPUs |
 | 6 | Memory held by the caches | `terrain.py` | ~410 MB RAM, ~190 MB GPU per planet you are near | Fine on desktop |
 | 7 | Synchronous generation in queries | `query.py` | 25 ms stall per missing chunk | **Must handle before game integration** |
 | 8 | Fragment shader texture samples | `terrain.frag` | Up to ~20 samples per pixel | Fine so far |
 | 9 | Initial fill and spec changes | `terrain.py`, `planet.py` | Several seconds of blur; 0.3 s main-thread hitch | Accepted |
 | 10 | Descent from orbit | `workers.py`, `depth.py` | Demand above the pool's ceiling when boosting; split-depth draws twice | Accepted (coarse, never holes) |
+| 12 | Frame time in fast flight | demo main thread | was ~30 fps flying low, boosted | Fixed: 89 fps offscreen (§12) |
 
 ## 1. Worker pool throughput
+
+**Current default** (`workers.default_workers`): one worker per *physical*
+core but one (Linux topology; two logical CPUs left free elsewhere), never
+fewer than one. Workers run at `nice +10`, so generation yields the CPU to the
+render loop. Measured in fast low flight (4 cores / 8 threads, chunks/s
+across the whole flight, all workers niced):
+
+| Workers | fps (50 Hz display) | Demo update, median | Chunks/s | Backlog (wanted) |
+|---|---|---|---|---|
+| 6 (old default, cores − 2) | 35 | 15.6 ms | 136 | 137 |
+| 4 | 43 | 11.7 ms | 121 | 138 |
+| 3 (new default) | 47 | 9.5 ms | 111 | 141 |
+| 2 | 49 | 8.6 ms | 84 | 153 |
+
+Workers on the renderer's hyper-threaded sibling cost frame time and added
+little: the backlog hardly moves between 6 and 3. The older measurements
+below were taken before the cube-sphere and before niceness.
 
 Each chunk is generated in a spawned worker process (`ChunkExecutor`,
 `cores - 2` = 6 workers here). Throughput does not scale with worker count:
@@ -144,17 +165,32 @@ Further options, from cheapest:
 | 20 km | ~290 | 1.5 ms |
 | 1,200 km | 13 | 0.1 ms |
 
-That is the flat chart's cost (2.9 ms for 562 chunks at the same settings).
-Each node's tangent-frame box is built once per key, in pure Python (~15 µs;
-numpy took 230 µs on so few points), and memoised. A pass over new ground
-(a fast descent) pays that for its new keys: a cold first pass near the
-ground is ~20–30 ms, once. It runs whenever the camera moves more than 14 m
-(or a 500th of its altitude, higher up), after any upload, and every 15
-frames. At speed that is every frame.
+Those were the first cube-sphere figures, the flat chart's cost (2.9 ms for
+562 chunks). After optimising the hot loop, the same bench gives **1.1 ms at
+2 m, 1.1 ms at 1 km, 0.5 ms at 20 km**:
 
-Options: run it at most every N frames; reuse the previous selection and
-only revisit nodes near split thresholds; vectorize the distance tests per
-level.
+- Per node, the box extents for its height bounds and its horizon terms are
+  cached (`LodSelector._prepare`). A visit is then 3 dot products, 3 clamps
+  written as comparisons (no `min`/`max` calls) and one square root.
+- Distance and culling are one call (`_measure`).
+- The terrain keeps one `(h_min, h_max)` tuple per stored chunk
+  (`Terrain._bounds`), so the cache recognises unchanged bounds by identity.
+- The wanted and prefetch lists are sorted by the distances measured in the
+  traversal. Re-measuring them with unknown bounds for the sort overwrote
+  cache entries the next pass needed: about 30 % misses while flying.
+
+Each node's tangent-frame box itself is built once per key, in pure Python
+(~15 µs; numpy took 230 µs on so few points). A pass over new ground pays
+that for its new keys.
+
+When it runs: after the camera moves a quarter of a leaf (29 m) or a 250th
+of its altitude, which is inside the 15 % hysteresis band, so no split waits
+visibly; after uploads at most every 3rd frame; and at least every 15
+frames. It used to run every frame in fast flight (every upload triggered
+one).
+
+Further options if needed: reuse the previous selection and only revisit
+nodes near split thresholds; vectorise the tests per level.
 
 ## 5. Chunk, vertex and draw counts
 
@@ -297,6 +333,44 @@ channels, the planet's already-queued keys were submitted again on every
 fill: the pool's queue grew without end and the planet stopped refining.
 `workers._unsent` binds it properly, and
 `test_channels_share_the_pool_without_duplicates` guards it.
+
+## 12. Frame time in fast flight
+
+`scripts/flight_bench.py`, fast flight 300 m over the demo coast, boosted
+(~750 m/s), terrain refining all the way (~115 chunks/s generated, ~140
+wanted):
+
+| Step | fps | Demo update, median / p95 |
+|---|---|---|
+| Before (window, 50 Hz display) | 30 | 17.2 / 31.9 ms |
+| Workers niced, physical cores − 1, LOD hot loop (window) | 48 (capped) | 7.8 / 13.5 ms |
+| + per-frame uniforms written in place, throttled passes and HUD, cheap ground query (offscreen) | 89 | 4.7 / 8.4 ms |
+
+Cruising at 3 km (~7.5 km/s) and descending from orbit run at 400–800 fps
+offscreen.
+
+What changed besides §1 and §4:
+
+- **Per-frame shader inputs** (camera, planet centre, haze shell, sun) are
+  `PTA` arrays bound once and written in place. Setting new values on the
+  terrain root made a new render state per input per frame, for Panda to
+  compose and garbage-collect.
+- **The HUD** refreshes 5 times a second; its text geometry was rebuilt
+  every frame (~1 ms).
+- **The ground query under the camera** skips `np.unique` for a single point,
+  and the triangle test converts only the 4 vertices it needs to float64
+  (it converted all 4,225).
+
+Measured and left alone:
+
+- **Unpickling results:** 0.02 ms per chunk. The profile's time in the
+  pool's result thread is blocking reads, not work.
+- **Panda's state garbage collection rate:** lowering it gained ~3 %,
+  within noise.
+
+What remains per frame flying low: ~4.7 ms of Python (LOD passes ~1 ms,
+uploads ~0.7 ms, the ocean and the rest) and ~6 ms of rendering, two cameras
+plus the ocean's reflection pass.
 
 ## Not covered
 

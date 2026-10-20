@@ -157,6 +157,8 @@ def two_bodies(showbase, planet_spec, moon_spec):
 
 
 def _settle(terrains, camera, frames=60):
+    """Step frames (a pass every few frames while uploads arrive, and six
+    uploads a frame: refining takes a few frames per level)."""
     for _ in range(frames):
         for terrain in terrains:
             terrain.update(camera)
@@ -166,7 +168,7 @@ def test_bodies_are_placed_in_one_world(showbase, two_bodies):
     planet, moon = two_bodies
     up = TangentFrame.at(30.0, 20.0).up
     camera = up * (planet.radius + 2000.0)
-    _settle((planet, moon), camera, frames=12)
+    _settle((planet, moon), camera, frames=40)
     assert planet.shown and moon.shown
     # Every drawn moon chunk sits where the moon is, relative to the camera
     # at the render origin.
@@ -188,12 +190,39 @@ def test_a_planet_seen_from_afar_releases_its_ground(showbase, two_bodies, monke
     monkeypatch.setattr(terrain_module, "MIN_RESIDENT", 16)
     planet, moon = two_bodies
     camera = TangentFrame.at(30.0, 20.0).up * (planet.radius + 5.0)
-    _settle((planet, moon), camera, frames=40)
+    _settle((planet, moon), camera, frames=120)
     near_ground = len(planet.store)
     assert near_ground > 64
     # Off to the moon: the planet shrinks to what its distant view needs.
     camera = moon.position + TangentFrame.at(0.0, 0.0).up * (moon.radius + 5.0)
-    _settle((planet, moon), camera, frames=30)
+    _settle((planet, moon), camera, frames=60)
     limit = max(16, RESIDENT_FACTOR * len(planet._keep))
     assert len(planet.store) <= limit < near_ground
     assert len(planet.nodes) <= limit
+
+
+# ── pool size ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("cores, expected", [(1, 1), (2, 1), (4, 3), (8, 7)])
+def test_default_workers_leave_a_core_and_never_drop_below_one(
+    monkeypatch, cores, expected
+):
+    monkeypatch.setattr(workers, "physical_cores", lambda: cores)
+    assert workers.default_workers() == expected
+
+
+@pytest.mark.parametrize("cpus, expected", [(1, 1), (2, 1), (3, 1), (8, 6)])
+def test_default_workers_without_a_core_count(monkeypatch, cpus, expected):
+    monkeypatch.setattr(workers, "physical_cores", lambda: None)
+    monkeypatch.setattr(workers, "usable_cpus", lambda: cpus)
+    assert workers.default_workers() == expected
+
+
+@pytest.mark.parametrize("asked", [0, -3])
+def test_a_pool_always_has_a_worker(asked):
+    executor = ChunkExecutor(backend="thread", workers=asked)
+    try:
+        assert executor.workers == 1 and executor.max_inflight >= 1
+    finally:
+        executor.shutdown()

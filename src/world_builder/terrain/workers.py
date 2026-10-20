@@ -32,9 +32,55 @@ from world_builder.terrain.planet import PlanetSpec
 DEFAULT_CHANNEL = "default"
 
 
+#: Fewest workers a pool runs, whatever the machine or the caller asks.
+MIN_WORKERS = 1
+#: Niceness added to worker processes: background generation yields the CPU
+#: to the render loop whenever both want it.
+WORKER_NICENESS = 10
+
+
+def usable_cpus() -> int:
+    """:returns: CPUs this process may run on (affinity and container limits
+    included where the platform reports them), at least 1"""
+    counter = getattr(os, "process_cpu_count", None)  # Python 3.13+
+    if counter is not None:
+        return max(1, counter() or 1)
+    if hasattr(os, "sched_getaffinity"):
+        return max(1, len(os.sched_getaffinity(0)))
+    return max(1, os.cpu_count() or 1)
+
+
+def physical_cores() -> int | None:
+    """:returns: physical cores among the CPUs this process may use (Linux
+    sysfs topology), or None where it cannot be told"""
+    if not hasattr(os, "sched_getaffinity"):
+        return None
+    cores = set()
+    try:
+        for cpu in os.sched_getaffinity(0):
+            topology = f"/sys/devices/system/cpu/cpu{cpu}/topology/"
+            with open(topology + "physical_package_id") as package:
+                with open(topology + "core_id") as core:
+                    cores.add((package.read().strip(), core.read().strip()))
+    except OSError:
+        return None
+    return len(cores) or None
+
+
 def default_workers() -> int:
-    """:returns: worker count leaving two cores for the renderer and the OS"""
-    return max(1, (os.cpu_count() or 2) - 2)
+    """Worker count: one per physical core but one, never below
+    :data:`MIN_WORKERS`.
+
+    Not per logical CPU: a worker on the renderer's hyper-threaded sibling
+    slows the frame (6 workers on 4 cores / 8 threads: 35 fps flying low,
+    3 workers: 47 fps) and adds little throughput (136 against 111 chunks/s,
+    the same backlog). Where cores cannot be counted, two logical CPUs are
+    left free. On 1-2 core machines one worker shares a core with the
+    renderer: slower fills, but terrain still arrives.
+    """
+    cores = physical_cores()
+    spare = cores - 1 if cores is not None else usable_cpus() - 2
+    return max(MIN_WORKERS, spare)
 
 
 @dataclass
@@ -56,24 +102,33 @@ class ChunkExecutor:
         workers: int | None = None,
         max_inflight: int | None = None,
         inline_budget: int = 2,
+        niceness: int = WORKER_NICENESS,
     ):
         """
         :param backend: "process", "thread" or "inline" (synchronous, in
             :meth:`request`)
-        :param workers: pool size; defaults to cores - 2
+        :param workers: pool size; defaults to :func:`default_workers`;
+            raised to :data:`MIN_WORKERS` if lower
         :param max_inflight: queued plus running tasks, all channels together;
             defaults to 2 per worker
         :param inline_budget: chunks generated per request() by the inline
             backend
+        :param niceness: added to the worker processes' niceness (lower
+            priority), so a busy pool never makes the renderer wait for a
+            CPU; 0 = same priority (process backend only)
         """
         self.backend = backend
-        self.workers = workers or default_workers()
-        self.max_inflight = max_inflight or 2 * self.workers
+        if workers is None:
+            workers = default_workers()
+        self.workers = max(MIN_WORKERS, int(workers))
+        self.max_inflight = max(1, max_inflight or 2 * self.workers)
         self.inline_budget = inline_budget
         if backend == "process":
             self._pool = ProcessPoolExecutor(
                 max_workers=self.workers,
                 mp_context=multiprocessing.get_context("spawn"),
+                initializer=_lower_priority,
+                initargs=(niceness,),
             )
         elif backend == "thread":
             self._pool = ThreadPoolExecutor(max_workers=self.workers)
@@ -200,3 +255,12 @@ def _unsent(ch: _Channel):
     queue would check that channel's pending set (resubmitting duplicates
     without end)."""
     return (key for key in ch.wanted if key not in ch.pending)
+
+
+def _lower_priority(niceness: int) -> None:
+    """Worker-process initializer: run below the renderer's priority."""
+    if niceness and hasattr(os, "nice"):
+        try:
+            os.nice(niceness)
+        except OSError:  # not permitted here: run at normal priority
+            pass

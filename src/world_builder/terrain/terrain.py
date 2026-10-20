@@ -74,6 +74,10 @@ NODE_CACHE_SIZE = 1200
 #: few hundred chunks instead of holding the ground it was last close to.
 RESIDENT_FACTOR = 3
 MIN_RESIDENT = 256
+#: An LOD pass runs at least this often (frames), and after uploads at most
+#: this often (it always runs at once when the camera has moved enough).
+SELECT_EVERY = 15
+SELECT_EVERY_ON_UPLOAD = 3
 #: Upload budget per frame.
 UPLOADS_PER_FRAME = 6
 UPLOAD_MS_PER_FRAME = 4.0
@@ -154,6 +158,9 @@ class Terrain:
         self.query: TerrainQuery | None = None
         self.selector: LodSelector | None = None
         self.store: OrderedDict[tuple, ChunkData] = OrderedDict()
+        # (h_min, h_max) per stored chunk: one tuple per chunk, which the
+        # selector's geometry cache recognises by identity.
+        self._bounds: dict[tuple, tuple[float, float]] = {}
         self.nodes: OrderedDict[tuple, NodePath] = OrderedDict()
         self.shown: set[tuple] = set()
         self._keep: set[tuple] = set()  # drawn chunks and their ancestors
@@ -162,6 +169,7 @@ class Terrain:
         self._camera = np.zeros(3)
         self._render_camera = np.zeros(3)
         self._last_select_pos = None
+        self._last_select_frame = 0
         self._frame = 0
         self._wanted: list[tuple] = []
         self.stats = {
@@ -174,6 +182,7 @@ class Terrain:
             "upload_ms": 0.0,
             "select_ms": 0.0,
             "finest": 0,
+            "generated": 0,
         }
         self.set_spec(spec)
 
@@ -194,6 +203,7 @@ class Terrain:
             node.remove_node()
         self.nodes.clear()
         self.store.clear()
+        self._bounds.clear()
         self.shown.clear()
         self._keep = set()
         self.selector = LodSelector(
@@ -227,30 +237,41 @@ class Terrain:
         for chunk in finished:
             self._store(chunk)
         if finished:
+            self.stats["generated"] += len(finished)
             gen = [c.gen_ms for c in finished]
             self.stats["gen_ms"] = 0.9 * self.stats["gen_ms"] + 0.1 * float(
                 np.mean(gen)
             )
 
         uploaded = self._upload()
-        # Re-select after moving an eighth of a leaf, or a 500th of the
-        # altitude: chunk sizes on screen change no faster than that.
-        threshold = max(self.grid.chunk_size(0) / 8.0, 0.002 * self.altitude(cam))
+        # Re-select after moving a quarter of a leaf (29 m at 600 km), or a
+        # 250th of the altitude: well inside the selector's 15 % hysteresis
+        # band (a leaf splits at 2 leaf sizes), so no split or merge waits
+        # visibly, and fast flight does not run a pass every frame.
+        threshold = max(self.grid.chunk_size(0) / 4.0, 0.004 * self.altitude(cam))
         moved = (
             self._last_select_pos is None
             or np.linalg.norm(cam - self._last_select_pos) > threshold
         )
-        if moved or uploaded or self._frame % 15 == 0:
+        # New uploads only need a pass to be shown, which can wait a frame or
+        # two: while refining, uploads land every frame, and a pass per
+        # frame was most of the frame.
+        since = self._frame - self._last_select_frame
+        if (
+            moved
+            or (uploaded and since >= SELECT_EVERY_ON_UPLOAD)
+            or since >= SELECT_EVERY
+        ):
             self._select(cam)
 
         rho = float(np.linalg.norm(cam))
         shell = self.spec.radius + self.haze_height
-        root = self.root
-        root.set_shader_input("uCamPos", LVecBase3f(*render_cam))
-        root.set_shader_input("uPlanetCentre", LVecBase3f(*(render_cam - cam)))
-        root.set_shader_input("uCamFromCentre", LVecBase3f(*cam))
+        frame = self._frame_inputs
+        frame["uCamPos"][0] = LVecBase3f(*render_cam)
+        frame["uPlanetCentre"][0] = LVecBase3f(*(render_cam - cam))
+        frame["uCamFromCentre"][0] = LVecBase3f(*cam)
         # In float64: as a float32 difference of squares it would be noise.
-        root.set_shader_input("uCamShellC", float((rho - shell) * (rho + shell)))
+        frame["uCamShellC"][0] = float((rho - shell) * (rho + shell))
         self.stats.update(
             shown=len(self.shown),
             stored=len(self.store),
@@ -298,11 +319,12 @@ class Terrain:
         :param direction: toward the sun, planet frame (the render frame's
             axes are the planet's)
         """
-        self.root.set_shader_input("uSunDir", Vec3(*direction).normalized())
-        self.root.set_shader_input("uSunColor", LVecBase3f(*color))
-        self.root.set_shader_input("uAmbient", LVecBase3f(*ambient))
+        frame = self._frame_inputs
+        frame["uSunDir"][0] = Vec3(*direction).normalized()
+        frame["uSunColor"][0] = LVecBase3f(*color)
+        frame["uAmbient"][0] = LVecBase3f(*ambient)
         if haze_color is not None:
-            self.root.set_shader_input("uHazeColor", LVecBase3f(*haze_color))
+            frame["uHazeColor"][0] = LVecBase3f(*haze_color)
 
     def set_debug_mode(self, mode: int) -> None:
         """0 shaded, 1 LOD level, 2 biomes, 3 slope, 4 normals, 5 skirts."""
@@ -382,7 +404,6 @@ class Terrain:
         root.set_shader_input("uDetailFar", 4000.0)
         root.set_shader_input("uBlendDepth", self.blend_depth)
         root.set_shader_input("uExposure", float(exposure))
-        root.set_shader_input("uHazeColor", LVecBase3f(*haze_color))
         # No atmosphere: a haze distance nothing reaches.
         haze = self.haze_distance if self.haze_distance is not None else 1e30
         root.set_shader_input("uHazeDistance", float(haze))
@@ -391,10 +412,27 @@ class Terrain:
         root.set_shader_input("uMaxLevel", 0)
         root.set_shader_input("uFace", 0)
         root.set_shader_input("uChunk", LVecBase4f(0.0, 0.0, 1.0, 0.0))
-        root.set_shader_input("uCamPos", LVecBase3f(0.0, 0.0, 0.0))
-        root.set_shader_input("uPlanetCentre", LVecBase3f(0.0, 0.0, -1.0))
-        root.set_shader_input("uCamFromCentre", LVecBase3f(0.0, 0.0, 1.0))
-        root.set_shader_input("uCamShellC", -1.0)
+        # Inputs that change every frame are arrays bound once and written in
+        # place: setting a new value on the root would make a new render
+        # state per input per frame, for Panda to compose and collect.
+        self._frame_inputs = {}
+        for name, value in (
+            ("uCamPos", (0.0, 0.0, 0.0)),
+            ("uPlanetCentre", (0.0, 0.0, -1.0)),
+            ("uCamFromCentre", (0.0, 0.0, 1.0)),
+            ("uSunDir", (0.0, 0.0, 1.0)),
+            ("uSunColor", (1.0, 1.0, 1.0)),
+            ("uAmbient", (0.0, 0.0, 0.0)),
+            ("uHazeColor", haze_color),
+        ):
+            array = PTA_LVecBase3f.empty_array(1)
+            array[0] = LVecBase3f(*value)
+            self._frame_inputs[name] = array
+            root.set_shader_input(name, array)
+        shell = PTA_float.empty_array(1)
+        shell[0] = -1.0
+        self._frame_inputs["uCamShellC"] = shell
+        root.set_shader_input("uCamShellC", shell)
         root.set_shader_input("uSeaSurface", 0)
         root.set_shader_input("uDepthBias", 6.0)
         self.set_sun(sun_direction, sun_color, ambient)
@@ -417,6 +455,7 @@ class Terrain:
 
     def _store(self, chunk: ChunkData) -> None:
         self.store[chunk.key] = chunk
+        self._bounds[chunk.key] = (chunk.h_min, chunk.h_max)
         self.store.move_to_end(chunk.key)
         self._evict_store()
 
@@ -437,6 +476,7 @@ class Terrain:
             if old in protected:
                 continue
             del self.store[old]
+            del self._bounds[old]
             if old in self.nodes:
                 self.nodes.pop(old).remove_node()
             excess -= 1
@@ -488,15 +528,12 @@ class Terrain:
     def _select(self, cam: np.ndarray) -> None:
         start = time.perf_counter()
         self._last_select_pos = cam.copy()
-
-        def bounds(key):
-            chunk = self.store.get(key)
-            return None if chunk is None else (chunk.h_min, chunk.h_max)
+        self._last_select_frame = self._frame
 
         selection = self.selector.select(
             cam,
             ready=self.nodes.__contains__,
-            bounds=bounds,
+            bounds=self._bounds.get,
         )
         draw = set(selection.draw)
         for key in self.shown - draw:

@@ -31,6 +31,8 @@ from world_builder.terrain.cubesphere import CubeGrid, Key
 
 #: Height bounds assumed for a node nobody has generated yet, metres.
 UNKNOWN_BOUNDS = (-7000.0, 9000.0)
+#: Cached per-node geometry entries before the cache is reset.
+_GEOMETRY_CACHE_LIMIT = 200_000
 
 
 @dataclass
@@ -86,6 +88,7 @@ class LodSelector:
         self.horizon_floor = horizon_floor
         self.min_level = min_level
         self._split: set[Key] = set()
+        self._geometry: dict[Key, tuple] = {}
 
     def reset(self):
         """Forget the hysteresis state (after a spec change)."""
@@ -102,44 +105,37 @@ class LodSelector:
         :param camera: camera position in the planet frame (centre at the
             origin), metres
         :param ready: whether a key's chunk can be drawn now
-        :param bounds: a key's (h_min, h_max) when known, else None
+        :param bounds: a key's (h_min, h_max) when known, else None. Return
+            the same tuple object for a key while its bounds do not change
+            (a dict's ``get`` does): the per-key geometry cache then
+            recognises it by identity
         :returns: what to draw and what to generate
         """
         self._begin(camera)
+        self._distances: dict[Key, float] = {}
         selection = Selection()
         split_now: set[Key] = set()
         for root in self.grid.roots():
             selection.keep.add(root)
             box = bounds(root) or UNKNOWN_BOUNDS
-            distance = self.distance(root, box)
-            if not self._culled(root, box, distance):
+            distance, culled = self._measure(root, box)
+            self._distances[root] = distance
+            if not culled:
                 self._visit(root, box, distance, ready, bounds, selection, split_now)
         self._split = split_now
         # Coarse first, so the world is covered before it is refined; nearer
-        # first within a level.
-        selection.wanted.sort(key=lambda k: (-k[0], self.distance(k, UNKNOWN_BOUNDS)))
-        selection.prefetch.sort(key=lambda k: self.distance(k, UNKNOWN_BOUNDS))
+        # first within a level. Distances as measured in the traversal (with
+        # each key's own bounds): re-measuring with other bounds would evict
+        # the geometry cache entries the next pass needs.
+        distances = self._distances
+        selection.wanted.sort(key=lambda k: (-k[0], distances[k]))
+        selection.prefetch.sort(key=distances.__getitem__)
         return selection
 
     def distance(self, key: Key, box: tuple[float, float]) -> float:
         """:returns: 3D distance from the camera of the last pass to the node's
         box with heights *box* = (h_min, h_max), metres"""
-        kb = self.grid.box(key)
-        r0 = self.radius + box[0]
-        r1 = self.radius + box[1]
-        x, y, z = self._camera
-        u0, u1 = kb.u_range
-        v0, v1 = kb.v_range
-        a, b, c = kb.t_u
-        pu = a * x + b * y + c * z
-        a, b, c = kb.t_v
-        pv = a * x + b * y + c * z
-        a, b, c = kb.up
-        pw = a * x + b * y + c * z
-        du = max(0.0, min(u0 * r0, u0 * r1) - pu, pu - max(u1 * r0, u1 * r1))
-        dv = max(0.0, min(v0 * r0, v0 * r1) - pv, pv - max(v1 * r0, v1 * r1))
-        dw = max(0.0, kb.cos_radius * r0 - pw, pw - r1)
-        return math.sqrt(du * du + dv * dv + dw * dw)
+        return self._measure(key, box)[0]
 
     # ── internals ──────────────────────────────────────────────────────────────
 
@@ -151,6 +147,8 @@ class LodSelector:
         self._rho = rho
         self._dir = (x / rho, y / rho, z / rho) if rho > 0.0 else (0.0, 0.0, 1.0)
         floor = self.radius + self.horizon_floor
+        if floor != getattr(self, "_floor", None):
+            self._geometry = {}  # cached horizon terms depend on the floor
         self._floor = floor
         # Angle from the camera's nadir to the tangent point on the floor
         # sphere; 0 when the camera is below it (under water: nothing beyond
@@ -158,6 +156,11 @@ class LodSelector:
         cos_eye = floor / rho if rho > floor else 1.0
         self._cos_eye = cos_eye
         self._sin_eye = math.sqrt(max(0.0, 1.0 - cos_eye * cos_eye))
+        level_size = self.grid.chunk_size
+        self._limits = [
+            self.split_factor * level_size(level)
+            for level in range(self.grid.max_level + 1)
+        ]
 
     def _visit(self, key, box, distance, ready, bounds, selection, split_now):
         """Visit a node that is not culled.
@@ -165,26 +168,38 @@ class LodSelector:
         :param box: its height bounds (its own, or its parent's if unknown)
         :param distance: camera distance to its box
         """
-        limit = self.split_factor * self.grid.chunk_size(key[0])
+        level = key[0]
+        limit = self._limits[level]
         if key in self._split:
             limit *= self.hysteresis
-        if key[0] > self.min_level and distance < limit:
+        if level > self.min_level and distance < limit:
             split_now.add(key)
-            every_child = CubeGrid.children(key)
+            _, face, i, j = key
+            i, j, child_level = 2 * i, 2 * j, level - 1
+            every_child = (
+                (child_level, face, i, j),
+                (child_level, face, i + 1, j),
+                (child_level, face, i, j + 1),
+                (child_level, face, i + 1, j + 1),
+            )
             selection.keep.update(every_child)
-            children = []
+            measure = self._measure
+            distances = self._distances
+            visible = []
+            missing = False
             for child in every_child:
                 child_box = bounds(child) or box
-                child_distance = self.distance(child, child_box)
-                if not self._culled(child, child_box, child_distance):
-                    children.append((child, child_box, child_distance))
-            visible = {c[0] for c in children}
-            selection.prefetch.extend(
-                c for c in every_child if c not in visible and not ready(c)
-            )
-            missing = [c for c in visible if not ready(c)]
+                child_distance, culled = measure(child, child_box)
+                distances[child] = child_distance
+                if culled:
+                    if not ready(child):
+                        selection.prefetch.append(child)
+                    continue
+                visible.append((child, child_box, child_distance))
+                if not missing and not ready(child):
+                    missing = True
             if not missing:
-                for child, child_box, child_distance in children:
+                for child, child_box, child_distance in visible:
                     self._visit(
                         child,
                         child_box,
@@ -195,30 +210,94 @@ class LodSelector:
                         split_now,
                     )
                 return
-            selection.wanted.extend(c[0] for c in children if not ready(c[0]))
+            selection.wanted.extend(c[0] for c in visible if not ready(c[0]))
         if ready(key):
             selection.draw.append(key)
             selection.keep.add(key)
         else:
             selection.wanted.append(key)
 
-    def _culled(self, key, box, distance) -> bool:
-        """Whether the node is wholly beyond the horizon or the distance cap."""
+    def _measure(self, key, box) -> tuple[float, bool]:
+        """Distance to the node's box, and whether the node is wholly beyond
+        the horizon or the distance cap.
+
+        The hot loop of the pass: the box extents for these bounds and the
+        horizon terms that depend only on the node are cached per key.
+        """
+        entry = self._geometry.get(key)
+        if entry is None or (entry[0] is not box and entry[0] != box):
+            entry = self._prepare(key, box)
+        (
+            _,
+            ux,
+            uy,
+            uz,
+            vx,
+            vy,
+            vz,
+            wx,
+            wy,
+            wz,
+            u0,
+            u1,
+            v0,
+            v1,
+            w0,
+            w1,
+            cos_r,
+            sin_r,
+            cos_top,
+            sin_top,
+        ) = entry
+        x, y, z = self._camera
+        p = ux * x + uy * y + uz * z
+        d = u0 - p if p < u0 else (p - u1 if p > u1 else 0.0)
+        total = d * d
+        p = vx * x + vy * y + vz * z
+        d = v0 - p if p < v0 else (p - v1 if p > v1 else 0.0)
+        total += d * d
+        p = wx * x + wy * y + wz * z
+        d = w0 - p if p < w0 else (p - w1 if p > w1 else 0.0)
+        distance = math.sqrt(total + d * d)
+
         if self.max_distance is not None and distance > self.max_distance:
-            return True
-        kb = self.grid.box(key)
+            return distance, True
         dx, dy, dz = self._dir
-        ux, uy, uz = kb.up
-        cos_phi = dx * ux + dy * uy + dz * uz  # camera direction to patch centre
-        if cos_phi >= kb.cos_radius:
-            return False  # the camera is over the patch
+        cos_phi = dx * wx + dy * wy + dz * wz  # camera direction to patch centre
+        if cos_phi >= cos_r:
+            return distance, False  # the camera is over the patch
         # Nearest patch point is alpha = phi - patch radius away (angle); the
         # line of sight grazing the floor sphere reaches beta = eye angle +
         # the angle at which the patch's top pokes over it.
-        sin_phi = math.sqrt(max(0.0, 1.0 - cos_phi * cos_phi))
-        cos_alpha = cos_phi * kb.cos_radius + sin_phi * kb.sin_radius
-        top = self.radius + box[1]
-        cos_top = self._floor / top if top > self._floor else 1.0
-        sin_top = math.sqrt(max(0.0, 1.0 - cos_top * cos_top))
+        s = 1.0 - cos_phi * cos_phi
+        cos_alpha = cos_phi * cos_r + (math.sqrt(s) if s > 0.0 else 0.0) * sin_r
         cos_beta = self._cos_eye * cos_top - self._sin_eye * sin_top
-        return cos_alpha < cos_beta
+        return distance, cos_alpha < cos_beta
+
+    def _prepare(self, key, box) -> tuple:
+        """Cache the node's box extents for *box* and its horizon terms."""
+        if len(self._geometry) > _GEOMETRY_CACHE_LIMIT:
+            self._geometry.clear()
+        kb = self.grid.box(key)
+        r0 = self.radius + box[0]
+        r1 = self.radius + box[1]
+        (u_lo, u_hi), (v_lo, v_hi), (w_lo, w_hi) = kb.extents(r0, r1)
+        cos_top = self._floor / r1 if r1 > self._floor else 1.0
+        entry = (
+            box,
+            *kb.t_u,
+            *kb.t_v,
+            *kb.up,
+            u_lo,
+            u_hi,
+            v_lo,
+            v_hi,
+            w_lo,
+            w_hi,
+            kb.cos_radius,
+            kb.sin_radius,
+            cos_top,
+            math.sqrt(max(0.0, 1.0 - cos_top * cos_top)),
+        )
+        self._geometry[key] = entry
+        return entry

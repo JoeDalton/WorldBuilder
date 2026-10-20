@@ -258,9 +258,12 @@ class TerrainQuery:
         heights = np.zeros(len(dirs))
         normals = np.zeros((len(dirs), 3))
         face, i, j, _, _ = self.grid.locate(dirs, level)
-        keys, inverse = np.unique(
-            np.column_stack([face, i, j]), axis=0, return_inverse=True
-        )
+        if len(dirs) == 1:  # the common case (an altimeter): no grouping
+            keys, inverse = np.array([[face[0], i[0], j[0]]]), np.zeros(1, np.intp)
+        else:
+            keys, inverse = np.unique(
+                np.column_stack([face, i, j]), axis=0, return_inverse=True
+            )
         inverse = inverse.ravel()
         for k, (f, ki, kj) in enumerate(keys):
             sel = np.nonzero(inverse == k)[0]
@@ -307,13 +310,16 @@ class TerrainQuery:
         fu, fv = self._in_chunk(chunk, dirs)
         col = np.clip(np.floor(fu).astype(np.int64), 0, QUADS - 1)
         row = np.clip(np.floor(fv).astype(np.int64), 0, QUADS - 1)
-        grid_vertices = chunk.vertices()["vertex"][: VERTS * VERTS]
-        p = grid_vertices.astype(np.float64) + chunk.centre
+        grid_vertices = chunk.vertices()["vertex"]
         base = row * VERTS + col
-        v00 = p[base]
-        v01 = p[base + 1]  # +u
-        v10 = p[base + VERTS]  # +v
-        v11 = p[base + VERTS + 1]
+
+        def corner(index):  # only the needed vertices go to float64
+            return grid_vertices[index].astype(np.float64) + chunk.centre
+
+        v00 = corner(base)
+        v01 = corner(base + 1)  # +u
+        v10 = corner(base + VERTS)  # +v
+        v11 = corner(base + VERTS + 1)
         lower = (fu - col) >= (fv - row)  # triangle (00, 01, 11), else (00, 11, 10)
         e1 = np.where(lower[:, None], v01 - v00, v11 - v00)
         e2 = np.where(lower[:, None], v11 - v00, v10 - v00)

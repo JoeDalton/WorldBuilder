@@ -11,6 +11,7 @@ python scripts/demo_terrain.py            # 3D flight: planet, moon, orbit to gr
 python scripts/terrain_shots.py           # the demo from fixed poses, to PNG
 python -m world_builder.terrain.preview   # globe and top-down maps of every preset, to PNG
 python -m world_builder.terrain.bench     # chunk, LOD and worker timings
+python scripts/flight_bench.py            # frame times in scripted fast flights
 python -m world_builder.terrain.level     # regenerate the sample stamp images
 pytest tests/test_terrain_*.py tests/test_depth.py
 ```
@@ -41,6 +42,11 @@ The radius is the one knob (`PlanetSpec.radius`, `planet.radius` in a level,
   any radius.
 - **The chunk grid follows the radius** (`cubesphere.grid_for`): enough levels
   for the finest spacing to stay near 2 m. That is 14 levels at 600 km, 17 at 6371 km.
+- **The finest tile** is `QUADS` (64) quads of that spacing: 1.8 m spacing and
+  115 m tiles at 600 km. The knob is `cubesphere.TARGET_SPACING` (2 m; the grid
+  rounds to the nearest power of two). At runtime, `Terrain(min_level=...)`
+  and `set_min_level` (P in the demo) stop refining at a coarser level, and
+  collision follows.
 - Below a 150 km radius, features stop shrinking.
 
 ### Elevation
