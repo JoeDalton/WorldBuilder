@@ -7,7 +7,7 @@ cube-sphere quadtree LOD and collision queries. SpaceFlight does not use it
 yet.
 
 ```
-python scripts/demo_terrain.py            # 3D flight from orbit to the ground (controls in the script)
+python scripts/demo_terrain.py            # 3D flight: planet, moon, orbit to ground (controls in the script)
 python scripts/terrain_shots.py           # the demo from fixed poses, to PNG
 python -m world_builder.terrain.preview   # globe and top-down maps of every preset, to PNG
 python -m world_builder.terrain.bench     # chunk, LOD and worker timings
@@ -152,6 +152,51 @@ Nothing else changes:
 - the existing shaders
 - the terrain's coastline depth bias
 - the ocean's reflection camera, which keeps its own copy of the lens
+
+## Several planets
+
+A world can hold several bodies: one `Terrain` each, all updated with the
+same camera.
+
+```python
+executor = ChunkExecutor()                      # one worker pool for all
+planet = Terrain(render, spec, executor=executor)
+moon = Terrain(render, replace(PRESETS["moon"], seed=7), executor=executor,
+               position=(3.0e6, 9.0e6, 1.0e6), haze_distance=None,
+               materials=planet.materials)
+for terrain in (planet, moon):                  # every frame
+    terrain.update(camera_world)                # float64, world frame
+```
+
+- **Frames.**
+  - The world frame is shared, and `Terrain.position` is each body's
+    centre in it (float64, settable, so orbits can move it later).
+  - Each terrain's queries, chunk centres and `to_render` work in its own
+    planet frame (centre at the origin, same axes);
+    `terrain.to_planet(p_world)` converts.
+  - float64 is fine at solar-system scale: about 30 µm at 1 AU.
+- **One worker pool.** `ChunkExecutor` serves one channel per terrain. Each
+  channel has its own spec, version, wanted list and results. Each free
+  slot goes to the channel with the fewest tasks in flight, so a distant
+  moon's handful of coarse tiles is not stuck behind the planet's thousands.
+- **Memory follows the view.** A terrain keeps at most `STORE_SIZE` /
+  `NODE_CACHE_SIZE` tiles, and below that, 3× what its current selection
+  needs (at least 256). A planet you fly away from releases its ground; a
+  moon seen from the planet costs about 6–15 tiles.
+- **Depth.** `SplitDepthCameras.system_ranges` takes the split from the
+  nearest ground and the far plane from the farthest visible body. Depth
+  steps up close only depend on the split, so reaching a moon 10,000 km
+  away costs nothing on the ground; on the moon itself steps are a few km,
+  narrower than a pixel at that range.
+- **No atmosphere:** `haze_distance=None`. Give such a body bare sunlight
+  and almost no ambient light (`set_sun`).
+- **Barren worlds:** `PlanetSpec.has_vegetation=False` removes grass and
+  forest, and desert takes whatever snow leaves. The `moon` preset is a
+  200 km airless ball of sand, with rock only on cliffs.
+
+Not handled yet: one body seen through another's atmosphere. From the
+planet's surface the moon is drawn crisp over the sky, untouched by the
+planet's haze.
 
 ## Ocean and sky in the demo
 

@@ -33,7 +33,14 @@ _WATER_DEEP = np.array([0.02, 0.06, 0.18])
 def _shade(planet: Planet, elevation, temperature, humidity, dirs, spacing, step):
     """:returns: (rows, cols, 3) linear colour: biomes, hillshade, water"""
     slope = biomes.slope_degrees(elevation, spacing, step)
-    w = biomes.weights(temperature, humidity, elevation, slope, planet.spec.has_ocean)
+    w = biomes.weights(
+        temperature,
+        humidity,
+        elevation,
+        slope,
+        planet.spec.has_ocean,
+        planet.spec.has_vegetation,
+    )
     for paint in planet.spec.paints:
         w = paint.apply(dirs, w, planet.spec.radius)
     color = biomes.colors(w).reshape(*elevation.shape, 3)

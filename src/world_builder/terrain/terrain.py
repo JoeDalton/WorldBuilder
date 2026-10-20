@@ -4,9 +4,16 @@ Runtime terrain: LOD selection, background generation, upload, and drawing.
 Usage::
 
     terrain = Terrain(parent=render, spec=PRESETS["earthlike"])
-    # every frame, with the camera's float64 position in the planet frame
-    # (planet centre at the origin, metres):
-    terrain.update(camera_planet)
+    # every frame, with the camera's float64 position in the world frame
+    # (metres; the planet's centre is at terrain.position, the origin by
+    # default):
+    terrain.update(camera_world)
+
+Several planets: give each its own ``position`` and one shared
+:class:`ChunkExecutor` (``executor=``), and update them all with the same
+camera. Positions and queries of one terrain are in its *planet frame*
+(centre at the origin, same axes as the world frame); ``to_render`` takes
+those.
 
 Precision: Panda transforms are float32, which cannot place a vertex 600 km
 from the origin to better than a few centimetres. The world therefore moves
@@ -58,10 +65,15 @@ ORIGIN_SNAP = 4096.0
 #: Height of the haze shell above sea level, metres: the path length of a
 #: line of sight inside it is what fades terrain to the haze colour.
 HAZE_HEIGHT = 12000.0
-#: Generated chunks kept in memory (about 170 KB each).
+#: Generated chunks kept in memory (about 205 KB each), at most.
 STORE_SIZE = 2000
-#: Uploaded chunks kept on the GPU, shown or not.
+#: Uploaded chunks kept on the GPU, shown or not, at most.
 NODE_CACHE_SIZE = 1200
+#: Below the caps, a terrain keeps this many times what its current selection
+#: needs (at least MIN_RESIDENT): a planet seen only from afar shrinks to a
+#: few hundred chunks instead of holding the ground it was last close to.
+RESIDENT_FACTOR = 3
+MIN_RESIDENT = 256
 #: Upload budget per frame.
 UPLOADS_PER_FRAME = 6
 UPLOAD_MS_PER_FRAME = 4.0
@@ -81,7 +93,7 @@ class Terrain:
         backend: str = "process",
         workers: int | None = None,
         haze_color=(0.55, 0.65, 0.8),
-        haze_distance: float = 150000.0,
+        haze_distance: float | None = 150000.0,
         haze_height: float = HAZE_HEIGHT,
         max_distance: float | None = None,
         sun_direction=(0.4, 0.5, 0.6),
@@ -90,6 +102,8 @@ class Terrain:
         exposure: float = 0.9,
         materials: MaterialSet | None = None,
         min_level: int = 0,
+        position=(0.0, 0.0, 0.0),
+        executor: ChunkExecutor | None = None,
     ):
         """
         :param parent: node to hang the terrain root under; must not be offset
@@ -99,7 +113,7 @@ class Terrain:
         :param workers: generation worker count
         :param haze_color: colour distant terrain fades to (display space)
         :param haze_distance: metres of line of sight inside the haze shell
-            over which terrain reaches the haze fully
+            over which terrain reaches the haze fully; None = no atmosphere
         :param haze_height: top of the haze shell above sea level, metres
         :param max_distance: terrain beyond this 3D distance is not drawn;
             None = out to the horizon
@@ -110,6 +124,11 @@ class Terrain:
         :param materials: biome textures; loaded from the textures folder if None
         :param min_level: finest LOD level drawn (0 = full detail, about 2 m
             vertex spacing; each level up doubles the spacing)
+        :param position: the planet centre in the world frame, metres
+            (float64; settable later through :attr:`position`)
+        :param executor: a generation pool shared with other terrains (this
+            terrain takes its own channel and does not shut it down); None
+            creates a private one from *backend* and *workers*
         """
         self.root = parent.attach_new_node("terrain")
         self.root.set_shader(
@@ -127,7 +146,10 @@ class Terrain:
         self.min_level = min_level
         self._set_static_inputs(haze_color, sun_direction, sun_color, ambient, exposure)
 
-        self.executor = ChunkExecutor(backend=backend, workers=workers)
+        self.position = np.asarray(position, dtype=np.float64)
+        self._owns_executor = executor is None
+        self.executor = executor or ChunkExecutor(backend=backend, workers=workers)
+        self._channel = f"terrain-{id(self):x}"
         self.planet: Planet | None = None
         self.query: TerrainQuery | None = None
         self.selector: LodSelector | None = None
@@ -162,7 +184,7 @@ class Terrain:
 
         :param spec: the new planet
         """
-        version = self.executor.set_spec(spec)
+        version = self.executor.set_spec(spec, self._channel)
         self.version = version
         self.planet = Planet(spec)
         self.spec = self.planet.spec
@@ -186,22 +208,22 @@ class Terrain:
         self._last_select_pos = None
         self.stats["finest"] = self.grid.max_level
 
-    def update(self, camera_planet, camera_render=(0.0, 0.0, 0.0)) -> None:
+    def update(self, camera_world, camera_render=(0.0, 0.0, 0.0)) -> None:
         """Per-frame update.
 
-        :param camera_planet: camera position in the planet frame (centre at
-            the origin), metres, float64
+        :param camera_world: camera position in the world frame, metres,
+            float64 (the planet frame if :attr:`position` is the origin)
         :param camera_render: where the camera is in the render frame (the
             game keeps it at the origin)
         """
         self._frame += 1
-        cam = np.asarray(camera_planet, dtype=np.float64)
+        cam = np.asarray(camera_world, dtype=np.float64) - self.position
         render_cam = np.asarray(camera_render, dtype=np.float64)
         self._camera = cam.copy()
         self._render_camera = render_cam.copy()
         self._rebase(cam, render_cam)
 
-        finished = self.executor.collect()
+        finished = self.executor.collect(self._channel)
         for chunk in finished:
             self._store(chunk)
         if finished:
@@ -233,7 +255,7 @@ class Terrain:
             shown=len(self.shown),
             stored=len(self.store),
             uploaded=len(self.nodes),
-            pending=self.executor.pending,
+            pending=self.executor.pending_for(self._channel),
             wanted=len(self._wanted),
         )
 
@@ -241,6 +263,10 @@ class Terrain:
     def radius(self) -> float:
         """Sea-level radius, metres."""
         return self.spec.radius
+
+    def to_planet(self, point_world) -> np.ndarray:
+        """:returns: a world-frame point in this planet's frame (float64)"""
+        return np.asarray(point_world, dtype=np.float64) - self.position
 
     def altitude(self, camera_planet) -> float:
         """:returns: metres above sea level of a planet-frame position"""
@@ -322,8 +348,10 @@ class Terrain:
         self._last_select_pos = None
 
     def destroy(self) -> None:
-        """Stop the workers and remove the geometry."""
-        self.executor.shutdown()
+        """Remove the geometry, and stop the workers if they are this
+        terrain's own."""
+        if self._owns_executor:
+            self.executor.shutdown()
         self.root.remove_node()
 
     # ── internals ──────────────────────────────────────────────────────────────
@@ -355,7 +383,9 @@ class Terrain:
         root.set_shader_input("uBlendDepth", self.blend_depth)
         root.set_shader_input("uExposure", float(exposure))
         root.set_shader_input("uHazeColor", LVecBase3f(*haze_color))
-        root.set_shader_input("uHazeDistance", float(self.haze_distance))
+        # No atmosphere: a haze distance nothing reaches.
+        haze = self.haze_distance if self.haze_distance is not None else 1e30
+        root.set_shader_input("uHazeDistance", float(haze))
         root.set_shader_input("uDebugMode", 0)
         root.set_shader_input("uLevel", 0)
         root.set_shader_input("uMaxLevel", 0)
@@ -388,11 +418,23 @@ class Terrain:
     def _store(self, chunk: ChunkData) -> None:
         self.store[chunk.key] = chunk
         self.store.move_to_end(chunk.key)
-        excess = len(self.store) - STORE_SIZE
+        self._evict_store()
+
+    def _resident(self, cap: int) -> int:
+        """:returns: how many chunks to keep, given what the selection needs"""
+        return min(cap, max(MIN_RESIDENT, RESIDENT_FACTOR * len(self._keep)))
+
+    def _evict_store(self) -> None:
+        """Drop least recently used chunks past the resident limit, never one
+        the selection depends on or one waiting for upload."""
+        excess = len(self.store) - self._resident(STORE_SIZE)
+        if excess <= 0:
+            return
+        protected = self._keep | set(self._wanted)
         for old in list(self.store):
             if excess <= 0:
                 break
-            if old in self._keep:
+            if old in protected:
                 continue
             del self.store[old]
             if old in self.nodes:
@@ -431,7 +473,7 @@ class Terrain:
         return count
 
     def _evict_nodes(self) -> None:
-        excess = len(self.nodes) - NODE_CACHE_SIZE
+        excess = len(self.nodes) - self._resident(NODE_CACHE_SIZE)
         if excess <= 0:
             return
         # Wanted chunks were just uploaded for the next selection to use.
@@ -477,6 +519,10 @@ class Terrain:
         self._keep = keep
         self.shown = draw
         self._wanted = selection.wanted + selection.prefetch
-        self.executor.request([k for k in self._wanted if k not in self.store])
+        self.executor.request(
+            [k for k in self._wanted if k not in self.store], self._channel
+        )
+        self._evict_store()
+        self._evict_nodes()
         self.stats["select_ms"] = (time.perf_counter() - start) * 1e3
         self.stats["finest"] = min((k[0] for k in draw), default=self.grid.max_level)

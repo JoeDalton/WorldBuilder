@@ -14,7 +14,9 @@ high (20 km up), swell / sea_surface (either side of the ocean handover at
 15 km: the swell ocean, then the terrain's own flat sea), stratosphere (200 km
 up), orbit (3 radii up, looking down),
 corner (over a cube corner, where three faces meet), lod (the LOD debug view
-from 20 km).
+from 20 km), moonrise (the moon over the northern horizon, from the start
+area), moon_orbit (3 moon radii up, looking down), moon_ground (2 km over the
+moon's sand).
 """
 
 from __future__ import annotations
@@ -39,14 +41,15 @@ CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
 
 
 def _poses(demo: TerrainDemo) -> dict:
-    """:returns: name -> (lat, lon, altitude, heading, pitch, debug view)"""
+    """:returns: name -> (lat, lon, altitude, heading, pitch, debug view,
+    body index)"""
     start = demo.start_pose or {}
     lat0 = start.get("lat", demo.terrain.spec.reference_lat)
     lon0 = start.get("lon", demo.terrain.spec.reference_lon)
     ref_lat, ref_lon = demo.terrain.spec.reference_lat, demo.terrain.spec.reference_lon
     corner_lat, corner_lon = (float(v[0]) for v in latlon(CORNER[None, :]))
     radius = demo.radius
-    return {
+    poses = {
         "ground": (
             lat0,
             lon0,
@@ -54,16 +57,26 @@ def _poses(demo: TerrainDemo) -> dict:
             start.get("heading", 0.0),
             start.get("pitch", 0.0),
             0,
+            0,
         ),
-        "coast": (ref_lat, ref_lon, 2000.0, 0.0, -10.0, 0),
-        "high": (lat0, lon0, 20000.0, 0.0, -25.0, 0),
-        "swell": (ref_lat, ref_lon, 13000.0, 0.0, -20.0, 0),
-        "sea_surface": (ref_lat, ref_lon, 17000.0, 0.0, -20.0, 0),
-        "stratosphere": (lat0, lon0, 200e3, 0.0, -45.0, 0),
-        "orbit": (lat0, lon0, 3.0 * radius, 0.0, -89.9, 0),
-        "corner": (corner_lat, corner_lon, 3000.0, 30.0, -30.0, 0),
-        "lod": (lat0, lon0, 20000.0, 0.0, -25.0, 1),
+        "coast": (ref_lat, ref_lon, 2000.0, 0.0, -10.0, 0, 0),
+        "high": (lat0, lon0, 20000.0, 0.0, -25.0, 0, 0),
+        "swell": (ref_lat, ref_lon, 13000.0, 0.0, -20.0, 0, 0),
+        "sea_surface": (ref_lat, ref_lon, 17000.0, 0.0, -20.0, 0, 0),
+        "stratosphere": (lat0, lon0, 200e3, 0.0, -45.0, 0, 0),
+        "orbit": (lat0, lon0, 3.0 * radius, 0.0, -89.9, 0, 0),
+        "corner": (corner_lat, corner_lon, 3000.0, 30.0, -30.0, 0, 0),
+        "lod": (lat0, lon0, 20000.0, 0.0, -25.0, 1, 0),
     }
+    if len(demo.bodies) > 1:
+        moon = demo.bodies[1]
+        poses["moonrise"] = (ref_lat, ref_lon, 1500.0, 0.0, 6.0, 0, 0)
+        # Over the moon's side facing the planet.
+        facing = -moon.position / np.linalg.norm(moon.position)
+        lat, lon = (float(v[0]) for v in latlon(facing[None, :]))
+        poses["moon_orbit"] = (lat, lon, 3.0 * moon.radius, 0.0, -89.9, 0, 1)
+        poses["moon_ground"] = (lat + 1.0, lon, 2000.0, 0.0, -15.0, 0, 1)
+    return poses
 
 
 def _settle(demo: TerrainDemo, timeout: float) -> bool:
@@ -72,8 +85,10 @@ def _settle(demo: TerrainDemo, timeout: float) -> bool:
     quiet = 0
     while time.perf_counter() - start < timeout:
         demo.taskMgr.step()
-        stats = demo.terrain.stats
-        quiet = quiet + 1 if stats["wanted"] == 0 and stats["pending"] == 0 else 0
+        busy = demo.executor.pending or any(
+            body.terrain.stats["wanted"] for body in demo.bodies
+        )
+        quiet = 0 if busy else quiet + 1
         if quiet >= 10:
             return True
     return False
@@ -107,22 +122,21 @@ def main():
     demo.setFrameRateMeter(False)
     poses = _poses(demo)
     for name in args.pose or list(poses):
-        lat, lon, alt, heading, pitch, view = poses[name]
-        demo._debug = view
-        demo.terrain.set_debug_mode(view)
-        demo._place_camera(lat, lon, alt, heading, pitch)
+        lat, lon, alt, heading, pitch, view, body = poses[name]
+        demo.set_debug_view(view)
+        demo._place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])
         demo.set_local_sun(210.0, 35.0)  # the same light everywhere
         settled = _settle(demo, args.timeout)
         for _ in range(3):  # let the last uploads reach the screen
             demo.taskMgr.step()
         path = args.out / f"{name}.png"
         demo.win.save_screenshot(Filename.from_os_specific(str(path)))
-        s = demo.terrain.stats
+        s = demo.bodies[body].terrain.stats
         print(
             f"{name:<13} {'settled' if settled else 'TIMEOUT'}  {s['shown']} chunks, "
             f"finest {s['finest']}, LOD {s['select_ms']:.1f} ms -> {path}"
         )
-    demo.terrain.destroy()
+    demo.destroy_terrain()
 
 
 if __name__ == "__main__":

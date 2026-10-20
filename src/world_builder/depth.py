@@ -114,6 +114,27 @@ class SplitDepthCameras:
         peak = math.sqrt(max(0.0, (radius + max_height) ** 2 - floor**2))
         return split, 1.05 * (eye + peak)
 
+    @staticmethod
+    def system_ranges(bodies, near_split: float = 2000.0) -> tuple[float, float]:
+        """Split and far distances for a camera among several bodies.
+
+        The split follows the nearest body (it bounds the nearest ground);
+        the far plane reaches the farthest visible part of any body. Depth
+        steps at a distance only depend on the split, so reaching a moon
+        10,000 km away costs nothing up close: a few km of step on the moon
+        itself, which is a few pixels wide per km anyway.
+
+        :param bodies: (radius, camera distance from its centre, max height,
+            min height) per body, as :meth:`planet_ranges` takes them
+        :param near_split: smallest split, metres
+        :returns: (split, far)
+        """
+        ranges = [
+            SplitDepthCameras.planet_ranges(*body, near_split=near_split)
+            for body in bodies
+        ]
+        return min(r[0] for r in ranges), max(r[1] for r in ranges)
+
     def destroy(self) -> None:
         """Remove the far camera and its display region."""
         self.app.win.remove_display_region(self.far_region)

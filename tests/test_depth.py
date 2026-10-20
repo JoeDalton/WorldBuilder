@@ -36,3 +36,13 @@ def test_the_far_camera_starts_short_of_the_ground():
     for altitude in (50e3, 500e3):
         split, _ = SplitDepthCameras.planet_ranges(R, R + altitude)
         assert split < altitude - 9000.0
+
+
+def test_system_ranges_follow_the_nearest_ground_and_reach_the_farthest_body():
+    moon = (200e3, 9.4e6, 9000.0, -7000.0)  # 9,400 km from the camera
+    planet = (R, R + 2.0, 9000.0, 0.0)  # standing on the planet
+    split, far = SplitDepthCameras.system_ranges([planet, moon])
+    assert split == SplitDepthCameras.planet_ranges(*planet)[0]
+    assert far >= 9.4e6  # the moon's near side is in range
+    # Up close, precision only depends on the split.
+    assert _precision(split, 100e3) < 1.0

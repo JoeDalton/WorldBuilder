@@ -9,6 +9,9 @@ snowy with no special rule. Two terrain rules then override the climate:
 * slope: cliffs are rock, whatever the climate
 * coast: a band just above sea level is beach (only on planets with an ocean)
 
+A barren planet (no vegetation: a moon) has no grass or forest; desert takes
+whatever snow leaves.
+
 Weights are smooth and normalised, not hard ids, so biomes blend.
 """
 
@@ -80,6 +83,7 @@ def weights(
     elevation: np.ndarray,
     slope: np.ndarray,
     has_ocean: bool,
+    vegetation: bool = True,
 ) -> np.ndarray:
     """Normalised biome weights.
 
@@ -88,6 +92,7 @@ def weights(
     :param elevation: metres above sea level
     :param slope: degrees
     :param has_ocean: whether the planet has a sea (beaches)
+    :param vegetation: False for a barren planet: no grass, no forest
     :returns: (N, 6) float32 summing to 1, in :data:`BIOMES` order
     """
     t = np.ravel(temperature)
@@ -107,10 +112,13 @@ def weights(
         * (1.0 - smoothstep(27.0, 33.0, t))
     )
     w[:, SNOW] = snow
-    w[:, DESERT] = desert * (1.0 - snow)
-    w[:, FOREST] = forest * (1.0 - snow) * (1.0 - desert)
-    w[:, GRASS] = np.maximum(0.05, 1.0 - w.sum(axis=1))
-    w /= w.sum(axis=1, keepdims=True)
+    if vegetation:
+        w[:, DESERT] = desert * (1.0 - snow)
+        w[:, FOREST] = forest * (1.0 - snow) * (1.0 - desert)
+        w[:, GRASS] = np.maximum(0.05, 1.0 - w.sum(axis=1))
+        w /= w.sum(axis=1, keepdims=True)
+    else:
+        w[:, DESERT] = 1.0 - snow
 
     if has_ocean:
         beach = (

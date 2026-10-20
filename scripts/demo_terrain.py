@@ -1,24 +1,29 @@
 """
 Standalone flythrough demo for the procedural planet terrain.
 
-Flies a free camera from orbit down to the ground of a procedurally generated
-planet with hand-made stamps (world_builder/terrain/levels/demo.yaml), the
-WorldBuilder ocean, and haze. Run it from an environment where world_builder
-is importable::
+Flies a free camera around a small planetary system: a Kerbin-sized planet
+with hand-made stamps (world_builder/terrain/levels/demo.yaml), the
+WorldBuilder ocean and haze, and an airless sand moon 10,000 km away, from
+orbit down to the ground of either. Run it from an environment where
+world_builder is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--radius METRES]
+        [--moon-distance METRES] [--no-moon]
         [--backend process|thread|inline]
 
 The default backend generates terrain in spawned worker processes, which
-re-import this script: keep the ``if __name__ == "__main__"`` guard.
+re-import this script: keep the ``if __name__ == "__main__"`` guard. All
+bodies share one pool.
 
-Frames: the camera position is float64 in the planet frame (planet centre at
-the origin). The camera stays at the render origin and the world is moved
-around it (see Terrain.to_render), so float32 never sees a large number near
-the camera. The camera's orientation is absolute in the planet frame: flying
-straight ahead from level flight climbs away from the curving surface,
-tangentially. Yaw turns about the local vertical, so the horizon stays level
-while turning; Y re-levels it after a long flight.
+Frames: positions are float64 in the world frame: the planet's centre at
+the origin, the moon elsewhere, no rotation. Each body's terrain works in its
+own planet frame (its centre at the origin, same axes). The camera stays at
+the render origin and the world is moved around it (see Terrain.to_render),
+so float32 never sees a large number near the camera. The camera's
+orientation is absolute in the world frame: flying straight ahead from level
+flight climbs away from the curving surface, tangentially. "Up", the ground
+and the speed follow the nearest body. Yaw turns about the local vertical,
+so the horizon stays level while turning; Y re-levels it after a long flight.
 
 Controls (AZERTY):
     Z / S           pitch down / up
@@ -30,11 +35,12 @@ Controls (AZERTY):
     W / X           slide up / down
     SHIFT           hold to move 5x faster (speed also grows with altitude)
     PAGE UP / DOWN  double / halve the base speed
-    HOME            jump to orbit: 3 planet radii up, looking down
+    HOME            jump to orbit of the nearest body: 3 radii up, looking down
+    TAB             jump to the next body: 3 radii up on the side facing you
     END / R         back to the level's start pose
 
     F1 - F4         planet preset: earthlike / desert / forest / ice
-    N               next seed
+    N               next seed (the planet)
     L               reload the level file (edit stamps live)
     O               toggle the ocean
     M               toggle the terrain in the ocean's reflection
@@ -62,6 +68,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -95,6 +102,7 @@ from world_builder.terrain.chart import (
 )
 from world_builder.terrain.cubesphere import FACE_NAMES, dirs_to_face
 from world_builder.terrain.level import DEMO_LEVEL, load_level
+from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 
 INITIAL_FAR_M = 600000.0  # the lens the ocean's reflection camera copies
@@ -104,9 +112,15 @@ HAZE_DISTANCE = 150000.0
 SPEED = 150.0  # metres/second at low altitude
 BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground
-MAX_ALTITUDE_RADII = 5.0  # the camera stays within this many radii above sea
-ORBIT_RADII = 3.0  # HOME jumps this high
+ORBIT_RADII = 3.0  # HOME and TAB jump this high
 MAX_DROPPED_LEVELS = 5  # P cycles the finest drawn level from 0 to this
+# The moon: centre-to-centre distance, and where it hangs in the start view
+# (this far from the start point's vertical, toward its north).
+MOON_DISTANCE_M = 10_000e3
+MOON_SEED = 7
+MOON_ZENITH_ANGLE = 75.0
+# The camera stays within this many moon distances of the planet.
+MAX_RANGE_FACTOR = 3.0
 # The swell ocean is built for eyes up to 20 km; above this band the terrain
 # draws the sea itself, as flat water (hysteresis, so it does not flicker).
 OCEAN_HANDOVER = (14000.0, 16000.0)
@@ -114,6 +128,9 @@ OCEAN_HANDOVER = (14000.0, 16000.0)
 # this point, re-anchored (a jump in the pattern) past this distance.
 OCEAN_ANCHOR_RANGE = 50000.0
 SKY_FADE = (20000.0, 80000.0)  # altitudes over which the sky dome fades to black
+# Airless bodies: sunlight unfiltered, next to no ambient light (a black sky).
+SPACE_SUN = (2.6, 2.45, 2.2)
+SPACE_AMBIENT = (0.025, 0.025, 0.03)
 PROBE_RADIUS = 20.0
 PROBE_DISTANCE = 60.0
 LASER_RANGE = 30000.0
@@ -174,10 +191,44 @@ def _quat_from_axes(x, y, z) -> LQuaternionf:
     return q
 
 
-class TerrainDemo(ShowBase):
-    """A free-flying camera around and onto the procedural planet."""
+@dataclass
+class Body:
+    """One planet or moon of the demo.
 
-    def __init__(self, level_path, backend: str, radius: float | None):
+    :ivar name: shown in the HUD
+    :ivar terrain: its terrain (which carries its world position)
+    :ivar atmosphere: whether it has air (sky, haze, coloured sunlight)
+    """
+
+    name: str
+    terrain: object
+    atmosphere: bool
+
+    @property
+    def position(self) -> np.ndarray:
+        return self.terrain.position
+
+    @property
+    def radius(self) -> float:
+        return self.terrain.radius
+
+
+class TerrainDemo(ShowBase):
+    """A free-flying camera around and onto a planet and its moon."""
+
+    def __init__(
+        self,
+        level_path,
+        backend: str,
+        radius: float | None,
+        moon_distance: float | None = MOON_DISTANCE_M,
+    ):
+        """
+        :param level_path: the planet's level file
+        :param backend: chunk generation backend, see ChunkExecutor
+        :param radius: overrides the level's planet radius, metres
+        :param moon_distance: centre-to-centre, metres; None = no moon
+        """
         super().__init__()
         self.setFrameRateMeter(True)
         self.disable_mouse()
@@ -186,8 +237,9 @@ class TerrainDemo(ShowBase):
         self.camLens.set_fov(70)
         self.set_background_color(0.0, 0.0, 0.0, 1.0)
 
-        self.cam_planet = np.array([0.0, 0.0, 1.0])
-        # Absolute, in the planet frame (= the render frame's axes): moving
+        # World frame, float64.
+        self.cam_world = np.array([0.0, 0.0, 1.0])
+        # Absolute, in the world frame (= the render frame's axes): moving
         # does not turn the camera.
         self._orientation = LQuaternionf()
         self.speed = SPEED
@@ -199,16 +251,33 @@ class TerrainDemo(ShowBase):
         self.seed = spec.seed
 
         from world_builder.terrain.terrain import Terrain
+        from world_builder.terrain.workers import ChunkExecutor
 
         print("starting terrain workers ...")
+        self.executor = ChunkExecutor(backend=backend)
         self.terrain = Terrain(
             parent=self.render,
             spec=spec,
-            backend=backend,
+            executor=self.executor,
             haze_color=HAZE_COLOR,
             haze_distance=HAZE_DISTANCE,
         )
-        self._sun_planet = np.array([0.0, 0.0, 1.0])
+        self.home = Body("planet", self.terrain, atmosphere=True)
+        self.bodies = [self.home]
+        if moon_distance is not None:
+            moon = Terrain(
+                parent=self.render,
+                spec=replace(PRESETS["moon"], seed=MOON_SEED),
+                executor=self.executor,
+                haze_distance=None,
+                position=self._moon_position(spec, moon_distance),
+                materials=self.terrain.materials,
+            )
+            self.bodies.append(Body("moon", moon, atmosphere=False))
+        self.max_range = MAX_RANGE_FACTOR * (moon_distance or 10.0 * spec.radius)
+        self.body = self.home  # the nearest body, updated every frame
+
+        self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
         self._sky = self._make_sky()
         # Built before the depth split changes the lens: the ocean's
         # reflection camera copies it once.
@@ -222,7 +291,7 @@ class TerrainDemo(ShowBase):
         self._wireframe = False
         self._debug = 0
         self._probe = self._make_probe()
-        self._laser_marks: list[tuple[object, np.ndarray]] = []
+        self._laser_marks: list[tuple[object, Body, np.ndarray]] = []
         self._ground = 0.0
 
         self._keys = dict.fromkeys(_CONTROLS, False)
@@ -250,6 +319,7 @@ class TerrainDemo(ShowBase):
             ("page_up", self._scale_speed, [2.0]),
             ("page_down", self._scale_speed, [0.5]),
             ("home", self._jump_to_orbit, []),
+            ("tab", self._jump_to_next_body, []),
             ("end", self._reset_camera, []),
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
@@ -278,31 +348,55 @@ class TerrainDemo(ShowBase):
 
     @property
     def radius(self) -> float:
-        return self.terrain.radius
+        """The planet's radius."""
+        return self.home.radius
 
-    def _true_frame(self):
+    @staticmethod
+    def _moon_position(spec, distance: float) -> np.ndarray:
+        """Where the moon hangs in the start view: above the northern horizon
+        of the level's reference point (the sun, south-west, lights it)."""
+        frame = TangentFrame.at(spec.reference_lat, spec.reference_lon)
+        angle = math.radians(MOON_ZENITH_ANGLE)
+        return distance * (math.cos(angle) * frame.up + math.sin(angle) * frame.north)
+
+    def _relative(self, body: Body | None = None) -> np.ndarray:
+        """:returns: the camera in a body's planet frame (the nearest's by default)"""
+        return self.cam_world - (body or self.body).position
+
+    def _nearest_body(self) -> Body:
+        return min(
+            self.bodies,
+            key=lambda b: float(np.linalg.norm(self.cam_world - b.position)) - b.radius,
+        )
+
+    def _true_frame(self, body: Body | None = None):
         """:returns: (east, north, up) of the geographic frame at the nadir"""
-        lat, lon = latlon(self.cam_planet[None, :] / np.linalg.norm(self.cam_planet))
+        p = self._relative(body)
+        lat, lon = latlon(p[None, :] / np.linalg.norm(p))
         frame = TangentFrame.at(float(lat[0]), float(lon[0]))
         return frame.east, frame.north, frame.up
 
     def _up(self) -> np.ndarray:
-        """:returns: the local vertical at the camera"""
-        return self.cam_planet / np.linalg.norm(self.cam_planet)
+        """:returns: the local vertical of the nearest body at the camera"""
+        p = self._relative()
+        return p / np.linalg.norm(p)
 
     def _forward(self) -> np.ndarray:
         f = self._orientation.get_forward()
         return np.array([f.x, f.y, f.z])
+
+    def _terrains(self):
+        return [body.terrain for body in self.bodies]
 
     # ── scene pieces ───────────────────────────────────────────────────────────
 
     def _make_ocean(self):
         """The game's real curved ocean, in a frame that follows the nadir.
 
-        The ocean is a flat-world object (sea level at z = 0, droop d^2 / 2R
-        from the camera). Its frame is the tangent plane at the sea-level
-        point under the camera, so it is exact where it matters; its xy
-        follow the ground (a chart around an anchor), so the waves stay put.
+        The ocean is a flat-world object (sea level at z = 0, droop from the
+        camera). Its frame is the tangent plane at the sea-level point under
+        the camera, so it is exact where it matters; its xy follow the ground
+        (a chart around an anchor), so the waves stay put.
         """
         from world_builder.ocean import Ocean
 
@@ -331,9 +425,10 @@ class TerrainDemo(ShowBase):
     def _make_sky(self):
         """A unit gradient dome: haze at and below the horizon, blue overhead.
 
-        Recentred on the camera, aligned with the local vertical and scaled
-        inside the far camera's range every frame; drawn by the far camera
-        only, first, without depth writes.
+        The planet's sky: recentred on the camera, aligned with the planet's
+        local vertical and scaled inside the far camera's range every frame;
+        drawn by the far camera only, first, without depth writes. It fades
+        out with altitude above the planet.
         """
         rings, segments = 24, 48
         vdata = GeomVertexData("sky", GeomVertexFormat.get_v3c4(), Geom.UH_static)
@@ -391,27 +486,37 @@ class TerrainDemo(ShowBase):
 
     def _update(self, task):
         dt = min(self._clock.get_dt(), 0.1)
+        self.body = self._nearest_body()
         self._fly(dt)
         self.camera.set_pos(0.0, 0.0, 0.0)
         self.camera.set_quat(self.render, self._orientation)
-        east, north, up = self._true_frame()
 
-        self.terrain.update(self.cam_planet)
-        rho = float(np.linalg.norm(self.cam_planet))
-        altitude = rho - self.radius
-        floor = 0.0 if self.terrain.spec.has_ocean else UNKNOWN_BOUNDS[0]
-        split, far = SplitDepthCameras.planet_ranges(
-            self.radius, rho, max_height=UNKNOWN_BOUNDS[1], min_height=floor
-        )
+        for terrain in self._terrains():
+            terrain.update(self.cam_world)
+        ranges = []
+        for body in self.bodies:
+            spec = body.terrain.spec
+            ranges.append(
+                (
+                    body.radius,
+                    float(np.linalg.norm(self._relative(body))),
+                    UNKNOWN_BOUNDS[1],
+                    0.0 if spec.has_ocean else UNKNOWN_BOUNDS[0],
+                )
+            )
+        split, far = SplitDepthCameras.system_ranges(ranges)
         self.depth.update(split, far)
-        self._update_sky(east, north, up, altitude, far)
-        self._update_sun(up)
-        self._update_ocean(altitude, up)
+
+        home_up = self._relative(self.home) / np.linalg.norm(self._relative(self.home))
+        home_altitude = float(np.linalg.norm(self._relative(self.home))) - self.radius
+        self._update_sky(home_up, home_altitude, far)
+        self._update_sun(home_up, home_altitude)
+        self._update_ocean(home_altitude, home_up)
         if not self._probe.is_hidden():
             self._update_probe()
-        for mark, point in self._laser_marks:
-            mark.set_pos(*self.terrain.to_render(point))
-        self._update_hud(altitude)
+        for mark, body, point in self._laser_marks:
+            mark.set_pos(*body.terrain.to_render(point))
+        self._update_hud()
         return task.cont
 
     def _fly(self, dt: float):
@@ -424,11 +529,13 @@ class TerrainDemo(ShowBase):
             if sign:
                 self._turn_sun(axis, sign * rate * dt)
 
-        ground = float(self.terrain.query.height_at(self.cam_planet, generate=False))
-        rho = float(np.linalg.norm(self.cam_planet))
-        above = max(rho - self.radius - ground, 0.0)
-        # Speed grows with height above ground: a descent from orbit is
-        # exponential, a few seconds per factor of e.
+        body = self.body
+        relative = self._relative(body)
+        ground = float(body.terrain.query.height_at(relative, generate=False))
+        above = max(float(np.linalg.norm(relative)) - body.radius - ground, 0.0)
+        # Speed grows with height above the nearest ground: a descent from
+        # orbit is exponential, a few seconds per factor of e, and the trip
+        # to the moon is quick.
         speed = (
             self.speed
             * max(1.0, above / 300.0)
@@ -439,39 +546,60 @@ class TerrainDemo(ShowBase):
             move[axis] = self._keys[plus] - self._keys[minus]
         if move.any():
             world = self._orientation.xform(Vec3(*move))
-            self.cam_planet = self.cam_planet + np.array(world) * speed * dt
-        rho = float(np.linalg.norm(self.cam_planet))
-        low = self.radius + ground + MIN_CLEARANCE
-        high = self.radius * (1.0 + MAX_ALTITUDE_RADII)
-        self.cam_planet *= min(max(rho, low), high) / rho
+            self.cam_world = self.cam_world + np.array(world) * speed * dt
+        # Stay above the nearest ground and within range of the planet.
+        relative = self._relative(body)
+        rho = float(np.linalg.norm(relative))
+        low = body.radius + ground + MIN_CLEARANCE
+        if rho < low:
+            self.cam_world = body.position + relative * (low / rho)
+        distance = float(np.linalg.norm(self.cam_world))
+        if distance > self.max_range:
+            self.cam_world *= self.max_range / distance
         self._ground = ground
 
-    def _update_sky(self, east, north, up, altitude, far):
+    def _update_sky(self, up, altitude, far):
+        east = np.cross(np.array([0.0, 0.0, 1.0]), up)
+        if np.linalg.norm(east) < 1e-6:  # over a pole: any east will do
+            east = np.array([1.0, 0.0, 0.0])
+        east /= np.linalg.norm(east)
         self._sky.set_pos(0.0, 0.0, 0.0)
-        self._sky.set_quat(self.render, _quat_from_axes(east, north, up))
+        self._sky.set_quat(self.render, _quat_from_axes(east, np.cross(up, east), up))
         self._sky.set_scale(0.9 * far)
         bright = 1.0 - _smoothstep(*SKY_FADE, altitude)
-        day = _smoothstep(-0.15, 0.1, float(self._sun_planet @ up))
+        day = _smoothstep(-0.15, 0.1, float(self._sun @ up))
         k = bright * (0.05 + 0.95 * day)
         self._sky.set_color_scale(k, k, k, 1.0)
 
-    def _update_sun(self, up):
-        # Colours follow the sun's height above the horizon under the camera.
-        elevation = math.degrees(math.asin(np.clip(self._sun_planet @ up, -1.0, 1.0)))
-        _, sun, sky = sun_lighting(0.0, elevation)
-        self.terrain.set_sun(tuple(self._sun_planet), sun, sky)
+    def _update_sun(self, home_up, home_altitude):
+        # The planet's light follows the sun's height under the camera (a red
+        # low sun, a dim sky), fading to plain daylight seen from space, where
+        # the shader's day/night line does the work. Airless bodies get bare
+        # sunlight and a black sky.
+        elevation = math.degrees(math.asin(np.clip(self._sun @ home_up, -1.0, 1.0)))
+        _, sun_low, sky_low = sun_lighting(0.0, elevation)
+        _, sun_high, sky_high = sun_lighting(0.0, 90.0)
+        space = _smoothstep(*SKY_FADE, home_altitude)
+        sun = tuple(a + (b - a) * space for a, b in zip(sun_low, sun_high))
+        sky = tuple(a + (b - a) * space for a, b in zip(sky_low, sky_high))
+        for body in self.bodies:
+            if body.atmosphere:
+                body.terrain.set_sun(tuple(self._sun), sun, sky)
+            else:
+                body.terrain.set_sun(tuple(self._sun), SPACE_SUN, SPACE_AMBIENT)
 
     def set_local_sun(self, azimuth: float, elevation: float):
-        """Put the sun at an azimuth/elevation (degrees) as seen from the nadir."""
+        """Put the sun at an azimuth/elevation (degrees) as seen from the
+        nadir on the nearest body."""
         east, north, up = self._true_frame()
         d, _, _ = sun_lighting(azimuth, elevation)
-        self._sun_planet = d[0] * east + d[1] * north + d[2] * up
+        self._sun = d[0] * east + d[1] * north + d[2] * up
 
     def _turn_sun(self, axis: int, degrees: float):
         """Swing the sun in the sky as seen from the nadir (axis 0 azimuth,
         1 elevation)."""
         east, north, up = self._true_frame()
-        s = self._sun_planet
+        s = self._sun
         el = math.degrees(math.asin(np.clip(s @ up, -1.0, 1.0)))
         az = math.degrees(math.atan2(s @ east, s @ north))
         if axis == 0:
@@ -479,7 +607,7 @@ class TerrainDemo(ShowBase):
         else:
             el = max(-10.0, min(89.0, el + degrees))
         d, _, _ = sun_lighting(az, el)
-        self._sun_planet = d[0] * east + d[1] * north + d[2] * up
+        self._sun = d[0] * east + d[1] * north + d[2] * up
 
     def _update_ocean(self, altitude: float, up: np.ndarray):
         if altitude > OCEAN_HANDOVER[1]:
@@ -515,9 +643,10 @@ class TerrainDemo(ShowBase):
                 method()
 
     def _update_probe(self):
-        center = self.cam_planet + PROBE_DISTANCE * self._forward()
-        self._probe_ball.set_pos(*self.terrain.to_render(center))
-        contact = self.terrain.query.sphere_contact(center, PROBE_RADIUS)
+        terrain = self.body.terrain
+        center = self._relative() + PROBE_DISTANCE * self._forward()
+        self._probe_ball.set_pos(*terrain.to_render(center))
+        contact = terrain.query.sphere_contact(center, PROBE_RADIUS)
         self._probe_normal.remove_node()
         if contact is None:
             self._probe_hit.hide()
@@ -525,7 +654,7 @@ class TerrainDemo(ShowBase):
             self._probe_normal = self._probe.attach_new_node("normal")
             return
         hit, normal = contact
-        hit_render = self.terrain.to_render(hit)
+        hit_render = terrain.to_render(hit)
         self._probe_hit.show()
         self._probe_hit.set_pos(*hit_render)
         self._probe_ball.set_color(1.0, 0.5, 0.2, 0.35)
@@ -536,35 +665,46 @@ class TerrainDemo(ShowBase):
         lines.draw_to(*(hit_render + normal * 25.0))
         self._probe_normal = self._probe.attach_new_node(lines.create())
 
-    def _update_hud(self, altitude: float):
-        up = self.cam_planet / np.linalg.norm(self.cam_planet)
+    def _update_hud(self):
+        body = self.body
+        terrain = body.terrain
+        relative = self._relative()
+        altitude = float(np.linalg.norm(relative)) - body.radius
+        up = relative / np.linalg.norm(relative)
         lat, lon = latlon(up[None, :])
         face, _, _ = dirs_to_face(up[None, :])
-        weights = self.terrain.query.biome_weights_at(self.cam_planet, generate=False)
+        weights = terrain.query.biome_weights_at(relative, generate=False)
         biome_text = "  ".join(
             f"{name} {w:.0%}" for name, w in zip(BIOMES, weights) if w >= 0.05
         )
-        s = self.terrain.stats
-        spec = self.terrain.spec
+        s = terrain.stats
+        spec = terrain.spec
         heading, pitch = self._true_heading_pitch()
         above = altitude - self._ground
         face_name = FACE_NAMES[int(face[0])]
         speed = self.speed / SPEED
         split_km, far_km = self.depth.split / 1e3, self.depth.far / 1e3
+        others = "   ".join(
+            f"{b.name} {np.linalg.norm(self._relative(b)) / 1e3:,.0f} km "
+            f"({b.terrain.stats['shown']} chunks)"
+            for b in self.bodies
+            if b is not body
+        )
         lines = [
-            f"{spec.name}  seed {spec.seed}  radius {spec.radius / 1e3:,.0f} km"
-            f"   view: {_DEBUG_VIEWS[self._debug]}"
+            f"{body.name}: {spec.name}  seed {spec.seed}  radius "
+            f"{spec.radius / 1e3:,.0f} km   view: {_DEBUG_VIEWS[self._debug]}"
             f"   blend {self.terrain.blend_depth:.2f}"
             f"   detail: {self._detail_text()}",
             f"altitude {altitude:,.0f} m   above ground {above:,.0f} m"
             f"   lat {lat[0]:.4f}  lon {lon[0]:.4f}  face {face_name}"
             f"   heading {heading:.0f}  pitch {pitch:.0f}   speed x{speed:g}",
-            f"under camera: {biome_text or '(not generated yet)'}",
+            f"under camera: {biome_text or '(not generated yet)'}"
+            + (f"   |   {others}" if others else ""),
             f"chunks: {s['shown']} shown (finest level {s['finest']}), "
             f"{s['uploaded']} on GPU, {s['stored']} stored, "
             f"{s['pending']} generating, {s['wanted']} wanted",
             f"gen {s['gen_ms']:.0f} ms/chunk "
-            f"({self.terrain.executor.workers} workers)   "
+            f"({self.executor.workers} workers)   "
             f"upload {s['upload_ms']:.2f} ms/chunk   LOD pass {s['select_ms']:.1f} ms"
             f"   depth split {split_km:,.1f} km, far {far_km:,.0f} km",
         ]
@@ -572,7 +712,7 @@ class TerrainDemo(ShowBase):
 
     def _true_heading_pitch(self) -> tuple[float, float]:
         """:returns: the view's heading (degrees counter-clockwise from north,
-        as Panda's H) and pitch, in the geographic frame"""
+        as Panda's H) and pitch, in the nearest body's geographic frame"""
         east, north, up = self._true_frame()
         f = self._forward()
         heading = math.degrees(math.atan2(-(f @ east), f @ north))
@@ -590,10 +730,12 @@ class TerrainDemo(ShowBase):
         )
 
     def _set_spec(self, spec):
+        """Replace the planet (the moon stays)."""
         self.terrain.set_spec(spec)
-        for mark, _ in self._laser_marks:
-            mark.remove_node()
-        self._laser_marks.clear()
+        for mark, body, _ in list(self._laser_marks):
+            if body is self.home:
+                mark.remove_node()
+                self._laser_marks.remove((mark, body, _))
         self._apply_ocean()
 
     def _set_preset(self, name):
@@ -632,29 +774,37 @@ class TerrainDemo(ShowBase):
 
     def _toggle_reflection(self):
         self._reflected = not self._reflected
-        self.terrain.set_reflected(self._reflected)
+        for terrain in self._terrains():
+            terrain.set_reflected(self._reflected)
 
     def _toggle_textures(self):
         self._textured = not self._textured
-        self.terrain.set_textured(self._textured)
+        for terrain in self._terrains():
+            terrain.set_textured(self._textured)
 
     def _toggle_wireframe(self):
         self._wireframe = not self._wireframe
-        self.terrain.set_wireframe(self._wireframe)
+        for terrain in self._terrains():
+            terrain.set_wireframe(self._wireframe)
 
     def _cycle_debug(self):
-        self._debug = (self._debug + 1) % len(_DEBUG_VIEWS)
-        self.terrain.set_debug_mode(self._debug)
+        self.set_debug_view((self._debug + 1) % len(_DEBUG_VIEWS))
+
+    def set_debug_view(self, view: int):
+        """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts (all bodies)."""
+        self._debug = view
+        for terrain in self._terrains():
+            terrain.set_debug_mode(view)
 
     def _cycle_detail(self):
-        self.terrain.set_min_level(
-            (self.terrain.min_level + 1) % (MAX_DROPPED_LEVELS + 1)
-        )
+        level = (self.terrain.min_level + 1) % (MAX_DROPPED_LEVELS + 1)
+        for terrain in self._terrains():
+            terrain.set_min_level(level)
 
     def _detail_text(self) -> str:
-        level = self.terrain.min_level
-        spacing = self.terrain.grid.spacing(level)
-        text = f"{spacing:.1f} m"
+        terrain = self.body.terrain
+        level = terrain.min_level
+        text = f"{terrain.grid.spacing(level):.1f} m"
         return f"full ({text})" if level == 0 else f"-{level} levels ({text})"
 
     def _toggle_probe(self):
@@ -687,9 +837,10 @@ class TerrainDemo(ShowBase):
         self._orientation = _quat_from_axes(right, forward, np.cross(right, forward))
 
     def _fire_laser(self):
+        body = self.body
         direction = self._forward()
-        start = self.cam_planet.copy()
-        hit = self.terrain.query.segment_intersect(
+        start = self._relative(body)
+        hit = body.terrain.query.segment_intersect(
             start, start + LASER_RANGE * direction
         )
         if hit is None:
@@ -697,36 +848,42 @@ class TerrainDemo(ShowBase):
             return
         t, point, normal = hit
         distance = t * LASER_RANGE
-        material = self.terrain.query.material_at(point, generate=False)
-        height = float(np.linalg.norm(point)) - self.radius
+        material = body.terrain.query.material_at(point, generate=False)
+        height = float(np.linalg.norm(point)) - body.radius
         up = point / np.linalg.norm(point)
         print(
-            f"laser: hit at {distance:,.0f} m, {material}, height {height:.1f} m, "
-            f"slope {math.degrees(math.acos(np.clip(normal @ up, -1.0, 1.0))):.0f} deg"
+            f"laser: hit the {body.name} at {distance:,.0f} m, {material}, "
+            f"height {height:.1f} m, slope "
+            f"{math.degrees(math.acos(np.clip(normal @ up, -1.0, 1.0))):.0f} deg"
         )
         mark = self.loader.load_model("models/misc/sphere")
         mark.set_scale(max(2.0, distance * 0.004))
         mark.set_color(1.0, 0.9, 0.1, 1.0)
         mark.set_light_off()
         mark.reparent_to(self.render)
-        self._laser_marks.append((mark, point))
+        self._laser_marks.append((mark, body, point))
 
     def _scale_blend(self, factor):
         depth = max(0.05, min(3.0, self.terrain.blend_depth * factor))
-        self.terrain.set_blend_depth(depth)
+        for terrain in self._terrains():
+            terrain.set_blend_depth(depth)
 
     def _scale_speed(self, factor):
         self.speed = max(10.0, min(SPEED * 64, self.speed * factor))
 
-    def _place_camera(self, lat, lon, altitude, heading, pitch):
-        """Put the camera over (lat, lon), with heading and pitch in the local
-        geographic frame (degrees; heading counter-clockwise from north, as
-        Panda's H) and no roll."""
+    def _place_camera(
+        self, lat, lon, altitude, heading, pitch, body: Body | None = None
+    ):
+        """Put the camera over (lat, lon) of a body (the planet by default),
+        with heading and pitch in the local geographic frame (degrees; heading
+        counter-clockwise from north, as Panda's H) and no roll."""
+        body = body or self.home
         frame = TangentFrame.at(lat, lon)
-        self.cam_planet = frame.up * (self.radius + altitude)
+        self.cam_world = body.position + frame.up * (body.radius + altitude)
         local = LQuaternionf()
         local.set_hpr((heading, pitch, 0.0))
         self._orientation = local * _quat_from_axes(frame.east, frame.north, frame.up)
+        self.body = body
         self._ground = 0.0
 
     def _reset_camera(self):
@@ -742,29 +899,48 @@ class TerrainDemo(ShowBase):
         # The sun stands where the original flat demo had it, at the start.
         frame = TangentFrame.at(spec.reference_lat, spec.reference_lon)
         d, _, _ = sun_lighting(210.0, 35.0)
-        self._sun_planet = d[0] * frame.east + d[1] * frame.north + d[2] * frame.up
+        self._sun = d[0] * frame.east + d[1] * frame.north + d[2] * frame.up
 
-    def _jump_to_orbit(self):
-        lat, lon = latlon(self.cam_planet[None, :] / np.linalg.norm(self.cam_planet))
+    def _jump_over(self, body: Body, direction: np.ndarray):
+        """3 radii above a body, along *direction* from its centre, looking down."""
+        lat, lon = latlon(direction[None, :] / np.linalg.norm(direction))
         self._place_camera(
-            float(lat[0]), float(lon[0]), ORBIT_RADII * self.radius, 0.0, -89.9
+            float(lat[0]), float(lon[0]), ORBIT_RADII * body.radius, 0.0, -89.9, body
         )
 
+    def _jump_to_orbit(self):
+        self._jump_over(self.body, self._relative())
+
+    def _jump_to_next_body(self):
+        """To the next body, over its side facing the camera."""
+        index = self.bodies.index(self.body)
+        target = self.bodies[(index + 1) % len(self.bodies)]
+        self._jump_over(target, self.cam_world - target.position)
+
     def _print_pose(self):
-        up = self.cam_planet / np.linalg.norm(self.cam_planet)
+        relative = self._relative()
+        up = relative / np.linalg.norm(relative)
         lat, lon = latlon(up[None, :])
         heading, pitch = self._true_heading_pitch()
-        altitude = float(np.linalg.norm(self.cam_planet)) - self.radius
+        altitude = float(np.linalg.norm(relative)) - self.body.radius
         right = self._orientation.get_right()
         roll = -math.degrees(math.asin(np.clip(np.array(right) @ up, -1.0, 1.0)))
         print(
-            f"camera: {{lat: {lat[0]:.5f}, lon: {lon[0]:.5f}, alt: {altitude:.0f}, "
-            f"heading: {heading:.1f}, pitch: {pitch:.1f}}}  roll {roll:.1f}"
+            f"camera over the {self.body.name}: {{lat: {lat[0]:.5f}, "
+            f"lon: {lon[0]:.5f}, alt: {altitude:.0f}, heading: {heading:.1f}, "
+            f"pitch: {pitch:.1f}}}  roll {roll:.1f}"
         )
-        print(f"terrain: {self.terrain.stats}")
+        for body in self.bodies:
+            print(f"{body.name} terrain: {body.terrain.stats}")
+
+    def destroy_terrain(self):
+        """Remove every body's terrain and stop the shared workers."""
+        for terrain in self._terrains():
+            terrain.destroy()
+        self.executor.shutdown()
 
     def _quit(self):
-        self.terrain.destroy()
+        self.destroy_terrain()
         sys.exit()
 
 
@@ -774,6 +950,13 @@ def main():
     parser.add_argument(
         "--radius", type=float, default=None, help="planet radius, metres"
     )
+    parser.add_argument(
+        "--moon-distance",
+        type=float,
+        default=MOON_DISTANCE_M,
+        help="moon distance, centre to centre, metres",
+    )
+    parser.add_argument("--no-moon", action="store_true")
     parser.add_argument(
         "--backend", default="process", choices=("process", "thread", "inline")
     )
@@ -791,7 +974,8 @@ def main():
             ]
         ),
     )
-    TerrainDemo(args.level, args.backend, args.radius).run()
+    moon = None if args.no_moon else args.moon_distance
+    TerrainDemo(args.level, args.backend, args.radius, moon).run()
 
 
 if __name__ == "__main__":

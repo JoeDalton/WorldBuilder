@@ -162,6 +162,7 @@ class PlanetSpec:
     :ivar reference_lat: latitude of the origin of chart-metre coordinates in
         level files (stamp centres, camera poses), degrees
     :ivar reference_lon: its longitude, degrees
+    :ivar has_vegetation: False for a barren world (no grass, no forest)
     :ivar stamps: hand-made heightmaps (:class:`stamps.Stamp`), in order
     :ivar paints: biome paint masks (:class:`stamps.Paint`), in order
     :ivar sea_bias: continental-field offset; None until :meth:`resolved`
@@ -173,6 +174,7 @@ class PlanetSpec:
     reference_lat: float = 42.0
     reference_lon: float = 10.0
     has_ocean: bool = True
+    has_vegetation: bool = True
     elevation: ElevationParams = field(default_factory=ElevationParams)
     climate: ClimateParams = field(default_factory=ClimateParams)
     stamps: tuple = ()
@@ -217,6 +219,29 @@ PRESETS: dict[str, PlanetSpec] = {
             temperature_latitude=22.0,
             humidity_mean=0.78,
             humidity_spread=0.18,
+        ),
+    ),
+    # A Mun-sized, airless ball of sand: dunes and crater-like basins (the
+    # continental lows, dry), rock only on cliffs. No sea, no vegetation, no
+    # climate: hot and bone dry everywhere, no snow even on the peaks.
+    "moon": PlanetSpec(
+        name="moon",
+        radius=200e3,
+        has_ocean=False,
+        has_vegetation=False,
+        elevation=ElevationParams(
+            ocean_fraction=0.4,
+            mountain_coverage=-0.1,
+            hills_height=260.0,
+            detail_height=30.0,
+        ),
+        climate=ClimateParams(
+            temperature_mean=30.0,
+            temperature_spread=0.0,
+            temperature_latitude=0.0,
+            lapse_rate=0.0,
+            humidity_mean=0.0,
+            humidity_spread=0.0,
         ),
     ),
     "ice": PlanetSpec(

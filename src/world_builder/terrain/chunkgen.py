@@ -185,6 +185,7 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         elevation,
         slope,
         spec.has_ocean,
+        spec.has_vegetation,
     )
     inner_dirs = dirs[inner].reshape(-1, 3)
     for paint in spec.paints:

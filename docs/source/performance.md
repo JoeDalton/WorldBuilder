@@ -20,7 +20,7 @@ figures in §3–5 and §10 are re-measured; §1, §2 and §6–9 still hold as 
 | 3 | numpy per-octave cost | `noise.py`, `planet.py` | ~25 ms per chunk | Accepted (numba not wanted) |
 | 4 | LOD pass in Python | `quadtree.py` | 2–6 ms per pass, up to every frame | Accepted |
 | 5 | Chunk and triangle counts | `quadtree.py` (K=2) | ~600 draws, ~5 M triangles, twice with the reflection | Fine on desktop GPUs |
-| 6 | Memory held by the caches | `terrain.py` | ~410 MB RAM, ~190 MB GPU | Fine on desktop |
+| 6 | Memory held by the caches | `terrain.py` | ~410 MB RAM, ~190 MB GPU per planet you are near | Fine on desktop |
 | 7 | Synchronous generation in queries | `query.py` | 25 ms stall per missing chunk | **Must handle before game integration** |
 | 8 | Fragment shader texture samples | `terrain.frag` | Up to ~20 samples per pixel | Fine so far |
 | 9 | Initial fill and spec changes | `terrain.py`, `planet.py` | Several seconds of blur; 0.3 s main-thread hitch | Accepted |
@@ -197,8 +197,16 @@ Levers, all already exposed:
 | `NODE_CACHE_SIZE` (uploaded geometry, GPU) | 1,200 | ~161 KB | ~190 MB |
 
 Both caches are protected from evicting chunks the current selection depends
-on (drawn chunks, the roots, every child of a split node), which is what
-fixed the terrain disappearing and reappearing.
+on (drawn chunks, the roots, every child of a split node) and chunks waiting
+for upload, which is what fixed the terrain disappearing and reappearing.
+
+With several bodies, the caps are maxima: below them a terrain keeps 3× what
+its selection needs, at least 256 tiles. Only the body you are near holds
+the full ~600 MB. A moon seen from the planet holds a few dozen tiles, and a
+planet you leave releases its ground within a frame or two. That costs
+regeneration if you come back, which is the same as arriving fresh. The
+check adds about 0.5 ms to an LOD pass (4.2 ms in total at the demo start,
+against 3.6 ms for the selector alone).
 
 Options: drop `vertex_bytes` from stored chunks once uploaded (re-upload
 would then need regeneration), half-precision normals, smaller caches.
@@ -274,6 +282,21 @@ Depth partitioning (`world_builder.depth`) culls and draws the scene twice
 (far camera, then near camera). Panda's cull is C++; only chunks straddling
 the split are drawn by both, which is a handful near the ground and none
 from high up, where the split is far below the camera.
+
+## 11. Several bodies
+
+All bodies share one worker pool (`ChunkExecutor` channels), so a second
+body adds no processes. Each runs its own LOD pass every frame: a moon
+10,000 km away is 6–15 chunks and ~0.1–0.5 ms. Only bodies you are near
+cost real time.
+
+A bug worth remembering: a generator expression created inside a list
+comprehension (`[(ch, (k for k in ch.wanted if k not in ch.pending)) for ch
+in ...]`) looks `ch.pending` up late, as the *last* channel's. With two
+channels, the planet's already-queued keys were submitted again on every
+fill: the pool's queue grew without end and the planet stopped refining.
+`workers._unsent` binds it properly, and
+`test_channels_share_the_pool_without_duplicates` guards it.
 
 ## Not covered
 
