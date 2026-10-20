@@ -79,7 +79,14 @@ def test_sunlight_through_the_air():
 def test_defaults_bind_every_input():
     node = NodePath("n")
     bind_defaults(node)
-    for name in ("uAtmoCount", "uAtmoCam", "uAtmoShape", "uAtmoScatter", "uAtmoMie"):
+    for name in (
+        "uAtmoCount",
+        "uAtmoCam",
+        "uAtmoShape",
+        "uAtmoScatter",
+        "uAtmoMie",
+        "uAtmoExtra",
+    ):
         # A missing input comes back blank: value type 0 (M_invalid).
         assert node.get_shader_input(name).get_value_type() != 0
     assert NodePath("unbound").get_shader_input("uAtmoCount").get_value_type() == 0

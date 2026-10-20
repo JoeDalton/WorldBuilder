@@ -25,7 +25,7 @@ void main() {
     gl_PointSize = 3.0;
     vec3 transmittance, inscatter;
     atmosphereAlong(dir, 1e30, uSunDir, AIR_STEPS, transmittance, inscatter);
-    float adapt = starAdaptation(inscatter);
+    float adapt = atmoHitsGround(dir) ? 0.0 : starAdaptation(inscatter);
     vec3 glow = skyBackground(textureLod(uStars, p3d_Vertex.xyz, 0.0).rgb);
     vBase = (glow * adapt * transmittance + inscatter) * uExposure;
     vStar = star.rgb * star.a * uStarBrightness * adapt * transmittance * uExposure;

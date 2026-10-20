@@ -6,10 +6,13 @@
 // Each atmosphere is an exponential Rayleigh + Mie medium around a sphere. A
 // view ray is marched in ATMO_STEPS samples through each atmosphere it
 // crosses; at every sample, the optical depth toward the sun is the analytic
-// Chapman function (no inner march), and samples in the planet's shadow get
-// no sunlight. Single scattering only: light scattered more than once is
-// missing (twilight a little dark; see docs: precomputed multiple scattering,
-// Bruneton). Lengths in metres, positions relative to each planet's centre.
+// Chapman function (no inner march). The planet's shadow is found
+// analytically along the ray, and each sample counts the lit share of its
+// stretch, so the shadow's edge moves smoothly (all-or-nothing samples drew
+// hard bands across the dusk sky). Single scattering, plus a flat share of
+// multiply scattered light that fades through twilight (see docs: precomputed
+// multiple scattering, Bruneton). Lengths in metres, positions relative to
+// each planet's centre.
 
 #define MAX_ATMOSPHERES 2
 #define ATMO_STEPS 8
@@ -26,6 +29,8 @@ uniform vec4 uAtmoScatter[MAX_ATMOSPHERES];
 // x: Mie extinction per metre, y: Mie anisotropy g, z: sun intensity,
 // w: |cam|^2 - ground^2 (float64 on the CPU).
 uniform vec4 uAtmoMie[MAX_ATMOSPHERES];
+// x: multiply scattered light, as a share of direct sunlight.
+uniform vec4 uAtmoExtra[MAX_ATMOSPHERES];
 
 const float ATMO_PI = 3.14159265;
 
@@ -75,6 +80,40 @@ bool atmoSphere(vec3 o, vec3 dir, float c, out float t0, out float t1) {
     return true;
 }
 
+// Where a ray from o (relative to the centre) is in the planet's shadow: a
+// cylinder of radius R along the sun's axis, behind the planet. Returns
+// [s0, s1], empty when s0 >= s1.
+vec2 atmoShadow(vec3 o, vec3 dir, vec3 sunDir, float R) {
+    vec3 op = o - sunDir * dot(o, sunDir);
+    vec3 dp = dir - sunDir * dot(dir, sunDir);
+    float a = dot(dp, dp);
+    float b = dot(op, dp);
+    float c = dot(op, op) - R * R;
+    vec2 s;
+    if (a < 1e-10) {  // along the axis: in it everywhere or nowhere
+        s = c < 0.0 ? vec2(-1e30, 1e30) : vec2(1e30, -1e30);
+    } else {
+        float disc = b * b - a * c;
+        if (disc <= 0.0) {
+            return vec2(1e30, -1e30);
+        }
+        float root = sqrt(disc);
+        s = vec2(-b - root, -b + root) / a;
+    }
+    float along = dot(dir, sunDir);
+    float start = dot(o, sunDir);
+    if (abs(along) < 1e-9) {
+        if (start >= 0.0) {
+            s = vec2(1e30, -1e30);
+        }
+    } else if (along > 0.0) {
+        s.y = min(s.y, -start / along);
+    } else {
+        s.x = max(s.x, -start / along);
+    }
+    return s;
+}
+
 // One atmosphere's effect on the segment [0, tmax] of a view ray: what the
 // background is multiplied by, and the light scattered toward the eye. near is
 // where the segment starts (for ordering several atmospheres).
@@ -109,24 +148,46 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
     float betaMExt = uAtmoMie[i].x;
 
     float ds = (t1 - t0) / float(steps);
+    vec2 shadow = atmoShadow(o, dir, sunDir, R);
+    float multiple = uAtmoExtra[i].x;
     float depthR = 0.0;
     float depthM = 0.0;
     vec3 sumR = vec3(0.0);
     vec3 sumM = vec3(0.0);
     for (int k = 0; k < steps; ++k) {
-        vec3 p = o + dir * (t0 + (float(k) + 0.5) * ds);
+        float ta = t0 + float(k) * ds;
+        float tc = ta + 0.5 * ds;
+        vec3 p = o + dir * tc;
         float r = length(p);
         float densityR = exp(-(r - R) / Hr) * ds;
         float densityM = exp(-(r - R) / Hm) * ds;
         depthR += 0.5 * densityR;
         depthM += 0.5 * densityM;
-        float cosSun = dot(p, sunDir) / r;
-        float sunR = atmoDepthToward(r, cosSun, R, Hr);
-        float sunM = atmoDepthToward(r, cosSun, R, Hm);
-        vec3 tau = betaR * (depthR + sunR) + betaMExt * (depthM + sunM);
-        vec3 t = exp(-tau);
-        sumR += t * densityR;
-        sumM += t * densityM;
+        // The lit share of this sample's stretch, and a lit point in it to
+        // take the sun's depth at (just outside the shadow if the centre is
+        // in it: there the sunlight grazes the ground, deep red, finite).
+        float shaded = max(0.0, min(ta + ds, shadow.y) - max(ta, shadow.x));
+        float lit = 1.0 - shaded / ds;
+        float ts = tc;
+        if (tc > shadow.x && tc < shadow.y) {
+            ts = tc - shadow.x < shadow.y - tc ? shadow.x - 50.0 : shadow.y + 50.0;
+        }
+        vec3 ps = o + dir * ts;
+        float rs = length(ps);
+        float cosSun = dot(ps, sunDir) / rs;
+        vec3 direct = vec3(0.0);
+        if (lit > 0.0) {
+            float sunR = atmoDepthToward(rs, cosSun, R, Hr);
+            float sunM = atmoDepthToward(rs, cosSun, R, Hm);
+            direct = exp(-(betaR * (depthR + sunR) + betaMExt * (depthM + sunM))) * lit;
+        }
+        // Light scattered more than once: a share of the sunlight, wherever
+        // the sky above is lit (fading through twilight), seen through the
+        // air back to the camera.
+        float twilight = smoothstep(-0.3, 0.1, dot(p, sunDir) / r);
+        vec3 fill = exp(-(betaR * depthR + betaMExt * depthM)) * multiple * twilight;
+        sumR += (direct + fill) * densityR;
+        sumM += (direct + fill) * densityM;
         depthR += 0.5 * densityR;
         depthM += 0.5 * densityM;
     }
@@ -138,6 +199,20 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
                  / ((2.0 + g2) * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
     inscatter = uAtmoMie[i].z * (sumR * betaR * phaseR + sumM * betaM * phaseM);
     transmittance = exp(-(betaR * depthR + betaMExt * depthM));
+}
+
+// Whether a view ray from the camera meets the ground of a planet with an
+// atmosphere (the stars and the sun are behind it).
+bool atmoHitsGround(vec3 dir) {
+    for (int i = 0; i < MAX_ATMOSPHERES; ++i) {
+        float g0, g1;
+        if (i < uAtmoCount
+            && atmoSphere(uAtmoCam[i].xyz, dir, uAtmoMie[i].w, g0, g1)
+            && g0 > 0.0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // What every atmosphere along a view ray does to whatever lies at distance

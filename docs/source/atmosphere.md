@@ -33,6 +33,20 @@ the ray crosses. At each sample:
 - the sunlight reaching it, times the density, times the transmittance back
   to the camera.
 
+**The planet's shadow** is found analytically along the ray (a cylinder of
+the planet's radius behind it, away from the sun), and each sample counts
+only the lit share of its stretch, its sun depth taken at a lit point. With
+whole samples lit or not, the shadow's edge moved a sample at a time: hard
+horizontal bands across the dusk sky, the planet's shadow rising above the
+horizon in steps.
+
+**Twilight fill.** A flat share of the sunlight (`multiple_scattering`,
+0.12) stands in for light scattered more than once: it reaches every sample,
+lit or not, fading as the sun goes 17° below the sample's horizon. Without it
+the planet's shadow on the air at dusk (the band below the pink "Belt of
+Venus" opposite the sun) was black, with stars showing through; with it, it
+is blue-grey. By day it lifts the sky by a few percent.
+
 The phase functions (Rayleigh, and Cornette-Shanks for Mie) then give the
 light scattered toward the eye. The result for anything at distance `d` along
 the ray is `seen = colour · transmittance + inscatter`, composed far to near
@@ -58,11 +72,12 @@ when a ray crosses two atmospheres.
 nodes and rewrites them in place once a frame, in float64 where it matters
 (`|camera|² - radius²` would be noise in float32).
 
-### Left out: multiple scattering (the Bruneton option)
+### Left out: true multiple scattering (the Bruneton option)
 
-Light scattered more than once is missing. Twilight comes out a little dark,
-the sky a little dark near the horizon, and lit clouds a little yellow (the
-cloud shader puts half the reddening back, standing in for it).
+Light scattered more than once is only the flat twilight fill above: its
+colour and its fading are guesses, and lit clouds come out a little yellow
+(the cloud shader puts half the reddening back, standing in for it). Clouds
+in the planet's shadow follow the same twilight curve for their sky light.
 
 The reference fix is **precomputed atmospheric scattering**, Bruneton &
 Neyret 2008 (revised by Bruneton in 2017): transmittance, multiple-scattering
@@ -218,6 +233,14 @@ that hold cloud: the weather map's coverage, which the near field reproduces
 by construction. Self-shadowing goes first (it is smaller than the
 cloud). So the pattern from orbit is the one you fly into, without the
 speckle.
+
+Lighting goes the same way: up close a low sun lights the clouds' sides
+(the volume does it); averaged from afar the deck is a sheet, whose sunlight
+per unit area falls with the sun's incidence, to nothing at its horizon. The
+far deck fades that factor in (full below ~20° of sun, none at noon), or it
+stays lit to the planet's shadow line and cuts to black there: a hard
+terminator from space (the air on a 600 km planet reddens grazing sunlight
+but barely dims it).
 
 ### Not yet
 

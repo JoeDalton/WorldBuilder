@@ -187,7 +187,20 @@ void main() {
         vec3 through = atmoSunlight(uOwnAtmosphere, samplePos, sunDir)
                      / max(atmoSunlight(uOwnAtmosphere, samplePos, up), vec3(1e-3));
         sunlight *= sqrt(min(through, vec3(1.0)));
-        skylight *= smoothstep(-0.2, 0.2, dot(up, sunDir));
+        // The sky's light fades through twilight as the air's own fill
+        // does (atmosphere.glsl), so clouds in the planet's shadow stay as
+        // bright as the air around them.
+        skylight *= smoothstep(-0.3, 0.1, dot(up, sunDir));
+    }
+    if (uSpherical == 1 && uDeck == 1) {
+        // Far away the deck is a sheet: the sunlight it catches per unit area
+        // falls with the sun's incidence, to nothing as the sun reaches its
+        // horizon. Up close a low sun lights the clouds' sides instead (the
+        // volume does it), so this fades in with the averaging. Without it
+        // the far deck stayed lit to the planet's shadow line, then cut to
+        // black: a hard terminator.
+        float incidence = smoothstep(-0.05, 0.35, dot(normalize(samplePos), sunDir));
+        sunlight *= mix(incidence, 1.0, shading);
     }
     vec3 colour = sunlight * (sunBrightness * sunVisibility * powderTerm * phase)
                 + skylight * ambient;

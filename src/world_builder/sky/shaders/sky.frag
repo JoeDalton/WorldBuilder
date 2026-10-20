@@ -24,6 +24,9 @@ void main() {
     vec3 transmittance, inscatter;
     atmosphereAlong(dir, 1e30, uSunDir, transmittance, inscatter);
     background = background * starAdaptation(inscatter) + uSunRadiance * disc;
+    if (atmoHitsGround(dir)) {
+        background = vec3(0.0);  // the ground is in front (when not drawn yet)
+    }
     vec3 colour = background * transmittance + inscatter;
     fragColor = vec4(aces_tonemap(colour * uExposure), 1.0);
 }

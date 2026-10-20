@@ -49,6 +49,9 @@ class AtmosphereParams:
     :ivar mie_g: Mie anisotropy (forward scattering, 0-1)
     :ivar sun_intensity: radiance scale of the scattered sunlight, in the
         renderer's linear units (the terrain's sun is ~2.6)
+    :ivar multiple_scattering: light scattered more than once, as a share of
+        direct sunlight, reaching air the sun does not (the planet's shadow
+        at dusk is blue-grey, not black); it fades out through twilight
     """
 
     height: float = 60e3
@@ -59,6 +62,11 @@ class AtmosphereParams:
     mie_height: float = 1200.0
     mie_g: float = 0.8
     sun_intensity: float = 22.0
+    multiple_scattering: float = 0.12
+
+
+#: The vec4 uniform arrays atmosphere.glsl reads, MAX_ATMOSPHERES each.
+_ARRAYS = ("uAtmoCam", "uAtmoShape", "uAtmoScatter", "uAtmoMie", "uAtmoExtra")
 
 
 class Atmospheres:
@@ -77,8 +85,7 @@ class Atmospheres:
         self._bodies: list[list] = []  # [radius, params, position]
         self._count = PTA_int.empty_array(1)
         self._arrays = {
-            name: PTA_LVecBase4f.empty_array(MAX_ATMOSPHERES)
-            for name in ("uAtmoCam", "uAtmoShape", "uAtmoScatter", "uAtmoMie")
+            name: PTA_LVecBase4f.empty_array(MAX_ATMOSPHERES) for name in _ARRAYS
         }
 
     def add(self, radius: float, params: AtmosphereParams, position=(0, 0, 0)) -> int:
@@ -98,6 +105,9 @@ class Atmospheres:
             radius, radius + p.height, p.rayleigh_height, p.mie_height
         )
         self._arrays["uAtmoScatter"][index] = LVecBase4f(*p.rayleigh, p.mie)
+        self._arrays["uAtmoExtra"][index] = LVecBase4f(
+            p.multiple_scattering, 0.0, 0.0, 0.0
+        )
         self._count[0] = len(self._bodies)
         return index
 
@@ -179,7 +189,7 @@ def bind_defaults(node: NodePath) -> None:
         count = PTA_int.empty_array(1)
         count[0] = 0
         _DEFAULTS = {"uAtmoCount": count}
-        for name in ("uAtmoCam", "uAtmoShape", "uAtmoScatter", "uAtmoMie"):
+        for name in _ARRAYS:
             array = PTA_LVecBase4f.empty_array(MAX_ATMOSPHERES)
             for i in range(MAX_ATMOSPHERES):
                 array[i] = LVecBase4f(0.0, 0.0, 1.0, 1.0)

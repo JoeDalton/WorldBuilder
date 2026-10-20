@@ -74,7 +74,7 @@ void main() {
         vec3 through = atmoSunlight(uOwnAtmosphere, p, sunDir)
                      / max(atmoSunlight(uOwnAtmosphere, p, vertical), vec3(1e-3));
         vSunTint = sqrt(min(through, vec3(1.0)));
-        vSkyTint = smoothstep(-0.2, 0.2, dot(vertical, sunDir));
+        vSkyTint = smoothstep(-0.3, 0.1, dot(vertical, sunDir));  // see cloud.frag
     }
     vFade = 1.0;
     if (nearFadeRadii > 0.0) {
