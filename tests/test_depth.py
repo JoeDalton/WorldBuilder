@@ -8,9 +8,23 @@ import math
 
 import numpy as np
 import pytest
-from panda3d.core import BoundingBox, BoundingVolume, PerspectiveLens, Point3
+from panda3d.core import (
+    BitMask32,
+    BoundingBox,
+    BoundingVolume,
+    NodePath,
+    PerspectiveLens,
+    Point3,
+)
 
-from world_builder.depth import SplitDepthCameras, frustum_bounds
+from world_builder.depth import (
+    FAR_CAMERA_MASK,
+    HIDE_FROM_FAR,
+    HIDE_FROM_NEAR,
+    NEAR_CAMERA_MASK,
+    SplitDepthCameras,
+    frustum_bounds,
+)
 
 R = 600e3
 
@@ -72,3 +86,25 @@ def test_frustum_bounds_reach_past_ten_thousand_km():
     assert lens.make_bounds().contains(planet) == BoundingVolume.IF_no_intersection
     assert frustum_bounds(lens).contains(planet) != BoundingVolume.IF_no_intersection
     assert frustum_bounds(lens).get_max()[1] == pytest.approx(12e6)
+
+
+def _drawn(node: NodePath, camera_mask) -> bool:
+    """Panda's rule (PandaNode::compare_draw_mask): drawn if any of the
+    camera's bits is shown, or not controlled, on the node."""
+    n = node.node()
+    shown = n.get_draw_show_mask() | ~n.get_draw_control_mask()
+    return not (shown & camera_mask).is_zero()
+
+
+def test_hiding_from_one_camera_leaves_the_others():
+    """The sky dome is hidden from the near camera by one bit; with a near
+    camera mask of "every bit but one" that hid nothing."""
+    reflection = BitMask32(0xFFFFF)  # the ocean's reflection camera's bits
+    sky = NodePath("sky")
+    sky.hide(HIDE_FROM_NEAR)
+    assert not _drawn(sky, NEAR_CAMERA_MASK)
+    assert _drawn(sky, FAR_CAMERA_MASK) and _drawn(sky, reflection)
+    near_only = NodePath("near_only")
+    near_only.hide(HIDE_FROM_FAR)
+    assert not _drawn(near_only, FAR_CAMERA_MASK)
+    assert _drawn(near_only, NEAR_CAMERA_MASK)

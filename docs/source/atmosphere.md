@@ -233,6 +233,11 @@ At every quality:
   where the rest cannot reach the threshold (they add at most their
   weights). It is exact: the same densities, fewer fetches in clear air, which
   is most of a billboard quad.
+- **Off-screen costs nothing.** Every pass (near, far, the ocean's mirror)
+  runs the vertex stage for every billboard of every shown tile. One whose
+  four corners all lie beyond one clip plane is dropped before its air and
+  sunlight are worked out (exact: it could not cover a pixel); ~1.5 ms at a
+  dusk view from inside the deck.
 - **Zero weight costs nothing.** A billboard wholly outside its shell's
   distance band, or faded out near the camera, is dropped in the vertex
   stage; a fragment's shell weight is known before its density. A coarse
@@ -279,8 +284,6 @@ but barely dims it).
 
 - **Wind:** the clouds are static.
 - **Shadows on the ground:** clouds do not shade the terrain.
-- **Reflections:** the demo keeps clouds out of the ocean's mirror (it would
-  draw every billboard twice).
 - **One cloud type per planet** (cumulus in the demo); the flat field mixes
   types, the planet field could take one per slab (the weather map could
   then say which).

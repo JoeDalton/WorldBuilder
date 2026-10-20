@@ -13,10 +13,14 @@ Both cameras see the whole scene graph and Panda culls each to its own
 frustum, so only objects straddling the split are drawn twice. Nothing else
 changes: standard depth, the window's multisampling, existing shaders.
 
-Masks: the near camera has every camera bit but :data:`FAR_BIT`, the far
-camera every bit but :data:`NEAR_BIT`. ``node.hide(HIDE_FROM_NEAR)`` keeps a
-node out of the near pass (e.g. a sky dome, which belongs to the far pass);
-other bits behave as before for both cameras.
+Masks: each camera has one bit of its own, :data:`NEAR_BIT` and
+:data:`FAR_BIT`. ``node.hide(HIDE_FROM_NEAR)`` keeps a node out of the near
+pass (e.g. a sky dome, which belongs to the far pass); other cameras (the
+ocean's reflection) are unaffected. Panda draws a node for a camera if any
+of the camera's bits is still shown on it, so a camera with every bit but
+one could never be hidden from by one bit: with the near camera's mask "all
+but FAR_BIT", ``hide(HIDE_FROM_NEAR)`` did nothing, and the sky was kept out
+of the near pass only by lying beyond its range.
 
 Culling: Panda builds a lens's culling frustum (``Lens.make_bounds``) with its
 far end cut at ``1 / lens-far-limit``, 10,000 km by default, whatever the far
@@ -42,6 +46,9 @@ FAR_BIT = 22
 HIDE_FROM_NEAR = BitMask32.bit(NEAR_BIT)
 #: ``node.hide(HIDE_FROM_FAR)``: drawn by the near camera only.
 HIDE_FROM_FAR = BitMask32.bit(FAR_BIT)
+#: The cameras' masks: one bit each, so one bit hides from each.
+NEAR_CAMERA_MASK = BitMask32.bit(NEAR_BIT)
+FAR_CAMERA_MASK = BitMask32.bit(FAR_BIT)
 
 
 def frustum_bounds(lens) -> BoundingHexahedron:
@@ -83,9 +90,9 @@ class SplitDepthCameras:
         self.overlap = overlap
         self.far_lens = app.camLens.make_copy()
         far_node = Camera("far_camera", self.far_lens)
-        far_node.set_camera_mask(PandaNode.get_all_camera_mask() & ~HIDE_FROM_NEAR)
+        far_node.set_camera_mask(FAR_CAMERA_MASK)
         self.far_camera = app.camera.attach_new_node(far_node)
-        app.cam.node().set_camera_mask(PandaNode.get_all_camera_mask() & ~HIDE_FROM_FAR)
+        app.cam.node().set_camera_mask(NEAR_CAMERA_MASK)
 
         self.near_region = app.cam.node().get_display_region(0)
         left, right, bottom, top = self.near_region.get_dimensions()

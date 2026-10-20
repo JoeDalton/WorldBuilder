@@ -109,7 +109,6 @@ from world_builder.terrain.cubesphere import FACE_NAMES, dirs_to_face
 from world_builder.terrain.level import DEMO_LEVEL, load_level
 from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
-from world_builder.terrain.terrain import REFLECTION_CAMERA_BITS
 
 INITIAL_FAR_M = 600000.0  # the lens the ocean's reflection camera copies
 # The ocean's own haze (it blends to this by distance where no atmosphere
@@ -879,8 +878,6 @@ class TerrainDemo(ShowBase):
         if self.clouds is None:
             return
         self.clouds.root.show()
-        # Not in the ocean's mirror: it would draw every billboard twice.
-        self.clouds.root.hide(REFLECTION_CAMERA_BITS)
         if not self._clouds_shown:
             self.clouds.root.hide()
 
@@ -1115,7 +1112,8 @@ def main():
         "--backend", default="process", choices=("process", "thread", "inline")
     )
     args = parser.parse_args()
-    window_config("Procedural terrain demo")
+    # No vsync: the frame rate shows what a frame costs, not the display.
+    window_config("Procedural terrain demo", vsync=False)
     moon = None if args.no_moon else args.moon_distance
     TerrainDemo(args.level, args.backend, args.radius, moon, args.workers).run()
 

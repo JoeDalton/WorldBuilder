@@ -19,6 +19,7 @@ out float vSkyTint;
 
 void main() {
     gl_Position = p3d_ModelViewProjectionMatrix * p3d_Vertex;
+    gl_ClipDistance[0] = 1.0;  // above the sea (see cloud_sphere.vert)
     worldPos = p3d_Vertex.xyz;
     vUv = vec2(0.5);
     vRadius = 0.0;

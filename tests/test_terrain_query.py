@@ -190,6 +190,15 @@ def test_segment_intersect(query, chart):
     )
 
 
+def test_segment_starting_underground_hits_at_once(query, chart):
+    surface = query.surface_point(at(chart, 300.0, -9500.0, 0.0))
+    up = surface / np.linalg.norm(surface)
+    start = surface - 5.0 * up
+    t, point, normal = query.segment_intersect(start, start + 100.0 * up, True)
+    assert t == 0.0
+    np.testing.assert_array_equal(point, start)
+
+
 def test_ocean_surface_is_solid_when_included(planet, chart):
     wet = TerrainQuery(planet, include_ocean=True)
     offshore = at(chart, -10000.0, 30000.0, 100.0)  # about 1 km deep for seed 19
@@ -286,6 +295,21 @@ def test_stamp_blends(planet, bump):
         and 0.0 < edge[1] < 100.0
         and edge[2] == pytest.approx(100.0, abs=0.5)
     )
+
+
+def test_stamp_max_and_min_blends(planet, bump):
+    """max raises the ground to the stamp, never lowers it; min the
+    reverse (the ground here is 100 m, the stamp 10-60 m)."""
+    placement = Placement(
+        lat=REFERENCE[0], lon=REFERENCE[1], width=1000.0, height=1000.0
+    )
+    high = Stamp(bump, placement, height_scale=50.0, height_offset=90.0, blend="max")
+    assert _stamped(planet, high, 0.0, 0.0)[0] == pytest.approx(140.0, abs=0.5)
+    assert _stamped(planet, high, 0.0, 450.0)[0] == pytest.approx(100.0, abs=0.5)
+    low = Stamp(bump, placement, height_scale=50.0, height_offset=10.0, blend="min")
+    assert _stamped(planet, low, 0.0, 0.0)[0] == pytest.approx(60.0, abs=0.5)
+    with pytest.raises(ValueError, match="unknown blend"):
+        Stamp(bump, placement, blend="multiply")
 
 
 def test_rotated_stamp(planet, tmp_path):

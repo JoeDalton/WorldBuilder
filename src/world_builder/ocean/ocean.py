@@ -260,6 +260,7 @@ class Ocean:
         haze_distance: float = 150000.0,
         planet_radius: float = PLANET_RADIUS_M,
         exact_sphere: bool = False,
+        reflection_scale: float | None = None,
         vert_shader: Path = _SHADERS / "ocean.vert",
         frag_shader: Path = _SHADERS / "ocean.frag",
     ):
@@ -304,6 +305,9 @@ class Ocean:
         :param exact_sphere: Curve the geometric-swell surface on the exact
             sphere rather than the d^2 / 2R paraboloid (see
             :func:`make_swell_grid_mesh`): for real spherical terrain.
+        :param reflection_scale: the reflection's resolution as a fraction of
+            the view's; None = the game's graphics settings, or
+            :data:`DEFAULT_REFLECTION_SCALE` without them
         :param vert_shader: Path to ocean.vert.
         :param frag_shader: Path to ocean.frag.
         """
@@ -313,11 +317,12 @@ class Ocean:
 
         # ── Reflection buffer ─────────────────────────────────────────────────
         settings = getattr(self.game.app, "graphics_settings", None)
-        refl_scale = (
-            settings.config["render"]["reflection_scale"]
-            if settings is not None
-            else DEFAULT_REFLECTION_SCALE
-        )
+        if reflection_scale is not None:
+            refl_scale = reflection_scale
+        elif settings is not None:
+            refl_scale = settings.config["render"]["reflection_scale"]
+        else:
+            refl_scale = DEFAULT_REFLECTION_SCALE
         self.refl_tex, uv_scale = self.make_reflection_buffer(refl_scale, water_color)
 
         # ── Shader ────────────────────────────────────────────────────────────

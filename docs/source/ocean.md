@@ -52,11 +52,18 @@ docstring has the overview):
   mirrors about the water plane every frame. A clip plane restricts it to
   geometry above the water, and a camera-mask bit hides the ocean from it. The
   buffer is sized from the app's `graphics_manager.get_render_size()` when
-  it has one (the window size otherwise) times `reflection_scale` (read from
-  `app.graphics_settings`, 0.5 by default), so it tracks the internal render resolution rather than
+  it has one (the window size otherwise) times `reflection_scale` (the `Ocean` argument,
+  else `app.graphics_settings`, else 0.5), so it tracks the internal render resolution rather than
   the window. `uReflUVScale` corrects for power-of-two texture padding and is
   refreshed from the real texture size once the buffer is realized: the default
   pipeline pads, simplepbr (not used) does not.
+  In the terrain demo the mirror shows the sky (its dome is drawn on the
+  far plane, so the reflection camera's shorter range keeps it) and the
+  clouds. Shaders drawn through the mirror write `gl_ClipDistance[0]`
+  (terrain: the real distance; sky, stars, clouds: always kept, they are
+  above the water). Its resolution is `reflection_scale` (half the view by
+  default); lowering it saves little in the demo, where the mirror's cost
+  is per billboard, not per pixel.
 - **No collision of its own.** Physics is the game's business: SpaceFlight's
   `space_flight.scenes.ocean.Ocean` subclass adds a flat terrain collision
   plane at Z=0 so ships can crash into the water.

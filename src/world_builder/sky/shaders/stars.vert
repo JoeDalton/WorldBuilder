@@ -22,6 +22,8 @@ void main() {
     // The map's rotation is orthonormal: its transpose maps it back.
     vec3 dir = transpose(uStarRotation) * p3d_Vertex.xyz;
     gl_Position = p3d_ModelViewProjectionMatrix * vec4(dir, 1.0);
+    gl_Position.z = gl_Position.w * 0.999999;  // see sky.vert
+    gl_ClipDistance[0] = 1.0;
     gl_PointSize = 3.0;
     vec3 transmittance, inscatter;
     atmosphereAlong(dir, 1e30, uSunDir, AIR_STEPS, transmittance, inscatter);

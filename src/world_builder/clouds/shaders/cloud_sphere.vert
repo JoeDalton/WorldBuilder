@@ -43,21 +43,47 @@ void main() {
     float aspect = shape.x;
     float stretch = aspect > 1.0001 ? sqrt(aspect) : 1.0;
 
-    // A billboard wholly outside its shell's distance band, or faded out
-    // near the camera, would draw nothing: drop it here (all four corners
-    // outside the clip volume) rather than evaluate the field over its
-    // pixels. A coarse shell's tile around the camera holds many such,
-    // large on screen. Exact: cloud.frag would discard every fragment.
     float centreDistance = length(uCamRender - centre);
-    float reach = i_radius * stretch * 1.5;  // past the quad's corners
-    vec4 band = layerParams[vLayer * LAYER_VEC4S + 11];
     vFade = 1.0;
     if (nearFadeRadii > 0.0) {
         vFade = smoothstep(0.0, nearFadeRadii * i_radius, centreDistance);
     }
-    if (centreDistance + reach <= band.x || centreDistance - reach >= band.w
-            || vFade <= 0.0) {
+    vec3 fwd = normalize(uCamRender - centre);
+    vec3 upRef = normalize(centre - uPlanetCentre);
+    if (abs(dot(fwd, upRef)) > 0.99) {
+        upRef = abs(fwd.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+    }
+    vec3 right = normalize(cross(upRef, fwd)) * (i_radius * stretch);
+    vec3 up = cross(fwd, normalize(right)) * (i_radius / stretch);
+
+    // Drop a billboard that would draw nothing, before the per-vertex air
+    // and sunlight (every pass runs this for every billboard of every shown
+    // tile: the ocean's mirror sees few of them). Exact, cloud.frag would
+    // discard every fragment:
+    // * wholly outside its shell's distance band, or faded out near the
+    //   camera (a coarse shell's tile around the camera holds many such,
+    //   large on screen);
+    // * wholly outside the view: all four corners beyond one clip plane.
+    float reach = i_radius * stretch * 1.5;  // past the quad's corners
+    vec4 band = layerParams[vLayer * LAYER_VEC4S + 11];
+    bool dropped = centreDistance + reach <= band.x
+                || centreDistance - reach >= band.w || vFade <= 0.0;
+    if (!dropped) {
+        vec4 c0 = p3d_ViewProjectionMatrix * vec4(centre - right - up, 1.0);
+        vec4 c1 = p3d_ViewProjectionMatrix * vec4(centre + right - up, 1.0);
+        vec4 c2 = p3d_ViewProjectionMatrix * vec4(centre + right + up, 1.0);
+        vec4 c3 = p3d_ViewProjectionMatrix * vec4(centre - right + up, 1.0);
+        vec4 x = vec4(c0.x, c1.x, c2.x, c3.x);
+        vec4 y = vec4(c0.y, c1.y, c2.y, c3.y);
+        vec4 z = vec4(c0.z, c1.z, c2.z, c3.z);
+        vec4 w = vec4(c0.w, c1.w, c2.w, c3.w);
+        dropped = all(greaterThan(x, w)) || all(lessThan(x, -w))
+               || all(greaterThan(y, w)) || all(lessThan(y, -w))
+               || all(greaterThan(z, w)) || all(lessThan(z, -w));
+    }
+    if (dropped) {
         gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+        gl_ClipDistance[0] = 1.0;
         vUv = vec2(0.0);
         worldPos = vec3(0.0);
         vRadius = 0.0;
@@ -68,18 +94,13 @@ void main() {
         vSkyTint = 1.0;
         return;
     }
-    vec3 fwd = normalize(uCamRender - centre);
-    vec3 upRef = normalize(centre - uPlanetCentre);
-    if (abs(dot(fwd, upRef)) > 0.99) {
-        upRef = abs(fwd.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
-    }
-    vec3 right = normalize(cross(upRef, fwd));
-    vec3 up = cross(fwd, right);
 
     vec2 corner = p3d_MultiTexCoord0;
-    vec3 wp = centre + right * (corner.x * i_radius * stretch)
-                     + up * (corner.y * i_radius / stretch);
+    vec3 wp = centre + right * corner.x + up * corner.y;
     gl_Position = p3d_ViewProjectionMatrix * vec4(wp, 1.0);
+    // The clouds are all above the sea: the ocean's reflection pass (whose
+    // clip plane is on) keeps them whole.
+    gl_ClipDistance[0] = 1.0;
     worldPos = wp - uPlanetCentre;
     vUv = i_uv_st.xy + (corner * 0.5 + 0.5) * i_uv_st.zw;
     vRadius = i_radius;

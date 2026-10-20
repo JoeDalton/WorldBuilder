@@ -1228,3 +1228,14 @@ def test_clouds_wrapper_lifecycle(app):
     assert clouds.field.node.is_empty()  # geometry detached
     game.root_node.remove_node()
     camera.remove_node()
+
+
+def test_an_empty_field_is_refused(volume, atlas_rects, resolved):
+    """A threshold above the fbm's range leaves nothing to place: an error
+    naming the cause, not an empty cloud field."""
+    spec = resolved[CloudType.CUMULUS]
+    empty = replace(spec, field=replace(spec.field, threshold=(9.0, 9.5)))
+    with pytest.raises(ValueError, match="empty over its slab"):
+        sample_field_particles(
+            empty, volume, domain=2000.0, cell_size=1000.0, atlas_rects=atlas_rects
+        )
