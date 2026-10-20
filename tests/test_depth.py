@@ -6,9 +6,11 @@ The cameras themselves need a window (see scripts/terrain_shots.py).
 
 import math
 
+import numpy as np
 import pytest
+from panda3d.core import BoundingBox, BoundingVolume, PerspectiveLens, Point3
 
-from world_builder.depth import SplitDepthCameras
+from world_builder.depth import SplitDepthCameras, frustum_bounds
 
 R = 600e3
 
@@ -46,3 +48,27 @@ def test_system_ranges_follow_the_nearest_ground_and_reach_the_farthest_body():
     assert far >= 9.4e6  # the moon's near side is in range
     # Up close, precision only depends on the split.
     assert _precision(split, 100e3) < 1.0
+
+
+def _lens(near, far):
+    lens = PerspectiveLens()
+    lens.set_fov(70.0, 42.0)
+    lens.set_near_far(near, far)
+    return lens
+
+
+def test_frustum_bounds_match_the_lens_within_its_own_limit():
+    lens = _lens(500e3, 5e6)
+    ours, panda = frustum_bounds(lens), lens.make_bounds()
+    for i in range(8):
+        np.testing.assert_allclose(ours.get_point(i), panda.get_point(i), rtol=1e-5)
+
+
+def test_frustum_bounds_reach_past_ten_thousand_km():
+    """Panda's own frustum stops at 1 / lens-far-limit (10,000 km): a planet
+    beyond its moon was culled while the depth range covered it."""
+    lens = _lens(570e3, 12e6)
+    planet = BoundingBox(Point3(-1e6, 10.2e6, -1e6), Point3(1e6, 11.4e6, 1e6))
+    assert lens.make_bounds().contains(planet) == BoundingVolume.IF_no_intersection
+    assert frustum_bounds(lens).contains(planet) != BoundingVolume.IF_no_intersection
+    assert frustum_bounds(lens).get_max()[1] == pytest.approx(12e6)

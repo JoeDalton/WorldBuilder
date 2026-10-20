@@ -17,13 +17,22 @@ Masks: the near camera has every camera bit but :data:`FAR_BIT`, the far
 camera every bit but :data:`NEAR_BIT`. ``node.hide(HIDE_FROM_NEAR)`` keeps a
 node out of the near pass (e.g. a sky dome, which belongs to the far pass);
 other bits behave as before for both cameras.
+
+Culling: Panda builds a lens's culling frustum (``Lens.make_bounds``) with its
+far end cut at ``1 / lens-far-limit``, 10,000 km by default, whatever the far
+distance. Past it a whole body was culled while its depth range still
+covered it (a planet seen from beyond its moon, 10,000 km away, vanished; its
+clouds' deck and the sky's atmosphere, which are never culled, stayed). The
+far camera gets explicit cull bounds to its true far plane instead
+(:func:`frustum_bounds`).
 """
 
 from __future__ import annotations
 
 import math
 
-from panda3d.core import BitMask32, Camera, PandaNode
+import numpy as np
+from panda3d.core import BitMask32, BoundingHexahedron, Camera, PandaNode, Point3
 
 #: Camera bit only the near camera has (outside the ocean reflection's 0-19).
 NEAR_BIT = 21
@@ -33,6 +42,30 @@ FAR_BIT = 22
 HIDE_FROM_NEAR = BitMask32.bit(NEAR_BIT)
 #: ``node.hide(HIDE_FROM_FAR)``: drawn by the near camera only.
 HIDE_FROM_FAR = BitMask32.bit(FAR_BIT)
+
+
+def frustum_bounds(lens) -> BoundingHexahedron:
+    """A perspective lens's frustum to its true far plane.
+
+    What ``lens.make_bounds()`` returns, without its far end cut at
+    ``1 / lens-far-limit`` (10,000 km by default). No film offset.
+
+    :param lens: a ``PerspectiveLens``
+    """
+    fov = lens.get_fov()
+    half_x = np.tan(np.radians(fov[0]) / 2.0)
+    half_z = np.tan(np.radians(fov[1]) / 2.0)
+
+    def corners(distance):
+        x, z = distance * half_x, distance * half_z
+        return [
+            Point3(-x, distance, -z),
+            Point3(x, distance, -z),
+            Point3(x, distance, z),
+            Point3(-x, distance, z),
+        ]
+
+    return BoundingHexahedron(*corners(lens.get_far()), *corners(lens.get_near()))
 
 
 class SplitDepthCameras:
@@ -84,6 +117,7 @@ class SplitDepthCameras:
         # Follow window resizes and FOV changes.
         self.far_lens.set_fov(lens.get_fov())
         self.far_lens.set_aspect_ratio(lens.get_aspect_ratio())
+        self.far_camera.node().set_cull_bounds(frustum_bounds(self.far_lens))
 
     @staticmethod
     def planet_ranges(

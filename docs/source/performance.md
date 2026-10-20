@@ -334,6 +334,15 @@ fill: the pool's queue grew without end and the planet stopped refining.
 `workers._unsent` binds it properly, and
 `test_channels_share_the_pool_without_duplicates` guards it.
 
+Another: Panda's culling frustum (`Lens.make_bounds`) ends at
+`1 / lens-far-limit`, 10,000 km by default, whatever the lens's far distance.
+A planet seen from just beyond its moon (10,000 km away), or the moon from
+beyond the planet, was culled whole while the depth range covered it; its
+cloud deck and the sky's atmosphere, never culled, stayed on screen.
+`SplitDepthCameras` now gives the far camera cull bounds to its true far
+plane (`depth.frustum_bounds`); `test_frustum_bounds_reach_past_ten_thousand_km`
+guards it.
+
 ## 12. Frame time in fast flight
 
 `scripts/flight_bench.py`, fast flight 300 m over the demo coast, boosted
