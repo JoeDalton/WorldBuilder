@@ -29,7 +29,8 @@ uniform vec4 uAtmoScatter[MAX_ATMOSPHERES];
 // x: Mie extinction per metre, y: Mie anisotropy g, z: sun intensity,
 // w: |cam|^2 - ground^2 (float64 on the CPU).
 uniform vec4 uAtmoMie[MAX_ATMOSPHERES];
-// x: multiply scattered light, as a share of direct sunlight.
+// x: multiply scattered light, as a share of direct sunlight; y: the slant
+// path's curvature scale (atmoDepthToward), >= 1.
 uniform vec4 uAtmoExtra[MAX_ATMOSPHERES];
 
 const float ATMO_PI = 3.14159265;
@@ -47,11 +48,15 @@ float atmoChapman(float x, float cosChi) {
 
 // Optical depth (density-weighted metres) from radius r toward a direction
 // at cosine cosChi from the vertical, through a layer of scale height H over
-// a ground of radius R. Huge if the planet is in the way.
-float atmoDepthToward(float r, float cosChi, float R, float H) {
+// a ground of radius R. Huge if the planet is in the way. curve >= 1 takes
+// the slant through the air as over a planet that many times larger: the
+// same overhead, longer near the horizon (redder sunsets on a small planet;
+// atmosphere.AtmosphereParams.sunset_radius).
+float atmoDepthToward(float r, float cosChi, float R, float H, float curve) {
     float density = exp(-(r - R) / H);
+    float k = curve / H;
     if (cosChi >= 0.0) {
-        return H * density * atmoChapman(r / H, cosChi);
+        return H * density * atmoChapman(r * k, cosChi);
     }
     float sinChi = sqrt(max(0.0, 1.0 - cosChi * cosChi));
     float tangent = r * sinChi;  // closest approach to the centre
@@ -59,8 +64,8 @@ float atmoDepthToward(float r, float cosChi, float R, float H) {
         return 1e9;
     }
     // Both sides of the tangent point, minus the side behind the start.
-    return H * (2.0 * exp(-(tangent - R) / H) * atmoChapman(tangent / H, 0.0)
-                - density * atmoChapman(r / H, -cosChi));
+    return H * (2.0 * exp(-(tangent - R) / H) * atmoChapman(tangent * k, 0.0)
+                - density * atmoChapman(r * k, -cosChi));
 }
 
 // Entry and exit distances along a ray from o (relative to the centre) with
@@ -177,8 +182,9 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
         float cosSun = dot(ps, sunDir) / rs;
         vec3 direct = vec3(0.0);
         if (lit > 0.0) {
-            float sunR = atmoDepthToward(rs, cosSun, R, Hr);
-            float sunM = atmoDepthToward(rs, cosSun, R, Hm);
+            float curve = max(uAtmoExtra[i].y, 1.0);
+            float sunR = atmoDepthToward(rs, cosSun, R, Hr, curve);
+            float sunM = atmoDepthToward(rs, cosSun, R, Hm, curve);
             direct = exp(-(betaR * (depthR + sunR) + betaMExt * (depthM + sunM))) * lit;
         }
         // Light scattered more than once: a share of the sunlight, wherever
@@ -286,7 +292,8 @@ vec3 atmoSunlight(int i, vec3 p, vec3 sunDir) {
     vec4 shape = uAtmoShape[i];
     float r = max(length(p), shape.x);
     float cosSun = dot(p, sunDir) / r;
-    float depthR = atmoDepthToward(r, cosSun, shape.x, shape.z);
-    float depthM = atmoDepthToward(r, cosSun, shape.x, shape.w);
+    float curve = max(uAtmoExtra[i].y, 1.0);
+    float depthR = atmoDepthToward(r, cosSun, shape.x, shape.z, curve);
+    float depthM = atmoDepthToward(r, cosSun, shape.x, shape.w, curve);
     return exp(-(uAtmoScatter[i].rgb * depthR + uAtmoMie[i].x * depthM));
 }

@@ -39,6 +39,35 @@ const int AIR_STEPS = 4;
 void main() {
     vLayer = int(i_layer + 0.5);
     vec3 centre = (p3d_ModelMatrix * vec4(p3d_Vertex.xyz, 1.0)).xyz;
+    vec4 shape = layerParams[vLayer * LAYER_VEC4S + 10];
+    float aspect = shape.x;
+    float stretch = aspect > 1.0001 ? sqrt(aspect) : 1.0;
+
+    // A billboard wholly outside its shell's distance band, or faded out
+    // near the camera, would draw nothing: drop it here (all four corners
+    // outside the clip volume) rather than evaluate the field over its
+    // pixels. A coarse shell's tile around the camera holds many such,
+    // large on screen. Exact: cloud.frag would discard every fragment.
+    float centreDistance = length(uCamRender - centre);
+    float reach = i_radius * stretch * 1.5;  // past the quad's corners
+    vec4 band = layerParams[vLayer * LAYER_VEC4S + 11];
+    vFade = 1.0;
+    if (nearFadeRadii > 0.0) {
+        vFade = smoothstep(0.0, nearFadeRadii * i_radius, centreDistance);
+    }
+    if (centreDistance + reach <= band.x || centreDistance - reach >= band.w
+            || vFade <= 0.0) {
+        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+        vUv = vec2(0.0);
+        worldPos = vec3(0.0);
+        vRadius = 0.0;
+        vFade = 0.0;
+        vAtmoT = vec3(1.0);
+        vAtmoS = vec3(0.0);
+        vSunTint = vec3(1.0);
+        vSkyTint = 1.0;
+        return;
+    }
     vec3 fwd = normalize(uCamRender - centre);
     vec3 upRef = normalize(centre - uPlanetCentre);
     if (abs(dot(fwd, upRef)) > 0.99) {
@@ -46,10 +75,6 @@ void main() {
     }
     vec3 right = normalize(cross(upRef, fwd));
     vec3 up = cross(fwd, right);
-
-    vec4 shape = layerParams[vLayer * LAYER_VEC4S + 10];
-    float aspect = shape.x;
-    float stretch = aspect > 1.0001 ? sqrt(aspect) : 1.0;
 
     vec2 corner = p3d_MultiTexCoord0;
     vec3 wp = centre + right * (corner.x * i_radius * stretch)
@@ -75,9 +100,5 @@ void main() {
                      / max(atmoSunlight(uOwnAtmosphere, p, vertical), vec3(1e-3));
         vSunTint = sqrt(min(through, vec3(1.0)));
         vSkyTint = smoothstep(-0.3, 0.1, dot(vertical, sunDir));  // see cloud.frag
-    }
-    vFade = 1.0;
-    if (nearFadeRadii > 0.0) {
-        vFade *= smoothstep(0.0, nearFadeRadii * i_radius, length(uCamRender - centre));
     }
 }

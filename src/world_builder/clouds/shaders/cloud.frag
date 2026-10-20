@@ -73,6 +73,14 @@ void main() {
     float distance = length(toCamera);
     vec3 V = -toCamera / distance;
 
+    // LOD shell crossfade: adjacent shells' weights sum to 1. Applied to OPTICAL
+    // DEPTH (exact for any depth, unlike alpha) and AFTER the cap (or two shells
+    // could each reach it), below. Known before the field is: a fragment
+    // weighing nothing (another shell's range) costs nothing.
+    float shellWeight = smoothstep(f.shellFade.x, f.shellFade.y, distance)
+                      * (1.0 - smoothstep(f.shellFade.z, f.shellFade.w, distance));
+    if (shellWeight <= 0.0 || vFade <= 0.0) discard;
+
     float puff;
     float chord;
     vec3 samplePos;
@@ -127,16 +135,10 @@ void main() {
     // (On a planet the atmospheres do it, in linear light, below.)
     float haze = uSpherical == 1 ? 0.0 : clamp(distance * horizonFade, 0.0, 1.0);
     if (haze >= 0.999) discard;
-    if (vFade <= 0.0) discard;
 
     // Capped so every billboard stays a thin veil, never a hard-edged opaque quad.
     float opticalDepth = min(f.extinction * density * chord, f.maxOpticalDepth);
 
-    // LOD shell crossfade: adjacent shells' weights sum to 1. Applied to OPTICAL
-    // DEPTH (exact for any depth, unlike alpha) and AFTER the cap (or two shells
-    // could each reach it).
-    float shellWeight = smoothstep(f.shellFade.x, f.shellFade.y, distance)
-                      * (1.0 - smoothstep(f.shellFade.z, f.shellFade.w, distance));
     opticalDepth *= shellWeight;
 
     float alpha = 1.0 - exp2(-opticalDepth);

@@ -47,6 +47,7 @@ Controls (AZERTY):
     F5              cycle the cloud quality: high / mid / low / off
     F6              cycle the nebula's palette
     F7 / F8         dimmer / brighter nebula
+    F9 / F10        dimmer / brighter ambient (sky) light
     M               toggle the terrain in the ocean's reflection
     , / ;           sharper / softer biome transitions
     T               toggle textures (off: flat biome colours)
@@ -79,7 +80,9 @@ import numpy as np
 from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
+    AmbientLight,
     ClockObject,
+    DirectionalLight,
     GraphicsWindow,
     LineSegs,
     LMatrix3f,
@@ -91,7 +94,7 @@ from panda3d.core import (
     loadPrcFileData,
 )
 
-from world_builder.atmosphere import AtmosphereParams, Atmospheres
+from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cloud import CloudQuality
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
@@ -136,6 +139,10 @@ OCEAN_ANCHOR_RANGE = 50000.0
 SUN_COLOR = (2.6, 2.5, 2.35)
 SKY_AMBIENT = (0.34, 0.44, 0.64)
 SPACE_AMBIENT = (0.025, 0.025, 0.03)
+# The clouds' share of the sky light (SphericalClouds' sky_strength).
+CLOUD_SKY_LIGHT = 0.35
+# The sun's elevation the ocean's water colour was tuned in (the start pose).
+WATER_TUNED_ELEVATION = 35.0
 CLOUD_BASE = 2200.0  # metres above sea level: above the start pose
 HUD_PERIOD = 0.2  # seconds between HUD refreshes
 PROBE_RADIUS = 20.0
@@ -356,6 +363,14 @@ class TerrainDemo(ShowBase):
         self._wireframe = False
         self._debug = 0
         self._probe = self._make_probe()
+        # Panda3D lights for anything not drawn by the world's own shaders
+        # (models, ships): the sun and the sky as they are at the camera.
+        self.sun_light = self.render.attach_new_node(DirectionalLight("sun"))
+        self.ambient_light = self.render.attach_new_node(AmbientLight("ambient"))
+        self.render.set_light(self.sun_light)
+        self.render.set_light(self.ambient_light)
+        self.ambient_scale = 1.0
+        self._water_reference = None
         self._laser_marks: list[tuple[object, Body, np.ndarray]] = []
         self._ground = 0.0
 
@@ -376,6 +391,8 @@ class TerrainDemo(ShowBase):
             ("f6", self._cycle_nebula_palette, []),
             ("f7", self._scale_nebula, [1 / 1.5]),
             ("f8", self._scale_nebula, [1.5]),
+            ("f9", self._scale_ambient, [1 / 1.25]),
+            ("f10", self._scale_ambient, [1.25]),
             ("m", self._toggle_reflection, []),
             ("t", self._toggle_textures, []),
             ("b", self._toggle_wireframe, []),
@@ -601,11 +618,59 @@ class TerrainDemo(ShowBase):
     def _update_sun(self):
         # Sunlight above the air: the atmosphere reddens it where it must.
         self.sky.set_sun(self._sun)
+        scale = self.ambient_scale
         if self.clouds is not None:
             self.clouds.set_sun(self._sun)
+            self.clouds.set_sky_light(CLOUD_SKY_LIGHT * scale)
         for body in self.bodies:
             ambient = SKY_AMBIENT if body.atmosphere else SPACE_AMBIENT
-            body.terrain.set_sun(tuple(self._sun), SUN_COLOR, ambient)
+            body.terrain.set_sun(
+                tuple(self._sun), SUN_COLOR, np.multiply(ambient, scale)
+            )
+        self._update_lights()
+
+    def _light_at(self, body: Body, point_world) -> tuple[np.ndarray, np.ndarray]:
+        """:returns: (direct, ambient) light at a point near a body"""
+        if body.atmosphere:
+            return self.atmospheres.light_at(
+                0,
+                point_world,
+                self._sun,
+                SUN_COLOR,
+                np.multiply(SKY_AMBIENT, self.ambient_scale),
+            )
+        hidden = in_shadow(point_world - body.position, self._sun, body.radius)
+        direct = np.zeros(3) if hidden else np.asarray(SUN_COLOR)
+        return direct, np.multiply(SPACE_AMBIENT, self.ambient_scale)
+
+    def _update_lights(self):
+        """Panda3D's sun and ambient lights as they are at the camera, and
+        the swell ocean lit as the sea under it."""
+        direct, ambient = self._light_at(self.body, self.cam_world)
+        self.sun_light.node().set_color((*direct, 1.0))
+        self.sun_light.node().set_direction(Vec3(*(-self._sun)))
+        self.ambient_light.node().set_color((*ambient, 1.0))
+        # The water's colour was tuned in daylight: scale it by the light on
+        # the sea now (sun on a level surface plus sky) over that day's.
+        up = self._relative(self.home) / np.linalg.norm(self._relative(self.home))
+        sea = self.home.position + up * self.radius
+        direct, ambient = self._light_at(self.home, sea)
+        light = direct * max(float(self._sun @ up), 0.0) + ambient
+        if self._water_reference is None:
+            elevation = math.radians(WATER_TUNED_ELEVATION)
+            east = np.cross([0.0, 0.0, 1.0], up)
+            east /= max(np.linalg.norm(east), 1e-9)
+            tuned = math.sin(elevation) * up + math.cos(elevation) * east
+            t = self.atmospheres.transmittance_to_sun(0, sea, tuned)
+            self._water_reference = np.asarray(SUN_COLOR) * t * math.sin(
+                elevation
+            ) + np.asarray(SKY_AMBIENT)
+        self.ocean.set_light(np.clip(light / self._water_reference, 0.0, 1.5))
+
+    def _scale_ambient(self, factor):
+        self.ambient_scale = max(0.05, min(8.0, self.ambient_scale * factor))
+        self._hud_time = -1.0
+        print(f"ambient light x{self.ambient_scale:.2f}")
 
     def set_local_sun(self, azimuth: float, elevation: float):
         """Put the sun at an azimuth/elevation (degrees) as seen from the
@@ -737,7 +802,9 @@ class TerrainDemo(ShowBase):
             f"({self.executor.workers} workers)   "
             f"upload {s['upload_ms']:.2f} ms/chunk   LOD pass {s['select_ms']:.1f} ms"
             f"   depth split {split_km:,.1f} km, far {far_km:,.0f} km",
-            clouds + ("" if self._clouds_shown else " (hidden)"),
+            clouds
+            + ("" if self._clouds_shown else " (hidden)")
+            + f"   ambient x{self.ambient_scale:.2f}",
         ]
         self._hud.setText("\n".join(lines))
 

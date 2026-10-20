@@ -13,6 +13,9 @@ from world_builder.atmosphere import (
     AtmosphereParams,
     Atmospheres,
     bind_defaults,
+    depth_toward,
+    in_shadow,
+    twilight,
 )
 from world_builder.sky import NEBULA_PALETTES, NebulaStyle, Sky, Starfield
 from world_builder.sky.starfield import (
@@ -74,6 +77,55 @@ def test_sunlight_through_the_air():
     np.testing.assert_array_equal(
         atmospheres.transmittance_to_sun(0, space, (0.0, 0.0, 1.0)), 1.0
     )
+
+
+def test_sunset_radius_reddens_only_a_low_sun():
+    """A larger sunset radius lengthens the grazing path (redder near the
+    terminator) and leaves the sun overhead as it was."""
+    physical, earthlike = Atmospheres(), Atmospheres()
+    physical.add(R, AtmosphereParams(sunset_radius=None))
+    earthlike.add(R, AtmosphereParams(sunset_radius=6371e3))
+    ground = np.array([0.0, 0.0, R + 1.0])
+    overhead = (0.0, 0.0, 1.0)
+    np.testing.assert_allclose(
+        earthlike.transmittance_to_sun(0, ground, overhead),
+        physical.transmittance_to_sun(0, ground, overhead),
+        rtol=1e-2,  # the Chapman function's curvature term, a few tenths of 1 %
+    )
+    low = (1.0, 0.0, 0.05)
+    a = physical.transmittance_to_sun(0, ground, low)
+    b = earthlike.transmittance_to_sun(0, ground, low)
+    assert b[2] / b[0] < 0.5 * (a[2] / a[0])  # much redder
+
+
+def test_slant_depth_is_continuous_across_the_horizon():
+    """Above and below the horizontal, the two branches of the Chapman
+    formula meet."""
+    r = R + 2000.0
+    for curve in (1.0, 10.0):
+        up = depth_toward(r, 1e-6, R, 8000.0, curve)
+        down = depth_toward(r, -1e-6, R, 8000.0, curve)
+        assert down == pytest.approx(up, rel=1e-3)
+
+
+def test_light_at_follows_the_sun_and_the_planet_shadow():
+    atmospheres = Atmospheres()
+    atmospheres.add(R, AtmosphereParams())
+    ground = np.array([0.0, 0.0, R + 10.0])
+    sun, sky = (2.6, 2.5, 2.35), (0.3, 0.4, 0.6)
+    noon_direct, noon_sky = atmospheres.light_at(0, ground, (0, 0, 1), sun, sky)
+    assert np.all(noon_direct > 0.5 * np.asarray(sun))
+    np.testing.assert_allclose(noon_sky, sky)
+    night_direct, night_sky = atmospheres.light_at(0, ground, (0, 0, -1), sun, sky)
+    np.testing.assert_array_equal(night_direct, 0.0)
+    np.testing.assert_array_equal(night_sky, 0.0)
+    assert twilight(0.0) == pytest.approx(0.5)
+
+
+def test_in_shadow_is_the_bodys_geometric_shadow():
+    assert in_shadow((0.0, 0.0, -2.0), (0.0, 0.0, 1.0), 1.0)
+    assert not in_shadow((0.0, 0.0, 2.0), (0.0, 0.0, 1.0), 1.0)
+    assert not in_shadow((1.5, 0.0, -2.0), (0.0, 0.0, 1.0), 1.0)
 
 
 def test_defaults_bind_every_input():

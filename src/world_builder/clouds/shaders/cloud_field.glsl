@@ -200,13 +200,15 @@ float sunOpticalDepth(Field f, vec3 p) {
     vec3 increment = sunDir * f.sunStepLength;
     vec3 position = p + increment * 0.5;
     float density = 0.0;
+    // The weather varies over kilometres, the march spans a few hundred
+    // metres: one fetch for all its steps.
+    float shift = weatherShift(p) + f.shadowBias;
     for (int i = 0; i < f.sunSteps; i++, position += increment) {
         float h = slabHeight(f, heightOf(position));
         if (h <= 0.0 || h >= 1.0) {
             continue;
         }
         vec3 coord = position * f.noiseScale + f.noiseOrigin;
-        float shift = weatherShift(position) + f.shadowBias;
         float first = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x;
         // The same exact early-out as cloudDensity's (shadowGain > 0).
         if ((first + f.octaveWeights.y) * f.shadowGain + shift

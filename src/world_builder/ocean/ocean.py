@@ -346,6 +346,8 @@ class Ocean:
         self.ocean_node.setShaderInput("iCameraPos", LVecBase3f(0, 0, 20))
         self.ocean_node.setShaderInput("uModelMatrix", LMatrix4f.identMat())
         self.ocean_node.setShaderInput("iWaterColor", water_color)
+        self.ocean_node.setShaderInput("iWaterLight", LVecBase3f(1.0, 1.0, 1.0))
+        self._water_color = LVecBase3f(water_color)
         self.ocean_node.setShaderInput("iReflectionTex", self.refl_tex)
         self.ocean_node.setShaderInput("iRippleStrength", ripple_strength)
         self.ocean_node.setShaderInput("iWindDir", wind_dir)
@@ -439,6 +441,18 @@ class Ocean:
         """
         self.ocean_node.setShaderInput("uBaseToWorld", base_to_world)
         self.ocean_node.setShaderInput("uAtmoSunDir", LVecBase3f(*sun_direction))
+
+    def set_light(self, light) -> None:
+        """How lit the water is, relative to the daylight its colour was
+        chosen in: (r, g, b) multiplying the water's own scattered colour and
+        the reflection's clear colour (1 = as tuned; 0 = night). The sky's
+        reflection darkens by itself."""
+        light = LVecBase3f(*light)
+        self.ocean_node.setShaderInput("iWaterLight", light)
+        c = self._water_color
+        self.refl_buffer.setClearColor(
+            LVecBase4f(c[0] * light[0], c[1] * light[1], c[2] * light[2], 1)
+        )
 
     def set_wave_iterations(self, iterations: int):
         """Adjust wave-detail quality at runtime (e.g. from a settings menu).

@@ -731,6 +731,10 @@ class SphericalClouds:
         if sky_color is not None:
             self.root.set_shader_input("skyColor", Vec3(*sky_color))
 
+    def set_sky_light(self, strength: float) -> None:
+        """The sky's (ambient) light on the clouds, as ``sky_strength``."""
+        self.root.set_shader_input("skyStrength", float(strength))
+
     def set_pixel_angle(self, radians: float) -> None:
         """The angle one pixel spans (vertical fov / window height): how far
         the deck can show the clouds' own detail before averaging it."""

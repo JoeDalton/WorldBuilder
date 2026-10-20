@@ -40,6 +40,14 @@ whole samples lit or not, the shadow's edge moved a sample at a time: hard
 horizontal bands across the dusk sky, the planet's shadow rising above the
 horizon in steps.
 
+**Redder sunsets on a small planet.** Sunlight grazing a 600 km planet
+crosses ~11 air masses (Earth's ~38), so it reached the terminator bright and
+barely red. `sunset_radius` (default Earth's, 6,371 km) takes the slant path
+as over a planet of that radius: the Chapman function's curvature argument
+is scaled, which lengthens grazing paths and leaves the sun overhead as it
+was (within a few tenths of a percent). `None` is the physical path. It
+applies everywhere the sun's depth is taken: the sky, the ground, the clouds.
+
 **Twilight fill.** A flat share of the sunlight (`multiple_scattering`,
 0.12) stands in for light scattered more than once: it reaches every sample,
 lit or not, fading as the sun goes 17° below the sample's horizon. Without it
@@ -71,6 +79,25 @@ when a ray crosses two atmospheres.
 `Atmospheres` holds every atmosphere's uniforms in arrays shared by all bound
 nodes and rewrites them in place once a frame, in float64 where it matters
 (`|camera|² - radius²` would be noise in float32).
+
+### Lighting anything else
+
+`Atmospheres.light_at(index, point, sun, sun_colour, sky_light)` gives the
+light at a point as the terrain's shader lights its ground: the sunlight
+through the air (none in the planet's shadow), and the sky light fading
+through twilight. `transmittance_to_sun` is the shader's formula on the CPU
+(the Chapman function, `depth_toward`); `in_shadow` covers airless bodies.
+
+The demo uses them each frame for:
+
+- **Panda3D's lights**: a `DirectionalLight` (the sun) and an `AmbientLight`
+  on `render`, as they are at the camera, for anything drawn without the
+  world's own shaders (models, ships);
+- **the swell ocean**: `Ocean.set_light` scales its water colour (tuned in
+  daylight) by the light on the sea under the camera over the daylight's, so
+  the sea is dark by night;
+- **an ambient scale** (F9 / F10) applied to the terrain's sky light, the
+  clouds' (`SphericalClouds.set_sky_light`), the ocean's and Panda3D's.
 
 ### Left out: true multiple scattering (the Bruneton option)
 
@@ -206,6 +233,12 @@ At every quality:
   where the rest cannot reach the threshold (they add at most their
   weights). It is exact: the same densities, fewer fetches in clear air, which
   is most of a billboard quad.
+- **Zero weight costs nothing.** A billboard wholly outside its shell's
+  distance band, or faded out near the camera, is dropped in the vertex
+  stage; a fragment's shell weight is known before its density. A coarse
+  shell's tile around the camera holds many such billboards, large on screen
+  (inside the deck, looking at a nearby cloud: 12.7 → 9.6 ms of clouds).
+- **The sun march** reads the weather once per pixel, not at every step.
 - **The atmosphere** in front of a billboard takes 4 samples per vertex
   (`atmosphereAlong(..., steps, ...)`), against 8 per pixel elsewhere.
 

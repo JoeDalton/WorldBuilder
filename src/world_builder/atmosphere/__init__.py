@@ -20,6 +20,7 @@ Defaults are Earth's air (Bruneton 2017's constants) over a 60 km shell.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,6 +53,10 @@ class AtmosphereParams:
     :ivar multiple_scattering: light scattered more than once, as a share of
         direct sunlight, reaching air the sun does not (the planet's shadow
         at dusk is blue-grey, not black); it fades out through twilight
+    :ivar sunset_radius: sunlight's slant through the air is taken as over a
+        planet of this radius, if larger than the real one: as red near the
+        terminator as there (a 600 km planet's grazing sunlight crosses ~11
+        air masses, Earth's ~38), the same overhead. None = physical
     """
 
     height: float = 60e3
@@ -63,6 +68,7 @@ class AtmosphereParams:
     mie_g: float = 0.8
     sun_intensity: float = 22.0
     multiple_scattering: float = 0.12
+    sunset_radius: float | None = 6371e3
 
 
 #: The vec4 uniform arrays atmosphere.glsl reads, MAX_ATMOSPHERES each.
@@ -106,7 +112,7 @@ class Atmospheres:
         )
         self._arrays["uAtmoScatter"][index] = LVecBase4f(*p.rayleigh, p.mie)
         self._arrays["uAtmoExtra"][index] = LVecBase4f(
-            p.multiple_scattering, 0.0, 0.0, 0.0
+            p.multiple_scattering, _curve(radius, p), 0.0, 0.0
         )
         self._count[0] = len(self._bodies)
         return index
@@ -145,36 +151,101 @@ class Atmospheres:
     def transmittance_to_sun(
         self, index: int, point_world, sun_direction
     ) -> np.ndarray:
-        """Sunlight reaching a point through atmosphere *index* (the GLSL's
-        atmoSunlight, for CPU-side lighting): (3,) factors in [0, 1].
-
-        Marched numerically (64 steps); for occasional use.
+        """Sunlight reaching a point through atmosphere *index*: the GLSL's
+        atmoSunlight on the CPU (the same formula), (3,) factors in [0, 1].
         """
         radius, params, position = self._bodies[index]
         p = np.asarray(point_world, float) - position
         d = np.asarray(sun_direction, float)
         d = d / np.linalg.norm(d)
-        top = radius + params.height
-        # Distance to the top of the atmosphere along the sun ray.
-        b = float(p @ d)
-        c = float(p @ p) - top * top
-        if c > 0.0 and b > 0.0:
-            return np.ones(3)  # above the air, looking away from it
-        disc = b * b - c
-        if disc <= 0.0:
-            return np.ones(3)
-        t1 = -b + np.sqrt(disc)
-        s = (np.arange(64) + 0.5) / 64.0 * max(t1, 0.0)
-        points = p + s[:, None] * d
-        r = np.linalg.norm(points, axis=1)
-        if np.any(r < radius):
-            return np.zeros(3)
-        ds = max(t1, 0.0) / 64.0
-        depth_r = np.sum(np.exp(-(r - radius) / params.rayleigh_height)) * ds
-        depth_m = np.sum(np.exp(-(r - radius) / params.mie_height)) * ds
+        r = max(float(np.linalg.norm(p)), radius)
+        if r >= radius + params.height and float(p @ d) >= 0.0:
+            return np.ones(3)  # above the air, the sun not behind it
+        cos_sun = float(p @ d) / max(float(np.linalg.norm(p)), 1e-9)
+        curve = _curve(radius, params)
+        depth_r = depth_toward(r, cos_sun, radius, params.rayleigh_height, curve)
+        depth_m = depth_toward(r, cos_sun, radius, params.mie_height, curve)
+        if depth_r >= 1e9:
+            return np.zeros(3)  # the planet is in the way
         return np.exp(
             -(np.asarray(params.rayleigh) * depth_r + params.mie_extinction * depth_m)
         )
+
+    def light_at(
+        self, index: int, point_world, sun_direction, sun_color, sky_light
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The light at a point in atmosphere *index*, as the terrain's
+        shader lights its ground: for lighting anything else there (Panda3D
+        lights, the ocean...).
+
+        :param sun_direction: toward the sun, world frame
+        :param sun_color: sunlight above the air, linear RGB
+        :param sky_light: the sky's light by day, linear RGB
+        :returns: (direct, ambient): the sunlight through the air (0 in the
+            planet's shadow), and the sky light, fading through twilight
+        """
+        radius, _, position = self._bodies[index]
+        p = np.asarray(point_world, float) - position
+        d = np.asarray(sun_direction, float)
+        d = d / np.linalg.norm(d)
+        direct = np.asarray(sun_color, float) * self.transmittance_to_sun(
+            index, point_world, d
+        )
+        cos_sun = float(p @ d) / max(float(np.linalg.norm(p)), 1e-9)
+        return direct, np.asarray(sky_light, float) * twilight(cos_sun)
+
+
+def twilight(cos_sun: float) -> float:
+    """How much of the sky's light is left with the sun at *cos_sun* from
+    the vertical: terrain.frag's ``smoothstep(-0.2, 0.2, dot(up, L))``."""
+    t = min(max((cos_sun + 0.2) / 0.4, 0.0), 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def in_shadow(point, sun_direction, radius: float) -> bool:
+    """Whether a body of *radius* (centred at the origin) hides the sun from
+    *point*: for airless bodies, which :meth:`Atmospheres.light_at` does not
+    cover."""
+    p = np.asarray(point, float)
+    d = np.asarray(sun_direction, float)
+    d = d / np.linalg.norm(d)
+    along = float(p @ d)
+    if along >= 0.0:
+        return False
+    return float(p @ p) - along * along < radius * radius
+
+
+def _curve(radius: float, params: AtmosphereParams) -> float:
+    """atmosphere.glsl's slant curvature scale (uAtmoExtra.y)."""
+    if params.sunset_radius is None:
+        return 1.0
+    return max(1.0, params.sunset_radius / radius)
+
+
+def _chapman(x: float, cos_chi: float) -> float:
+    y = math.sqrt(0.5 * x) * cos_chi
+    erfcx = 1.0 / (1.1635781 * y + math.sqrt(0.3707296 * y * y + 1.0))
+    return math.sqrt(1.5707963 * x) * erfcx
+
+
+def depth_toward(
+    r: float, cos_chi: float, ground: float, height: float, curve: float = 1.0
+) -> float:
+    """atmosphere.glsl's atmoDepthToward: optical depth (density-weighted
+    metres) from radius *r* toward a direction at *cos_chi* from the vertical,
+    through a layer of scale height *height* over a ground of radius
+    *ground*; 1e9 if the planet is in the way."""
+    density = math.exp(-(r - ground) / height)
+    k = curve / height
+    if cos_chi >= 0.0:
+        return height * density * _chapman(r * k, cos_chi)
+    tangent = r * math.sqrt(max(0.0, 1.0 - cos_chi * cos_chi))
+    if tangent < ground:
+        return 1e9
+    return height * (
+        2.0 * math.exp(-(tangent - ground) / height) * _chapman(tangent * k, 0.0)
+        - density * _chapman(r * k, -cos_chi)
+    )
 
 
 _DEFAULTS: dict | None = None

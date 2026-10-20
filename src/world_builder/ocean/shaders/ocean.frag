@@ -7,6 +7,7 @@
 uniform float     iTime;
 uniform vec3      iCameraPos;
 uniform vec3      iWaterColor;
+uniform vec3      iWaterLight;     // daylight 1; dims it by night (Ocean.set_light)
 uniform sampler2D iReflectionTex;
 uniform float     iRippleStrength;
 uniform vec2      uReflUVScale;
@@ -288,7 +289,7 @@ void main() {
     // texture's power-of-two padding (clear colour), so the ripple must never
     // push the sample out there or it picks up bright/garbage edge texels.
     vec3 reflected = texture(iReflectionTex, clamp(perturbedUV, vec2(0.0), uReflUVScale)).rgb;
-    vec3 scattered = iWaterColor * (1.0 - fresnel);
+    vec3 scattered = iWaterColor * iWaterLight * (1.0 - fresnel);
 
     vec3 C = fresnel * reflected + scattered;
 
