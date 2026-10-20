@@ -3,8 +3,8 @@ Chunk data to Panda geometry.
 
 The vertex bytes arrive pre-packed from the worker in :data:`VERTEX_DTYPE`
 layout, so building a chunk is one memory copy. All chunks share one index
-buffer. Each GeomNode gets a manual bounding box that reaches down past the
-largest drop the chunk can show, since Panda culls on the undropped geometry.
+buffer. Each GeomNode gets the chunk's precomputed bounding box, so Panda
+never walks the vertices to compute one.
 """
 
 from __future__ import annotations
@@ -24,12 +24,7 @@ from panda3d.core import (
     Point3,
 )
 
-from world_builder.terrain.chunkgen import (
-    VERTEX_DTYPE,
-    ChunkData,
-    chunk_size,
-    triangle_indices,
-)
+from world_builder.terrain.chunkgen import VERTEX_DTYPE, ChunkData, triangle_indices
 
 
 @functools.cache
@@ -38,7 +33,7 @@ def vertex_format() -> GeomVertexFormat:
     array = GeomVertexArrayFormat()
     array.add_column(InternalName.get_vertex(), 3, Geom.NT_float32, Geom.C_point)
     array.add_column(InternalName.get_normal(), 3, Geom.NT_float32, Geom.C_normal)
-    array.add_column(InternalName.make("morph_z"), 1, Geom.NT_float32, Geom.C_other)
+    array.add_column(InternalName.make("height"), 1, Geom.NT_float32, Geom.C_other)
     # C_color makes Panda pass the bytes normalised to [0, 1].
     array.add_column(InternalName.make("biome_a"), 4, Geom.NT_uint8, Geom.C_color)
     array.add_column(InternalName.make("biome_b"), 4, Geom.NT_uint8, Geom.C_color)
@@ -63,23 +58,17 @@ def shared_triangles() -> GeomTriangles:
     return tris
 
 
-def build_chunk_node(chunk: ChunkData, max_drop: float) -> GeomNode:
-    """A GeomNode for one chunk, in chunk-local coordinates (centre = origin).
+def build_chunk_node(chunk: ChunkData) -> GeomNode:
+    """A GeomNode for one chunk, relative to its centre (:attr:`ChunkData.centre`).
 
     :param chunk: generated chunk data
-    :param max_drop: the largest camera-relative drop the chunk can show,
-        metres; the bounds reach this far below the skirt
     :returns: the node, bounds final
     """
     vdata = GeomVertexData(f"terrain{chunk.key}", vertex_format(), Geom.UH_static)
     rows = len(chunk.vertex_bytes) // VERTEX_DTYPE.itemsize
     vdata.unclean_set_num_rows(rows)
     memoryview(vdata.modify_array(0)).cast("B")[:] = chunk.vertex_bytes
-    half = chunk_size(chunk.key[0]) / 2.0
-    bounds = BoundingBox(
-        Point3(-half, -half, chunk.h_min - chunk.skirt_depth - max_drop),
-        Point3(half, half, chunk.h_max),
-    )
+    bounds = BoundingBox(Point3(*chunk.aabb_min), Point3(*chunk.aabb_max))
     geom = Geom(vdata)
     geom.add_primitive(shared_triangles())
     # On the Geom too, in case the cull tests Geoms individually.

@@ -6,7 +6,8 @@ Level files: a planet preset with overrides, plus hand-made stamps and paints.
     planet:
       preset: earthlike          # one of planet.PRESETS
       seed: 7
-      reference: {lat: 42.0, lon: 10.0}   # where the flat world's origin is
+      radius: 600000             # metres; planetary features scale with it
+      reference: {lat: 42.0, lon: 10.0}   # origin of the chart metres below
       has_ocean: true
       elevation: {mountain_height: 6000}  # any ElevationParams field
       climate: {temperature_mean: 12}     # any ClimateParams field
@@ -26,10 +27,14 @@ Level files: a planet preset with overrides, plus hand-made stamps and paints.
         colors: {"#808080": rock, "#e0c080": desert}
         falloff: 80
         strength: 1.0
-    camera: {x: 0, y: 0, z: 600, heading: 0, pitch: -8}   # demo start pose
+    camera: {lat: 42.0, lon: 10.0, alt: 600, heading: 0, pitch: -8}
+                                          # demo start pose; alt above sea
+                                          # level, heading from north, or
+                                          # {x, y, z} in chart metres
 
-Positions in chart metres are converted to latitude/longitude at load, so a
-stamp stays put on the planet even if the reference point moves.
+Positions in chart metres (east, north of the reference point, on an
+azimuthal-equidistant chart) are converted to latitude/longitude at load, so
+a stamp stays put on the planet even if the reference point moves.
 """
 
 from __future__ import annotations
@@ -53,13 +58,21 @@ LEVELS_PATH = Path(__file__).parent / "levels"
 DEMO_LEVEL = LEVELS_PATH / "demo.yaml"
 
 
-def load_level(path: Path | str, preset: str | None = None, seed: int | None = None):
+def load_level(
+    path: Path | str,
+    preset: str | None = None,
+    seed: int | None = None,
+    radius: float | None = None,
+):
     """Read a level file.
 
     :param path: the YAML file
     :param preset: overrides the level's preset (the hand-made content stays)
     :param seed: overrides the level's seed
-    :returns: (resolved PlanetSpec, camera pose dict or None)
+    :param radius: overrides the level's planet radius, metres
+    :returns: (resolved PlanetSpec, camera pose or None). The pose is a dict
+        with lat, lon (degrees), alt (metres above sea level), heading
+        (degrees, counter-clockwise from north) and pitch (degrees)
     """
     path = Path(path)
     data = yaml.safe_load(path.read_text()) or {}
@@ -69,6 +82,9 @@ def load_level(path: Path | str, preset: str | None = None, seed: int | None = N
     spec = replace(
         base,
         seed=int(seed if seed is not None else planet.get("seed", base.seed)),
+        radius=float(
+            radius if radius is not None else planet.get("radius", base.radius)
+        ),
         reference_lat=float(reference.get("lat", base.reference_lat)),
         reference_lon=float(reference.get("lon", base.reference_lon)),
         has_ocean=bool(planet.get("has_ocean", base.has_ocean)),
@@ -110,7 +126,29 @@ def load_level(path: Path | str, preset: str | None = None, seed: int | None = N
             )
         )
     spec = replace(spec, stamps=tuple(stamps), paints=tuple(paints)).resolved()
-    return spec, data.get("camera")
+    return spec, _camera_pose(data.get("camera"), chart)
+
+
+def _camera_pose(pose: dict | None, chart: AzimuthalEquidistantChart) -> dict | None:
+    if not pose:
+        return None
+    if "lat" in pose:
+        lat, lon = float(pose["lat"]), float(pose["lon"])
+        alt = float(pose.get("alt", 800.0))
+    else:
+        dirs = chart.to_dirs(
+            np.array([pose.get("x", 0.0)]), np.array([pose.get("y", 0.0)])
+        )
+        lat_a, lon_a = latlon(dirs)
+        lat, lon = float(lat_a[0]), float(lon_a[0])
+        alt = float(pose.get("z", 800.0))
+    return {
+        "lat": lat,
+        "lon": lon,
+        "alt": alt,
+        "heading": float(pose.get("heading", 0.0)),
+        "pitch": float(pose.get("pitch", 0.0)),
+    }
 
 
 def _override(params, values, cls):

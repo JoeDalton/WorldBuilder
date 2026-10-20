@@ -36,7 +36,7 @@ import numpy as np
 from scipy import ndimage
 
 from world_builder.terrain.biomes import BIOMES
-from world_builder.terrain.chart import AzimuthalEquidistantChart
+from world_builder.terrain.chart import AzimuthalEquidistantChart, TangentFrame
 from world_builder.terrain.noise import smoothstep
 from world_builder.terrain.pngio import read_image
 
@@ -63,10 +63,21 @@ class Placement:
     def local(self, dirs: np.ndarray, radius: float) -> tuple[np.ndarray, np.ndarray]:
         """:returns: (u, v) in metres in the image's rotated frame, u east, v north"""
         x, y = _chart(self.lat, self.lon, radius).from_dirs(dirs)
-        # Directions on the far hemisphere unroll to huge distances: outside.
         theta = math.radians(self.rotation)
         c, s = math.cos(theta), math.sin(theta)
         return x * c + y * s, -x * s + y * c
+
+    def near(self, dirs: np.ndarray, radius: float) -> np.ndarray:
+        """Indices of the directions within the image's bounding cap.
+
+        Every chunk of the planet passes through the stamps, so this cheap
+        test keeps the chart maths (singular at the antipode) to the few
+        directions that can be inside.
+
+        :returns: (M,) indices into dirs
+        """
+        up, cos_reach = _cap(self.lat, self.lon, self.width, self.height, radius)
+        return np.nonzero(dirs @ up > cos_reach)[0]
 
     def inside(self, u: np.ndarray, v: np.ndarray) -> np.ndarray:
         return (np.abs(u) < self.width / 2.0) & (np.abs(v) < self.height / 2.0)
@@ -126,11 +137,15 @@ class Stamp:
         :param base: ground height at the stamp's centre, for ``flatten``
         :returns: new (N,) heights
         """
-        u, v = self.placement.local(dirs, radius)
-        inside = self.placement.inside(u, v)
-        if not np.any(inside):
+        near = self.placement.near(dirs, radius)
+        if near.size == 0:
             return elevation
-        u, v = u[inside], v[inside]
+        u, v = self.placement.local(dirs[near], radius)
+        within = self.placement.inside(u, v)
+        if not np.any(within):
+            return elevation
+        inside = near[within]
+        u, v = u[within], v[within]
         pyramid = _height_pyramid(self.heightmap, _mtime(self.heightmap))
         image = _pick_level(pyramid, self.placement.width, spacing)
         row, col = self.placement.pixel(u, v, image.shape)
@@ -186,10 +201,15 @@ class Paint:
         :param radius: planet radius, metres
         :returns: new (N, 6) weights, still normalised
         """
-        u, v = self.placement.local(dirs, radius)
-        inside = self.placement.inside(u, v)
-        if not np.any(inside):
+        near = self.placement.near(dirs, radius)
+        if near.size == 0:
             return weights
+        u, v = self.placement.local(dirs[near], radius)
+        within = self.placement.inside(u, v)
+        if not np.any(within):
+            return weights
+        inside = near[within]
+        u, v = u[within], v[within]
         channels = _paint_channels(
             self.mask,
             _mtime(self.mask),
@@ -198,7 +218,7 @@ class Paint:
             self.falloff,
             self.placement.width,
         )
-        row, col = self.placement.pixel(u[inside], v[inside], channels.shape[1:])
+        row, col = self.placement.pixel(u, v, channels.shape[1:])
         paint = np.stack(
             [
                 ndimage.map_coordinates(ch, [row, col], order=1, mode="constant")
@@ -219,6 +239,14 @@ class Paint:
 @functools.lru_cache(maxsize=8)
 def _chart(lat: float, lon: float, radius: float) -> AzimuthalEquidistantChart:
     return AzimuthalEquidistantChart(lat, lon, radius)
+
+
+@functools.lru_cache(maxsize=64)
+def _cap(lat: float, lon: float, width: float, height: float, radius: float):
+    """:returns: (centre direction, cosine of a cap angle enclosing the image)"""
+    # The half diagonal is a chart distance, i.e. an arc length; 1 % spare.
+    angle = 1.01 * math.hypot(width, height) / 2.0 / radius + 1e-9
+    return TangentFrame.at(lat, lon).up, math.cos(min(angle, math.pi))
 
 
 def _mtime(path: str) -> float:

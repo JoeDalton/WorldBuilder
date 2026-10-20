@@ -4,7 +4,9 @@
 planet:
   preset: earthlike
   seed: 19
-  reference: {lat: 42.0, lon: 10.0}
+  radius: 600000          # metres; the demo's --radius overrides it
+  # Chosen on the 600 km planet: the coast is ~9 km north, a range ~12 km south.
+  reference: {lat: 38.85, lon: -125.72}
 
 stamps:
   # 0: an impact crater, carved into whatever terrain lies there
@@ -58,4 +60,4 @@ paints:
     falloff: 60
 
 # South of the features, on the flank of the range, looking north to the coast.
-camera: {x: -2000, y: -10000, z: 1900, heading: 0, pitch: -8}
+camera: {x: -2000, y: -10000, z: 1300, heading: 0, pitch: -8}

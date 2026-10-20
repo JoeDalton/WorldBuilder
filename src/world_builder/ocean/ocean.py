@@ -162,6 +162,7 @@ def make_swell_grid_mesh(
     outer_half: float,
     curvature: float = 0.0,
     border_rings: int = 28,
+    exact_sphere: bool = False,
 ) -> GeomNode:
     """
     Mesh for the geometric-swell mode: a dense uniform grid of half-size
@@ -176,6 +177,11 @@ def make_swell_grid_mesh(
     :param outer_half: Half-size of the outer border, in world units.
     :param curvature: 1 / (2 * planet radius); 0 for a flat surface.
     :param border_rings: Number of geometrically-spaced border rings.
+    :param exact_sphere: Bake the sphere of that radius instead of the
+        paraboloid d^2 / 2R. They part by d^4 / 8R^3 (58 m at 100 km on a
+        600 km planet), so an ocean meeting real spherical terrain needs it;
+        one meeting the other drooped objects (clouds) must keep the
+        paraboloid.
     :return: A :class:`GeomNode` holding the grid mesh.
     """
     # Per-axis coordinates: the border rings mirrored below the grid, the uniform
@@ -190,8 +196,14 @@ def make_swell_grid_mesh(
     verts = np.zeros((m * m, 3), dtype=np.float32)
     verts[:, 0] = np.tile(coords, m)
     verts[:, 1] = np.repeat(coords, m)
-    # Droop from the true radius, so the grid samples a paraboloid of revolution.
-    verts[:, 2] = -curvature * (verts[:, 0] ** 2 + verts[:, 1] ** 2)
+    # Droop from the true radius, so the grid samples a paraboloid of revolution
+    # (or the sphere itself).
+    r2 = verts[:, 0].astype(np.float64) ** 2 + verts[:, 1].astype(np.float64) ** 2
+    if exact_sphere and curvature > 0.0:
+        radius = 1.0 / (2.0 * curvature)
+        verts[:, 2] = np.sqrt(np.maximum(radius * radius - r2, 0.0)) - radius
+    else:
+        verts[:, 2] = -curvature * r2
 
     fmt = GeomVertexFormat.getV3()
     vdata = GeomVertexData("ocean_grid", fmt, Geom.UHStatic)
@@ -245,6 +257,8 @@ class Ocean:
         wave_fade_k2: float = 0.001,
         haze_color: LVecBase3f = LVecBase3f(0.2, 0.2, 0.4),
         haze_distance: float = 150000.0,
+        planet_radius: float = PLANET_RADIUS_M,
+        exact_sphere: bool = False,
         vert_shader: Path = _SHADERS / "ocean.vert",
         frag_shader: Path = _SHADERS / "ocean.frag",
     ):
@@ -283,6 +297,12 @@ class Ocean:
         :param haze_color: Colour distant water fades toward. Should match what
             the cloud field fades to, or sea and sky disagree at the horizon.
         :param haze_distance: Metres over which water reaches haze_color fully.
+        :param planet_radius: Radius the surface curves with (its droop is
+            d^2 / 2R) and whose horizon it must reach, in metres. Must match
+            the clouds' and the terrain's.
+        :param exact_sphere: Curve the geometric-swell surface on the exact
+            sphere rather than the d^2 / 2R paraboloid (see
+            :func:`make_swell_grid_mesh`): for real spherical terrain.
         :param vert_shader: Path to ocean.vert.
         :param frag_shader: Path to ocean.frag.
         """
@@ -306,14 +326,15 @@ class Ocean:
         # Follows the camera in XY each frame so the view is always covered to the
         # horizon. The reflection mirror (and a game's collision plane) stay flat
         # at z=0; both are exact at the camera, where the droop is zero.
-        horizon = math.sqrt(2.0 * PLANET_RADIUS_M * _MAX_EYE_ALTITUDE_M)
+        horizon = math.sqrt(2.0 * planet_radius * _MAX_EYE_ALTITUDE_M)
         outer_half = horizon * _HORIZON_MARGIN
         if geometric_swell:
             mesh = make_swell_grid_mesh(
                 swell_grid_half,
                 swell_grid_subdivs,
                 outer_half,
-                curvature=1.0 / (2.0 * PLANET_RADIUS_M),
+                curvature=1.0 / (2.0 * planet_radius),
+                exact_sphere=exact_sphere,
             )
         else:
             # Four vertices cannot curve, so this path stays flat.

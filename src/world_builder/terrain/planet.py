@@ -17,32 +17,46 @@ Elevation, in metres above sea level, sums these layers at the sample point
    limited, so coarse samples never alias detail they cannot represent)
 5. **stamps**: hand-made heightmaps, in list order
 
-Fields with no wavelength below ~25 km (warp, continents, the mountain mask,
-the base climate) are the "low band". :meth:`Planet.sample_grid` evaluates them
-on a fixed world lattice and interpolates (Catmull-Rom), which halves the cost
-of a fine chunk. The lattice is global, so every LOD level interpolates the
-same nodes and the levels agree. Everything else is evaluated per sample.
+Planet scale: the radius is the one knob. :class:`ElevationParams` and
+:class:`ClimateParams` hold the planetary-scale lengths (warp, continents,
+mountains, climate) for a :data:`REFERENCE_RADIUS_M` planet; :class:`Planet`
+multiplies them by ``feature_scale`` (radius / reference unless set), so a
+bigger planet gets bigger continents. Ground-level character (hills, detail,
+local climate patches) stays in absolute metres at every radius.
+
+Fields with no wavelength below ~10 km (warp, continents, the mountain mask,
+the base climate) are the "low band". :meth:`Planet.sample_face_grid` evaluates
+them on a fixed lattice of each cube face (see :mod:`cubesphere`) and
+interpolates (Catmull-Rom), which halves the cost of a fine chunk. The lattice
+is global, so every LOD level interpolates the same nodes and the levels agree.
+Everything else is evaluated per sample.
 """
 
 from __future__ import annotations
 
 import functools
+import math
 from dataclasses import dataclass, field, replace
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
 
-from world_builder import PLANET_RADIUS_M
-from world_builder.terrain.chart import (
-    AzimuthalEquidistantChart,
-    dirs_from_latlon,
-    latlon,
-)
+from world_builder.terrain.chart import dirs_from_latlon, latlon
+from world_builder.terrain.cubesphere import face_dirs, grid_for
 from world_builder.terrain.noise import fbm, ridged, smoothstep, warp
 
-#: Spacing of the world lattice the low band is evaluated on, metres. Must be a
-#: power-of-two multiple of the leaf spacing, so coarse chunk vertices land on it.
-LOW_BAND_SPACING = 512.0
+#: Default terrain planet radius, metres (a small, Kerbin-like world).
+TERRAIN_RADIUS_M = 600e3
+#: Radius the planetary-scale lengths in the params are given for, metres.
+REFERENCE_RADIUS_M = 600e3
+#: Planetary features stop shrinking below this feature scale (a 150 km
+#: planet), or they would reach the hills' wavelength.
+MIN_FEATURE_SCALE = 0.25
+#: Aimed-for spacing of the low-band lattice at feature scale 1, metres. Its
+#: shortest field (the warp's top octave, 10 km) gets ~40 nodes per wavelength.
+LOW_BAND_TARGET = 300.0
+#: Mountain height scales with sqrt(feature scale), within these factors.
+MOUNTAIN_SCALE_RANGE = (2000.0 / 4800.0, 7000.0 / 4800.0)
 #: Directions sampled to set the sea bias from ``ocean_fraction``.
 _SEA_BIAS_SAMPLES = 40000
 
@@ -62,18 +76,24 @@ _SEED_JITTER = 97
 class ElevationParams:
     """Shape of the relief. Lengths in metres.
 
+    The planetary-scale lengths (warp, continents, mountains and their mask)
+    and the mountain height are for a :data:`REFERENCE_RADIUS_M` planet and get
+    scaled with the radius (see the module docstring). Hills and detail are
+    absolute.
+
     :ivar continent_curve: (c, metres) control points mapping the continental
         field (sea bias removed, about [-1, 1]) to a base height; must pass
         through (0, 0), which is the coastline
+    :ivar feature_scale: multiplier of the planetary-scale lengths; None =
+        radius / REFERENCE_RADIUS_M. Set 1.0 to keep the lengths as given
     """
 
-    warp_wavelength: float = 250e3
-    #: Keep the warp's gradient (~3.2e-5 per metre of amplitude at 250 km, at
-    #: the 99.9th percentile) well under 1, or space folds over itself and every
-    #: warped field gets a crease line along the fold
-    warp_amplitude: float = 15e3
-    continent_wavelength: float = 900e3
-    continent_octaves: int = 6
+    warp_wavelength: float = 70e3
+    #: Keep amplitude / wavelength near 0.06: a steeper warp folds space over
+    #: itself and every warped field gets a crease line along the fold
+    warp_amplitude: float = 4.2e3
+    continent_wavelength: float = 380e3
+    continent_octaves: int = 5
     ocean_fraction: float = 0.55
     continent_curve: tuple[tuple[float, float], ...] = (
         (-1.0, -5500.0),
@@ -86,12 +106,14 @@ class ElevationParams:
         (0.35, 700.0),
         (1.0, 1800.0),
     )
-    mountain_wavelength: float = 110e3
-    mountain_octaves: int = 9
+    mountain_wavelength: float = 40e3
+    mountain_octaves: int = 8
     #: Height of the tallest crests (the ridged field cubed, so most of a
-    #: range is far lower and the peaks stand out)
-    mountain_height: float = 7000.0
-    mountain_mask_wavelength: float = 700e3
+    #: range is far lower and the peaks stand out); scaled by sqrt(feature
+    #: scale) within :data:`MOUNTAIN_SCALE_RANGE`
+    mountain_height: float = 4800.0
+    #: At least ~3x the mountain wavelength, or a range is a single ridge
+    mountain_mask_wavelength: float = 140e3
     #: Raises (positive) or lowers the share of land that is mountain range
     mountain_coverage: float = 0.0
     hills_wavelength: float = 14e3
@@ -100,6 +122,7 @@ class ElevationParams:
     detail_wavelength: float = 900.0
     detail_octaves: int = 8
     detail_height: float = 35.0
+    feature_scale: float | None = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +136,9 @@ class ClimateParams:
         alone is what puts snow on peaks
     :ivar humidity_mean: planet mean humidity
     :ivar humidity_spread: amplitude of the regional variation
+    :ivar temperature_wavelength: size of the regional temperature patches,
+        metres (scaled with the radius, as the elevation's planetary lengths)
+    :ivar humidity_wavelength: same for humidity
     """
 
     temperature_mean: float = 14.0
@@ -121,14 +147,21 @@ class ClimateParams:
     lapse_rate: float = 0.0065
     humidity_mean: float = 0.5
     humidity_spread: float = 0.35
+    temperature_wavelength: float = 140e3
+    temperature_octaves: int = 4
+    humidity_wavelength: float = 105e3
+    humidity_octaves: int = 4
 
 
 @dataclass(frozen=True)
 class PlanetSpec:
     """Everything that defines one planet; frozen and picklable.
 
-    :ivar reference_lat: latitude of the game's flat-world origin, degrees
-    :ivar reference_lon: longitude of the game's flat-world origin, degrees
+    :ivar radius: sea-level radius, metres; the planetary-scale features
+        follow it (see the module docstring)
+    :ivar reference_lat: latitude of the origin of chart-metre coordinates in
+        level files (stamp centres, camera poses), degrees
+    :ivar reference_lon: its longitude, degrees
     :ivar stamps: hand-made heightmaps (:class:`stamps.Stamp`), in order
     :ivar paints: biome paint masks (:class:`stamps.Paint`), in order
     :ivar sea_bias: continental-field offset; None until :meth:`resolved`
@@ -136,7 +169,7 @@ class PlanetSpec:
 
     name: str
     seed: int = 1
-    radius: float = PLANET_RADIUS_M
+    radius: float = TERRAIN_RADIUS_M
     reference_lat: float = 42.0
     reference_lon: float = 10.0
     has_ocean: bool = True
@@ -160,7 +193,7 @@ PRESETS: dict[str, PlanetSpec] = {
         has_ocean=False,
         elevation=ElevationParams(
             ocean_fraction=0.3,
-            mountain_height=4000.0,
+            mountain_height=2700.0,
             mountain_coverage=-0.1,
             hills_height=220.0,
             detail_height=25.0,
@@ -176,7 +209,7 @@ PRESETS: dict[str, PlanetSpec] = {
     "forest": PlanetSpec(
         name="forest",
         elevation=ElevationParams(
-            ocean_fraction=0.35, mountain_height=5500.0, hills_height=420.0
+            ocean_fraction=0.35, mountain_height=3800.0, hills_height=420.0
         ),
         climate=ClimateParams(
             temperature_mean=17.0,
@@ -201,20 +234,49 @@ PRESETS: dict[str, PlanetSpec] = {
 }
 
 
+def scaled_params(spec: PlanetSpec) -> tuple[ElevationParams, ClimateParams]:
+    """The spec's parameters with the planetary-scale lengths fitted to its radius.
+
+    :param spec: the planet
+    :returns: elevation and climate parameters as evaluated, with
+        ``feature_scale`` set to the factor applied
+    """
+    e, c = spec.elevation, spec.climate
+    s = (
+        e.feature_scale
+        if e.feature_scale is not None
+        else spec.radius / REFERENCE_RADIUS_M
+    )
+    s = max(float(s), MIN_FEATURE_SCALE)
+    lo, hi = MOUNTAIN_SCALE_RANGE
+    e = replace(
+        e,
+        warp_wavelength=e.warp_wavelength * s,
+        warp_amplitude=e.warp_amplitude * s,
+        continent_wavelength=e.continent_wavelength * s,
+        mountain_wavelength=e.mountain_wavelength * s,
+        mountain_mask_wavelength=e.mountain_mask_wavelength * s,
+        mountain_height=e.mountain_height * min(max(s**0.5, lo), hi),
+        feature_scale=s,
+    )
+    c = replace(
+        c,
+        temperature_wavelength=c.temperature_wavelength * s,
+        humidity_wavelength=c.humidity_wavelength * s,
+    )
+    return e, c
+
+
 @dataclass
 class GridSample:
-    """Fields sampled on a regular n x n chart grid (row = y, column = x).
+    """Fields sampled on a grid of one cube face (row = v, column = u).
 
-    :ivar x: (n,) chart x of the columns, metres
-    :ivar y: (n,) chart y of the rows, metres
-    :ivar dirs: (n*n, 3) sphere directions, row-major
-    :ivar elevation: (n, n) metres above sea level
-    :ivar temperature: (n, n) degrees Celsius, altitude lapse included
-    :ivar humidity: (n, n) in [0, 1]
+    :ivar dirs: (rows * columns, 3) sphere directions, row-major
+    :ivar elevation: (rows, columns) metres above sea level
+    :ivar temperature: (rows, columns) degrees Celsius, altitude lapse included
+    :ivar humidity: (rows, columns) in [0, 1]
     """
 
-    x: np.ndarray
-    y: np.ndarray
     dirs: np.ndarray
     elevation: np.ndarray
     temperature: np.ndarray
@@ -227,10 +289,13 @@ class Planet:
     def __init__(self, spec: PlanetSpec):
         """:param spec: the planet; resolved here if its sea bias is unset"""
         self.spec = spec.resolved()
-        self.chart = AzimuthalEquidistantChart(
-            self.spec.reference_lat, self.spec.reference_lon, self.spec.radius
-        )
-        points = np.array(self.spec.elevation.continent_curve)
+        self.elevation, self.climate = scaled_params(self.spec)
+        self.grid = grid_for(self.spec.radius)
+        #: Level-0 steps between low-band lattice nodes: a power of two, so
+        #: coarse chunks' samples land on it; follows the feature scale.
+        target = LOW_BAND_TARGET * self.elevation.feature_scale / self.grid.spacing0
+        self.low_band_step = min(1 << max(0, round(math.log2(target))), self.grid.n0)
+        points = np.array(self.elevation.continent_curve)
         self._continent_curve = PchipInterpolator(points[:, 0], points[:, 1])
         self._curve_range = (points[0, 0], points[-1, 0])
         self._stamp_bases: dict[int, float] = {}
@@ -238,14 +303,14 @@ class Planet:
     # ── low band ───────────────────────────────────────────────────────────────
 
     def low_band(self, dirs: np.ndarray) -> np.ndarray:
-        """Fields with no detail below ~25 km, safe to interpolate.
+        """Fields with no detail below ~10 km, safe to interpolate.
 
         :param dirs: (N, 3) unit vectors
         :returns: (N, 7): warp displacement xyz (metres), continental field
             (sea bias removed), mountain mask, base temperature, base humidity
         """
         spec = self.spec
-        e, c = spec.elevation, spec.climate
+        e, c = self.elevation, self.climate
         p = dirs * spec.radius
         seed = spec.seed * 1000
         q = warp(p, e.warp_wavelength, e.warp_amplitude, 3, seed + _SEED_WARP)
@@ -257,11 +322,18 @@ class Planet:
         lat, _ = latlon(dirs)
         temperature = (
             c.temperature_mean
-            + c.temperature_spread * 2.0 * fbm(p, 1500e3, 5, seed + _SEED_TEMPERATURE)
+            + c.temperature_spread
+            * 2.0
+            * fbm(
+                p,
+                c.temperature_wavelength,
+                c.temperature_octaves,
+                seed + _SEED_TEMPERATURE,
+            )
             + c.temperature_latitude * (np.cos(np.radians(lat)) ** 2 - 0.66)
         )
         humidity = c.humidity_mean + c.humidity_spread * 2.0 * fbm(
-            p, 1100e3, 6, seed + _SEED_HUMIDITY
+            p, c.humidity_wavelength, c.humidity_octaves, seed + _SEED_HUMIDITY
         )
         return np.column_stack([q - p, continent, mask, temperature, humidity])
 
@@ -272,7 +344,7 @@ class Planet:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Elevation and climate from the low band plus per-sample detail.
 
-        Stamps are not applied here; see :meth:`sample_grid`.
+        Stamps are not applied here; see :meth:`sample_face_grid`.
 
         :param dirs: (N, 3) unit vectors
         :param low: (N, 7) low band at the same points (:meth:`low_band`)
@@ -280,7 +352,7 @@ class Planet:
         :returns: elevation (metres), base temperature, humidity; each (N,)
         """
         spec = self.spec
-        e = spec.elevation
+        e = self.elevation
         seed = spec.seed * 1000
         p = dirs * spec.radius
         q = p + low[:, 0:3]
@@ -341,60 +413,68 @@ class Planet:
         """:returns: *temperature* cooled by altitude above sea level"""
         return temperature - self.spec.climate.lapse_rate * np.maximum(elevation, 0.0)
 
-    def sample_points(
-        self, x: np.ndarray, y: np.ndarray, min_wavelength: float | None = None
+    def sample_dirs(
+        self,
+        dirs: np.ndarray,
+        min_wavelength: float | None = None,
+        apply_stamps: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Direct (uninterpolated, stamp-free) evaluation at chart points.
+        """Direct (uninterpolated) evaluation at arbitrary directions.
 
-        :param x: chart x, metres
-        :param y: chart y, metres
+        :param dirs: (N, 3) unit vectors
         :param min_wavelength: shortest wavelength to keep, metres
-        :returns: elevation, temperature (lapse included), humidity
+        :param apply_stamps: whether to blend the spec's stamps in (their mip
+            level follows min_wavelength / 4)
+        :returns: elevation, temperature (lapse included), humidity; each (N,)
         """
-        dirs = self.chart.to_dirs(x, y)
+        dirs = np.atleast_2d(np.asarray(dirs, dtype=np.float64))
         elevation, temperature, humidity = self.evaluate(
             dirs, self.low_band(dirs), min_wavelength
         )
+        if apply_stamps:
+            spacing = min_wavelength / 4.0 if min_wavelength else 1.0
+            elevation = self._apply_stamps(dirs, elevation, spacing)
         return elevation, self.lapse(temperature, elevation), humidity
 
-    def sample_grid(
-        self, x0: float, y0: float, spacing: float, n: int, apply_stamps: bool = True
+    def sample_face_grid(
+        self,
+        face: int,
+        ka: np.ndarray,
+        kb: np.ndarray,
+        step: int,
+        apply_stamps: bool = True,
     ) -> GridSample:
-        """Sample an n x n chart grid starting at (x0, y0).
+        """Sample a grid of one cube face.
 
-        The low band comes from the world lattice when the grid is finer than
+        The low band comes from the face lattice when the grid is finer than
         it, and is evaluated directly otherwise. On a coarse chunk, whose
-        vertices lie on the lattice, both give the same values.
+        samples lie on the lattice, both give the same values.
 
-        :param x0: chart x of the first column, metres
-        :param y0: chart y of the first row, metres
-        :param spacing: grid spacing, metres
-        :param n: samples per side
+        :param face: cube face, 0-5
+        :param ka: (columns,) level-0 indices along u, ascending, evenly spaced
+        :param kb: (rows,) level-0 indices along v, same spacing
+        :param step: level-0 steps between samples (2**level)
         :param apply_stamps: whether to blend the spec's stamps in
         :returns: the sampled fields
         """
-        xs = x0 + spacing * np.arange(n)
-        ys = y0 + spacing * np.arange(n)
-        gx, gy = np.meshgrid(xs, ys)
-        dirs = self.chart.to_dirs(gx, gy)
-        if spacing >= LOW_BAND_SPACING:
+        grid = self.grid
+        ga, gb = np.meshgrid(grid.param(ka), grid.param(kb))
+        dirs = face_dirs(face, ga, gb)
+        if step >= self.low_band_step:
             low = self.low_band(dirs)
         else:
-            low = self._interpolated_low_band(xs, ys)
+            low = self._interpolated_low_band(face, ka, kb)
+        spacing = grid.spacing0 * step
         elevation, temperature, humidity = self.evaluate(dirs, low, 4.0 * spacing)
         if apply_stamps:
-            for index, stamp in enumerate(self.spec.stamps):
-                elevation = stamp.apply(
-                    dirs, elevation, spacing, self.spec.radius, self.stamp_base(index)
-                )
+            elevation = self._apply_stamps(dirs, elevation, spacing)
         temperature = self.lapse(temperature, elevation)
+        shape = (len(kb), len(ka))
         return GridSample(
-            x=xs,
-            y=ys,
             dirs=dirs,
-            elevation=elevation.reshape(n, n),
-            temperature=temperature.reshape(n, n),
-            humidity=humidity.reshape(n, n),
+            elevation=elevation.reshape(shape),
+            temperature=temperature.reshape(shape),
+            humidity=humidity.reshape(shape),
         )
 
     def stamp_base(self, index: int) -> float:
@@ -412,25 +492,40 @@ class Planet:
             self._stamp_bases[index] = float(elevation[0])
         return self._stamp_bases[index]
 
-    def _interpolated_low_band(self, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-        """Low band at grid points, by Catmull-Rom from the world lattice.
+    def _apply_stamps(self, dirs, elevation, spacing):
+        for index, stamp in enumerate(self.spec.stamps):
+            elevation = stamp.apply(
+                dirs, elevation, spacing, self.spec.radius, self.stamp_base(index)
+            )
+        return elevation
 
-        :param xs: (n,) column x
-        :param ys: (n,) row y
-        :returns: (n*n, 7), row-major
+    def _interpolated_low_band(
+        self, face: int, ka: np.ndarray, kb: np.ndarray
+    ) -> np.ndarray:
+        """Low band at face grid points, by Catmull-Rom from the face lattice.
+
+        :param face: cube face
+        :param ka: (columns,) level-0 indices
+        :param kb: (rows,) level-0 indices
+        :returns: (rows * columns, 7), row-major
         """
-        wx, lx = _catmull_rom_weights(xs, LOW_BAND_SPACING)
-        wy, ly = _catmull_rom_weights(ys, LOW_BAND_SPACING)
-        nodes = self._lattice_nodes(lx, ly)  # (len(ly), len(lx), 7)
-        # rows: wy @ nodes, columns: @ wx.T, per channel
-        out = np.einsum("ri,ijc,sj->rsc", wy, nodes, wx, optimize=True)
+        step = float(self.low_band_step)
+        wa, la = _catmull_rom_weights(np.asarray(ka, dtype=np.float64), step)
+        wb, lb = _catmull_rom_weights(np.asarray(kb, dtype=np.float64), step)
+        nodes = self._lattice_nodes(face, la, lb)  # (len(lb), len(la), 7)
+        # rows: wb @ nodes, columns: @ wa.T, per channel
+        out = np.einsum("ri,ijc,sj->rsc", wb, nodes, wa, optimize=True)
         return out.reshape(-1, nodes.shape[2])
 
-    def _lattice_nodes(self, lx: np.ndarray, ly: np.ndarray) -> np.ndarray:
-        """:returns: low band at the lattice nodes lx x ly, (len(ly), len(lx), 7)"""
-        gx, gy = np.meshgrid(lx, ly)
-        dirs = self.chart.to_dirs(gx, gy)
-        return self.low_band(dirs).reshape(len(ly), len(lx), -1)
+    def _lattice_nodes(self, face: int, la: np.ndarray, lb: np.ndarray) -> np.ndarray:
+        """Low band at the lattice nodes la x lb (level-0 indices; nodes past
+        the face edge are points of the extended face, still on the sphere).
+
+        :returns: (len(lb), len(la), 7)
+        """
+        ga, gb = np.meshgrid(self.grid.param(la), self.grid.param(lb))
+        dirs = face_dirs(face, ga, gb)
+        return self.low_band(dirs).reshape(len(lb), len(la), -1)
 
 
 def _catmull_rom_weights(coords: np.ndarray, step: float):
@@ -471,5 +566,6 @@ def _sea_bias(spec: PlanetSpec) -> float:
     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
     unbiased = Planet.__new__(Planet)
     unbiased.spec = replace(spec, sea_bias=0.0)
+    unbiased.elevation, unbiased.climate = scaled_params(spec)
     continent = unbiased.low_band(dirs)[:, 3]
     return float(np.quantile(continent, spec.elevation.ocean_fraction))

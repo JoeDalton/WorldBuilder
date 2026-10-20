@@ -16,5 +16,6 @@ it works. The per-class API is in the auto-generated
 terrain
 ocean
 clouds
+performance
 apidocs/index
 ```

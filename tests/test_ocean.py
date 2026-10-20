@@ -149,3 +149,28 @@ def test_swell_grid_mesh_scales_with_subdivisions_and_rings():
             geom = node.get_geom(0)
             assert geom.get_vertex_data().get_num_rows() == m * m
             assert geom.get_primitive(0).get_num_vertices() == 6 * (m - 1) * (m - 1)
+
+
+def test_ocean_radius_defaults_to_the_shared_planet():
+    """The terrain demo passes its own radius; SpaceFlight relies on the default."""
+    import inspect
+
+    from world_builder.ocean import Ocean
+
+    parameter = inspect.signature(Ocean).parameters["planet_radius"]
+    assert parameter.default == PLANET_RADIUS_M
+
+
+def test_exact_sphere_droop_lies_on_the_sphere():
+    radius = 600e3
+    node = make_swell_grid_mesh(
+        4000.0, 8, 150e3, curvature=1.0 / (2.0 * radius), exact_sphere=True
+    )
+    v = _read_positions(node).astype(np.float64)
+    distance = np.sqrt(v[:, 0] ** 2 + v[:, 1] ** 2 + (v[:, 2] + radius) ** 2)
+    np.testing.assert_allclose(distance, radius, atol=0.05)
+    # The paraboloid stands above it far out.
+    parabolic = _read_positions(
+        make_swell_grid_mesh(4000.0, 8, 150e3, curvature=1.0 / (2.0 * radius))
+    )
+    assert np.max(parabolic[:, 2] - v[:, 2]) > 50.0

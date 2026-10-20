@@ -1,0 +1,122 @@
+"""
+Depth partitioning: one view drawn by a far camera, then a near camera.
+
+A planet seen from orbit and a rock under the camera do not fit one 24-bit
+depth buffer: with the near plane at 1 m, depth steps are hundreds of metres
+at 100 km. :class:`SplitDepthCameras` (the trick KSP uses with its scaled and
+local cameras) draws the scene twice into the same window: first a far camera
+covering [split, far], then the usual camera covering [near, split] after
+clearing depth. Each range gets the whole depth buffer, so precision stays
+under a metre at the far end of each at any altitude (see :meth:`update`).
+
+Both cameras see the whole scene graph and Panda culls each to its own
+frustum, so only objects straddling the split are drawn twice. Nothing else
+changes: standard depth, the window's multisampling, existing shaders.
+
+Masks: the near camera has every camera bit but :data:`FAR_BIT`, the far
+camera every bit but :data:`NEAR_BIT`. ``node.hide(HIDE_FROM_NEAR)`` keeps a
+node out of the near pass (e.g. a sky dome, which belongs to the far pass);
+other bits behave as before for both cameras.
+"""
+
+from __future__ import annotations
+
+import math
+
+from panda3d.core import BitMask32, Camera, PandaNode
+
+#: Camera bit only the near camera has (outside the ocean reflection's 0-19).
+NEAR_BIT = 21
+#: Camera bit only the far camera has.
+FAR_BIT = 22
+#: ``node.hide(HIDE_FROM_NEAR)``: drawn by the far camera only.
+HIDE_FROM_NEAR = BitMask32.bit(NEAR_BIT)
+#: ``node.hide(HIDE_FROM_FAR)``: drawn by the near camera only.
+HIDE_FROM_FAR = BitMask32.bit(FAR_BIT)
+
+
+class SplitDepthCameras:
+    """A far camera under the app's camera, drawn first into the same window."""
+
+    def __init__(self, app, near: float = 1.0, overlap: float = 1.02):
+        """
+        :param app: the ShowBase (``camera``, ``cam``, ``camLens``, ``win``)
+        :param near: near plane of the near camera, metres
+        :param overlap: the near camera reaches this factor past the split, so
+            the two ranges overlap by a sliver and never leave a gap
+        """
+        self.app = app
+        self.near = near
+        self.overlap = overlap
+        self.far_lens = app.camLens.make_copy()
+        far_node = Camera("far_camera", self.far_lens)
+        far_node.set_camera_mask(PandaNode.get_all_camera_mask() & ~HIDE_FROM_NEAR)
+        self.far_camera = app.camera.attach_new_node(far_node)
+        app.cam.node().set_camera_mask(PandaNode.get_all_camera_mask() & ~HIDE_FROM_FAR)
+
+        self.near_region = app.cam.node().get_display_region(0)
+        left, right, bottom, top = self.near_region.get_dimensions()
+        self.far_region = app.win.make_display_region(left, right, bottom, top)
+        self.far_region.set_sort(self.near_region.get_sort() - 1)
+        self.far_region.set_camera(self.far_camera)
+        self.near_region.set_clear_depth_active(True)
+        self.near_region.set_clear_depth(1.0)
+        self.split = 0.0
+        self.far = 0.0
+
+    def update(self, split: float, far: float) -> None:
+        """Set the ranges for this frame: near camera [near, split], far
+        camera [split, far].
+
+        Depth steps at the end of a range are about d^2 / (near * 2^24): pick
+        *split* near the nearest thing the far camera must draw finely and
+        *far* just past the farthest thing visible.
+
+        :param split: metres
+        :param far: metres; raised to 2 * split if smaller
+        """
+        split = max(split, 2.0 * self.near)
+        far = max(far, 2.0 * split)
+        self.split, self.far = split, far
+        lens = self.app.camLens
+        lens.set_near_far(self.near, split * self.overlap)
+        self.far_lens.set_near_far(split, far)
+        # Follow window resizes and FOV changes.
+        self.far_lens.set_fov(lens.get_fov())
+        self.far_lens.set_aspect_ratio(lens.get_aspect_ratio())
+
+    @staticmethod
+    def planet_ranges(
+        radius: float,
+        camera_distance: float,
+        max_height: float = 9000.0,
+        min_height: float = 0.0,
+        near_split: float = 2000.0,
+    ) -> tuple[float, float]:
+        """Split and far distances for a camera over a sphere.
+
+        The split sits halfway down to the highest possible ground, so the far
+        camera starts well short of anything; the far plane sits just past the
+        horizon of the highest ground.
+
+        :param radius: sea-level radius, metres
+        :param camera_distance: camera distance from the planet centre, metres
+        :param max_height: highest ground above sea level, metres
+        :param min_height: lowest ground that can block the view (0 with an
+            ocean), metres
+        :param near_split: smallest split, metres
+        :returns: (split, far)
+        """
+        altitude = camera_distance - radius
+        split = max(near_split, 0.5 * (altitude - max_height))
+        floor = radius + min_height
+        eye = math.sqrt(max(0.0, camera_distance**2 - floor**2))
+        peak = math.sqrt(max(0.0, (radius + max_height) ** 2 - floor**2))
+        return split, 1.05 * (eye + peak)
+
+    def destroy(self) -> None:
+        """Remove the far camera and its display region."""
+        self.app.win.remove_display_region(self.far_region)
+        self.far_camera.remove_node()
+        self.app.cam.node().set_camera_mask(PandaNode.get_all_camera_mask())
+        self.near_region.set_clear_depth_active(False)

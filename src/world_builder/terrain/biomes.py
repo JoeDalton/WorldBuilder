@@ -63,6 +63,17 @@ def slope_degrees(elevation: np.ndarray, spacing: float, step: int = 1) -> np.nd
     return np.degrees(np.arctan(np.hypot(dz_dx, dz_dy)))
 
 
+def slope_from_normals(normals: np.ndarray, up: np.ndarray) -> np.ndarray:
+    """Terrain slope from surface normals and the local vertical.
+
+    :param normals: (..., 3) unit normals
+    :param up: (..., 3) unit radial directions, same shape
+    :returns: (...) slope in degrees
+    """
+    cos = np.clip(np.einsum("...i,...i->...", normals, up), -1.0, 1.0)
+    return np.degrees(np.arccos(cos))
+
+
 def weights(
     temperature: np.ndarray,
     humidity: np.ndarray,

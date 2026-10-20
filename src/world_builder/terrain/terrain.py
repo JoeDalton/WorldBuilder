@@ -4,21 +4,23 @@ Runtime terrain: LOD selection, background generation, upload, and drawing.
 Usage::
 
     terrain = Terrain(parent=render, spec=PRESETS["earthlike"])
-    # every frame, with the camera's float64 world position:
-    terrain.update(camera_world)
+    # every frame, with the camera's float64 position in the planet frame
+    # (planet centre at the origin, metres):
+    terrain.update(camera_planet)
 
-Precision: Panda transforms are float32, which cannot place a vertex 500 km
-from the origin to better than a few centimetres. The terrain root therefore
-hangs directly under ``render`` and is moved every frame by ``origin -
-camera``, computed in float64, where ``origin`` is the camera position snapped
-to a 4 km grid. Chunks sit under the root at ``centre - origin`` and only move
-when the snapped origin does. Near the camera every float32 number involved
-is small.
+Precision: Panda transforms are float32, which cannot place a vertex 600 km
+from the origin to better than a few centimetres. The world therefore moves
+around the camera: the terrain root hangs directly under ``render`` and is
+moved every frame by ``origin - camera``, computed in float64, where
+``origin`` is the camera position snapped to a 3D grid (4 km near the ground,
+coarser with altitude, so orbital speeds do not re-place every chunk each
+frame). Chunks sit under the root at ``centre - origin`` and only move when the
+snapped origin does. Near the camera every float32 number involved is small.
+Use :meth:`Terrain.to_render` to place other objects the same way.
 """
 
 from __future__ import annotations
 
-import math
 import time
 from collections import OrderedDict
 from pathlib import Path
@@ -26,8 +28,8 @@ from pathlib import Path
 import numpy as np
 from panda3d.core import (
     BitMask32,
-    LVecBase2f,
     LVecBase3f,
+    LVecBase4f,
     NodePath,
     PTA_float,
     PTA_LVecBase3f,
@@ -36,15 +38,8 @@ from panda3d.core import (
 )
 
 from world_builder.terrain.biomes import BIOME_COLORS
-from world_builder.terrain.chunkgen import (
-    LEAF_SIZE,
-    MAX_LEVEL,
-    ChunkData,
-    chunk_center,
-    chunk_size,
-)
+from world_builder.terrain.chunkgen import ChunkData
 from world_builder.terrain.materials import (
-    UV_PERIOD,
     MaterialSet,
     load_materials,
     make_noise_texture,
@@ -57,8 +52,12 @@ from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.workers import ChunkExecutor
 
 SHADER_PATH = Path(__file__).parent / "shaders"
-#: The terrain root is re-based to the camera snapped to this grid, metres.
+#: The terrain root is re-based to the camera snapped to this grid, metres;
+#: above ORIGIN_SNAP * 16 of altitude the grid grows to altitude / 16.
 ORIGIN_SNAP = 4096.0
+#: Height of the haze shell above sea level, metres: the path length of a
+#: line of sight inside it is what fades terrain to the haze colour.
+HAZE_HEIGHT = 12000.0
 #: Generated chunks kept in memory (about 170 KB each).
 STORE_SIZE = 2000
 #: Uploaded chunks kept on the GPU, shown or not.
@@ -83,7 +82,8 @@ class Terrain:
         workers: int | None = None,
         haze_color=(0.55, 0.65, 0.8),
         haze_distance: float = 150000.0,
-        max_distance: float | None = -1.0,
+        haze_height: float = HAZE_HEIGHT,
+        max_distance: float | None = None,
         sun_direction=(0.4, 0.5, 0.6),
         sun_color=(2.4, 2.25, 2.0),
         ambient=(0.35, 0.45, 0.65),
@@ -98,17 +98,18 @@ class Terrain:
         :param backend: chunk generation backend, see :class:`ChunkExecutor`
         :param workers: generation worker count
         :param haze_color: colour distant terrain fades to (display space)
-        :param haze_distance: metres over which terrain reaches the haze fully
-        :param max_distance: terrain beyond this is not drawn; -1 = just past
-            the full-haze distance (invisible if the sky there is the haze
-            colour), None = out to the horizon
+        :param haze_distance: metres of line of sight inside the haze shell
+            over which terrain reaches the haze fully
+        :param haze_height: top of the haze shell above sea level, metres
+        :param max_distance: terrain beyond this 3D distance is not drawn;
+            None = out to the horizon
         :param sun_direction: toward the sun
         :param sun_color: direct light, linear (may exceed 1)
         :param ambient: sky light, linear
         :param exposure: pre-tonemap exposure, as the ocean's
         :param materials: biome textures; loaded from the textures folder if None
-        :param min_level: finest LOD level drawn (0 = full detail, 2 m vertex
-            spacing; each level up doubles the spacing)
+        :param min_level: finest LOD level drawn (0 = full detail, about 2 m
+            vertex spacing; each level up doubles the spacing)
         """
         self.root = parent.attach_new_node("terrain")
         self.root.set_shader(
@@ -119,8 +120,7 @@ class Terrain:
             )
         )
         self.haze_distance = haze_distance
-        if max_distance == -1.0:
-            max_distance = haze_distance * 1.05
+        self.haze_height = haze_height
         self.max_distance = max_distance
         self.materials = materials or load_materials()
         self.blend_depth = DEFAULT_BLEND_DEPTH
@@ -136,6 +136,9 @@ class Terrain:
         self.shown: set[tuple] = set()
         self._keep: set[tuple] = set()  # drawn chunks and their ancestors
         self._origin = None
+        self._snap = ORIGIN_SNAP
+        self._camera = np.zeros(3)
+        self._render_camera = np.zeros(3)
         self._last_select_pos = None
         self._frame = 0
         self._wanted: list[tuple] = []
@@ -148,7 +151,7 @@ class Terrain:
             "gen_ms": 0.0,
             "upload_ms": 0.0,
             "select_ms": 0.0,
-            "finest": MAX_LEVEL,
+            "finest": 0,
         }
         self.set_spec(spec)
 
@@ -163,6 +166,8 @@ class Terrain:
         self.version = version
         self.planet = Planet(spec)
         self.spec = self.planet.spec
+        self.grid = self.planet.grid
+        self.root.set_shader_input("uMaxLevel", self.grid.max_level)
         for node in self.nodes.values():
             node.remove_node()
         self.nodes.clear()
@@ -170,7 +175,7 @@ class Terrain:
         self.shown.clear()
         self._keep = set()
         self.selector = LodSelector(
-            self.spec.radius,
+            self.grid,
             max_distance=self.max_distance,
             horizon_floor=0.0 if self.spec.has_ocean else UNKNOWN_BOUNDS[0],
             min_level=self.min_level,
@@ -179,24 +184,21 @@ class Terrain:
             self.planet, self.store, version=version, level=self.min_level
         )
         self._last_select_pos = None
-        self.set_curvature(True)
+        self.stats["finest"] = self.grid.max_level
 
-    def set_curvature(self, on: bool) -> None:
-        """Toggle the camera-relative planet curvature (the drop)."""
-        curvature = 1.0 / (2.0 * self.spec.radius) if on else 0.0
-        self.root.set_shader_input("uEarthCurvature", curvature)
-
-    def update(self, camera_world, camera_render=(0.0, 0.0, 0.0)) -> None:
+    def update(self, camera_planet, camera_render=(0.0, 0.0, 0.0)) -> None:
         """Per-frame update.
 
-        :param camera_world: camera position on the flat chart, metres
-            (float64; z = altitude above sea level)
+        :param camera_planet: camera position in the planet frame (centre at
+            the origin), metres, float64
         :param camera_render: where the camera is in the render frame (the
             game keeps it at the origin)
         """
         self._frame += 1
-        cam = np.asarray(camera_world, dtype=np.float64)
+        cam = np.asarray(camera_planet, dtype=np.float64)
         render_cam = np.asarray(camera_render, dtype=np.float64)
+        self._camera = cam.copy()
+        self._render_camera = render_cam.copy()
         self._rebase(cam, render_cam)
 
         finished = self.executor.collect()
@@ -209,15 +211,24 @@ class Terrain:
             )
 
         uploaded = self._upload()
+        # Re-select after moving an eighth of a leaf, or a 500th of the
+        # altitude: chunk sizes on screen change no faster than that.
+        threshold = max(self.grid.chunk_size(0) / 8.0, 0.002 * self.altitude(cam))
         moved = (
             self._last_select_pos is None
-            or np.linalg.norm(cam - self._last_select_pos) > LEAF_SIZE / 8.0
+            or np.linalg.norm(cam - self._last_select_pos) > threshold
         )
         if moved or uploaded or self._frame % 15 == 0:
             self._select(cam)
 
-        self.root.set_shader_input("uCamPos", LVecBase3f(*render_cam))
-        self.root.set_shader_input("uSeaLevel", float(render_cam[2] - cam[2]))
+        rho = float(np.linalg.norm(cam))
+        shell = self.spec.radius + self.haze_height
+        root = self.root
+        root.set_shader_input("uCamPos", LVecBase3f(*render_cam))
+        root.set_shader_input("uPlanetCentre", LVecBase3f(*(render_cam - cam)))
+        root.set_shader_input("uCamFromCentre", LVecBase3f(*cam))
+        # In float64: as a float32 difference of squares it would be noise.
+        root.set_shader_input("uCamShellC", float((rho - shell) * (rho + shell)))
         self.stats.update(
             shown=len(self.shown),
             stored=len(self.store),
@@ -226,8 +237,41 @@ class Terrain:
             wanted=len(self._wanted),
         )
 
+    @property
+    def radius(self) -> float:
+        """Sea-level radius, metres."""
+        return self.spec.radius
+
+    def altitude(self, camera_planet) -> float:
+        """:returns: metres above sea level of a planet-frame position"""
+        return float(np.linalg.norm(camera_planet)) - self.spec.radius
+
+    def to_render(self, point_planet) -> np.ndarray:
+        """Where a planet-frame point is in the render frame this frame.
+
+        Computed in float64 against the camera, so near the camera it is
+        exact; give the result to ``node.set_pos(render, ...)``.
+
+        :param point_planet: (3,) or (N, 3) metres
+        :returns: same shape, render-frame metres
+        """
+        return (
+            np.asarray(point_planet, dtype=np.float64)
+            - self._camera
+            + self._render_camera
+        )
+
+    def set_sea_surface(self, on: bool) -> None:
+        """Draw the sea as flat water at sea level (seen from high up, where
+        the swell ocean is not shown), instead of the bare seabed."""
+        self.root.set_shader_input("uSeaSurface", 1 if on else 0)
+
     def set_sun(self, direction, color, ambient, haze_color=None) -> None:
-        """Relight the terrain (no rebuild)."""
+        """Relight the terrain (no rebuild).
+
+        :param direction: toward the sun, planet frame (the render frame's
+            axes are the planet's)
+        """
         self.root.set_shader_input("uSunDir", Vec3(*direction).normalized())
         self.root.set_shader_input("uSunColor", LVecBase3f(*color))
         self.root.set_shader_input("uAmbient", LVecBase3f(*ambient))
@@ -266,7 +310,7 @@ class Terrain:
         Collision queries follow: they read the same level's grid, so the
         physical ground stays the one on screen.
         """
-        self.min_level = max(0, min(int(level), MAX_LEVEL))
+        self.min_level = max(0, min(int(level), self.grid.max_level))
         self.selector.min_level = self.min_level
         self.query.level = self.min_level
         self._last_select_pos = None
@@ -314,25 +358,32 @@ class Terrain:
         root.set_shader_input("uHazeDistance", float(self.haze_distance))
         root.set_shader_input("uDebugMode", 0)
         root.set_shader_input("uLevel", 0)
-        root.set_shader_input("uChunkUvOrigin", LVecBase2f(0.0, 0.0))
+        root.set_shader_input("uMaxLevel", 0)
+        root.set_shader_input("uFace", 0)
+        root.set_shader_input("uChunk", LVecBase4f(0.0, 0.0, 1.0, 0.0))
         root.set_shader_input("uCamPos", LVecBase3f(0.0, 0.0, 0.0))
-        root.set_shader_input("uSeaLevel", 0.0)
+        root.set_shader_input("uPlanetCentre", LVecBase3f(0.0, 0.0, -1.0))
+        root.set_shader_input("uCamFromCentre", LVecBase3f(0.0, 0.0, 1.0))
+        root.set_shader_input("uCamShellC", -1.0)
+        root.set_shader_input("uSeaSurface", 0)
         root.set_shader_input("uDepthBias", 6.0)
-        root.set_shader_input("uEarthCurvature", 0.0)
         self.set_sun(sun_direction, sun_color, ambient)
 
     def _rebase(self, cam: np.ndarray, render_cam: np.ndarray) -> None:
-        origin = np.round(cam[:2] / ORIGIN_SNAP) * ORIGIN_SNAP
+        altitude = max(self.altitude(cam), 0.0)
+        snap = ORIGIN_SNAP
+        while snap * 16.0 < altitude:
+            snap *= 2.0
+        self._snap = snap
+        origin = np.round(cam / snap) * snap
         if self._origin is None or np.any(origin != self._origin):
             self._origin = origin
             for key, node in self.nodes.items():
                 self._place(key, node)
-        offset = render_cam - np.array([cam[0] - origin[0], cam[1] - origin[1], cam[2]])
-        self.root.set_pos(*offset)
+        self.root.set_pos(*(render_cam - (cam - origin)))
 
     def _place(self, key, node: NodePath) -> None:
-        cx, cy = chunk_center(key)
-        node.set_pos(cx - self._origin[0], cy - self._origin[1], 0.0)
+        node.set_pos(*(node.get_python_tag("centre") - self._origin))
 
     def _store(self, chunk: ChunkData) -> None:
         self.store[chunk.key] = chunk
@@ -348,15 +399,6 @@ class Terrain:
                 self.nodes.pop(old).remove_node()
             excess -= 1
 
-    def _max_drop(self, level: int) -> float:
-        """The largest camera-relative drop a chunk of *level* can be drawn with."""
-        reach = (
-            2.0 * self.selector.split_factor * self.selector.hysteresis + 1.5
-        ) * chunk_size(level)
-        cap = self.max_distance or 1.0e6
-        distance = min(reach, cap) if level < MAX_LEVEL else cap
-        return distance * distance / (2.0 * self.spec.radius)
-
     def _upload(self) -> int:
         start = time.perf_counter()
         count = 0
@@ -368,12 +410,16 @@ class Terrain:
             chunk = self.store.get(key)
             if chunk is None or key in self.nodes:
                 continue
-            node = NodePath(build_chunk_node(chunk, self._max_drop(key[0])))
-            cx, cy = chunk_center(key)
+            node = NodePath(build_chunk_node(chunk))
+            node.set_python_tag("centre", chunk.centre)
+            u0, v0 = self.grid.uv_origin(key)
             node.set_shader_input("uLevel", key[0])
+            node.set_shader_input("uFace", key[1])
             node.set_shader_input(
-                "uChunkUvOrigin",
-                LVecBase2f(math.fmod(cx, UV_PERIOD), math.fmod(cy, UV_PERIOD)),
+                "uChunk",
+                LVecBase4f(
+                    u0, v0, (1 << key[0]) * self.grid.uv_unit, chunk.skirt_depth
+                ),
             )
             self._place(key, node)
             self.nodes[key] = node
@@ -406,7 +452,7 @@ class Terrain:
             return None if chunk is None else (chunk.h_min, chunk.h_max)
 
         selection = self.selector.select(
-            (float(cam[0]), float(cam[1]), float(cam[2])),
+            cam,
             ready=self.nodes.__contains__,
             bounds=bounds,
         )
@@ -433,4 +479,4 @@ class Terrain:
         self._wanted = selection.wanted + selection.prefetch
         self.executor.request([k for k in self._wanted if k not in self.store])
         self.stats["select_ms"] = (time.perf_counter() - start) * 1e3
-        self.stats["finest"] = min((k[0] for k in draw), default=MAX_LEVEL)
+        self.stats["finest"] = min((k[0] for k in draw), default=self.grid.max_level)
