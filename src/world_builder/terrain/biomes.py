@@ -9,6 +9,9 @@ snowy with no special rule. Two terrain rules then override the climate:
 * slope: cliffs are rock, whatever the climate
 * coast: a band just above sea level is beach (only on planets with an ocean)
 
+A barren planet (no vegetation: a moon) has no grass or forest; desert takes
+whatever snow leaves.
+
 Weights are smooth and normalised, not hard ids, so biomes blend.
 """
 
@@ -47,7 +50,9 @@ SLOPE_SCALE = 8.0
 def slope_degrees(elevation: np.ndarray, spacing: float, step: int = 1) -> np.ndarray:
     """Terrain slope by central differences over +-*step* samples.
 
-    The outermost *step* rows/columns are left at the nearest valid value;
+    For flat grids (the preview's maps); chunks measure the slope against
+    the local vertical with :func:`slope_from_normals`. The outermost *step*
+    rows/columns get no difference (their slope reads 0 along that axis);
     callers sample a border wide enough to discard them.
 
     :param elevation: (n, n) heights, metres
@@ -63,12 +68,24 @@ def slope_degrees(elevation: np.ndarray, spacing: float, step: int = 1) -> np.nd
     return np.degrees(np.arctan(np.hypot(dz_dx, dz_dy)))
 
 
+def slope_from_normals(normals: np.ndarray, up: np.ndarray) -> np.ndarray:
+    """Terrain slope from surface normals and the local vertical.
+
+    :param normals: (..., 3) unit normals
+    :param up: (..., 3) unit radial directions, same shape
+    :returns: (...) slope in degrees
+    """
+    cos = np.clip(np.einsum("...i,...i->...", normals, up), -1.0, 1.0)
+    return np.degrees(np.arccos(cos))
+
+
 def weights(
     temperature: np.ndarray,
     humidity: np.ndarray,
     elevation: np.ndarray,
     slope: np.ndarray,
     has_ocean: bool,
+    vegetation: bool = True,
 ) -> np.ndarray:
     """Normalised biome weights.
 
@@ -77,6 +94,7 @@ def weights(
     :param elevation: metres above sea level
     :param slope: degrees
     :param has_ocean: whether the planet has a sea (beaches)
+    :param vegetation: False for a barren planet: no grass, no forest
     :returns: (N, 6) float32 summing to 1, in :data:`BIOMES` order
     """
     t = np.ravel(temperature)
@@ -96,10 +114,13 @@ def weights(
         * (1.0 - smoothstep(27.0, 33.0, t))
     )
     w[:, SNOW] = snow
-    w[:, DESERT] = desert * (1.0 - snow)
-    w[:, FOREST] = forest * (1.0 - snow) * (1.0 - desert)
-    w[:, GRASS] = np.maximum(0.05, 1.0 - w.sum(axis=1))
-    w /= w.sum(axis=1, keepdims=True)
+    if vegetation:
+        w[:, DESERT] = desert * (1.0 - snow)
+        w[:, FOREST] = forest * (1.0 - snow) * (1.0 - desert)
+        w[:, GRASS] = np.maximum(0.05, 1.0 - w.sum(axis=1))
+        w /= w.sum(axis=1, keepdims=True)
+    else:
+        w[:, DESERT] = 1.0 - snow
 
     if has_ocean:
         beach = (

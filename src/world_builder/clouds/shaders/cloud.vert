@@ -10,7 +10,8 @@ uniform vec3 camPos;
 // R32F, rows of CELLS_PER_ROW cells, each [x, y, z, layerId].
 uniform sampler2D cellParams;
 // LAYER_VEC4S per cloud type (noise.pack_layer_params). Must be declared exactly as
-// in cloud.frag, or the stages fail to link and nothing draws.
+// in cloud_field.glsl (cloud.frag's include), or the stages fail to link and
+// nothing draws.
 uniform vec4 layerParams[96];
 uniform float nearFadeRadii;   // fade a billboard out within this many radii
 // 1 / (2 * planet radius): the deck droops with distance to sink behind the
@@ -28,6 +29,11 @@ out vec3  worldPos;
 out float vRadius;
 out float vFade;        // recycle-boundary and near-camera fade
 flat out int vLayer;
+// Planet-mode billboards' per-vertex air (cloud_sphere.vert); unused here.
+out vec3 vAtmoT;
+out vec3 vAtmoS;
+out vec3 vSunTint;
+out float vSkyTint;
 
 const int CELL_PARAMS_STRIDE = 4;
 // Rows keep the texture under GL_MAX_TEXTURE_DIMENSION. Must match field.py.
@@ -84,6 +90,10 @@ void main() {
                          + up    * (corner.y * i_radius / stretch);
 
     gl_Position = p3d_ModelViewProjectionMatrix * vec4(wp, 1.0);
+    // Clouds are above the sea, even where the droop takes them below the
+    // flat water plane far away: the ocean's reflection pass (whose clip
+    // plane is on) keeps them whole. Undefined when not written.
+    gl_ClipDistance[0] = 1.0;
     worldPos    = wp;
     vUv         = i_uv_st.xy + (corner * 0.5 + 0.5) * i_uv_st.zw;
     vRadius     = i_radius;
@@ -101,4 +111,8 @@ void main() {
         float toCamera = length(camPos - pworld);
         vFade *= smoothstep(0.0, nearFadeRadii * i_radius, toCamera);
     }
+    vAtmoT = vec3(1.0);
+    vAtmoS = vec3(0.0);
+    vSunTint = vec3(1.0);
+    vSkyTint = 1.0;
 }

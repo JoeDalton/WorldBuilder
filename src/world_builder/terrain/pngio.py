@@ -25,6 +25,7 @@ def write_png(path: Path | str, image: np.ndarray) -> None:
 
     :param path: destination file
     :param image: (h, w) or (h, w, 3|4), uint8 (8-bit) or uint16 (16-bit)
+    :raises TypeError: for any other dtype
     """
     if image.ndim == 2:
         image = image[:, :, None]
@@ -53,7 +54,8 @@ def read_image(path: Path | str) -> np.ndarray:
     16-bit PNGs keep their full precision.
 
     :param path: source file
-    :returns: (h, w, channels) float32
+    :returns: (h, w, channels) float32 in [0, 1]
+    :raises OSError: if Panda cannot read the file
     """
     from panda3d.core import Filename, PfmFile, PNMImage
 

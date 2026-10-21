@@ -3,27 +3,35 @@ Unit tests for the terrain prototype's planet, biomes, chunks and LOD
 (world_builder.terrain). Pure NumPy; no window.
 """
 
+import math
 import pickle
+import time
 from dataclasses import replace
 
 import numpy as np
 import pytest
 
 from world_builder.terrain import biomes
+from world_builder.terrain.chart import AzimuthalEquidistantChart, TangentFrame
 from world_builder.terrain.chunkgen import (
-    LEAF_SIZE,
     QUADS,
-    VERTEX_DTYPE,
     VERTS,
-    chunk_size,
     generate_chunk,
     parent_interpolation,
     skirt_ring,
     triangle_indices,
 )
-from world_builder.terrain.planet import PRESETS, Planet
-from world_builder.terrain.quadtree import LodSelector, parent
+from world_builder.terrain.cubesphere import CubeGrid, face_dirs, grid_for
+from world_builder.terrain.planet import (
+    PRESETS,
+    REFERENCE_RADIUS_M,
+    Planet,
+    scaled_params,
+)
+from world_builder.terrain.quadtree import LodSelector
 from world_builder.terrain.workers import ChunkExecutor
+
+R = 600e3
 
 
 @pytest.fixture(scope="module")
@@ -36,12 +44,17 @@ def planet(spec):
     return Planet(spec)
 
 
+def camera_at(lat, lon, altitude, radius=R):
+    return TangentFrame.at(lat, lon).up * (radius + altitude)
+
+
 # ── planet ─────────────────────────────────────────────────────────────────────
 
 
 def test_spec_is_picklable_and_hashable(spec):
     assert pickle.loads(pickle.dumps(spec)) == spec
     assert hash(spec) == hash(replace(spec))
+    assert spec.radius == R
 
 
 def test_sea_bias_sets_the_ocean_fraction(spec, planet):
@@ -54,23 +67,32 @@ def test_sea_bias_sets_the_ocean_fraction(spec, planet):
     )
 
 
-def test_interpolated_low_band_matches_direct(planet):
-    """The lattice interpolation is invisible: centimetres of elevation."""
-    xs = np.arange(-1500.0, 1500.0, 16.0) + 300.0
-    ys = np.arange(-800.0, 800.0, 16.0)
-    interpolated = planet._interpolated_low_band(xs, ys)
-    gx, gy = np.meshgrid(xs, ys)
-    dirs = planet.chart.to_dirs(gx, gy)
-    direct = planet.low_band(dirs)
-    e_i, _, _ = planet.evaluate(dirs, interpolated, 64.0)
-    e_d, _, _ = planet.evaluate(dirs, direct, 64.0)
-    assert np.abs(e_i - e_d).max() < 0.05
+@pytest.mark.parametrize(
+    "radius, tolerance", [(600e3, 0.05), (200e3, 0.1), (6371e3, 0.1)]
+)
+def test_interpolated_low_band_matches_direct(radius, tolerance):
+    """The lattice interpolation is invisible: centimetres of elevation, at a
+    face centre and right at a face edge (where the lattice runs past it)."""
+    planet = Planet(replace(PRESETS["earthlike"], seed=19, radius=radius))
+    n0 = planet.grid.n0
+    for ka0 in (n0 // 2 + 12345, n0 - 40):
+        ka = ka0 + 3 * np.arange(60)
+        kb = n0 // 2 + 777 + 3 * np.arange(60)
+        interpolated = planet._interpolated_low_band(1, ka, kb)
+        ga, gb = np.meshgrid(planet.grid.param(ka), planet.grid.param(kb))
+        dirs = face_dirs(1, ga, gb)
+        e_i, _, _ = planet.evaluate(dirs, interpolated, 12.0)
+        e_d, _, _ = planet.evaluate(dirs, planet.low_band(dirs), 12.0)
+        assert np.abs(e_i - e_d).max() < tolerance
 
 
-def test_sample_grid_is_deterministic(planet):
-    a = planet.sample_grid(1000.0, -2000.0, 4.0, 33)
-    b = planet.sample_grid(1000.0, -2000.0, 4.0, 33)
+def test_sample_face_grid_is_deterministic(planet):
+    ka = 1000 + 4 * np.arange(33)
+    kb = 90000 + 4 * np.arange(33)
+    a = planet.sample_face_grid(3, ka, kb, 4)
+    b = planet.sample_face_grid(3, ka, kb, 4)
     np.testing.assert_array_equal(a.elevation, b.elevation)
+    assert a.elevation.shape == (33, 33)
 
 
 def test_temperature_falls_with_altitude(planet):
@@ -79,18 +101,47 @@ def test_temperature_falls_with_altitude(planet):
     assert cooled[1] == pytest.approx(15.0 - 13.0)
 
 
+def test_planetary_features_scale_with_the_radius():
+    base = PRESETS["earthlike"]
+    e600, c600 = scaled_params(base)
+    assert e600.feature_scale == 1.0
+    assert e600.continent_wavelength == base.elevation.continent_wavelength
+    earth, earth_climate = scaled_params(replace(base, radius=6371e3))
+    factor = 6371e3 / REFERENCE_RADIUS_M
+    assert earth.continent_wavelength == pytest.approx(
+        base.elevation.continent_wavelength * factor
+    )
+    assert earth_climate.temperature_wavelength == pytest.approx(
+        c600.temperature_wavelength * factor
+    )
+    # Ground-level character does not scale.
+    assert earth.hills_wavelength == base.elevation.hills_wavelength
+    assert earth.detail_wavelength == base.elevation.detail_wavelength
+    # Mountains grow with sqrt(scale), within bounds.
+    assert e600.mountain_height < earth.mountain_height <= 7000.0
+    # An explicit feature scale wins over the radius.
+    fixed = replace(base.elevation, feature_scale=1.0)
+    kept, _ = scaled_params(replace(base, radius=6371e3, elevation=fixed))
+    assert kept.continent_wavelength == base.elevation.continent_wavelength
+
+
 @pytest.mark.parametrize(
     "preset, expected",
     [("desert", biomes.DESERT), ("forest", biomes.FOREST), ("ice", biomes.SNOW)],
 )
 def test_presets_bias_the_biomes(preset, expected):
     planet = Planet(replace(PRESETS[preset], seed=2))
-    s = planet.sample_grid(-200e3, -200e3, 4000.0, 101)
-    slope = biomes.slope_degrees(s.elevation, 4000.0)
-    w = biomes.weights(
-        s.temperature, s.humidity, s.elevation, slope, planet.spec.has_ocean
+    spacing, n = 1500.0, 101
+    coords = spacing * (np.arange(n) - n // 2)
+    gx, gy = np.meshgrid(coords, coords)
+    chart = AzimuthalEquidistantChart(20.0, 0.0, planet.spec.radius)
+    elevation, temperature, humidity = planet.sample_dirs(
+        chart.to_dirs(gx, gy), 4.0 * spacing
     )
-    land = s.elevation.ravel() > 0.0
+    elevation = elevation.reshape(n, n)
+    slope = biomes.slope_degrees(elevation, spacing)
+    w = biomes.weights(temperature, humidity, elevation, slope, planet.spec.has_ocean)
+    land = elevation.ravel() > 0.0
     counts = np.bincount(biomes.dominant(w[land]), minlength=len(biomes.BIOMES))
     assert counts.argmax() == expected
 
@@ -135,25 +186,50 @@ def test_slope_of_a_plane():
     np.testing.assert_allclose(slope[5:-5, 5:-5], 45.0)
 
 
+def test_slope_from_normals():
+    up = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])
+    normals = np.array([[0.0, math.sin(0.5), math.cos(0.5)], [1.0, 0.0, 0.0]])
+    np.testing.assert_allclose(
+        biomes.slope_from_normals(normals, up), [math.degrees(0.5), 0.0], atol=1e-6
+    )
+
+
 # ── chunks ─────────────────────────────────────────────────────────────────────
 
 
+def _positions(chunk):
+    return chunk.vertices()["vertex"].astype(np.float64) + chunk.centre
+
+
 def test_chunk_layout(spec):
-    chunk = generate_chunk(spec, (0, 3, -4))
-    vertices = np.frombuffer(chunk.vertex_bytes, VERTEX_DTYPE)
+    grid = grid_for(spec.radius)
+    key = (0, 1, grid.side(0) // 3, grid.side(0) // 2)
+    chunk = generate_chunk(spec, key)
+    vertices = chunk.vertices()
     assert len(vertices) == VERTS * VERTS + 4 * QUADS
     assert chunk.elevation.shape == (VERTS, VERTS)
+    p = _positions(chunk)
+    radial = np.linalg.norm(p, axis=1)
+    # Grid vertices sit at R + h along their direction.
     np.testing.assert_allclose(
-        vertices["vertex"][: VERTS * VERTS, 2], chunk.elevation.ravel(), atol=1e-3
+        radial[: VERTS * VERTS] - spec.radius, chunk.elevation.ravel(), atol=1e-2
     )
-    assert vertices["vertex"][:, 0].min() == -LEAF_SIZE / 2
-    assert vertices["vertex"][:, 0].max() == LEAF_SIZE / 2
     np.testing.assert_allclose(
-        np.linalg.norm(vertices["normal"], axis=1), 1.0, atol=1e-5
+        vertices["height"][: VERTS * VERTS], chunk.elevation.ravel(), atol=1e-3
     )
+    normals = vertices["normal"]
+    np.testing.assert_allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-5)
+    up = p / radial[:, None]
+    assert np.all(np.einsum("ij,ij->i", normals, up) > 0.0)  # outward
     skirt = vertices[VERTS * VERTS :]
     assert np.all(skirt["biome_b"][:, 3] == 255)
-    assert np.all(skirt["vertex"][:, 2] < vertices["vertex"][skirt_ring(), 2])
+    edge = skirt_ring()
+    assert np.all(radial[VERTS * VERTS :] < radial[edge])  # hangs below its edge
+    np.testing.assert_allclose(  # straight down
+        up[VERTS * VERTS :], up[edge], atol=1e-6
+    )
+    local = vertices["vertex"]
+    assert np.all(local >= chunk.aabb_min) and np.all(local <= chunk.aabb_max)
 
 
 def test_indices_reference_valid_vertices():
@@ -162,18 +238,46 @@ def test_indices_reference_valid_vertices():
     assert len(indices) % 3 == 0
 
 
+def test_triangles_face_outwards(spec):
+    chunk = generate_chunk(spec, (2, 5, 40, 77))
+    p = _positions(chunk)
+    tris = triangle_indices()[: 6 * QUADS * QUADS].reshape(-1, 3)
+    n = np.cross(p[tris[:, 1]] - p[tris[:, 0]], p[tris[:, 2]] - p[tris[:, 0]])
+    assert np.all(np.einsum("ij,ij->i", n, p[tris[:, 0]]) > 0.0)
+
+
 def test_neighbour_chunks_share_edges(spec):
     """Same-level neighbours compute the same heights on their shared edge."""
     for level in (0, 3):
-        west = generate_chunk(spec, (level, 5, 2))
-        east = generate_chunk(spec, (level, 6, 2))
+        west = generate_chunk(spec, (level, 2, 5, 2))
+        east = generate_chunk(spec, (level, 2, 6, 2))
         np.testing.assert_allclose(
             west.elevation[:, -1], east.elevation[:, 0], atol=1e-6
         )
-        south = generate_chunk(spec, (level, 5, 1))
+        south = generate_chunk(spec, (level, 2, 5, 1))
         np.testing.assert_allclose(
             south.elevation[-1, :], west.elevation[0, :], atol=1e-6
         )
+
+
+@pytest.mark.parametrize("level", [0, 3, 8])
+def test_chunks_meet_across_face_seams(spec, level):
+    """Across a seam the two faces' edge vertices are the same points (1 cm;
+    the lattices of the low band differ by millimetres)."""
+    grid = grid_for(spec.radius)
+    last = grid.side(level) - 1
+    j = last // 3
+    rows = VERTS * np.arange(VERTS)
+    # +X's east edge is +Y's west edge (an equatorial seam).
+    east = _positions(generate_chunk(spec, (level, 0, last, j)))[rows + QUADS]
+    west = _positions(generate_chunk(spec, (level, 2, 0, j)))[rows]
+    np.testing.assert_allclose(east, west, atol=0.01)
+    # +Y's north edge is +Z's east edge, in the same order (a rotated seam).
+    top = _positions(generate_chunk(spec, (level, 2, j, last)))[
+        QUADS * VERTS + np.arange(VERTS)
+    ]
+    side = _positions(generate_chunk(spec, (level, 4, last, j)))[rows + QUADS]
+    np.testing.assert_allclose(top, side, atol=0.01)
 
 
 def test_parent_interpolation_keeps_even_samples():
@@ -186,58 +290,99 @@ def test_parent_interpolation_keeps_even_samples():
 
 # ── LOD selection ──────────────────────────────────────────────────────────────
 
+GRID = grid_for(R)
+ALL_READY = dict(ready=lambda k: True, bounds=lambda k: (0.0, 300.0))
 
-def _covered_area(keys):
-    return sum(chunk_size(k[0]) ** 2 for k in keys)
+
+def _ancestors(key):
+    while key[0] < GRID.max_level:
+        key = CubeGrid.parent(key)
+        yield key
 
 
 def test_selection_tiles_without_overlap():
-    selector = LodSelector(6371000.0, max_distance=60000.0)
-    selection = selector.select(
-        (1000.0, -3000.0, 200.0), ready=lambda k: True, bounds=lambda k: (0.0, 300.0)
-    )
+    selector = LodSelector(GRID)
+    selection = selector.select(camera_at(40.0, 20.0, 200.0), **ALL_READY)
     draw = set(selection.draw)
     assert not selection.wanted
-    # No drawn chunk is an ancestor of another drawn chunk.
-    for key in draw:
-        node = key
-        while node[0] < 12:
-            node = parent(node)
-            assert node not in draw
+    for key in draw:  # no drawn chunk is an ancestor of another drawn chunk
+        assert not draw.intersection(_ancestors(key))
     # Fine near the camera, coarse far away.
     assert min(k[0] for k in draw) == 0
     assert max(k[0] for k in draw) >= 7
 
 
 def test_selection_never_drops_a_parent_before_all_children_are_ready():
-    selector = LodSelector(6371000.0, max_distance=60000.0)
-    ready = {(12, ix, iy) for ix in range(-1, 2) for iy in range(-1, 2)}
+    selector = LodSelector(GRID)
+    ready = set(GRID.roots())
     selection = selector.select(
-        (10.0, 10.0, 100.0), ready=ready.__contains__, bounds=lambda k: None
+        camera_at(40.0, 20.0, 100.0), ready=ready.__contains__, bounds=lambda k: None
     )
     assert set(selection.draw) <= ready
-    assert any(k[0] == 11 for k in selection.wanted)
-    assert all(k[0] >= 11 for k in selection.wanted)
+    assert any(k[0] == GRID.max_level - 1 for k in selection.wanted)
+    assert all(k[0] >= GRID.max_level - 1 for k in selection.wanted)
 
 
 def test_selection_wants_coarse_first():
-    selector = LodSelector(6371000.0, max_distance=60000.0)
+    selector = LodSelector(GRID)
     selection = selector.select(
-        (0.0, 0.0, 100.0), ready=lambda k: False, bounds=lambda k: None
+        camera_at(40.0, 20.0, 100.0), ready=lambda k: False, bounds=lambda k: None
     )
     assert selection.draw == []
     levels = [k[0] for k in selection.wanted]
-    assert levels[0] == 12
+    assert levels[0] == GRID.max_level
     assert levels == sorted(levels, reverse=True)
+
+
+def test_from_orbit_only_coarse_chunks_cover_the_visible_hemisphere():
+    camera = camera_at(10.0, 30.0, 3.0 * R)
+    selection = LodSelector(GRID).select(camera, **ALL_READY)
+    assert len(selection.draw) <= 40
+    assert min(k[0] for k in selection.draw) >= GRID.max_level - 2
+    # Every visible point of the planet is under a drawn chunk.
+    rng = np.random.default_rng(3)
+    dirs = rng.normal(size=(4000, 3))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    visible = dirs @ (camera / np.linalg.norm(camera)) > 1.0 / 4.0  # R / distance
+    face, i, j, _, _ = GRID.locate(dirs[visible], GRID.max_level)
+    for f, ki, kj in zip(face, i, j):
+        root = (GRID.max_level, int(f), int(ki), int(kj))
+        drawn = [k for k in selection.draw if k[1] == f and root in (k, *_ancestors(k))]
+        assert drawn
+
+
+def test_nothing_behind_the_horizon_is_drawn():
+    camera = camera_at(40.0, 20.0, 10.0)
+    up = camera / np.linalg.norm(camera)
+    selection = LodSelector(GRID).select(
+        camera, ready=lambda k: True, bounds=lambda k: (0.0, 300.0)
+    )
+    # Horizon angle of the eye (10 m) plus that of a 300 m peak.
+    reach = math.acos(R / (R + 10.0)) + math.acos(R / (R + 300.0))
+    for key in selection.draw:
+        box = GRID.box(key)
+        nearest = math.acos(np.clip(up @ np.array(box.up), -1, 1)) - math.acos(
+            box.cos_radius
+        )
+        assert nearest <= reach + 1e-9
+    assert len(selection.draw) < 1000
+
+
+def test_cube_corner_draws_fine_chunks_from_three_faces():
+    corner = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
+    selection = LodSelector(GRID).select(corner * (R + 20.0), **ALL_READY)
+    fine_faces = {k[1] for k in selection.draw if k[0] <= 1}
+    assert fine_faces == {0, 2, 4}  # +X, +Y, +Z
 
 
 def test_inline_executor_generates_and_versions(spec):
     executor = ChunkExecutor(backend="inline", inline_budget=2)
     executor.set_spec(spec)
-    executor.request([(9, 0, 0), (9, 1, 0), (9, 2, 0)])
+    keys = [(9, 0, 0, 0), (9, 0, 1, 0), (9, 0, 2, 0)]
+    executor.request(keys)
     done = executor.collect()
-    assert [c.key for c in done] == [(9, 0, 0), (9, 1, 0)]
-    executor.request([(9, 2, 0)])
+    assert [c.key for c in done] == keys[:2]
+    executor.request(keys[2:])
     executor.set_spec(replace(spec, seed=spec.seed + 1, sea_bias=None))
     assert executor.collect() == []  # the old version's chunk is dropped
 
@@ -245,15 +390,13 @@ def test_inline_executor_generates_and_versions(spec):
 def test_thread_executor_completes(spec):
     executor = ChunkExecutor(backend="thread", workers=2)
     executor.set_spec(spec)
-    keys = [(10, ix, 0) for ix in range(3)]
+    keys = [(10, 3, ix, 0) for ix in range(3)]
     executor.request(keys)
     done = []
     for _ in range(400):
         done += executor.collect()
         if len(done) == len(keys):
             break
-        import time
-
         time.sleep(0.01)
     executor.shutdown()
     assert sorted(c.key for c in done) == keys
@@ -265,18 +408,15 @@ def test_selection_keeps_and_prefetches_every_child_of_split_nodes():
     Otherwise its parent cannot stay split, and the whole subtree (the fine
     detail under the camera included) collapses to one coarse chunk.
     """
-    from world_builder.terrain.quadtree import _children
-
-    selector = LodSelector(6371000.0, max_distance=60000.0)
-    camera = (1000.0, -3000.0, 200.0)
+    selector = LodSelector(GRID)
+    camera = camera_at(40.0, 20.0, 200.0)
     everything = selector.select(camera, ready=lambda k: True, bounds=lambda k: None)
     for key in everything.draw:
-        node = key
-        while node[0] < 12:
-            node = parent(node)
-            assert set(_children(node)) <= everything.keep
-    split = {parent(k) for k in everything.keep if k[0] < 12}
-    children = {k for k in everything.keep if k[0] < 12}  # roots are not children
+        for node in _ancestors(key):
+            assert set(CubeGrid.children(node)) <= everything.keep
+    roots = set(GRID.roots())
+    split = {CubeGrid.parent(k) for k in everything.keep if k not in roots}
+    children = everything.keep - roots
     culled_children = children - set(everything.draw) - split
     assert culled_children  # some kept children are neither drawn nor split
 
@@ -290,12 +430,10 @@ def test_selection_keeps_and_prefetches_every_child_of_split_nodes():
 
 
 def test_min_level_drops_the_finest_levels():
-    full = LodSelector(6371000.0, max_distance=60000.0)
-    coarse = LodSelector(6371000.0, max_distance=60000.0, min_level=3)
-    camera, kwargs = (
-        (500.0, 500.0, 50.0),
-        dict(ready=lambda k: True, bounds=lambda k: None),
-    )
+    full = LodSelector(GRID)
+    coarse = LodSelector(GRID, min_level=3)
+    camera = camera_at(40.0, 20.0, 50.0)
+    kwargs = dict(ready=lambda k: True, bounds=lambda k: None)
     draw_full = full.select(camera, **kwargs).draw
     draw_coarse = coarse.select(camera, **kwargs).draw
     assert min(k[0] for k in draw_full) == 0
@@ -303,3 +441,15 @@ def test_min_level_drops_the_finest_levels():
     assert len(draw_coarse) < len(draw_full)
     # Only the finest levels change: coarse chunks far away are the same.
     assert {k for k in draw_full if k[0] >= 5} == {k for k in draw_coarse if k[0] >= 5}
+
+
+def test_lod_pass_cost_is_bounded():
+    """Guards the LOD pass from regressing badly (it runs in the frame)."""
+    selector = LodSelector(GRID)
+    camera = camera_at(40.0, 20.0, 10.0)
+    selector.select(camera, **ALL_READY)  # warm the per-key boxes
+    start = time.perf_counter()
+    selection = selector.select(camera, **ALL_READY)
+    elapsed = time.perf_counter() - start
+    assert 300 < len(selection.draw) < 900
+    assert elapsed < 0.05

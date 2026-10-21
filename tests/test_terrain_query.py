@@ -10,23 +10,40 @@ import pytest
 
 from world_builder.terrain import materials
 from world_builder.terrain.biomes import BIOMES, ROCK
-from world_builder.terrain.chunkgen import (
-    VERTEX_DTYPE,
-    VERTS,
-    chunk_size,
-    chunk_spacing,
-    generate_chunk,
+from world_builder.terrain.chart import (
+    AzimuthalEquidistantChart,
+    TangentFrame,
+    dirs_from_latlon,
 )
+from world_builder.terrain.chunkgen import VERTS, generate_chunk
+from world_builder.terrain.cubesphere import face_dirs
 from world_builder.terrain.level import DEMO_LEVEL, load_level
 from world_builder.terrain.planet import PRESETS, Planet
 from world_builder.terrain.pngio import read_image, write_png
 from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.stamps import Paint, Placement, Stamp
 
+#: The demo level's reference point: a coast, with a range to the south.
+REFERENCE = (38.85, -125.72)
+
 
 @pytest.fixture(scope="module")
 def planet():
-    return Planet(replace(PRESETS["earthlike"], seed=19))
+    spec = replace(
+        PRESETS["earthlike"],
+        seed=19,
+        reference_lat=REFERENCE[0],
+        reference_lon=REFERENCE[1],
+    )
+    return Planet(spec)
+
+
+@pytest.fixture(scope="module")
+def chart(planet):
+    spec = planet.spec
+    return AzimuthalEquidistantChart(
+        spec.reference_lat, spec.reference_lon, spec.radius
+    )
 
 
 @pytest.fixture(scope="module")
@@ -34,108 +51,173 @@ def query(planet):
     return TerrainQuery(planet, include_ocean=False)
 
 
+def at(chart, x, y, height):
+    """:returns: (..., 3) planet-frame point *height* m above sea level over
+    chart (x, y)"""
+    x, y = np.broadcast_arrays(np.asarray(x, float), np.asarray(y, float))
+    dirs = chart.to_dirs(x, y).reshape(*x.shape, 3)
+    return dirs * (chart.radius + height)
+
+
+def _key_near(planet, chart, level, x=0.0, y=0.0):
+    face, i, j, _, _ = planet.grid.locate(
+        chart.to_dirs(np.array([x]), np.array([y])), level
+    )
+    return level, int(face[0]), int(i[0]), int(j[0])
+
+
+def _positions(chunk):
+    return chunk.vertices()["vertex"].astype(np.float64) + chunk.centre
+
+
 # ── queries ────────────────────────────────────────────────────────────────────
 
 
-def test_height_at_vertices_matches_the_mesh(query):
-    chunk = generate_chunk(query.planet.spec, (0, 10, -40))
-    query.store[chunk.key] = chunk
-    spacing = chunk_spacing(0)
-    x0, y0 = 10 * 128.0, -40 * 128.0
-    cols, rows = np.meshgrid(np.arange(0, VERTS - 1, 7), np.arange(0, VERTS - 1, 5))
-    h = query.height_at(x0 + cols * spacing, y0 + rows * spacing)
-    np.testing.assert_allclose(h, chunk.elevation[rows, cols], atol=1e-3)
-
-
-def test_height_inside_triangles_matches_the_rendered_plane(query):
-    """Interpolate exactly as the GPU does, on the mesh's own triangles."""
-    chunk = generate_chunk(query.planet.spec, (0, -3, 7))
-    query.store[chunk.key] = chunk
-    vertices = np.frombuffer(chunk.vertex_bytes, VERTEX_DTYPE)["vertex"].astype(
-        np.float64
+def test_height_at_vertices_matches_the_mesh(query, chart):
+    chunk = generate_chunk(
+        query.planet.spec, _key_near(query.planet, chart, 0, 500.0, -9000.0)
     )
-    centre = np.array([-3 * 128.0 + 64.0, 7 * 128.0 + 64.0])
+    query.store[chunk.key] = chunk
+    p = _positions(chunk)[: VERTS * VERTS]
+    # Anywhere on the radial line through a vertex, above or below it.
+    pick = np.arange(0, VERTS * VERTS, 37)
+    for scale in (1.01, 0.99):
+        h = query.height_at(p[pick] * scale)
+        np.testing.assert_allclose(h, chunk.elevation.ravel()[pick], atol=1e-3)
+
+
+def test_height_inside_triangles_matches_the_rendered_plane(query, chart):
+    """Intersect the very triangles the GPU draws."""
+    chunk = generate_chunk(
+        query.planet.spec, _key_near(query.planet, chart, 0, -300.0, -9200.0)
+    )
+    query.store[chunk.key] = chunk
+    p = _positions(chunk)
     rng = np.random.default_rng(4)
     for _ in range(50):
         r, c = rng.integers(0, VERTS - 1, 2)
         fu, fv = sorted(rng.uniform(0, 1, 2))[::-1]  # fu >= fv: triangle (00, 01, 11)
-        p00 = vertices[r * VERTS + c]
-        p01 = vertices[r * VERTS + c + 1]
-        p11 = vertices[(r + 1) * VERTS + c + 1]
-        expected = p00 + fu * (p01 - p00) + fv * (p11 - p01)
-        got = query.height_at(centre[0] + expected[0], centre[1] + expected[1])
-        assert float(got) == pytest.approx(expected[2], abs=2e-3)
+        p00, p01, p11 = (
+            p[r * VERTS + c],
+            p[r * VERTS + c + 1],
+            p[(r + 1) * VERTS + c + 1],
+        )
+        point = p00 + fu * (p01 - p00) + fv * (p11 - p01)
+        assert float(query.altitude(point)) == pytest.approx(0.0, abs=2e-3)
 
 
-def test_query_follows_the_drawn_level(planet):
+def test_query_follows_the_drawn_level(planet, chart):
     """With coarser detail drawn, collision reads that coarser mesh."""
     coarse = TerrainQuery(planet, include_ocean=False, level=3)
-    chunk = generate_chunk(planet.spec, (3, 0, -10))
+    chunk = generate_chunk(planet.spec, _key_near(planet, chart, 3, 0.0, -9000.0))
     coarse.store[chunk.key] = chunk
-    spacing = chunk_spacing(3)
-    x0, y0 = 0.0, -10 * chunk_size(3)
+    p = _positions(chunk)
+    row = 20
     cols = np.arange(1, VERTS - 1, 9)
-    h = coarse.height_at(x0 + cols * spacing, np.full(cols.shape, y0 + 20 * spacing))
-    np.testing.assert_allclose(h, chunk.elevation[20, cols], atol=1e-3)
+    h = coarse.height_at(p[row * VERTS + cols] * 1.001)
+    np.testing.assert_allclose(h, chunk.elevation[row, cols], atol=1e-3)
     # Midway between coarse vertices the fine grid has detail the coarse one lacks.
-    mid = x0 + (cols + 0.5) * spacing
+    mid = 0.5 * (p[row * VERTS + cols] + p[row * VERTS + cols + 1])
     fine = TerrainQuery(planet, include_ocean=False)
-    y = np.full(mid.shape, y0 + 20 * spacing)
-    assert np.abs(coarse.height_at(mid, y) - fine.height_at(mid, y)).max() > 0.05
-    hit = coarse.segment_intersect([mid[0], y[0], 5000.0], [mid[0], y[0], -5000.0])
-    assert hit[1][2] == pytest.approx(float(coarse.height_at(mid[0], y[0])), abs=0.01)
+    assert np.abs(coarse.height_at(mid) - fine.height_at(mid)).max() > 0.05
+    up = mid[0] / np.linalg.norm(mid[0])
+    hit = coarse.segment_intersect(mid[0] + 5000.0 * up, mid[0] - 5000.0 * up)
+    height = float(np.linalg.norm(hit[1])) - planet.spec.radius
+    assert height == pytest.approx(float(coarse.height_at(mid[0])), abs=0.01)
 
 
-def test_normal_points_up_and_matches_slope(query):
-    n = query.normal_at(np.array([100.0, 2000.0]), np.array([-300.0, -9000.0]))
+def test_normal_points_out_of_the_ground(query, chart):
+    points = at(chart, [100.0, 2000.0], [-300.0, -9000.0], 3000.0)
+    n = query.normal_at(points)
     np.testing.assert_allclose(np.linalg.norm(n, axis=-1), 1.0)
-    assert np.all(n[:, 2] > 0.0)
+    up = points / np.linalg.norm(points, axis=-1, keepdims=True)
+    assert np.all(np.einsum("ij,ij->i", n, up) > 0.0)
 
 
-def test_sphere_contact(query):
-    x, y = 500.0, -9000.0
-    ground = float(query.height_at(x, y))
-    assert query.sphere_contact([x, y, ground + 50.0], 20.0) is None
-    hit, normal = query.sphere_contact([x, y, ground + 10.0], 20.0)
-    assert np.linalg.norm(hit - np.array([x, y, ground + 10.0])) <= 20.0 + 1e-6
-    assert normal[2] > 0.3
-    assert abs(hit[2] - float(query.height_at(hit[0], hit[1]))) < 2.0
+def test_sphere_contact(query, chart):
+    surface = query.surface_point(at(chart, 500.0, -9000.0, 0.0))
+    up = surface / np.linalg.norm(surface)
+    assert query.sphere_contact(surface + 50.0 * up, 20.0) is None
+    centre = surface + 10.0 * up
+    hit, normal = query.sphere_contact(centre, 20.0)
+    assert np.linalg.norm(hit - centre) <= 20.0 + 1e-6
+    assert normal @ up > 0.3
+    assert abs(float(query.altitude(hit))) < 2.0
     # A buried sphere still reports the surface above its centre.
-    hit, normal = query.sphere_contact([x, y, ground - 5.0], 2.0)
-    assert hit[2] > ground - 5.0
+    buried = surface - 5.0 * up
+    hit, normal = query.sphere_contact(buried, 2.0)
+    assert (hit - buried) @ up > 0.0
 
 
-def test_large_sensor_sphere_uses_a_coarse_level(query):
-    x, y = 500.0, -9000.0
-    ground = float(query.height_at(x, y))
+@pytest.mark.parametrize(
+    "where",
+    [(0, 1.0, 0.3), (2, 0.4, 1.0), (0, 1.0, 1.0)],
+    ids=["seam", "rotated seam", "corner"],
+)
+def test_sphere_contact_across_seams_and_corners(query, where):
+    face, a, b = where
+    d = face_dirs(face, np.array([a]), np.array([b]))[0]
+    surface = query.surface_point(d)
+    hit, normal = query.sphere_contact(surface + 8.0 * d, 20.0)
+    assert normal @ d > 0.3
+    assert abs(float(query.altitude(hit))) < 2.0
+
+
+def test_large_sensor_sphere_uses_a_coarse_level(query, chart):
+    surface = query.surface_point(at(chart, 500.0, -9000.0, 0.0))
+    up = surface / np.linalg.norm(surface)
     before = set(query.store)
-    assert query.sphere_contact([x, y, ground + 60.0], 100.0) is not None
+    assert query.sphere_contact(surface + 60.0 * up, 100.0) is not None
     new_levels = {k[0] for k in set(query.store) - before}
     assert new_levels and min(new_levels) >= 2
 
 
-def test_segment_intersect(query):
-    x, y = 300.0, -9500.0
-    ground = float(query.height_at(x, y))
-    hit = query.segment_intersect(
-        [x, y, ground + 100.0], [x, y, ground - 100.0], generate=True
+def test_segment_intersect(query, chart):
+    surface = query.surface_point(at(chart, 300.0, -9500.0, 0.0))
+    up = surface / np.linalg.norm(surface)
+    t, point, normal = query.segment_intersect(
+        surface + 100.0 * up, surface - 100.0 * up, generate=True
     )
-    t, point, normal = hit
     assert t == pytest.approx(0.5, abs=0.01)
-    assert point[2] == pytest.approx(ground, abs=0.05)
+    np.testing.assert_allclose(point, surface, atol=0.05)
+    assert normal @ up > 0.0
+    side = TangentFrame.at(*REFERENCE).east
     assert (
-        query.segment_intersect([x, y, ground + 100.0], [x + 50, y, ground + 200.0])
+        query.segment_intersect(
+            surface + 100.0 * up, surface + 200.0 * up + 50.0 * side
+        )
         is None
     )
 
 
-def test_ocean_surface_is_solid_when_included(planet):
+def test_segment_starting_underground_hits_at_once(query, chart):
+    surface = query.surface_point(at(chart, 300.0, -9500.0, 0.0))
+    up = surface / np.linalg.norm(surface)
+    start = surface - 5.0 * up
+    t, point, normal = query.segment_intersect(start, start + 100.0 * up, True)
+    assert t == 0.0
+    np.testing.assert_array_equal(point, start)
+
+
+def test_ocean_surface_is_solid_when_included(planet, chart):
     wet = TerrainQuery(planet, include_ocean=True)
-    # Offshore, north-east of the demo start (about 1 km deep for seed 19).
-    x, y = 45000.0, 55000.0
-    assert float(wet.ground_height_at(x, y)) < -500.0
-    assert float(wet.height_at(x, y)) == 0.0
-    assert wet.material_at(x, y) == "water"
+    offshore = at(chart, -10000.0, 30000.0, 100.0)  # about 1 km deep for seed 19
+    assert float(wet.ground_height_at(offshore)) < -500.0
+    assert float(wet.height_at(offshore)) == 0.0
+    up = offshore / np.linalg.norm(offshore)
+    np.testing.assert_allclose(wet.normal_at(offshore), up)
+    assert wet.material_at(offshore) == "water"
+
+
+def test_queries_without_chunks_fall_back_to_the_planet(planet):
+    query = TerrainQuery(planet, include_ocean=False)
+    point = TangentFrame.at(10.0, 10.0).up * (planet.spec.radius + 9000.0)
+    h = float(query.height_at(point, generate=False))
+    expected = planet.sample_dirs(
+        point[None, :] / np.linalg.norm(point), apply_stamps=True
+    )[0]
+    assert h == pytest.approx(float(expected[0]))
+    assert not query.store
 
 
 # ── stamps ─────────────────────────────────────────────────────────────────────
@@ -163,17 +245,29 @@ def bump(tmp_path):
 
 
 def _stamped(planet, stamp, x, y):
-    dirs = planet.chart.to_dirs(np.atleast_1d(x), np.atleast_1d(y))
+    chart = AzimuthalEquidistantChart(*REFERENCE, planet.spec.radius)
+    dirs = chart.to_dirs(np.atleast_1d(x), np.atleast_1d(y))
     base = np.full(len(dirs), 100.0)
     return stamp.apply(dirs, base, 2.0, planet.spec.radius, base=40.0)
 
 
+def test_stamps_ignore_the_rest_of_the_planet(planet, bump):
+    """Far directions never reach the stamp's chart maths (singular at its
+    antipode), and come back untouched."""
+    placement = Placement(
+        lat=REFERENCE[0], lon=REFERENCE[1], width=1000.0, height=1000.0
+    )
+    stamp = Stamp(bump, placement, height_scale=50.0, blend="add")
+    antipode = -TangentFrame.at(*REFERENCE).up
+    dirs = np.array([antipode, TangentFrame.at(0.0, 0.0).up])
+    with np.errstate(all="raise"):
+        out = stamp.apply(dirs, np.array([7.0, 8.0]), 2.0, planet.spec.radius)
+    np.testing.assert_array_equal(out, [7.0, 8.0])
+
+
 def test_stamp_blends(planet, bump):
     placement = Placement(
-        lat=planet.spec.reference_lat,
-        lon=planet.spec.reference_lon,
-        width=1000.0,
-        height=1000.0,
+        lat=REFERENCE[0], lon=REFERENCE[1], width=1000.0, height=1000.0
     )
     centre, outside = (0.0, 0.0), (0.0, 900.0)
     add = Stamp(bump, placement, height_scale=50.0, blend="add")
@@ -203,6 +297,21 @@ def test_stamp_blends(planet, bump):
     )
 
 
+def test_stamp_max_and_min_blends(planet, bump):
+    """max raises the ground to the stamp, never lowers it; min the
+    reverse (the ground here is 100 m, the stamp 10-60 m)."""
+    placement = Placement(
+        lat=REFERENCE[0], lon=REFERENCE[1], width=1000.0, height=1000.0
+    )
+    high = Stamp(bump, placement, height_scale=50.0, height_offset=90.0, blend="max")
+    assert _stamped(planet, high, 0.0, 0.0)[0] == pytest.approx(140.0, abs=0.5)
+    assert _stamped(planet, high, 0.0, 450.0)[0] == pytest.approx(100.0, abs=0.5)
+    low = Stamp(bump, placement, height_scale=50.0, height_offset=10.0, blend="min")
+    assert _stamped(planet, low, 0.0, 0.0)[0] == pytest.approx(60.0, abs=0.5)
+    with pytest.raises(ValueError, match="unknown blend"):
+        Stamp(bump, placement, blend="multiply")
+
+
 def test_rotated_stamp(planet, tmp_path):
     image = np.zeros((16, 64), dtype=np.uint16)
     image[:, :] = 65535  # a wide bar
@@ -230,7 +339,8 @@ def test_paint_forces_biomes(planet, tmp_path):
         planet.spec.reference_lat, planet.spec.reference_lon, 1000.0, 1000.0
     )
     paint = Paint(str(path), placement, colors=(("#808080", "rock"),))
-    dirs = planet.chart.to_dirs(np.array([-300.0, 300.0]), np.array([0.0, 0.0]))
+    chart = AzimuthalEquidistantChart(*REFERENCE, planet.spec.radius)
+    dirs = chart.to_dirs(np.array([-300.0, 300.0]), np.array([0.0, 0.0]))
     w = np.zeros((2, len(BIOMES)), dtype=np.float32)
     w[:, 2] = 1.0  # grass
     out = paint.apply(dirs, w, planet.spec.radius)
@@ -242,26 +352,43 @@ def test_paint_forces_biomes(planet, tmp_path):
 def test_demo_level_loads_and_stamps_show():
     spec, camera = load_level(DEMO_LEVEL)
     assert len(spec.stamps) == 4 and len(spec.paints) == 3
-    assert camera["z"] > 0
+    assert camera["alt"] > 0 and -90.0 <= camera["lat"] <= 90.0
+    assert spec.radius == 600e3
     planet = Planet(spec)
     pad = spec.stamps[2]
     assert pad.blend == "flatten"
     # Around the pad's centre the ground is level, at its base height.
-    x, y = planet.chart.from_dirs(
-        np.array([[*_dir(pad.placement.lat, pad.placement.lon)]])
-    )
-    s = planet.sample_grid(float(x[0]) - 40.0, float(y[0]) - 40.0, 4.0, 21)
+    chart = AzimuthalEquidistantChart(pad.placement.lat, pad.placement.lon, spec.radius)
+    coords = 4.0 * np.arange(-10, 11)
+    gx, gy = np.meshgrid(coords, coords)
+    elevation, _, _ = planet.sample_dirs(chart.to_dirs(gx, gy), 16.0, apply_stamps=True)
     base = planet.stamp_base(2)
-    assert np.ptp(s.elevation) < 1.0
-    assert np.abs(s.elevation - (base + 0.5)).max() < 1.0
+    assert np.ptp(elevation) < 1.0
+    assert np.abs(elevation - (base + 0.5)).max() < 1.0
+
+
+def test_level_radius_override():
+    spec, camera = load_level(DEMO_LEVEL, radius=1200e3)
+    assert spec.radius == 1200e3
+    # Chart metres stay metres: the crater is as far from the reference point.
+    chart = AzimuthalEquidistantChart(
+        spec.reference_lat, spec.reference_lon, spec.radius
+    )
+    crater = spec.stamps[0].placement
+    x, y = chart.from_dirs(dirs_from_latlon(crater.lat, crater.lon))
+    assert (float(x[0]), float(y[0])) == pytest.approx((-4500.0, -2500.0), abs=0.01)
 
 
 def test_cliff_lake():
     """Water at sea level, deep up to a near-vertical cliff on the north shore."""
     spec, _ = load_level(DEMO_LEVEL)
     query = TerrainQuery(Planet(spec), include_ocean=False)
+    chart = AzimuthalEquidistantChart(
+        spec.reference_lat, spec.reference_lon, spec.radius
+    )
     y = np.arange(4000.0, 5600.0, 2.0)
-    h = query.ground_height_at(np.full_like(y, -4500.0), y)
+    line = at(chart, np.full_like(y, -4500.0), y, 1000.0)
+    h = query.ground_height_at(line)
     assert h.min() < -50.0  # the lake bed
     shore = int(np.argmax(h > 0.0))
     assert h[shore - 4] < -20.0  # still deep 8 m from the foot of the wall
@@ -269,14 +396,8 @@ def test_cliff_lake():
     rim = int(np.argmax(h > 290.0))
     assert (rim - shore) * 2.0 <= 16.0  # waterline to rim within 16 m
     wall = int(np.argmax(np.diff(h)))
-    assert query.material_at(-4500.0, y[wall] + 1.0) == "rock"
-    assert query.material_at(-4500.0, 5900.0) == "forest"  # painted plateau
-
-
-def _dir(lat, lon):
-    from world_builder.terrain.chart import dirs_from_latlon
-
-    return dirs_from_latlon(lat, lon)[0]
+    assert query.material_at(at(chart, -4500.0, y[wall] + 1.0, 500.0)) == "rock"
+    assert query.material_at(at(chart, -4500.0, 5900.0, 500.0)) == "forest"  # painted
 
 
 def test_level_rejects_unknown_fields(tmp_path):

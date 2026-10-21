@@ -18,7 +18,13 @@ It reads from ``game``: ``root_node``, ``method_lists``, ``game_time``
 (``get_current_time()``) and ``app`` (the ShowBase: ``camera``, ``camLens``,
 ``win``, ``graphicsEngine``). Two settings are read when the app has them,
 with defaults otherwise: ``app.graphics_settings.config["render"]
-["reflection_scale"]`` and ``app.graphics_manager.get_render_size()``.
+["reflection_scale"]`` (unless the ``reflection_scale`` argument is given)
+and ``app.graphics_manager.get_render_size()``.
+
+Alone, distant water fades to a haze colour. In a world with atmospheres,
+bind them to :attr:`Ocean.ocean_node` (``Atmospheres.bind``) and keep
+:meth:`Ocean.set_atmosphere_frame` current: they replace the haze. By
+night, :meth:`Ocean.set_light` dims the water's own colour.
 
 The ocean has no collision of its own: physics is the game's business. Its
 surface is the plane z = 0, exact at the camera, where the droop is zero.
@@ -32,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from numpy.typing import ArrayLike
 from panda3d.core import (
     BitMask32,
     Camera,
@@ -55,6 +62,7 @@ from panda3d.core import (
 )
 
 from world_builder import PLANET_RADIUS_M
+from world_builder.atmosphere import bind_defaults
 from world_builder.utils import compute_next_power_of_2
 
 _SHADERS = Path(__file__).parent / "shaders"
@@ -68,7 +76,15 @@ _MAX_EYE_ALTITUDE_M = 20000.0
 _HORIZON_MARGIN = 1.1
 
 # Camera mask bit used to hide the ocean from the reflection camera
-_OCEAN_BIT = BitMask32.bit(1)
+#: The reflection camera's mask: camera bits 0-19. Panda draws a node for a
+#: camera if any of the camera's bits is still shown on it, so a node is
+#: hidden from the reflection by hiding *all* of these
+#: (``node.hide(REFLECTION_CAMERA_MASK)``); hiding one bit does nothing. The
+#: main cameras keep other bits (world_builder.depth's 21 and 22, or all of
+#: them by default) and still see it.
+REFLECTION_CAMERA_MASK = BitMask32(0xFFFFF)
+#: The reflection's field of view, relative to the main camera's.
+REFLECTION_FOV_SCALE = 1.4
 
 # Max wave iterations the shader's iWaveDirs[] array can hold (must match the
 # MAX_WAVE_ITER #define in ocean.frag).
@@ -162,6 +178,7 @@ def make_swell_grid_mesh(
     outer_half: float,
     curvature: float = 0.0,
     border_rings: int = 28,
+    exact_sphere: bool = False,
 ) -> GeomNode:
     """
     Mesh for the geometric-swell mode: a dense uniform grid of half-size
@@ -176,6 +193,11 @@ def make_swell_grid_mesh(
     :param outer_half: Half-size of the outer border, in world units.
     :param curvature: 1 / (2 * planet radius); 0 for a flat surface.
     :param border_rings: Number of geometrically-spaced border rings.
+    :param exact_sphere: Bake the sphere of that radius instead of the
+        paraboloid d^2 / 2R. They part by d^4 / 8R^3 (58 m at 100 km on a
+        600 km planet), so an ocean meeting real spherical terrain needs it;
+        one meeting the other drooped objects (clouds) must keep the
+        paraboloid.
     :return: A :class:`GeomNode` holding the grid mesh.
     """
     # Per-axis coordinates: the border rings mirrored below the grid, the uniform
@@ -190,8 +212,14 @@ def make_swell_grid_mesh(
     verts = np.zeros((m * m, 3), dtype=np.float32)
     verts[:, 0] = np.tile(coords, m)
     verts[:, 1] = np.repeat(coords, m)
-    # Droop from the true radius, so the grid samples a paraboloid of revolution.
-    verts[:, 2] = -curvature * (verts[:, 0] ** 2 + verts[:, 1] ** 2)
+    # Droop from the true radius, so the grid samples a paraboloid of revolution
+    # (or the sphere itself).
+    r2 = verts[:, 0].astype(np.float64) ** 2 + verts[:, 1].astype(np.float64) ** 2
+    if exact_sphere and curvature > 0.0:
+        radius = 1.0 / (2.0 * curvature)
+        verts[:, 2] = np.sqrt(np.maximum(radius * radius - r2, 0.0)) - radius
+    else:
+        verts[:, 2] = -curvature * r2
 
     fmt = GeomVertexFormat.getV3()
     vdata = GeomVertexData("ocean_grid", fmt, Geom.UHStatic)
@@ -225,6 +253,16 @@ def make_swell_grid_mesh(
 
 
 class Ocean:
+    """A camera-locked ocean surface, its planar reflection and its shader.
+
+    :ivar base_node: the ocean's frame (under ``game.root_node``); the water
+        is its plane z = 0
+    :ivar ocean_node: the surface mesh, carrying the shader inputs
+    :ivar refl_buffer: the offscreen reflection buffer
+    :ivar refl_tex: its texture
+    :ivar refl_cam: the mirrored reflection camera's NodePath
+    """
+
     def __init__(
         self,
         game: Any,
@@ -245,9 +283,12 @@ class Ocean:
         wave_fade_k2: float = 0.001,
         haze_color: LVecBase3f = LVecBase3f(0.2, 0.2, 0.4),
         haze_distance: float = 150000.0,
+        planet_radius: float = PLANET_RADIUS_M,
+        exact_sphere: bool = False,
+        reflection_scale: float | None = None,
         vert_shader: Path = _SHADERS / "ocean.vert",
         frag_shader: Path = _SHADERS / "ocean.frag",
-    ):
+    ) -> None:
         """
         Build the ocean surface, its shared reflection buffer, and shader.
 
@@ -283,6 +324,15 @@ class Ocean:
         :param haze_color: Colour distant water fades toward. Should match what
             the cloud field fades to, or sea and sky disagree at the horizon.
         :param haze_distance: Metres over which water reaches haze_color fully.
+        :param planet_radius: Radius the surface curves with (its droop is
+            d^2 / 2R) and whose horizon it must reach, in metres. Must match
+            the clouds' and the terrain's.
+        :param exact_sphere: Curve the geometric-swell surface on the exact
+            sphere rather than the d^2 / 2R paraboloid (see
+            :func:`make_swell_grid_mesh`): for real spherical terrain.
+        :param reflection_scale: the reflection's resolution as a fraction of
+            the view's; None = the game's graphics settings, or
+            :data:`DEFAULT_REFLECTION_SCALE` without them
         :param vert_shader: Path to ocean.vert.
         :param frag_shader: Path to ocean.frag.
         """
@@ -292,11 +342,12 @@ class Ocean:
 
         # ── Reflection buffer ─────────────────────────────────────────────────
         settings = getattr(self.game.app, "graphics_settings", None)
-        refl_scale = (
-            settings.config["render"]["reflection_scale"]
-            if settings is not None
-            else DEFAULT_REFLECTION_SCALE
-        )
+        if reflection_scale is not None:
+            refl_scale = reflection_scale
+        elif settings is not None:
+            refl_scale = settings.config["render"]["reflection_scale"]
+        else:
+            refl_scale = DEFAULT_REFLECTION_SCALE
         self.refl_tex, uv_scale = self.make_reflection_buffer(refl_scale, water_color)
 
         # ── Shader ────────────────────────────────────────────────────────────
@@ -306,14 +357,15 @@ class Ocean:
         # Follows the camera in XY each frame so the view is always covered to the
         # horizon. The reflection mirror (and a game's collision plane) stay flat
         # at z=0; both are exact at the camera, where the droop is zero.
-        horizon = math.sqrt(2.0 * PLANET_RADIUS_M * _MAX_EYE_ALTITUDE_M)
+        horizon = math.sqrt(2.0 * planet_radius * _MAX_EYE_ALTITUDE_M)
         outer_half = horizon * _HORIZON_MARGIN
         if geometric_swell:
             mesh = make_swell_grid_mesh(
                 swell_grid_half,
                 swell_grid_subdivs,
                 outer_half,
-                curvature=1.0 / (2.0 * PLANET_RADIUS_M),
+                curvature=1.0 / (2.0 * planet_radius),
+                exact_sphere=exact_sphere,
             )
         else:
             # Four vertices cannot curve, so this path stays flat.
@@ -324,6 +376,8 @@ class Ocean:
         self.ocean_node.setShaderInput("iCameraPos", LVecBase3f(0, 0, 20))
         self.ocean_node.setShaderInput("uModelMatrix", LMatrix4f.identMat())
         self.ocean_node.setShaderInput("iWaterColor", water_color)
+        self.ocean_node.setShaderInput("iWaterLight", LVecBase3f(1.0, 1.0, 1.0))
+        self._water_color = LVecBase3f(water_color)
         self.ocean_node.setShaderInput("iReflectionTex", self.refl_tex)
         self.ocean_node.setShaderInput("iRippleStrength", ripple_strength)
         self.ocean_node.setShaderInput("iWindDir", wind_dir)
@@ -354,18 +408,31 @@ class Ocean:
         # Aerial perspective, to meet the cloud haze at the horizon.
         self.ocean_node.setShaderInput("uHazeColor", haze_color)
         self.ocean_node.setShaderInput("uHazeDistance", float(haze_distance))
-        # Hide the ocean from the reflection camera
-        self.ocean_node.hide(_OCEAN_BIT)
+        # No atmosphere unless a world binds its own (atmosphere.Atmospheres):
+        # then they replace the haze. The base frame's rotation and the sun
+        # are the binder's to keep current (set_atmosphere_frame).
+        bind_defaults(self.ocean_node)
+        self.ocean_node.setShaderInput("uBaseToWorld", LMatrix4f.identMat())
+        self.ocean_node.setShaderInput("uAtmoSunDir", LVecBase3f(0.0, 0.0, 1.0))
+        # Not in its own mirror.
+        self.ocean_node.hide(REFLECTION_CAMERA_MASK)
 
         self.game.method_lists[self.id] = [self.update]
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def update(self):
+    def update(self) -> None:
         """Per-frame update (self-registered in ``game.method_lists``)."""
         current_time = self.game.game_time.get_current_time()
         camera_pos = self.game.app.camera.getPos(self.base_node)
         self.mirror_camera()
+        # Follow the main camera's field of view (window resizes, zoom). Its
+        # far plane is not followed: world_builder.depth sets the main lens
+        # to the near camera's short range every frame.
+        fov = self.game.app.camLens.getFov()
+        self.refl_cam_node.getLens().setFov(
+            fov.x * REFLECTION_FOV_SCALE, fov.y * REFLECTION_FOV_SCALE
+        )
 
         # Reflection view-projection, for the shaders' reflection lookup
         view = LMatrix4f()
@@ -400,7 +467,36 @@ class Ocean:
         self.ocean_node.setShaderInput("iCameraPos", camera_pos)
         self.ocean_node.setShaderInput("uReflMVP", mvp)
 
-    def set_wave_iterations(self, iterations: int):
+    def set_atmosphere_frame(
+        self, base_to_world: LMatrix4f, sun_direction: ArrayLike
+    ) -> None:
+        """For a bound atmosphere: how the base node's axes sit in the world
+        (the atmospheres work in world axes) and where the sun is.
+
+        :param base_to_world: the base node's transform relative to render
+            (an LMatrix4f, e.g. ``base_node.get_mat(render)``; only its
+            rotation is used)
+        :param sun_direction: toward the sun, world axes
+        """
+        self.ocean_node.setShaderInput("uBaseToWorld", base_to_world)
+        self.ocean_node.setShaderInput("uAtmoSunDir", LVecBase3f(*sun_direction))
+
+    def set_light(self, light: ArrayLike) -> None:
+        """How lit the water is, relative to the daylight its colour was
+        chosen in: (r, g, b) multiplying the water's own scattered colour
+        (``iWaterLight``) and the reflection's clear colour (1 = as tuned;
+        0 = night). The sky's reflection darkens by itself.
+
+        :param light: linear (r, g, b) factors
+        """
+        light = LVecBase3f(*light)
+        self.ocean_node.setShaderInput("iWaterLight", light)
+        c = self._water_color
+        self.refl_buffer.setClearColor(
+            LVecBase4f(c[0] * light[0], c[1] * light[1], c[2] * light[2], 1)
+        )
+
+    def set_wave_iterations(self, iterations: int) -> None:
         """Adjust wave-detail quality at runtime (e.g. from a settings menu).
 
         Higher = sharper waves up close but more expensive per pixel; lower =
@@ -456,27 +552,30 @@ class Ocean:
         self.refl_buffer.setClearColor(LVecBase4f(*water_color, 1))
 
         self.refl_cam_node = Camera("refl_cam")
-        # Use a wider lens than the main camera to avoid frustum culling
-        # artifacts when turning quickly — the extra margin ensures reflected
-        # objects are never culled at the edges of the reflection buffer.
+        # Use a wider lens than the main camera (REFLECTION_FOV_SCALE times its
+        # FOV) to avoid frustum culling artifacts when turning quickly — the
+        # extra margin ensures reflected objects are never culled at the edges
+        # of the reflection buffer. update() follows the main camera's FOV;
+        # near and far are the ones taken here.
         refl_lens = self.game.app.camLens.makeCopy()
         fov = self.game.app.camLens.getFov()
-        refl_lens.setFov(fov.x * 1.4, fov.y * 1.4)
+        refl_lens.setFov(fov.x * REFLECTION_FOV_SCALE, fov.y * REFLECTION_FOV_SCALE)
         # The reflection camera sits ~2*altitude further from the skybox's far
-        # side than the main camera, so with the same far plane the skybox could
-        # be clipped at the reflected zenith. Push the reflection far plane well
-        # past it so it always renders in full.
+        # side than the main camera, so with the same far plane a skybox that is
+        # real geometry could be clipped at the reflected zenith. Push the
+        # reflection far plane well past it so it always renders in full.
+        # (world_builder's Sky needs none of it: sky.vert puts it on the far
+        # plane whatever the range.)
         refl_lens.setFar(self.game.app.camLens.getFar() * 4.0)
         self.refl_cam_node.setLens(refl_lens)
         self.refl_cam = self.base_node.attachNewNode(self.refl_cam_node)
 
-        # Use only the lower 20 bits, excluding bit 1 (_OCEAN_BIT)
-        self.refl_cam_node.setCameraMask(BitMask32(0xFFFFF & ~2))
+        self.refl_cam_node.setCameraMask(REFLECTION_CAMERA_MASK)
 
         # TODO(perf): the reflection re-renders all scene geometry. Objects that
-        # contribute little (small, distant) could be excluded with another
-        # camera-mask bit as a "do not reflect" flag, as _OCEAN_BIT does for the
-        # ocean. Worth it with many minor objects, not for one large hero object.
+        # contribute little (small, distant) could be kept out of it with
+        # ``node.hide(REFLECTION_CAMERA_MASK)``, as the ocean itself is. Worth
+        # it with many minor objects, not for one large hero object.
 
         self.refl_buffer.makeDisplayRegion(0, 1, 0, 1).setCamera(self.refl_cam)
 
@@ -496,16 +595,17 @@ class Ocean:
         )
         return refl_tex, uv_scale
 
-    def mirror_camera(self):
+    def mirror_camera(self) -> None:
         """Mirror the reflection camera across the water plane (Z = 0)."""
         pos = self.game.app.camera.getPos(self.base_node)
         hpr = self.game.app.camera.getHpr(self.base_node)
         self.refl_cam.setPos(self.base_node, pos.x, pos.y, -pos.z)
         self.refl_cam.setHpr(self.base_node, hpr.x, -hpr.y, -hpr.z)
 
-    def clean(self):
+    def clean(self) -> None:
         """
-        Cleans the Ocean object
+        Cleans the Ocean object: unregisters its update, destroys the
+        reflection buffer and removes its nodes.
         """
         if self.game.method_lists:
             self.game.method_lists.pop(self.id, None)

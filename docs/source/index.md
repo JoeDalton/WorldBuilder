@@ -1,20 +1,37 @@
 # Welcome to the WorldBuilder documentation!
 
-WorldBuilder procedurally builds worlds in Panda3D: planetary terrain, a
-curved reflective ocean and volumetric billboard clouds. It started inside
+WorldBuilder procedurally builds worlds in Panda3D: cube-sphere planetary
+terrain seen from orbit to the ground, single-scattering atmospheres, a
+procedural sky (stars, nebulae, the sun), a curved reflective ocean, and
+volumetric billboard clouds (a flat field, or over a whole planet, following
+its weather). It started inside
 [SpaceFlight](https://github.com/JoeDalton/SpaceFlight), which uses it for its
 ocean and clouds.
 
 These pages are developer documentation: how each system is organised and how
-it works. The per-class API is in the auto-generated
-[code reference](apidocs/index.rst).
+it works.
+
+- [Terrain](terrain.md): the planet's layers, the cube-sphere and its LOD,
+  precision and depth, several bodies, and the demo.
+- [Atmosphere, sky and planet clouds](atmosphere.md): the scattering model,
+  the star field and the clouds over a whole planet, with their weather.
+- [Ocean](ocean.md): the reflective ocean and its swell.
+- [Clouds](clouds.md): billboard clouds, their density fields and shading.
+- [Performance](performance.md): where the time goes, measured, and what was
+  done about it; the [performance backlog](performance_backlog.md) lists the
+  savings found but not yet made.
+
+The per-class API is in the auto-generated [code reference](apidocs/index.rst).
 
 ```{toctree}
 :maxdepth: 2
 :caption: Contents
 
 terrain
+atmosphere
 ocean
 clouds
+performance
+performance_backlog
 apidocs/index
 ```

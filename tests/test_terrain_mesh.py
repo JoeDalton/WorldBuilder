@@ -33,8 +33,8 @@ def test_vertex_format_matches_the_packed_records():
 
 def test_chunk_node_holds_the_bytes_and_shared_indices():
     spec = replace(PRESETS["desert"], seed=3).resolved()
-    chunk = generate_chunk(spec, (2, 1, 1))
-    node = build_chunk_node(chunk, max_drop=100.0)
+    chunk = generate_chunk(spec, (2, 4, 1, 1))
+    node = build_chunk_node(chunk)
     geom = node.get_geom(0)
     vdata = geom.get_vertex_data()
     assert vdata.get_num_rows() == len(chunk.vertex_bytes) // VERTEX_DTYPE.itemsize
@@ -42,5 +42,11 @@ def test_chunk_node_holds_the_bytes_and_shared_indices():
     assert geom.get_primitive(0).get_num_vertices() == len(triangle_indices())
     assert geom.get_primitive(0) == shared_triangles()
     bounds = node.get_internal_bounds()  # the box we set (culling wraps it in a sphere)
-    assert bounds.get_min().z <= chunk.h_min - chunk.skirt_depth - 100.0 + 1e-3
-    assert np.isclose(bounds.get_max().z, chunk.h_max, atol=1e-3)
+    np.testing.assert_allclose(bounds.get_min(), chunk.aabb_min)
+    np.testing.assert_allclose(bounds.get_max(), chunk.aabb_max)
+    local = chunk.vertices()["vertex"]
+    assert np.all(local >= chunk.aabb_min) and np.all(local <= chunk.aabb_max)
+
+
+def test_vertex_format_carries_the_height_column():
+    assert vertex_format().get_array(0).has_column("height")

@@ -195,7 +195,7 @@ _CONTROLS = (
 )
 
 
-def sun_palette(elevation, palette_index):
+def sun_palette(elevation: float, palette_index: int) -> tuple:
     """Direct and ambient light for a sun at *elevation*, and the matching sky.
 
     A hand-authored ramp standing in for Rayleigh/Mie: driving both lights from
@@ -223,7 +223,7 @@ def sun_palette(elevation, palette_index):
     return name, tuple(blend), tuple(sky), (*background, 1.0)
 
 
-def sun_vector(azimuth, elevation):
+def sun_vector(azimuth: float, elevation: float) -> Vec3:
     """Unit vector toward the sun; Z-up, azimuth 0 along +Y increasing toward +X.
 
     :param azimuth: degrees around the horizon
@@ -242,7 +242,7 @@ def sun_vector(azimuth, elevation):
 class CloudDemo(ShowBase):
     """A free-flying camera, one cloud field, and one large opaque smiley."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.setFrameRateMeter(True)
         self.disable_mouse()  # or the default trackball fights the keyboard
@@ -368,7 +368,7 @@ class CloudDemo(ShowBase):
 
     # ── internals ──────────────────────────────────────────────────────────────
 
-    def _set_key(self, key, pressed):
+    def _set_key(self, key: str, pressed: bool) -> None:
         """Record a held key.
 
         :param key: Panda key name
@@ -376,7 +376,7 @@ class CloudDemo(ShowBase):
         """
         self._keys[key] = pressed
 
-    def _reset_camera(self):
+    def _reset_camera(self) -> None:
         """Put the camera back at its starting pose."""
         self.camera.set_pos(Point3(*START_POS))
         self.camera.set_hpr(Vec3(*START_HPR))
@@ -409,7 +409,7 @@ class CloudDemo(ShowBase):
                 )
                 self._ground_haze.append(haze)
 
-        def index(ring, step):
+        def index(ring: int, step: int) -> int:
             """:returns: the vertex row for a ring (1-based) and angular step."""
             return 1 + (ring - 1) * GROUND_SEGMENTS + step % GROUND_SEGMENTS
 
@@ -432,7 +432,7 @@ class CloudDemo(ShowBase):
         ground.set_light_off()
         return ground
 
-    def _recolour_ground(self, lit_ground, haze):
+    def _recolour_ground(self, lit_ground, haze) -> None:
         """Rewrite the ground's vertex colours for the current light.
 
         :param lit_ground: RGB of the ground under the current sun
@@ -475,14 +475,14 @@ class CloudDemo(ShowBase):
         marker.set_light_off()
         return marker
 
-    def _toggle(self, nodepath):
+    def _toggle(self, nodepath) -> None:
         """Hide/show *nodepath*."""
         if nodepath.is_hidden():
             nodepath.show()
         else:
             nodepath.hide()
 
-    def _toggle_cirrus(self):
+    def _toggle_cirrus(self) -> None:
         """Show/hide the cirrus layer by zeroing its optical-depth cap.
 
         Layers share one Geom (so they sort against each other), so a NodePath
@@ -506,16 +506,16 @@ class CloudDemo(ShowBase):
             f"forward_gain {optics.forward_gain:.1f}x)"
         )
 
-    def _cycle_palette(self):
+    def _cycle_palette(self) -> None:
         """Step to the next time-of-day palette."""
         self._palette = (self._palette + 1) % len(SUN_PALETTES)
         self._apply_sun()
 
-    def _apply_optics(self):
+    def _apply_optics(self) -> None:
         """Push the swept optic to every layer (shading only, no rebuild)."""
         self.field.set_optics(**{SWEEP_PARAM: self._sweep_value})
 
-    def _apply_coverage(self):
+    def _apply_coverage(self) -> None:
         """Push coverage and edge softness to every cumulus shell, which share one
         field and must agree."""
         for layer in self._cumulus_layers:
@@ -523,13 +523,13 @@ class CloudDemo(ShowBase):
                 layer=layer, coverage=self._coverage, edge_softness=self._softness
             )
 
-    def _apply_cirrus_coverage(self):
+    def _apply_cirrus_coverage(self) -> None:
         """Push the cirrus coverage to its layer."""
         self.field.set_coverage(
             layer=self._cirrus_layer, coverage=self._cirrus_coverage
         )
 
-    def _apply_sun(self):
+    def _apply_sun(self) -> None:
         """Push the current sun to the cloud field, the sky, the ground and the
         readout, so they can never disagree."""
         name, sun_color, sky_color, background = sun_palette(
@@ -559,7 +559,7 @@ class CloudDemo(ShowBase):
         self._palette_name = name
         self._update_readout()
 
-    def _update_readout(self):
+    def _update_readout(self) -> None:
         """Refresh the on-screen sun and swept-parameter lines.
 
         backward_gain is shown so its independence from forward_gain is visible.
@@ -581,14 +581,14 @@ class CloudDemo(ShowBase):
             f"    edge {self._softness:.2f}s (N/M)"
         )
 
-    def _place_sun_marker(self):
+    def _place_sun_marker(self) -> None:
         """Put the marker a fixed distance along the sun vector from the eye, so it
         reads as a direction and stays put in the sky however far you fly."""
         cam_pos = self.camera.get_pos(self.render)
         offset = sun_vector(self._sun_azimuth, self._sun_elevation)
         self.sun_marker.set_pos(cam_pos + offset * SUN_MARKER_DISTANCE)
 
-    def _print_pose(self):
+    def _print_pose(self) -> None:
         """Dump the camera pose, the sun, and each layer's field, for tweaking."""
         pos = self.camera.get_pos(self.render)
         hpr = self.camera.get_hpr(self.render)
@@ -622,7 +622,7 @@ class CloudDemo(ShowBase):
                 f"    optics: {optics}"
             )
 
-    def _update(self, task):
+    def _update(self, task) -> int:
         dt = self._clock.get_dt()
         keys = self._keys
 

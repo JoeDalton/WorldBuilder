@@ -53,7 +53,10 @@ shadow each other, and why their silhouettes are exactly as crisp as the field.
   - **`density`** evaluates the field on the CPU *exactly* as the fragment
     shader does — same trilinear half-texel addressing, same 8-bit quantisation.
     That equality is load-bearing: placement is driven by the very field that
-    is drawn.
+    is drawn. (`density_on_sphere` is its planet-mode twin.) The shader side is
+    one include, `shaders/cloud_field.glsl`, and its `cloudDensity` stops after
+    one or two octaves where the rest (at most their weights) cannot reach the
+    threshold: exact, and most of a billboard quad is clear air.
   - Types share one volume, decorrelated by a constant noise-space offset
     (`field_offset`): an independent field with identical statistics, for the
     cost of an add.
@@ -108,7 +111,9 @@ shadow each other, and why their silhouettes are exactly as crisp as the field.
     over a shared band so their weights sum to 1, and share one field and
     threshold so they agree where the cloud is.
   - **Per-type fields on the GPU** ride in a `layerParams` uniform array indexed
-    by a flat layer id (twelve `vec4`s each). A uniform array rather than a
+    by a flat layer id (`LAYER_VEC4S`, twelve `vec4`s each, for up to
+    `MAX_LAYERS`, eight, layers; packed by `noise.pack_layer_params`, read by
+    `getField` in `cloud_field.glsl`). A uniform array rather than a
     texture: a fragment needs about two dozen of its type's parameters, which as
     `texelFetch`es would be two dozen texture reads per pixel and as varyings
     would burn most of the interpolator budget.
@@ -186,10 +191,26 @@ shadow each other, and why their silhouettes are exactly as crisp as the field.
     delegating everything else to `CloudField`, which builds synchronously in
     its constructor.
 
+## Planet clouds
+
+[`sphere.py`](../../src/world_builder/clouds/sphere.py) carries the same field
+over a whole planet (`SphericalClouds`): the slab becomes a height above the
+sea-level sphere, billboard LOD shells are generated per cube-sphere tile in
+the terrain's worker pool, and a deck sphere takes over beyond the last shell,
+up to orbit. [`weather.py`](../../src/world_builder/clouds/weather.py) builds
+the weather they follow: a cube map of target coverage (`WeatherSpec`), turned
+into the fbm shift that gives it exactly (`shift_table`). The same shaders draw
+it, with `uSpherical` set (`field.flat_mode_inputs` switches that mode off for
+the flat field). The design is described in
+[Atmosphere, sky and planet clouds](atmosphere.md#planet-clouds).
+
+## Testing and the demo
+
 The headless tests cannot check the pixels, nor even whether the GLSL compiles
 (`Shader.load` succeeds with no graphics context); that needs
-[`scripts/demo_clouds.py`](../../scripts/demo_clouds.py) or an offscreen GL
-context.
+[`scripts/demo_clouds.py`](../../scripts/demo_clouds.py) (the planet's:
+[`scripts/terrain_shots.py`](../../scripts/terrain_shots.py)) or an offscreen
+GL context.
 
 The demo builds its deck with **coverage headroom** above the authored value,
 because `set_coverage` is only exact downward. Measured on six shells at

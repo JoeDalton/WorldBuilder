@@ -11,7 +11,8 @@ premultiplied-over blending, spread round-robin over ``resort_frames`` frames.
 
 The clouds draw in their own "cloud" bin, between "opaque" and "transparent", with
 no depth write: every translucent effect composites over them, but an effect behind
-a dense cloud is not hidden by it. Design notes: docs/source/scenes.md.
+a dense cloud is not hidden by it. Design notes: docs/source/clouds.md. (A whole
+planet's clouds are sphere.py's.)
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -49,6 +50,7 @@ from panda3d.core import (
 )
 
 from world_builder import PLANET_RADIUS_M
+from world_builder.atmosphere import bind_defaults
 from world_builder.clouds.cloud import (
     PRESETS,
     CloudQuality,
@@ -99,15 +101,15 @@ class CloudLayer:
     """
 
     cloud_type: CloudType
-    field: Optional[DensityField] = None
-    optics: Optional[CloudOptics] = None
-    radius: Optional[tuple] = None
-    volume_fraction: Optional[float] = None
-    aspect: Optional[float] = None
-    domain: Optional[float] = None
+    field: DensityField | None = None
+    optics: CloudOptics | None = None
+    radius: tuple[float, float] | None = None
+    volume_fraction: float | None = None
+    aspect: float | None = None
+    domain: float | None = None
     cell_size: float = 1000.0
-    fade_in: Optional[tuple] = None
-    fade_out: Optional[tuple] = None
+    fade_in: tuple[float, float] | None = None
+    fade_out: tuple[float, float] | None = None
 
 
 _SPEC_OVERRIDES = ("field", "optics", "radius", "volume_fraction", "aspect")
@@ -118,7 +120,7 @@ def lod_shells(
     count: int = 6,
     domain: float = 32000.0,
     cell_size: float = 1000.0,
-    crossfade: tuple = (0.62, 0.85),
+    crossfade: tuple[float, float] = (0.62, 0.85),
     **overrides: Any,
 ) -> list[CloudLayer]:
     """Nested camera-centred shells carrying one cloud type out to the horizon.
@@ -132,9 +134,14 @@ def lod_shells(
     cell_size and max_optical_depth double with the radius too (a doubled chord
     doubles each fragment's depth).
 
+    :param cloud_type: the type every shell carries
+    :param count: how many shells
+    :param domain: the innermost shell's box side, metres
+    :param cell_size: the innermost shell's cell side, metres
     :param crossfade: (start, end) fractions of a shell's half-width where it hands
         over to the next; must complete inside the box to hide the recycle edge
-    :param overrides: applied to every shell (e.g. a shared ``field``)
+    :param overrides: :class:`CloudLayer` fields applied to every shell (e.g. a
+        shared ``field``); ``radius`` and ``optics`` are the innermost shell's
     :returns: a list of :class:`CloudLayer`, innermost first
     """
     preset = PRESETS[cloud_type]
@@ -224,6 +231,34 @@ def _calibration(seed: int, field: DensityField) -> tuple[np.ndarray, float]:
     return column_peaks(volume, field), fbm_sigma(volume, field)
 
 
+@functools.cache
+def _no_weather() -> Texture:
+    """A 1-texel weather cube map, for shaders that never read it."""
+    tex = Texture("no_weather")
+    tex.setup_cube_map(1, Texture.T_unsigned_byte, Texture.F_rg)
+    tex.set_ram_image(bytes(12))
+    return tex
+
+
+def flat_mode_inputs(node: NodePath) -> None:
+    """The shaders' planet-mode inputs (cloud.frag, cloud_field.glsl), switched
+    off for the flat field: the shader reads them, so they must be set even when
+    unused.
+
+    :param node: the node the cloud shader is on
+    """
+    bind_defaults(node)
+    node.set_shader_inputs(
+        uSpherical=0,
+        uDeck=0,
+        planetRadius=0.0,
+        weatherMap=_no_weather(),
+        uOwnAtmosphere=-1,
+        uPixelAngle=0.001,
+        uCloudDebug=0,
+    )
+
+
 #: Floats per vertex, and per cell in cellParams ([x, y, z, layerId]); the latter
 #: must match CELL_PARAMS_STRIDE in cloud.vert.
 _VERTEX_FLOATS = 11
@@ -276,6 +311,8 @@ class CloudField:
     Built in the constructor; call :meth:`update` once per frame. A layer's field
     is its shape (rebuild to change); its optics, coverage and the sun can be
     changed live with :meth:`set_optics`, :meth:`set_coverage`, :meth:`set_sun`.
+
+    :ivar node: the field's one GeomNode, under *parent*
     """
 
     def __init__(
@@ -539,6 +576,7 @@ class CloudField:
             noiseOffset=Vec3(0, 0, 0),
             nearFadeRadii=float(self._near_fade_radii),
         )
+        flat_mode_inputs(self.node)
         self.set_sun(
             self._sun_direction,
             self._sun_color_arg,
@@ -612,6 +650,8 @@ class CloudField:
         """Change :class:`CloudOptics` fields of one layer (or all), live. Shape
         lives in the DensityField and needs a rebuild.
 
+        :param layer: layer index, or None for every layer
+        :param changes: CloudOptics field names and their new values
         :returns: the resulting :class:`CloudOptics` per layer
         :raises AttributeError: for a name that is not a CloudOptics field
         """
@@ -633,7 +673,7 @@ class CloudField:
         sun_color: ArrayLike | None = None,
         sky_color: ArrayLike | None = None,
         haze_color: ArrayLike | None = None,
-    ):
+    ) -> None:
         """Move the sun and/or restate its colours; nothing is baked, so this is a
         few uniform writes.
 
@@ -642,6 +682,7 @@ class CloudField:
         :param sky_color: RGB of the ambient sky, or None to keep; also sets the
             haze colour unless *haze_color* is given
         :param haze_color: RGB distant cloud tends toward, or None to keep
+        :raises ValueError: for a zero direction
         """
         sun_dir = np.asarray(direction, dtype=float)[:3]
         norm = magnitude(sun_dir)
@@ -662,7 +703,7 @@ class CloudField:
 
     # ── Per-frame ─────────────────────────────────────────────────────────────
 
-    def update(self, cam_pos: Vec3, dt: float = 0.0):
+    def update(self, cam_pos: Vec3, dt: float = 0.0) -> None:
         """Advance one frame: drift + recycle the cells and continue the re-sort.
 
         :param cam_pos: camera position in the parent's frame (the cells' world)
@@ -686,7 +727,7 @@ class CloudField:
         self._upload_cells()
         self._restage(cam_xyz)
 
-    def remove(self):
+    def remove(self) -> None:
         """Detach the cloud geometry from the scene."""
         self.node.removeNode()
 
@@ -751,6 +792,8 @@ class Clouds:
     """A :class:`CloudField` under ``game.root_node`` following the scene
     convention: per-frame update via game.method_lists, and clean(). Keyword
     arguments pass straight through to CloudField.
+
+    :ivar field: the :class:`CloudField`
     """
 
     def __init__(
@@ -766,13 +809,13 @@ class Clouds:
         )
         game.method_lists[self.id] = [self.update]
 
-    def update(self):
+    def update(self) -> None:
         """Per-frame: drive wind/recycle/sort against the current camera."""
         cam_pos = self.game.app.camera.get_pos(self.game.root_node)
         dt = self.game.game_time.get_time_step()
         self.field.update(cam_pos, dt)
 
-    def clean(self):
+    def clean(self) -> None:
         """Remove the per-frame update and detach the cloud geometry."""
         if self.game.method_lists:
             self.game.method_lists.pop(self.id, None)

@@ -1,0 +1,206 @@
+"""
+Render the terrain demo from fixed poses to PNG: a visual regression check.
+
+The shaders cannot be validated headless (see tests/test_terrain_mesh.py), so
+this drives the real demo (planet, moon, atmosphere, clouds, ocean, sky): for
+each pose it waits until the terrain has finished refining (or a timeout),
+times a few frames, then saves a screenshot::
+
+    python scripts/terrain_shots.py [--out DIR] [--level FILE]
+        [--radius METRES] [--pose NAME ...] [--timeout SECONDS]
+        [--size "1600 900"] [--offscreen]
+        [--cloud-quality high|mid|low|off] [--cloud-debug BITS] [--frames N]
+
+    --out            where the PNGs go (default ./terrain_shots)
+    --level          the planet's level file (default: the demo level)
+    --radius         overrides the level's planet radius
+    --pose           the poses to shoot (default: all, in the order below)
+    --timeout        seconds to wait for a pose to settle (default 90)
+    --size           window or buffer size (default "1600 900")
+    --offscreen      render to an offscreen buffer, not a window
+    --cloud-quality  default high
+    --cloud-debug    SphericalClouds.set_debug bits (cloud.frag's
+                     uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
+                     octaves at most, 8 flat colour; default 0)
+    --frames         frames timed once settled (default 60)
+
+No multisampling, vsync off. Once a pose has settled, N frames are timed,
+each waiting for the GPU to finish (a one-pixel read back): CPU and GPU time
+in series, so a difference between two runs is the difference in work.
+Without the wait, an offscreen frame is not held back by the GPU at all. Each
+pose prints whether it settled, the body's chunk count and finest level, the
+cloud billboards, the LOD pass and the median frame time.
+
+Poses: ground (the level's start), coast (2 km up over the reference point),
+high (20 km up), swell / sea_surface (either side of the ocean handover at
+15 km: the swell ocean, then the terrain's own flat sea), stratosphere (200 km
+up), orbit (3 radii up, looking down), corner (over a cube corner, where three
+faces meet), lod (the LOD debug view from 20 km), in_clouds (inside the cloud
+deck, 2.7 km up), sunset (600 m up, looking west at the sun 3 degrees up),
+moonrise (the moon over the northern horizon, from the start area),
+moon_orbit (3 moon radii up, looking down), moon_ground (2 km over the
+moon's sand), night_orbit (1.5 radii up, looking down at the terminator: the
+sun 60 degrees below the nadir's horizon). Every other pose has the sun at
+azimuth 210, elevation 35, as seen there.
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+from panda3d.core import Filename
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from demo_terrain import (  # noqa: E402
+    CLOUD_QUALITIES,
+    TerrainDemo,
+    describe_window,
+    window_config,
+)
+
+from world_builder.terrain.chart import latlon  # noqa: E402
+from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
+
+CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
+#: Sun (azimuth, elevation) per pose, as seen there; default (210, 35).
+SUNS = {"sunset": (270.0, 3.0), "night_orbit": (90.0, -60.0)}
+
+
+def _poses(demo: TerrainDemo) -> dict:
+    """:returns: name -> (lat, lon, altitude, heading, pitch, debug view,
+    body index)"""
+    start = demo.start_pose or {}
+    lat0 = start.get("lat", demo.terrain.spec.reference_lat)
+    lon0 = start.get("lon", demo.terrain.spec.reference_lon)
+    ref_lat, ref_lon = demo.terrain.spec.reference_lat, demo.terrain.spec.reference_lon
+    corner_lat, corner_lon = (float(v[0]) for v in latlon(CORNER[None, :]))
+    radius = demo.radius
+    poses = {
+        "ground": (
+            lat0,
+            lon0,
+            start.get("alt", 800.0),
+            start.get("heading", 0.0),
+            start.get("pitch", 0.0),
+            0,
+            0,
+        ),
+        "coast": (ref_lat, ref_lon, 2000.0, 0.0, -10.0, 0, 0),
+        "high": (lat0, lon0, 20000.0, 0.0, -25.0, 0, 0),
+        "swell": (ref_lat, ref_lon, 13000.0, 0.0, -20.0, 0, 0),
+        "sea_surface": (ref_lat, ref_lon, 17000.0, 0.0, -20.0, 0, 0),
+        "stratosphere": (lat0, lon0, 200e3, 0.0, -45.0, 0, 0),
+        "orbit": (lat0, lon0, 3.0 * radius, 0.0, -89.9, 0, 0),
+        "corner": (corner_lat, corner_lon, 3000.0, 30.0, -30.0, 0, 0),
+        "lod": (lat0, lon0, 20000.0, 0.0, -25.0, 1, 0),
+    }
+    # Inside the cloud deck (2.2-3.2 km above sea level).
+    poses["in_clouds"] = (ref_lat, ref_lon, 2700.0, 0.0, 0.0, 0, 0)
+    # The sun low in the west, looking at it (heading 90 = west).
+    poses["sunset"] = (ref_lat, ref_lon, 600.0, 90.0, 2.0, 0, 0)
+    if len(demo.bodies) > 1:
+        moon = demo.bodies[1]
+        poses["moonrise"] = (ref_lat, ref_lon, 1500.0, 0.0, 6.0, 0, 0)
+        # Over the moon's side facing the planet.
+        facing = -moon.position / np.linalg.norm(moon.position)
+        lat, lon = (float(v[0]) for v in latlon(facing[None, :]))
+        poses["moon_orbit"] = (lat, lon, 3.0 * moon.radius, 0.0, -89.9, 0, 1)
+        poses["moon_ground"] = (lat + 1.0, lon, 2000.0, 0.0, -15.0, 0, 1)
+    # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
+    poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
+    return poses
+
+
+def _settle(demo: TerrainDemo, timeout: float) -> bool:
+    """Step frames until nothing is wanted or generating for 10 frames.
+
+    :returns: whether that happened before *timeout* seconds
+    """
+    start = time.perf_counter()
+    quiet = 0
+    while time.perf_counter() - start < timeout:
+        demo.taskMgr.step()
+        busy = demo.executor.pending or any(
+            body.terrain.stats["wanted"] for body in demo.bodies
+        )
+        quiet = 0 if busy else quiet + 1
+        if quiet >= 10:
+            return True
+    return False
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument(
+        "--out", type=Path, default=Path("terrain_shots"), help="PNG directory"
+    )
+    parser.add_argument("--level", default=str(DEMO_LEVEL), help="level file")
+    parser.add_argument(
+        "--radius", type=float, default=None, help="planet radius, metres"
+    )
+    parser.add_argument("--pose", nargs="*", default=None, help="default: all")
+    parser.add_argument(
+        "--timeout", type=float, default=90.0, help="seconds to settle a pose"
+    )
+    parser.add_argument("--size", default="1600 900", help='"width height"')
+    parser.add_argument(
+        "--offscreen", action="store_true", help="an offscreen buffer, no window"
+    )
+    parser.add_argument("--cloud-quality", default="high", choices=CLOUD_QUALITIES)
+    parser.add_argument(
+        "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"
+    )
+    parser.add_argument(
+        "--frames", type=int, default=60, help="frames timed once settled"
+    )
+    args = parser.parse_args()
+    window_config("Terrain shots", args.size, args.offscreen, vsync=False)
+    args.out.mkdir(parents=True, exist_ok=True)
+    demo = TerrainDemo(
+        args.level,
+        "process",
+        args.radius,
+        cloud_quality=args.cloud_quality,
+        cloud_debug=args.cloud_debug,
+    )
+    demo.setFrameRateMeter(False)
+    print(describe_window(demo), f"clouds {args.cloud_quality}")
+    win = demo.win
+    probe = win.make_display_region(0, 1 / win.get_x_size(), 0, 1 / win.get_y_size())
+    poses = _poses(demo)
+    for name in args.pose or list(poses):
+        lat, lon, alt, heading, pitch, view, body = poses[name]
+        demo.set_debug_view(view)
+        demo._place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])
+        demo.set_local_sun(*SUNS.get(name, (210.0, 35.0)))
+        settled = _settle(demo, args.timeout)
+        for _ in range(3):  # let the last uploads reach the screen
+            demo.taskMgr.step()
+        times = []
+        for _ in range(args.frames):  # the settled view's frame time
+            start = time.perf_counter()
+            demo.taskMgr.step()
+            probe.get_screenshot()  # waits for the GPU
+            times.append(time.perf_counter() - start)
+        median = float(np.median(times)) * 1e3
+        path = args.out / f"{name}.png"
+        demo.win.save_screenshot(Filename.from_os_specific(str(path)))
+        s = demo.bodies[body].terrain.stats
+        clouds = demo.clouds.stats if demo.clouds is not None else None
+        billboards = f"{clouds['billboards'] / 1e3:.0f}k bb, " if clouds else ""
+        print(
+            f"{name:<13} {'settled' if settled else 'TIMEOUT'}  {s['shown']} chunks, "
+            f"finest {s['finest']}, {billboards}LOD {s['select_ms']:.1f} ms, "
+            f"{median:.2f} ms ({1e3 / median:.0f} fps) -> {path}"
+        )
+    demo.destroy_terrain()
+
+
+if __name__ == "__main__":
+    main()
