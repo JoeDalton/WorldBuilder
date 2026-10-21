@@ -142,6 +142,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A chunk generated on the query path (`TerrainQuery` with `generate=True`,
+  the default of `sphere_contact` and the point queries) went into the
+  terrain's store without its height bounds: the LOD selector saw it as
+  unknown, and evicting it later raised `KeyError` in `Terrain.update`. The
+  query now hands such chunks to the terrain's own store. (#16)
+- `TerrainQuery` point queries (`height_at`, `altitude`, ...) failed on an
+  empty array of points. (#16)
 - A planet seen from beyond 10,000 km was culled whole (Panda's
   `lens-far-limit`): the far camera gets explicit cull bounds. (#1)
 - `hide(HIDE_FROM_NEAR)` did nothing: each split-depth camera now has a

@@ -185,8 +185,6 @@ def tangent_frame(up: np.ndarray):
 
 def scatter(terrain, camera, rng, count, low, high):
     """Planet-frame points within SPREAD of the camera, low..high above ground."""
-    if count == 0:  # TerrainQuery.height_at fails on an empty array
-        return np.zeros((0, 3)), np.zeros((0, 3))
     up = camera / np.linalg.norm(camera)
     east, north = tangent_frame(up)
     offsets = rng.uniform(-SPREAD, SPREAD, size=(count, 2))

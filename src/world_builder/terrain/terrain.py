@@ -445,8 +445,14 @@ class Terrain:
             min_level=self.min_level,
             split_factor=self._settings.split_factor,
         )
+        # Chunks the query generates (generate=True) join the store like the
+        # workers' do, bounds included.
         self.query = TerrainQuery(
-            self.planet, self.store, version=version, level=self.min_level
+            self.planet,
+            self.store,
+            version=version,
+            level=self.min_level,
+            store_chunk=self._store,
         )
         if self.collision is not None:
             self.collision.reset()
