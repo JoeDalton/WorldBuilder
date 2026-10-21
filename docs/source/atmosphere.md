@@ -101,7 +101,9 @@ The demo uses them each frame for:
 
 - **Panda3D's lights**: a `DirectionalLight` (the sun) and an `AmbientLight`
   on `render`, as they are at the camera, for anything drawn without the
-  world's own shaders (models, ships);
+  world's own shaders (models, ships). The white test ball ahead of the start
+  pose shows them; models skip the world's exposure and tonemap, see
+  [Lighting on objects](object_lighting.md);
 - **the swell ocean**: `Ocean.set_light` scales its water colour (tuned in
   daylight) by the light on the sea under the camera over the daylight's, so
   the sea is dark by night;
@@ -113,7 +115,9 @@ The demo uses them each frame for:
 Light scattered more than once is only the flat twilight fill above: its
 colour and its fading are guesses, and lit clouds come out a little yellow
 (the cloud shader puts half the reddening back, standing in for it). Clouds
-in the planet's shadow follow the same twilight curve for their sky light.
+in the planet's shadow follow the same twilight curve for their sky light,
+plus a stand-in for the light of the still-lit air above them
+([the terminator on the clouds](#the-terminator-on-the-clouds)).
 
 The reference fix is **precomputed atmospheric scattering**, Bruneton &
 Neyret 2008 (revised by Bruneton in 2017): transmittance, multiple-scattering

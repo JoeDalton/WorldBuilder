@@ -57,5 +57,7 @@ The version is read from git tags; a tag's zip carries it in
 [atmosphere, sky and planet clouds](docs/source/atmosphere.md),
 [ocean](docs/source/ocean.md), [clouds](docs/source/clouds.md),
 [performance](docs/source/performance.md) and its
-[backlog](docs/source/performance_backlog.md). Build the HTML, with the API
-reference, with `invoke doc`.
+[backlog](docs/source/performance_backlog.md),
+[lighting on objects](docs/source/object_lighting.md). Build the HTML, with
+the API reference, with `invoke doc`. Changes are listed in the
+[changelog](CHANGELOG.md).
