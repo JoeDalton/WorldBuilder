@@ -1,6 +1,7 @@
 #version 330
 
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
+#pragma include "../../ocean/shaders/water.glsl"
 
 // Terrain fragment shader: biome texture blending, lighting (sunlight through
 // the planet's own air), aerial perspective through every atmosphere, and the
@@ -36,6 +37,8 @@ uniform vec3  uAmbient;           // sky light (near none on an airless body)
 uniform float uExposure;
 uniform int   uOwnAtmosphere;     // this planet's atmosphere index, -1 = airless
 uniform int   uSeaSurface;
+uniform vec3  uShallowWater;      // the sea surface's shallow tint, linear
+uniform float uShallowDepth;      // and its e-folding depth, metres (as the ocean's)
 
 uniform int   uDebugMode;  // 0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts
 uniform int   uLevel;      // per chunk
@@ -148,6 +151,10 @@ void main() {
 
     if (water) {
         albedo = mix(WATER_SHALLOW, WATER_DEEP, clamp(-vSeabed / 3000.0, 0.0, 1.0));
+        // The coast's shallow tint, as the swell ocean draws it below the
+        // handover.
+        albedo = mix(uShallowWater, albedo,
+                     deepWaterShare(-vSeabed, abs(dot(normalize(vRelPos), up)), uShallowDepth));
         surfaceN = up;
         roughness = 0.08;
     } else if (uDebugMode == 2) {

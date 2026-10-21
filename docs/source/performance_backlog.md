@@ -126,3 +126,17 @@ metres of air to nearby ground, where the integrand barely changes.
   count is asked for, which made the start view 40 ms. Exact counts need an
   offscreen buffer (tried, works); the user chose no MSAA.
 - **Lower reflection resolution:** 0.5 → 0.25 saved under 1 ms (see above).
+
+## Ocean (#12)
+
+- **The swell's gradient by finite differences.** `ocean.frag` evaluates
+  `swellField` three times per pixel (the value and two offsets), each two
+  `fbmNoise`s. It already skips the two offsets where the swell is
+  sub-pixel. An analytic gradient of the value noise would halve the rest.
+- **The seabed bakes hold the GIL.** About half of a bake is Python-level
+  (`TerrainQuery`'s loop over chunks), so in fast low flight the worker
+  takes main-thread time. It is capped at one bake per cascade every 0.5 s
+  (`seabed.MIN_INTERVAL_S`), and in the `low` flight frame times match
+  those without it. Reading the stored chunks' `elevation` grids straight
+  into the cascade, chunk by chunk, would take it off the GIL almost
+  entirely.

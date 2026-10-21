@@ -8,6 +8,7 @@ reporting frame times and where the main thread spends them::
     python scripts/flight_bench.py [--flight low cruise descent] [--seconds S]
         [--profile] [--size "1600 900"] [--workers N] [--offscreen]
         [--cloud-quality high|mid|low|off] [--cloud-debug BITS]
+        [--ocean-quality high|mid|low|ultra]
 
     --flight         the flights to run, in order (default: all three)
     --seconds        each flight's length, at most (default 15)
@@ -18,6 +19,7 @@ reporting frame times and where the main thread spends them::
     --offscreen      render to an offscreen buffer: no display refresh cap
                      or throttling
     --cloud-quality  default high
+    --ocean-quality  default high
     --cloud-debug    SphericalClouds.set_debug bits (default 0)
 
 Flights (boosted, along the coast of the demo level from its reference
@@ -49,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import (  # noqa: E402
     CLOUD_QUALITIES,
+    OCEAN_QUALITIES,
     TerrainDemo,
     describe_window,
     window_config,
@@ -188,6 +191,7 @@ def main() -> None:
         help="render to an offscreen buffer: no display refresh cap or throttling",
     )
     parser.add_argument("--cloud-quality", default="high", choices=CLOUD_QUALITIES)
+    parser.add_argument("--ocean-quality", default="high", choices=OCEAN_QUALITIES)
     parser.add_argument(
         "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"
     )
@@ -199,10 +203,14 @@ def main() -> None:
         None,
         workers=args.workers,
         cloud_quality=args.cloud_quality,
+        ocean_quality=args.ocean_quality,
         cloud_debug=args.cloud_debug,
     )
     demo.setFrameRateMeter(False)
-    print(describe_window(demo), f"clouds {args.cloud_quality}")
+    print(
+        describe_window(demo),
+        f"clouds {args.cloud_quality}, ocean {args.ocean_quality}",
+    )
     try:
         for flight in args.flight:
             run(demo, flight, args.seconds, args.profile)

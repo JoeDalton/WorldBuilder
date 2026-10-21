@@ -65,6 +65,8 @@ Controls (AZERTY):
     F7 / F8         dimmer / brighter nebula
     F9 / F10        dimmer / brighter ambient (sky) light
     M               toggle the terrain in the ocean's reflection
+    F11             cycle the ocean quality: high / mid / low / ultra
+    F12             cycle the swell's deep-water height: 20 / 40 / 60 / 10 m
     , / ;           sharper / softer biome transitions
     T               toggle textures (off: flat biome colours)
     B               toggle wireframe
@@ -201,6 +203,10 @@ _CONTROLS = (
 )
 #: F5 cycles the clouds through these.
 CLOUD_QUALITIES = ("high", "mid", "low", "off")
+#: F11 cycles the ocean through these (world_builder.ocean.OCEAN_QUALITY).
+OCEAN_QUALITIES = ("high", "mid", "low", "ultra")
+#: F12 cycles the swell's deep-water height through these, metres.
+SWELL_HEIGHTS = (20.0, 40.0, 60.0, 10.0)
 _DEBUG_VIEWS = ("shaded", "LOD", "biomes", "slope", "normals", "skirts")
 
 
@@ -315,6 +321,8 @@ class TerrainDemo(ShowBase):
         workers: int | None = None,
         cloud_quality: str = "high",
         cloud_debug: int = 0,
+        ocean_quality: str = "high",
+        ocean_debug: int = 0,
     ) -> None:
         """
         :param level_path: the planet's level file
@@ -325,6 +333,8 @@ class TerrainDemo(ShowBase):
         :param cloud_quality: one of :data:`CLOUD_QUALITIES`
         :param cloud_debug: the clouds' profiling switches
             (:meth:`SphericalClouds.set_debug`)
+        :param ocean_quality: one of :data:`OCEAN_QUALITIES`
+        :param ocean_debug: the ocean's debug view (:meth:`Ocean.set_debug_mode`)
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -392,6 +402,8 @@ class TerrainDemo(ShowBase):
         # Built before the depth split changes the lens: the ocean's
         # reflection camera copies it once.
         self.ocean = self._make_ocean()
+        self.set_ocean_quality(ocean_quality)
+        self.ocean.set_debug_mode(ocean_debug)
         self.depth = SplitDepthCameras(self, near=1.0)
         self._ocean_wanted = True
         self._ocean_low = True  # below the handover band
@@ -432,6 +444,8 @@ class TerrainDemo(ShowBase):
             ("f9", self._scale_ambient, [1 / 1.25]),
             ("f10", self._scale_ambient, [1.25]),
             ("m", self._toggle_reflection, []),
+            ("f11", self._cycle_ocean_quality, []),
+            ("f12", self._cycle_swell, []),
             ("t", self._toggle_textures, []),
             ("b", self._toggle_wireframe, []),
             ("v", self._cycle_debug, []),
@@ -540,9 +554,10 @@ class TerrainDemo(ShowBase):
         ocean = Ocean(
             game=self._game,
             geometric_swell=True,
-            # The game's 20 m swell lifts the water up to 20 m near the camera,
-            # drowning the beach band; a gentler swell keeps the coast readable.
-            swell_amplitude=3.0,
+            # The game's 20 m swell, in deep water: the seabed (set_seabed,
+            # below) makes it die out over the shallows, so it does not drown
+            # the beaches.
+            swell_amplitude=20.0,
             haze_color=LVecBase3f(*HAZE_COLOR),
             haze_distance=HAZE_DISTANCE,
             # The terrain is a true sphere: the paraboloid would stand 58 m
@@ -551,7 +566,24 @@ class TerrainDemo(ShowBase):
             exact_sphere=True,
         )
         self.atmospheres.bind(ocean.ocean_node)
+        ocean.set_seabed(self._seabed_heights)
         return ocean
+
+    def _seabed_heights(self, points: np.ndarray, texel: float) -> np.ndarray:
+        """The ocean's seabed sampler (on its worker thread): the drawn
+        terrain under points of the sea's plane, read at the grid level
+        matching the texel and only from stored chunks (generating one would
+        take the workers' time from the terrain).
+
+        :param points: (N, 3) planet frame, metres
+        :param texel: the seabed texel, metres
+        :returns: (N,) ground heights, metres (negative under the sea)
+        """
+        query = self.terrain.query
+        grid = query.grid
+        level = int(math.floor(math.log2(max(texel / grid.spacing0, 1.0))))
+        level = min(max(level, query.level), grid.max_level)
+        return query.ground_height_at(points, level=level, generate=False)
 
     def _make_probe(self):
         # Under render, re-placed every frame from planet-frame positions.
@@ -780,6 +812,9 @@ class TerrainDemo(ShowBase):
         n = np.cross(up, e)
         sea_point = self.terrain.to_render(up * self.radius)
         self._sea_frame.set_quat(self.render, _quat_from_axes(e, n, up))
+        # The sea's plane in the planet frame, for its seabed: its (0, 0) is
+        # gx, gy west and south of the nadir's sea-level point.
+        self.ocean.set_seabed_frame(up * self.radius - gx * e - gy * n, e, n)
         self.ocean.set_atmosphere_frame(
             self.ocean.base_node.get_mat(self.render), self._sun
         )
@@ -837,7 +872,7 @@ class TerrainDemo(ShowBase):
             f"({cs['gen_ms']:.0f} ms/tile)"
             if cs is not None
             else "clouds off"
-        )
+        ) + f"   ocean {self._ocean_quality}"
         others = "   ".join(
             f"{b.name} {np.linalg.norm(self._relative(b)) / 1e3:,.0f} km "
             f"({b.terrain.stats['shown']} chunks)"
@@ -889,6 +924,7 @@ class TerrainDemo(ShowBase):
     def _set_spec(self, spec) -> None:
         """Replace the planet (the moon stays) and its weather."""
         self.terrain.set_spec(spec)
+        self.ocean.set_seabed(self._seabed_heights)  # drops the old planet's
         self.set_cloud_quality(self._cloud_quality)
         for mark, body, _ in list(self._laser_marks):
             if body is self.home:
@@ -979,6 +1015,25 @@ class TerrainDemo(ShowBase):
     def _cycle_cloud_quality(self) -> None:
         index = CLOUD_QUALITIES.index(self._cloud_quality)
         self.set_cloud_quality(CLOUD_QUALITIES[(index + 1) % len(CLOUD_QUALITIES)])
+
+    def set_ocean_quality(self, name: str) -> None:
+        """The ocean's cost/quality preset (live, no rebuild)."""
+        from world_builder.ocean import OCEAN_QUALITY
+
+        self._ocean_quality = name
+        self.ocean.set_quality(OCEAN_QUALITY[name])
+
+    def _cycle_ocean_quality(self) -> None:
+        index = OCEAN_QUALITIES.index(self._ocean_quality)
+        self.set_ocean_quality(OCEAN_QUALITIES[(index + 1) % len(OCEAN_QUALITIES)])
+        print(f"ocean quality: {self._ocean_quality}")
+
+    def _cycle_swell(self) -> None:
+        heights = SWELL_HEIGHTS
+        nearest = min(heights, key=lambda h: abs(h - self.ocean.swell_amplitude))
+        height = heights[(heights.index(nearest) + 1) % len(heights)]
+        self.ocean.set_swell_amplitude(height)
+        print(f"swell: {height:g} m in deep water")
 
     def _toggle_reflection(self) -> None:
         self._reflected = not self._reflected
@@ -1186,6 +1241,12 @@ def main() -> None:
         choices=CLOUD_QUALITIES,
         help="the clouds' quality at start (F5 cycles it)",
     )
+    parser.add_argument(
+        "--ocean-quality",
+        default="high",
+        choices=OCEAN_QUALITIES,
+        help="the ocean's quality at start (F11 cycles it)",
+    )
     args = parser.parse_args()
     # No vsync: the frame rate shows what a frame costs, not the display.
     window_config("Procedural terrain demo", vsync=False)
@@ -1197,6 +1258,7 @@ def main() -> None:
         moon,
         args.workers,
         cloud_quality=args.cloud_quality,
+        ocean_quality=args.ocean_quality,
     ).run()
 
 

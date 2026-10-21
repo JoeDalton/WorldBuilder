@@ -6,6 +6,7 @@ clouds' bookkeeping. The shaders' output is checked by
 scripts/terrain_shots.py, not here.
 """
 
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -206,7 +207,68 @@ def test_ocean_light_and_settings(ocean):
     np.testing.assert_allclose(tuple(clear)[:3], aces_tonemap(lit), atol=1e-6)
     made.set_atmosphere_frame(made.base_node.get_mat(), (0.0, 0.0, 1.0))
     made.set_wave_iterations(12)
+    assert _input(made.ocean_node, "iIterationsNormal")[0] == 12
     made.set_wave_iterations(10**6)  # clamped to the shader's maximum
+    assert _input(made.ocean_node, "iIterationsNormal")[0] == 64
+
+
+def test_ocean_quality_sets_its_uniforms(ocean):
+    from world_builder.ocean import OCEAN_QUALITY
+    from world_builder.ocean.ocean import wave_weight_sum
+
+    made, _ = ocean
+    node = made.ocean_node
+    try:
+        made.set_quality(OCEAN_QUALITY["low"])
+        assert _input(node, "iIterationsNormal")[0] == 16
+        assert _input(node, "uWaveWeightSum")[0] == pytest.approx(wave_weight_sum(16))
+        assert _input(node, "uAAEnd")[0] == pytest.approx(2.0 * math.pi / 6.0)
+        assert _input(node, "uRoughFresnel")[0] == 0
+        assert _input(node, "uReflBlur")[0] == 0.0
+        assert not made.refl_tex.uses_mipmaps()  # nothing reads them
+        assert _input(node, "uFoamNoiseOn")[0] == 0
+        assert len(made.seabed.cascades) == 2
+        made.set_quality(OCEAN_QUALITY["high"])
+        assert _input(node, "uRoughFresnel")[0] == 1
+        assert made.refl_tex.uses_mipmaps()
+        assert len(made.seabed.cascades) == 3
+        made.set_foam(False)
+        assert _input(node, "uFoamOn")[0] == 0 and not made.quality.foam
+        made.set_foam(True)
+        assert _input(node, "uFoamOn")[0] == 1
+        made.set_debug_mode(10)
+        assert _input(node, "uDebugMode")[0] == 10
+        made.set_swell_amplitude(45.0)
+        assert _input(node, "uSwellAmplitude")[0] == 45.0
+    finally:
+        made.set_quality(OCEAN_QUALITY["high"])
+        made.set_debug_mode(0)
+
+
+def test_ocean_seabed_bakes_from_its_update(ocean):
+    import time
+
+    made, _ = ocean
+    calls = []
+
+    def beach(points, texel):
+        calls.append(texel)
+        return points[:, 0] * 0.01 - 5.0
+
+    made.set_seabed_frame((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    made.set_seabed(beach)
+    try:
+        start = time.monotonic()
+        while _input(made.ocean_node, "uSeabedCount")[0] < 3:
+            assert time.monotonic() - start < 10.0, "no seabed bake landed"
+            made.update()
+            time.sleep(0.01)
+        # Finest first, each at its own texel.
+        assert calls[:3] == sorted(calls[:3])
+    finally:
+        made.set_seabed(None)
+    made.update()
+    assert _input(made.ocean_node, "uSeabedCount")[0] == 0
 
 
 def test_ocean_clean_releases_its_buffer(window, ocean):
@@ -278,6 +340,14 @@ def test_terrain_settings(terrain):
     assert terrain.blend_depth == 0.3
     terrain.set_sea_surface(True)
     assert _input(root, "uSeaSurface")[0] == 1
+    from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
+
+    np.testing.assert_allclose(_input(root, "uShallowWater")[:3], SHALLOW_WATER_COLOR)
+    assert _input(root, "uShallowDepth")[0] == pytest.approx(SHALLOW_WATER_DEPTH_M)
+    terrain.set_shallow_water((0.1, 0.2, 0.3), 4.0)
+    np.testing.assert_allclose(
+        _input(root, "uShallowWater")[:3], (0.1, 0.2, 0.3), rtol=1e-6
+    )
     terrain.set_wireframe(True)
     assert root.has_render_mode()
     terrain.set_wireframe(False)
