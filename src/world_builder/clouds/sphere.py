@@ -25,8 +25,10 @@ same function, so the pattern seen from orbit is the one you fly into:
   depth. Billboards would thin out at that scale (their covered area falls as
   1 / size); the deck covers the planet with a few thousand triangles.
   Where a pixel spans more than the clouds' features it fades to the
-  weather's expected coverage, and near the terminator its sunlight falls
-  with the sun's incidence, as a sheet's does.
+  weather's expected coverage, lit by the average of its own close-up
+  self-shadowing (:func:`noise.deck_light_table`, by the sun's elevation and
+  the coverage): no change of colour closing in, and a terminator in the
+  reddened sunlight's colour.
 
 The clouds are geometry that depth-tests against the scene, like the flat
 field: terrain occludes them with no depth plumbing. Premultiplied "over"
@@ -88,11 +90,15 @@ from world_builder.clouds.cloud import (
     load_cloud_atlas,
 )
 from world_builder.clouds.noise import (
+    DECK_LIGHT_COS_MIN,
     LAYER_VEC4S,
     MAX_LAYERS,
     NOISE_SIZE,
+    CloudOptics,
     DensityField,
+    build_deck_light_texture,
     build_noise_texture,
+    deck_light_table,
     density_on_sphere,
     fbm_sigma,
     pack_layer_params,
@@ -251,6 +257,22 @@ def _peaks(seed: int, field: DensityField, radius: float, octaves: int) -> np.nd
 @functools.cache
 def _cached_peaks(seed, field, radius, octaves) -> np.ndarray:
     return sphere_column_peaks(_noise(seed), field, radius, octaves)
+
+
+@functools.cache
+def _deck_light(
+    seed: int,
+    field: DensityField,
+    optics: CloudOptics,
+    radius: float,
+    table: tuple,
+    octaves: int,
+) -> np.ndarray:
+    """The deck's far lighting (:func:`noise.deck_light_table`; ~0.4 s)."""
+    volume = _noise(seed)
+    return deck_light_table(
+        volume, field, optics, radius, np.asarray(table), octaves, float(volume.mean())
+    )
 
 
 def octave_offset(full: np.ndarray, fewer: np.ndarray) -> float:
@@ -664,15 +686,19 @@ class SphericalClouds:
             schedule[-1],
             octave_offset(peaks, _peaks(seed, field, self.radius, schedule[-1])),
         )
+        deck_optics = replace(preset.optics, max_optical_depth=DECK_MAX_OPTICAL_DEPTH)
         params[shells] = pack_layer_params(
             deck.field_of(field),
             extinction=field.density,  # per metre of the slab's path
             wrap_radius=1e12,
             wrap_fade_band=0.0,
             octave_mean=octave_mean,
-            optics=replace(preset.optics, max_optical_depth=DECK_MAX_OPTICAL_DEPTH),
+            optics=deck_optics,
             fade_in=bands[-1],
             octaves=schedule[-1],
+        )
+        deck_light = _deck_light(
+            seed, deck.field_of(field), deck_optics, self.radius, table, schedule[-1]
         )
         self._bands = bands
         self.spec = SphereCloudSpec(
@@ -732,6 +758,8 @@ class SphericalClouds:
             noiseSize=float(NOISE_SIZE),
             noiseOffset=Vec3(0, 0, 0),
             weatherMap=build_weather_texture(self.weather),
+            deckLight=build_deck_light_texture(deck_light),
+            deckLightCosMin=DECK_LIGHT_COS_MIN,
             uSpherical=1,
             planetRadius=self.radius,
             uOwnAtmosphere=-1 if atmosphere is None else int(atmosphere),

@@ -451,11 +451,7 @@ def sphere_column_peaks(
     :param octaves: octaves evaluated (see :func:`fbm`)
     :returns: (columns,) sorted peaks, in raw fbm units
     """
-    index = np.arange(columns) + 0.5
-    z = 1.0 - 2.0 * index / columns
-    angle = np.pi * (1.0 + 5.0**0.5) * index
-    ring = np.sqrt(1.0 - z * z)
-    dirs = np.stack([ring * np.cos(angle), ring * np.sin(angle), z], axis=1)
+    dirs = _fibonacci_dirs(columns)
     base, thickness = spec.slab
     h = (np.arange(levels) + 0.5) / levels
     points = dirs[:, None, :] * (radius + base + h * thickness)[None, :, None]
@@ -679,12 +675,10 @@ def density_on_sphere(
     h = (r - radius - base) / max(thickness, 1e-3)
     coords = points * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
     shift = sample_cube(weather[..., 1], points)
-    lift = threshold_lift(spec, h)
-    lo, hi = spec.threshold[0] + lift, spec.threshold[1] + lift
-    inside = (h > 0.0) & (h < 1.0)
     raw = fbm(volume, coords, spec, octaves) + shift
     if early_out:
         # cloud_field.glsl's cloudDensity: what is still to come at most.
+        lo = spec.threshold[0] + threshold_lift(spec, h)
         mean = float(volume.mean())
         w = spec.octave_weights
         rest = sum((1.0 if k < octaves else mean) * w[k] for k in (2, 3))
@@ -697,7 +691,217 @@ def density_on_sphere(
         )
         alive = (first + w[1] + rest > lo) & (first + second + rest > lo)
         raw = np.where(alive, raw, -np.inf)
+    return _slab_density(spec, h, raw)
+
+
+def _slab_density(spec: DensityField, h: np.ndarray, raw: np.ndarray) -> np.ndarray:
+    """cloud_field.glsl's ``slabDensity``, zero outside the slab: the threshold
+    window raised by :func:`threshold_lift`, times the base's fill.
+
+    :param h: normalised slab height
+    :param raw: the fbm, shift included
+    """
+    lift = threshold_lift(spec, h)
+    lo, hi = spec.threshold[0] + lift, spec.threshold[1] + lift
     t = np.clip((raw - lo) / np.maximum(hi - lo, 1e-9), 0.0, 1.0)
     coverage = t * t * (3.0 - 2.0 * t)
     base_fill = 1.0 - np.exp2(-spec.base_ramp * np.clip(h, 0.0, 1.0))
+    inside = (h > 0.0) & (h < 1.0)
     return np.where(inside, coverage * base_fill, 0.0)
+
+
+def _sun_march_samples(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The sun march's steps before the weather and the calibration: their
+    slab heights and two-octave sums, (..., sun_steps) each."""
+    steps = np.arange(optics.sun_steps) + 0.5
+    positions = points[..., None, :] + sun_dirs[..., None, :] * (
+        steps[:, None] * optics.sun_step_length
+    )
+    base, thickness = spec.slab
+    h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
+    coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    return h, fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
+
+
+def _sun_depth(
+    spec: DensityField,
+    optics: CloudOptics,
+    h: np.ndarray,
+    pair: np.ndarray,
+    shift: ArrayLike,
+    octave_mean: float,
+) -> np.ndarray:
+    """:func:`sun_optical_depth_on_sphere` from :func:`_sun_march_samples`."""
+    gain, bias = shadow_calibration(spec, octave_mean)
+    shift = np.asarray(shift, dtype=np.float64)[..., None]
+    density = _slab_density(spec, h, pair * gain + shift + bias).sum(axis=-1)
+    return density * optics.sun_step_length * spec.density * optics.shadow_strength
+
+
+def sun_optical_depth_on_sphere(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    shift: ArrayLike = 0.0,
+    octave_mean: float | None = None,
+) -> np.ndarray:
+    """The shader's ``sunOpticalDepth`` in planet mode: *sun_steps* steps of
+    *sun_step_length* toward the sun, from half a step out, through the two
+    lowest octaves calibrated onto the full field (:func:`shadow_calibration`).
+    Its early-out is exact, so it is left out.
+
+    :param volume: the noise octave (quantised, to match the GPU)
+    :param spec: a resolved field (the layer's)
+    :param optics: the layer's optics (its steps, step length and strength)
+    :param points: (..., 3) planet-frame positions the march starts from
+    :param sun_dirs: (..., 3) unit directions toward the sun
+    :param radius: sea-level radius, metres
+    :param shift: the weather's fbm shift at *points* (broadcast)
+    :param octave_mean: the noise's mean; None = *volume*'s
+    :returns: (...) optical depth toward the sun
+    """
+    _require_resolved(spec)
+    points = np.asarray(points, dtype=np.float64)
+    if optics.sun_steps <= 0:
+        return np.zeros(points.shape[:-1])
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
+    sun_dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
+    h, pair = _sun_march_samples(volume, spec, optics, points, sun_dirs, radius)
+    return _sun_depth(spec, optics, h, pair, shift, octave_mean)
+
+
+#: The lowest sun cosine (at the cloud) of :func:`deck_light_table`: below
+#: it the planet's shadow has taken the sunlight at any cloud height.
+DECK_LIGHT_COS_MIN = -0.3
+
+
+def _fibonacci_dirs(count: int) -> np.ndarray:
+    """:returns: (count, 3) unit directions spread evenly over the sphere"""
+    index = np.arange(count) + 0.5
+    z = 1.0 - 2.0 * index / count
+    angle = np.pi * (1.0 + 5.0**0.5) * index
+    ring = np.sqrt(1.0 - z * z)
+    return np.stack([ring * np.cos(angle), ring * np.sin(angle), z], axis=1)
+
+
+def deck_light_table(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    radius: float,
+    shift_table: ArrayLike,
+    octaves: int = 4,
+    octave_mean: float | None = None,
+    cosines: int = 32,
+    coverages: int = 17,
+    columns: int = 2048,
+    seed: int = 0,
+) -> np.ndarray:
+    """What the planet's deck shows on average where its pixels are too big
+    for the clouds' self-shadowing (cloud.frag, ``shading`` 0): the mean of
+    its own close-up lighting, by the sun's elevation and the weather's
+    coverage.
+
+    Close up, a deck pixel is lit by ``vis = exp2(-sunOpticalDepth)`` at
+    mid-slab, its sun term scaled by the powder term as well. Averaged over
+    columns, weighted by their alpha seen from overhead, those make the far
+    deck the blur of the near one: a low sun marches along the slab through
+    the neighbouring clouds, which darkens it gradually to the terminator,
+    in the sunlight's own (reddened) colour.
+
+    :param volume: the noise octave (quantised, to match the GPU)
+    :param spec: the deck's resolved field (its shell's
+        :meth:`sphere.ShellSpec.field_of`)
+    :param optics: the deck's optics (its ``max_optical_depth`` caps the alpha)
+    :param radius: sea-level radius, metres
+    :param shift_table: coverage to fbm shift (:func:`weather.shift_table`)
+    :param octaves: octaves the deck evaluates
+    :param octave_mean: the noise's mean; None = *volume*'s
+    :param cosines: sun cosines, evenly over [:data:`DECK_LIGHT_COS_MIN`, 1]
+    :param coverages: weather coverages, evenly over [0, 1]
+    :param columns: columns averaged, spread over the planet
+    :param seed: the sun's azimuth at each column
+    :returns: (coverages, cosines, 2) float32: the mean of ``vis * powder
+        term`` (the sun term's) and of ``vis`` (the multiple-scattering
+        fill's); 1 where there is no cloud
+    """
+    from world_builder.clouds.weather import coverage_to_shift
+
+    _require_resolved(spec)
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
+    up = _fibonacci_dirs(columns)
+    base, thickness = spec.slab
+    reference = np.where(
+        (np.abs(up[:, 2]) < 0.9)[:, None], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]
+    )
+    east = np.cross(reference, up)
+    east /= np.linalg.norm(east, axis=1, keepdims=True)
+    north = np.cross(up, east)
+    azimuth = np.random.default_rng(seed).uniform(0.0, 2.0 * np.pi, columns)
+    level = np.cos(azimuth)[:, None] * east + np.sin(azimuth)[:, None] * north
+
+    # The deck's sample: its density is the mean of two through the slab,
+    # its sun march starts at mid-slab.
+    heights = np.array([0.3, 0.7])
+    layers = up[:, None, :] * (radius + base + heights * thickness)[None, :, None]
+    coords = layers * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    view_raw = fbm(volume, coords, spec, octaves, octave_mean)
+    mid = up * (radius + base + 0.5 * thickness)
+    mu = np.linspace(DECK_LIGHT_COS_MIN, 1.0, cosines)
+    sun = (
+        mu[:, None, None] * up[None]
+        + np.sqrt(1.0 - mu * mu)[:, None, None] * level[None]
+    )
+    if optics.sun_steps > 0:
+        march = _sun_march_samples(volume, spec, optics, mid[None], sun, radius)
+
+    table = np.ones((coverages, cosines, 2), dtype=np.float32)
+    shifts = coverage_to_shift(
+        np.linspace(0.0, 1.0, coverages), np.asarray(shift_table)
+    )
+    for row, shift in enumerate(shifts):
+        density = _slab_density(spec, heights, view_raw + shift).mean(axis=1)
+        alpha = 1.0 - np.exp2(
+            -np.minimum(spec.density * density * thickness, optics.max_optical_depth)
+        )
+        # Plus one clear, unshadowed column: an almost clear row would
+        # otherwise rest on its few wisps (the far deck shows next to none
+        # of them, but filters between the rows).
+        total = alpha.sum() + 1.0
+        if total <= 1.0 + 1e-9:
+            continue
+        if optics.sun_steps > 0:
+            vis = np.exp2(-_sun_depth(spec, optics, *march, shift, octave_mean))
+        else:
+            vis = np.ones((cosines, columns))
+        powder = 1.0 - np.exp2(-spec.density * density * optics.powder_length * 2.0)
+        powder_term = 1.0 + optics.powder_strength * (powder - 1.0)
+        table[row, :, 0] = ((vis * (alpha * powder_term)).sum(axis=1) + 1.0) / total
+        table[row, :, 1] = ((vis * alpha).sum(axis=1) + 1.0) / total
+    return table
+
+
+def build_deck_light_texture(table: np.ndarray) -> Texture:
+    """A :func:`deck_light_table` as an RG32F 2D texture (x: the sun's
+    cosine, y: the coverage), linearly filtered and clamped."""
+    coverages, cosines, _ = table.shape
+    tex = Texture("cloud_deck_light")
+    tex.setup_2d_texture(cosines, coverages, Texture.T_float, Texture.F_rg32)
+    tex.set_ram_image(np.ascontiguousarray(table, dtype=np.float32).tobytes())
+    tex.set_magfilter(SamplerState.FT_linear)
+    tex.set_minfilter(SamplerState.FT_linear)
+    tex.set_wrap_u(SamplerState.WM_clamp)
+    tex.set_wrap_v(SamplerState.WM_clamp)
+    return tex

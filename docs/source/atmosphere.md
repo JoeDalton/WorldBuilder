@@ -101,7 +101,9 @@ The demo uses them each frame for:
 
 - **Panda3D's lights**: a `DirectionalLight` (the sun) and an `AmbientLight`
   on `render`, as they are at the camera, for anything drawn without the
-  world's own shaders (models, ships);
+  world's own shaders (models, ships). The white test ball ahead of the start
+  pose shows them; models skip the world's exposure and tonemap, see
+  [Lighting on objects](object_lighting.md);
 - **the swell ocean**: `Ocean.set_light` scales its water colour (tuned in
   daylight) by the light on the sea under the camera over the daylight's, so
   the sea is dark by night;
@@ -113,7 +115,9 @@ The demo uses them each frame for:
 Light scattered more than once is only the flat twilight fill above: its
 colour and its fading are guesses, and lit clouds come out a little yellow
 (the cloud shader puts half the reddening back, standing in for it). Clouds
-in the planet's shadow follow the same twilight curve for their sky light.
+in the planet's shadow follow the same twilight curve for their sky light,
+plus a stand-in for the light of the still-lit air above them
+([the terminator on the clouds](#the-terminator-on-the-clouds)).
 
 The reference fix is **precomputed atmospheric scattering**, Bruneton &
 Neyret 2008 (revised by Bruneton in 2017): transmittance, multiple-scattering
@@ -159,7 +163,17 @@ Its shader shows:
   (linear). Rotate either with `star_hpr` (`Sky.set_star_rotation`);
 - **the sun's disc**, twice its real size so it reads at any resolution,
   reddened by the air at sunset;
-- through every atmosphere, then the terrain's tonemap.
+- through every atmosphere, then the terrain's tonemap. The disc and the glow
+  around it are much brighter than white, and a per-channel tonemap flattens
+  such light toward white whatever its colour (the sunset sun was white while
+  it lit everything orange). So above white the sky fades to a tonemap of its
+  brightest channel instead, which keeps the hue: the disc shows the colour of
+  the sunlight reaching the camera, the light it casts, and so does its
+  reflection on the sea. Low, the sun is no brighter on screen than the glow
+  around it and got lost in it, so it is drawn as an overexposed sun looks: a
+  paler core, a redder rim and a glare of its own light around it
+  (`SUN_CORE`, `SUN_REDDEN`, `SUN_GLARE` in sky.frag). How low it is comes
+  from its light's colour, so a high sun is untouched.
 
 ## Planet clouds
 
@@ -286,13 +300,49 @@ by construction. Self-shadowing goes first (it is smaller than the
 cloud). So the pattern from orbit is the one you fly into, without the
 speckle.
 
-Lighting goes the same way: up close a low sun lights the clouds' sides
-(the volume does it); averaged from afar the deck is a sheet, whose sunlight
-per unit area falls with the sun's incidence, to nothing at its horizon. The
-far deck fades that factor in (full below ~20° of sun, none at noon), or it
-stays lit to the planet's shadow line and cuts to black there: a hard
-terminator from space (the air on a 600 km planet reddens grazing sunlight
-but barely dims it).
+Lighting goes the same way: from afar, the self-shadowing and the powder
+term are their **averages** over the clouds' columns
+(`noise.deck_light_table`), not the per-pixel values that would alias. The
+averages are measured on the CPU when the clouds are built (~0.4 s, cached).
+The deck's own close-up lighting (`sun_optical_depth_on_sphere`, the sun
+march's mirror) is averaged over 2048 columns, weighted by their alpha seen
+from overhead. The result is a 32 × 17 table indexed by the sun's cosine at
+the cloud and the weather's coverage. The far deck is then the blur of the
+near one, so nothing changes colour when closing in. A low sun marches along
+the slab through the clouds around it, which darkens the deck gradually
+toward the terminator, in the reddened sunlight's own colour.
+
+An earlier version replaced this with a sheet's falloff with the sun's
+incidence. That removed the direct sunlight from about 20° of sun down,
+before the air reddens it, so the clouds along the terminator were lit by the
+blue sky alone: grey-blue from orbit, turning orange about 200 km closer.
+
+### The terminator on the clouds
+
+A cloud stays sunlit after sunset below it: at 2.7 km over a 600 km planet,
+until the sun is 5.4° below its horizon. The air alone dimmed its light only
+to about 15 % of red by then, and the planet's shadow then cut it to black,
+which drew a hard line across the clouds, close up and from orbit. Two terms
+in `cloud_field.glsl` (billboards per vertex, the deck per pixel) spread it:
+
+- **The grazing edge** (`grazingLight`): sunlight whose path dips below the
+  cloud's own altitude crosses the haze, the terrain and the cloud deck
+  around, more the lower it passes, and none gets through along the ground.
+  It is scaled by a smoothstep of the square root of the path's lowest
+  altitude over the cloud's, so the light fades to nothing at the planet's
+  shadow over its last ~1.5°, not in a step. A sun above the cloud's horizon
+  is untouched.
+- **Twilight** (`cloudTwilight`, weighted by `TWILIGHT_GLOW` in cloud.frag):
+  once a cloud is in the shadow, the air above it is still sunlit for a few
+  degrees more and lights it, warm, fading as that air darkens in turn. It
+  is taken as the sunlight the air `TWILIGHT_AIR_HEIGHT` (6 km) above
+  receives and the cloud does not, which makes it nothing by day. It is
+  light from the sky: not phase-weighted, not self-shadowed, and reaching
+  undersides as the sky's light does. It carries the clouds from lit to dark
+  over about 4° past the line (about 40 km on this planet).
+
+The terrain and Panda3D's lights still use the plain shadow: on the ground
+the sun has set long before, so there is no line to see there.
 
 ### Not yet
 
