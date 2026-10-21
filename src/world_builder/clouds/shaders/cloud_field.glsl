@@ -2,8 +2,9 @@
 // fragment stage (cloud.frag) and the planet billboards' vertex stage
 // (cloud_sphere.vert: the layer parameters, sunDir, uCloudDebug). Include with
 // #pragma include. noise.py mirrors the density on the CPU (fbm, density,
-// density_on_sphere), which is what billboard placement runs on; the sun
-// march has no CPU copy.
+// density_on_sphere), which is what billboard placement runs on, and the sun
+// march (sun_optical_depth_on_sphere), which the far deck's lighting table is
+// averaged from (deck_light_table).
 uniform sampler3D cloudNoise;    // one tileable octave of value noise, R8
 uniform vec3  noiseOffset;       // wind advection, in METRES
 uniform float noiseSize;         // volume resolution, for the coord → uvw divide

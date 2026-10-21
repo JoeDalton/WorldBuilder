@@ -286,13 +286,22 @@ by construction. Self-shadowing goes first (it is smaller than the
 cloud). So the pattern from orbit is the one you fly into, without the
 speckle.
 
-Lighting goes the same way: up close a low sun lights the clouds' sides
-(the volume does it); averaged from afar the deck is a sheet, whose sunlight
-per unit area falls with the sun's incidence, to nothing at its horizon. The
-far deck fades that factor in (full below ~20° of sun, none at noon), or it
-stays lit to the planet's shadow line and cuts to black there: a hard
-terminator from space (the air on a 600 km planet reddens grazing sunlight
-but barely dims it).
+Lighting goes the same way: from afar, the self-shadowing and the powder
+term are their **averages** over the clouds' columns
+(`noise.deck_light_table`), not the per-pixel values that would alias. The
+averages are measured on the CPU when the clouds are built (~0.4 s, cached).
+The deck's own close-up lighting (`sun_optical_depth_on_sphere`, the sun
+march's mirror) is averaged over 2048 columns, weighted by their alpha seen
+from overhead. The result is a 32 × 17 table indexed by the sun's cosine at
+the cloud and the weather's coverage. The far deck is then the blur of the
+near one, so nothing changes colour when closing in. A low sun marches along
+the slab through the clouds around it, which darkens the deck gradually
+toward the terminator, in the reddened sunlight's own colour.
+
+An earlier version replaced this with a sheet's falloff with the sun's
+incidence. That removed the direct sunlight from about 20° of sun down,
+before the air reddens it, so the clouds along the terminator were lit by the
+blue sky alone: grey-blue from orbit, turning orange about 200 km closer.
 
 ### Not yet
 

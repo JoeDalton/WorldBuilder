@@ -12,9 +12,12 @@ import pytest
 
 from world_builder.clouds.cloud import PRESETS, CloudQuality, CloudType
 from world_builder.clouds.noise import (
+    DECK_LIGHT_COS_MIN,
+    deck_light_table,
     density_on_sphere,
     fbm_sigma,
     sphere_column_peaks,
+    sun_optical_depth_on_sphere,
     with_threshold,
 )
 from world_builder.clouds.sphere import (
@@ -193,6 +196,84 @@ def test_the_weather_opens_and_closes_the_deck(field, cube):
     wet, dry = cover > 0.7, cover < 0.15
     assert wet.sum() > 200 and dry.sum() > 200
     assert cloudy[wet].mean() > cloudy[dry].mean() + 0.3
+
+
+# ── The far deck's lighting ───────────────────────────────────────────────────
+
+OPTICS = PRESETS[CloudType.CUMULUS].optics
+
+
+def test_the_sun_march_counts_only_the_slab(field, table):
+    """Above the slab, looking up, the sun is never shadowed; and with no
+    steps, nothing is."""
+    up = TangentFrame.at(20.0, 40.0).up
+    overcast = coverage_to_shift(1.0, table)
+    above = up * (R + sum(field.slab) + 10.0)
+    depth = sun_optical_depth_on_sphere(
+        _noise(7), field, OPTICS, above[None], up, R, overcast
+    )
+    assert depth[0] == 0.0
+    inside = up * (R + field.slab[0] + 0.5 * field.slab[1])
+    none = sun_optical_depth_on_sphere(
+        _noise(7), field, replace(OPTICS, sun_steps=0), inside[None], up, R, overcast
+    )
+    assert none[0] == 0.0
+
+
+def test_the_sun_march_along_overcast_grows_with_its_steps(field, table):
+    """Marching along the middle of an overcast slab, each step adds depth."""
+    rng = np.random.default_rng(3)
+    dirs = rng.normal(size=(500, 3))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    level = np.cross(dirs, [0.0, 0.0, 1.0])
+    level /= np.linalg.norm(level, axis=1, keepdims=True)
+    points = dirs * (R + field.slab[0] + 0.5 * field.slab[1])
+    overcast = coverage_to_shift(1.0, table)
+    short, long = (
+        sun_optical_depth_on_sphere(
+            _noise(7), field, replace(OPTICS, sun_steps=n), points, level, R, overcast
+        )
+        for n in (2, 4)
+    )
+    assert (short > 0.0).mean() > 0.9
+    assert np.all(long >= short)
+    assert long.mean() > 1.5 * short.mean()
+
+
+@pytest.fixture(scope="module")
+def deck_light(field, table):
+    return deck_light_table(
+        _noise(7), field, OPTICS, R, table, cosines=16, columns=1024
+    )
+
+
+def test_the_deck_light_is_a_shadowing(deck_light):
+    """Shares of the sunlight: in [0, 1], the powder only darkens, and a
+    clear sky is unshadowed."""
+    assert deck_light.shape == (17, 16, 2)
+    assert np.all((deck_light >= 0.0) & (deck_light <= 1.0))
+    assert np.all(deck_light[..., 0] <= deck_light[..., 1] + 1e-6)
+    np.testing.assert_array_equal(deck_light[0], 1.0)
+
+
+def test_a_low_sun_shadows_the_deck_more(deck_light):
+    """Toward the terminator the sun marches along the slab through the
+    clouds around: the deck darkens gradually, never to nothing (the far
+    deck used to drop its sunlight to black at the sun's horizon)."""
+    mu = np.linspace(DECK_LIGHT_COS_MIN, 1.0, deck_light.shape[1])
+    low, high = np.argmin(np.abs(mu - 0.05)), -1
+    for row in range(4, 11):  # coverage 0.25 to 0.625
+        visibility = deck_light[row, :, 1]
+        assert visibility[low] < visibility[high] - 0.05, row
+        assert visibility[low] > 0.2, row
+
+
+def test_the_deck_light_is_deterministic(field, table):
+    args = (_noise(7), field, OPTICS, R, table)
+    first = deck_light_table(*args, cosines=4, columns=256)
+    np.testing.assert_array_equal(
+        first, deck_light_table(*args, cosines=4, columns=256)
+    )
 
 
 # ── The weather map ────────────────────────────────────────────────────────────
@@ -377,10 +458,12 @@ def test_clouds_draw_tiles_around_the_camera(showbase):
         # Only the near shells' levels, near the camera.
         levels = {k[0] for k in clouds._shown}
         assert levels <= {s.level for s in clouds.spec.shells}
-        # The deck sits at the planet's centre.
+        # The deck sits at the planet's centre, its far lighting bound.
         np.testing.assert_allclose(
             clouds.deck.get_pos(showbase.render), -camera, atol=1.0
         )
+        light = clouds.root.get_shader_input("deckLight").get_texture()
+        assert light.get_x_size() == 32 and light.get_y_size() == 17
     finally:
         clouds.remove()
         executor.shutdown()

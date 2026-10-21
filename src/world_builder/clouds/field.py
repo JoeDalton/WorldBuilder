@@ -68,6 +68,7 @@ from world_builder.clouds.noise import (
     NOISE_SIZE,
     CloudOptics,
     DensityField,
+    build_deck_light_texture,
     build_noise_texture,
     column_peaks,
     fbm_sigma,
@@ -240,6 +241,12 @@ def _no_weather() -> Texture:
     return tex
 
 
+@functools.cache
+def _no_deck_light() -> Texture:
+    """A 1-texel deck lighting table, for shaders that never read it."""
+    return build_deck_light_texture(np.ones((1, 1, 2), dtype=np.float32))
+
+
 def flat_mode_inputs(node: NodePath) -> None:
     """The shaders' planet-mode inputs (cloud.frag, cloud_field.glsl), switched
     off for the flat field: the shader reads them, so they must be set even when
@@ -253,6 +260,8 @@ def flat_mode_inputs(node: NodePath) -> None:
         uDeck=0,
         planetRadius=0.0,
         weatherMap=_no_weather(),
+        deckLight=_no_deck_light(),
+        deckLightCosMin=0.0,
         uOwnAtmosphere=-1,
         uPixelAngle=0.001,
         uCloudDebug=0,
