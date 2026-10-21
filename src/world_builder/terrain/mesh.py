@@ -5,6 +5,11 @@ The vertex bytes arrive pre-packed from the worker in :data:`VERTEX_DTYPE`
 layout, so building a chunk is one memory copy. All chunks share one index
 buffer. Each GeomNode gets the chunk's precomputed bounding box, so Panda
 never walks the vertices to compute one.
+
+Chunk nodes are not collision targets: Panda would otherwise collide
+colliders whose from-mask has GeomNode's default bit with every drawn
+triangle, at about a microsecond each. Terrain collision goes through
+``Terrain.enable_collision`` instead.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ from __future__ import annotations
 import functools
 
 from panda3d.core import (
+    BitMask32,
     BoundingBox,
     Geom,
     GeomEnums,
@@ -77,4 +83,5 @@ def build_chunk_node(chunk: ChunkData) -> GeomNode:
     node.add_geom(geom)
     node.set_bounds(bounds)
     node.set_final(True)
+    node.set_into_collide_mask(BitMask32.all_off())
     return node

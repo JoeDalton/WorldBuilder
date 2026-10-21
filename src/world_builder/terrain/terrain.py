@@ -465,13 +465,14 @@ class Terrain:
         name: str = "terrain",
         owner_tag: str = "owner",
         max_distance: float = 100_000.0,
+        include_ocean: bool | None = None,
     ) -> TerrainCollision:
         """Make the drawn terrain solid to a game's ``CollisionTraverser``.
 
         Adds one ``CollisionNode`` (into-only) beside :attr:`root`, holding a
         native solid that answers sphere and segment tests against the drawn
-        triangles of every chunk within *max_distance* of the camera (sea
-        surface included if the planet has an ocean). Each collider gets at
+        triangles of every chunk within *max_distance* of the camera (and the
+        sea surface, see *include_ocean*). Each collider gets at
         most one entry per frame, with the surface point and normal. The
         node's *owner_tag* python tag is a
         :class:`~world_builder.terrain.collision.TerrainSurface`: its
@@ -482,13 +483,16 @@ class Terrain:
         :param owner_tag: the python tag the owner is stored under
         :param max_distance: chunks farther from the camera are not solid,
             metres
+        :param include_ocean: the sea surface is solid (else the seabed
+            under it); None = if the planet has an ocean, as
+            :class:`TerrainQuery` does
         :returns: the collision (also :attr:`collision`)
         :raises NativeCollisionError: the native library is not built for
             the running Panda3D (``scripts/build_native.sh``)
         """
         self.disable_collision()
         self.collision = TerrainCollision(
-            self, into_mask, name, owner_tag, max_distance
+            self, into_mask, name, owner_tag, max_distance, include_ocean
         )
         if self._origin is not None:
             self.collision.follow(self.root, self._origin, rebased=True)

@@ -17,6 +17,7 @@ from panda3d.core import (
     CollisionSegment,
     CollisionSphere,
     CollisionTraverser,
+    GeomNode,
 )
 
 from world_builder.terrain.biomes import BIOMES
@@ -351,6 +352,29 @@ def test_only_chunks_within_reach_are_solid(moon):
         terrain.disable_collision()
 
 
+def test_drawn_chunks_are_not_collision_targets(showbase, moon):
+    """A collider with GeomNode's default bit would otherwise hit every drawn
+    triangle (slowly); only the collision node is solid."""
+    terrain, camera = moon
+    assert terrain.collision is None
+    up = camera / np.linalg.norm(camera)
+    ground = terrain.query.surface_point(camera, generate=False)
+    start = terrain.to_render(ground + 30.0 * up)
+    end = terrain.to_render(ground - 30.0 * up)
+    traverser = CollisionTraverser()
+    queue = CollisionHandlerQueue()
+    node = CollisionNode("laser")
+    node.add_solid(CollisionSegment(0, 0, 0, *(end - start)))
+    node.set_from_collide_mask(GeomNode.get_default_collide_mask() | MASK)
+    node.set_into_collide_mask(BitMask32.all_off())
+    path = showbase.render.attach_new_node(node)
+    path.set_pos(*start)
+    traverser.add_collider(path, queue)
+    traverser.traverse(showbase.render)
+    path.remove_node()
+    assert queue.get_num_entries() == 0
+
+
 def test_disable_removes_the_node(showbase, moon):
     terrain, _ = moon
     terrain.enable_collision(MASK)
@@ -408,3 +432,80 @@ def test_a_new_planet_resets_the_chunks(moon):
         terrain.disable_collision()
         terrain.set_spec(spec)
         _settle(terrain, camera)
+
+
+# ── the sea, through Terrain ───────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def ocean_terrain(showbase):
+    """An earthlike terrain settled over deep sea."""
+    from world_builder.terrain.terrain import Terrain, TerrainSettings
+    from world_builder.terrain.workers import ChunkExecutor
+
+    spec = replace(PRESETS["earthlike"], seed=19).resolved()
+    planet = Planet(spec)
+    dirs = np.random.default_rng(8).normal(size=(4000, 3))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    heights = planet.sample_dirs(dirs, apply_stamps=True)[0]
+    deep = dirs[int(np.argmin(heights))]
+    assert heights.min() < -1500.0
+    executor = ChunkExecutor(backend="inline", inline_budget=16)
+    terrain = Terrain(
+        showbase.render, spec, executor=executor, settings=TerrainSettings(min_level=7)
+    )
+    camera = deep * (terrain.radius + 2000.0)
+    _settle(terrain, camera)
+    try:
+        terrain.enable_collision(MASK)
+    except NativeCollisionError as error:
+        terrain.destroy()
+        executor.shutdown()
+        pytest.skip(str(error))
+    terrain.disable_collision()
+    yield terrain, camera
+    terrain.destroy()
+    executor.shutdown()
+
+
+def _radial_laser(showbase, terrain, camera):
+    up = camera / np.linalg.norm(camera)
+    p0 = up * (terrain.radius + 30.0)
+    p1 = up * (terrain.radius - 30.0 + float(terrain.query.ground_height_at(camera)))
+    start = terrain.to_render(p0)
+    entries = _traverse(
+        showbase.render,
+        ("laser", CollisionSegment(0, 0, 0, *(terrain.to_render(p1) - start)), start),
+    )
+    assert len(entries) == 1
+    return entries[0], up
+
+
+def test_the_sea_surface_is_solid_through_the_terrain(showbase, ocean_terrain):
+    terrain, camera = ocean_terrain
+    collision = terrain.enable_collision(MASK)  # include_ocean follows the planet
+    try:
+        entry, up = _radial_laser(showbase, terrain, camera)
+        point = np.array(entry.get_surface_point(showbase.render))
+        np.testing.assert_allclose(
+            point, terrain.to_render(up * terrain.radius), atol=0.05
+        )
+        assert _angle(np.array(entry.get_surface_normal(showbase.render)), up) < 0.01
+        assert collision.surface.material_at(point) == "water"
+    finally:
+        terrain.disable_collision()
+
+
+def test_without_the_sea_the_seabed_is_hit(showbase, ocean_terrain):
+    terrain, camera = ocean_terrain
+    collision = terrain.enable_collision(MASK, include_ocean=False)
+    try:
+        entry, up = _radial_laser(showbase, terrain, camera)
+        point = np.array(entry.get_surface_point(showbase.render))
+        seabed = terrain.query.ground_height_at(camera, generate=False)
+        assert float(seabed) < -1000.0
+        expected = terrain.to_render(up * (terrain.radius + float(seabed)))
+        np.testing.assert_allclose(point, expected, atol=0.05)
+        assert collision.surface.material_at(point) != "water"
+    finally:
+        terrain.disable_collision()

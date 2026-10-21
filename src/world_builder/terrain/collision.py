@@ -79,6 +79,8 @@ class TerrainCollision:
     :ivar surface: its owner (:class:`TerrainSurface`)
     :ivar max_distance: chunks farther than this from the camera are not
         registered, metres
+    :ivar include_ocean: whether the sea surface is solid; None follows the
+        planet (solid if it has an ocean), also after a spec change
     """
 
     def __init__(
@@ -88,10 +90,12 @@ class TerrainCollision:
         name: str,
         owner_tag: str,
         max_distance: float,
+        include_ocean: bool | None = None,
         samples: int = SPHERE_SAMPLES,
     ):
         self.terrain = terrain
         self.max_distance = float(max_distance)
+        self.include_ocean = include_ocean
         self._samples = samples
         self._registered: set[tuple] = set()
         self.native = self._make_native()
@@ -107,11 +111,12 @@ class TerrainCollision:
 
     def _make_native(self) -> NativeTerrain:
         terrain = self.terrain
+        ocean = self.include_ocean
         return NativeTerrain(
             terrain.radius,
             terrain.grid.max_level,
             terrain.grid.n0,
-            terrain.spec.has_ocean,
+            terrain.spec.has_ocean if ocean is None else ocean,
         )
 
     @property

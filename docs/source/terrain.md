@@ -283,9 +283,11 @@ The solid answers for every drawn chunk within `max_distance` of the camera. Chu
 
 **Where the node goes:** it hangs beside `Terrain.root`, not under it, and copies the root's transform each frame. Under the root, its collide mask would send the traverser through every chunk node for every collider.
 
-**Cost:** on the earthlike preset, with 64 ships, 33 active sensors and 300 lasers within 5 km of the camera, the terrain adds about 0.6 ms to a traverse, and 1.1 ms with every ship and laser hugging the ground (`scripts/collision_bench.py`).
+**Cost:** on the earthlike preset, with 64 ships, 33 active sensors and 300 lasers within 5 km of the camera, the terrain adds about 0.6 ms to a traverse, and 1.1 ms with every ship and laser hugging the ground (`scripts/collision_bench.py`). `scripts/collision_viewer.py` shows the same load live in a window: contacts, normals and the traverse time.
 
 The library is built per Panda3D series with `scripts/build_native.sh` (see `NATIVE_COLLISION_BUILD.md`). `enable_collision` raises `NativeCollisionError` when it is missing or built for another series.
+
+`include_ocean=False` makes the seabed solid instead of the sea surface. The drawn chunk meshes themselves are never collision targets: their into-mask is off.
 
 `TerrainQuery` stays the pure-numpy path for one-off queries (`altitude`, `height_at`, and so on).
 
