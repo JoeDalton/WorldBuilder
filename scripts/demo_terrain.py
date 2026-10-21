@@ -92,6 +92,8 @@ reddens it and the planets' shadows hide it. Panda3D's own lights (a
 DirectionalLight and an AmbientLight on render, for anything drawn without
 the world's shaders) follow the light at the camera, and the swell ocean is
 lit as the sea under the camera (Ocean.set_light), so it darkens at night.
+A white ball (Panda3D's smiley, untextured, 20 m across) floats ahead of the
+start pose, at its height, to judge how they light an object.
 
 Terrain is generated in background processes, coarse first: the world shows
 blurry for a second, then sharpens.
@@ -175,6 +177,9 @@ CLOUD_BASE = 2200.0  # metres above sea level: above the start pose
 HUD_PERIOD = 0.2  # seconds between HUD refreshes
 PROBE_RADIUS = 20.0
 PROBE_DISTANCE = 60.0
+# The white ball ahead of the start pose (judging the lights on objects).
+TEST_BALL_DIAMETER = 20.0
+TEST_BALL_DISTANCE = 150.0  # metres ahead of the start pose, level with it
 LASER_RANGE = 30000.0
 
 _ROTATIONS = (
@@ -462,6 +467,7 @@ class TerrainDemo(ShowBase):
         )
         self._hud_time = -1.0
         self._reset_camera()
+        self._test_ball, self._test_ball_point = self._make_test_ball()
         self.taskMgr.add(self._update, "terrain_demo_update")
         print(__doc__)
 
@@ -564,6 +570,23 @@ class TerrainDemo(ShowBase):
         probe.hide()
         return probe
 
+    def _make_test_ball(self):
+        """A white ball ahead of the start pose, level with it, lit by Panda3D's
+        lights as any model is: for judging them.
+
+        :returns: (node, its position in the planet frame)
+        """
+        ball = self.loader.load_model("models/smiley")
+        ball.set_texture_off(1)
+        ball.set_color(1.0, 1.0, 1.0, 1.0)
+        ball.set_scale(TEST_BALL_DIAMETER / 2.0)  # the model is a unit sphere
+        ball.reparent_to(self.render)
+        start = self._relative(self.home)
+        up = start / np.linalg.norm(start)
+        ahead = self._forward() - up * float(self._forward() @ up)
+        ahead /= max(np.linalg.norm(ahead), 1e-9)
+        return ball, start + ahead * TEST_BALL_DISTANCE
+
     # ── per frame ──────────────────────────────────────────────────────────────
 
     def _update(self, task) -> int:
@@ -603,6 +626,7 @@ class TerrainDemo(ShowBase):
             self._update_probe()
         for mark, body, point in self._laser_marks:
             mark.set_pos(*body.terrain.to_render(point))
+        self._test_ball.set_pos(*self.home.terrain.to_render(self._test_ball_point))
         # Text geometry is rebuilt on every change: a few times a second is
         # plenty to read, and saves ~1 ms a frame.
         now = self._clock.get_frame_time()

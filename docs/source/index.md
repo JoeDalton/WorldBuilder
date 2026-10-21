@@ -33,5 +33,6 @@ ocean
 clouds
 performance
 performance_backlog
+object_lighting
 apidocs/index
 ```

@@ -159,7 +159,17 @@ Its shader shows:
   (linear). Rotate either with `star_hpr` (`Sky.set_star_rotation`);
 - **the sun's disc**, twice its real size so it reads at any resolution,
   reddened by the air at sunset;
-- through every atmosphere, then the terrain's tonemap.
+- through every atmosphere, then the terrain's tonemap. The disc and the glow
+  around it are much brighter than white, and a per-channel tonemap flattens
+  such light toward white whatever its colour (the sunset sun was white while
+  it lit everything orange). So above white the sky fades to a tonemap of its
+  brightest channel instead, which keeps the hue: the disc shows the colour of
+  the sunlight reaching the camera, the light it casts, and so does its
+  reflection on the sea. Low, the sun is no brighter on screen than the glow
+  around it and got lost in it, so it is drawn as an overexposed sun looks: a
+  paler core, a redder rim and a glare of its own light around it
+  (`SUN_CORE`, `SUN_REDDEN`, `SUN_GLARE` in sky.frag). How low it is comes
+  from its light's colour, so a high sun is untouched.
 
 ## Planet clouds
 
