@@ -282,15 +282,25 @@ class TerrainQuery:
         normals = np.zeros((len(dirs), 3))
         face, i, j, _, _ = self.grid.locate(dirs, level)
         if len(dirs) == 1:  # the common case (an altimeter): no grouping
-            keys, inverse = np.array([[face[0], i[0], j[0]]]), np.zeros(1, np.intp)
+            groups = [((int(face[0]), int(i[0]), int(j[0])), np.zeros(1, np.intp))]
         else:
-            keys, inverse = np.unique(
-                np.column_stack([face, i, j]), axis=0, return_inverse=True
-            )
-        inverse = inverse.ravel()
-        for k, (f, ki, kj) in enumerate(keys):
-            sel = np.nonzero(inverse == k)[0]
-            chunk = self._chunk((level, int(f), int(ki), int(kj)), generate)
+            # One int64 key per chunk, sorted once and split: for many points
+            # (the ocean's seabed) far cheaper than unique rows and a scan of
+            # all points per chunk.
+            side = self.grid.side(level)
+            key = (np.asarray(face, np.int64) * side + i) * side + j
+            order = np.argsort(key, kind="stable")
+            sorted_key = key[order]
+            starts = np.flatnonzero(np.r_[True, sorted_key[1:] != sorted_key[:-1]])
+            groups = [
+                (
+                    (int(k // (side * side)), int(k // side % side), int(k % side)),
+                    sel,
+                )
+                for k, sel in zip(sorted_key[starts], np.split(order, starts[1:]))
+            ]
+        for (f, ki, kj), sel in groups:
+            chunk = self._chunk((level, f, ki, kj), generate)
             if chunk is None:
                 heights[sel] = self.planet.sample_dirs(dirs[sel], apply_stamps=True)[0]
                 normals[sel] = dirs[sel]

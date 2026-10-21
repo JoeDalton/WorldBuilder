@@ -1,6 +1,7 @@
 # WorldBuilder
 
 Procedurally build whole worlds in Panda3D !
+This is also a full vibe-coding experiment for me
 
 | Package | What it is |
 |---|---|

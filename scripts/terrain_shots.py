@@ -10,6 +10,7 @@ times a few frames, then saves a screenshot::
         [--radius METRES] [--pose NAME ...] [--timeout SECONDS]
         [--size "1600 900"] [--offscreen]
         [--cloud-quality high|mid|low|off] [--cloud-debug BITS] [--frames N]
+        [--ocean-quality high|mid|low|ultra] [--ocean-debug MODE]
 
     --out            where the PNGs go (default ./terrain_shots)
     --level          the planet's level file (default: the demo level)
@@ -23,6 +24,10 @@ times a few frames, then saves a screenshot::
                      uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
                      octaves at most, 8 flat colour; default 0)
     --frames         frames timed once settled (default 60)
+    --ocean-quality  default high
+    --ocean-debug    Ocean.set_debug_mode view (ocean.frag's uDebugMode:
+                     9 octaves resolved, 10 unresolved slope spread, ...;
+                     default 0)
 
 No multisampling, vsync off. Once a pose has settled, N frames are timed,
 each waiting for the GPU to finish (a one-pixel read back): CPU and GPU time
@@ -41,7 +46,9 @@ moonrise (the moon over the northern horizon, from the start area),
 moon_orbit (3 moon radii up, looking down), moon_ground (2 km over the
 moon's sand), night_orbit (1.5 radii up, looking down at the terminator: the
 sun 60 degrees below the nadir's horizon), night_sea (3 m over the sea, the
-sun 8 degrees down: the sky's reflection must be as dark as the sky). Every
+sun 8 degrees down: the sky's reflection must be as dark as the sky), beach
+(40 m up, 300 m off the coast nearest the reference point, looking at it: the
+ocean's foam, colour by depth and swell). Every
 other pose has the sun at azimuth 210, elevation 35, as seen there.
 """
 
@@ -60,12 +67,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import (  # noqa: E402
     CLOUD_QUALITIES,
+    OCEAN_QUALITIES,
     TerrainDemo,
     describe_window,
     window_config,
 )
 
-from world_builder.terrain.chart import latlon  # noqa: E402
+from world_builder.terrain.chart import AzimuthalEquidistantChart, latlon  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 
 CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
@@ -121,7 +129,47 @@ def _poses(demo: TerrainDemo) -> dict:
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     # At sea level by night: the sky's reflection must be as dark as the sky.
     poses["night_sea"] = (-6.272, -52.0456, 3.0, -115.0, 2.0, 0, 0)
+    beach = _beach_pose(demo)
+    if beach is not None:
+        poses["beach"] = beach
     return poses
+
+
+def _beach_pose(demo: TerrainDemo) -> tuple | None:
+    """The ocean's shoreline up close: 40 m up, 300 m off the coast nearest
+    the reference point, looking at it (its foam, colour by depth and swell).
+
+    :returns: a pose (see :func:`_poses`), or None without a coast in 10 km
+    """
+    spec = demo.terrain.spec
+    chart = AzimuthalEquidistantChart(
+        spec.reference_lat, spec.reference_lon, demo.radius
+    )
+    angles = np.radians(np.arange(0.0, 360.0, 10.0))
+    reach = np.arange(0.0, 10000.0, 20.0)
+    x = np.outer(np.sin(angles), reach)  # east
+    y = np.outer(np.cos(angles), reach)  # north
+    heights = demo.terrain.planet.sample_dirs(chart.to_dirs(x, y), apply_stamps=True)[
+        0
+    ].reshape(x.shape)
+    best = None
+    for ray, h in enumerate(heights):
+        # The steps from sea onto land along this ray, with 300 m of sea
+        # before them.
+        for step in np.nonzero((h[:-1] < 0.0) & (h[1:] >= 0.0))[0]:
+            if step >= 15 and np.all(h[step - 15 : step + 1] < 0.0):
+                if best is None or step < best[1]:
+                    best = (ray, int(step))
+                break
+    if best is None:
+        return None
+    ray, step = best
+    back = step - 15  # 300 m out to sea
+    dirs = chart.to_dirs(x[ray, back], y[ray, back])
+    lat, lon = (float(v[0]) for v in latlon(dirs))
+    # Heading toward the shore, counter-clockwise from north.
+    heading = -math.degrees(angles[ray])
+    return (lat, lon, 40.0, heading, -8.0, 0, 0)
 
 
 def _settle(demo: TerrainDemo, timeout: float) -> bool:
@@ -166,6 +214,10 @@ def main() -> None:
     parser.add_argument(
         "--frames", type=int, default=60, help="frames timed once settled"
     )
+    parser.add_argument("--ocean-quality", default="high", choices=OCEAN_QUALITIES)
+    parser.add_argument(
+        "--ocean-debug", type=int, default=0, help="Ocean.set_debug_mode view"
+    )
     args = parser.parse_args()
     window_config("Terrain shots", args.size, args.offscreen, vsync=False)
     args.out.mkdir(parents=True, exist_ok=True)
@@ -175,9 +227,14 @@ def main() -> None:
         args.radius,
         cloud_quality=args.cloud_quality,
         cloud_debug=args.cloud_debug,
+        ocean_quality=args.ocean_quality,
+        ocean_debug=args.ocean_debug,
     )
     demo.setFrameRateMeter(False)
-    print(describe_window(demo), f"clouds {args.cloud_quality}")
+    print(
+        describe_window(demo),
+        f"clouds {args.cloud_quality}, ocean {args.ocean_quality}",
+    )
     win = demo.win
     probe = win.make_display_region(0, 1 / win.get_x_size(), 0, 1 / win.get_y_size())
     poses = _poses(demo)

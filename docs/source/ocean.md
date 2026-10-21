@@ -17,6 +17,37 @@ docstring has the overview):
   `compute_wave_dirs` precomputes the per-iteration wave directions once on the
   CPU as a uniform array; `set_wave_iterations()` changes wave detail at
   runtime.
+- **Quality.** Every cost/quality trade is a field of `OceanQuality`, with
+  presets in `OCEAN_QUALITY` (`low`, `mid`, `high` the default, `ultra`,
+  named like the clouds'). Pass one to `Ocean(quality=...)`, or change it live
+  with `set_quality()`: the octave count, how many pixels a wavelength needs
+  before it fades (`aa_full_px`, `aa_gone_px`), the rough fresnel, the
+  reflection's blur, the seabed's cascades and the depth colour, foam and
+  depth-scaled swell switches. `set_foam()` turns the foam alone. The
+  switches are uniforms tested in branches that are the same across the
+  screen, so a feature that is off costs almost nothing and needs no
+  recompile. The terrain demo cycles the presets with F11; `terrain_shots.py`
+  and `flight_bench.py` take `--ocean-quality`.
+- **Seabed** (`ocean/seabed.py`). The ocean knows nothing of the terrain:
+  `set_seabed(sampler)` gives it a function from points of its plane (in the
+  app's world) and a texel size to the sea floor's height there.
+  `SeabedMap` calls it on a worker thread over three square cascades centred
+  on the camera. With `high`: 1 km at 8 m texels, 8 km (the swell grid) at
+  42 m, 64 km at 500 m. Each cascade is uploaded as a float texture, re-baked
+  once the camera has moved a quarter of its extent, refreshed every 5 s,
+  and baked at most every 0.5 s. A fast camera outruns the finest cascade for
+  a moment, and the next coarser one covers. Where the plane sits in that
+  world may change every frame (`set_seabed_frame(origin, east, north)`): a
+  tangent plane following the camera over a planet turns as it flies. Each
+  cascade keeps the frame it was baked in, and every frame the current
+  plane's xy is mapped into it in float64, so a bake stays put on the ground.
+  Bake corners sit on the texel lattice, so a new bake reads the same ground
+  points and the shoreline does not shift when it lands. Without a sampler,
+  or beyond the cascades, the sea is deep and looks as before. The terrain
+  demo's sampler reads `TerrainQuery.ground_height_at` at the grid level
+  matching the texel, from stored chunks only. In the low fast flight
+  (`flight_bench.py`) the bakes take 15–36 ms each and leave the frame times
+  as they were.
 - **Geometric swell** (`geometric_swell=True`, used by SpaceFlight's ocean
   level and the terrain demo; a prototype with known artifacts, see the
   [swell artifact report](https://github.com/JoeDalton/WorldBuilder/blob/main/src/world_builder/ocean/OCEAN_SWELL_ARTIFACT_REPORT.md))
@@ -95,11 +126,24 @@ docstring has the overview):
 
 Driven by [`ocean/ocean.py`](../../src/world_builder/ocean/ocean.py) (above):
 
+- **[`seabed.glsl`](../../src/world_builder/ocean/shaders/seabed.glsl)**
+  (included by both) reads the seabed: the finest cascade covering a point,
+  blended into the next coarser one across the outer 10% of its side, so
+  mostly one texture read. Its `swellDepthFactor` takes the swell from
+  nothing at `swell_shallow` (5 m) to all of it at `swell_deep` (60 m).
+  **[`water.glsl`](../../src/world_builder/ocean/shaders/water.glsl)**
+  holds the colour by depth, shared with the terrain's sea surface.
 - **[`ocean.vert`](../../src/world_builder/ocean/shaders/ocean.vert)** is a
   passthrough plus the optional `uGeometricSwell` mode (which SpaceFlight
   enables): it displaces vertices vertically by the same `swellField` the
   fragment shader samples, tapered to zero near the dense grid's edge so the
-  displaced centre joins the undisplaced border rings. Its world position comes from
+  displaced centre joins the undisplaced border rings. Over the seabed the
+  swell dies out in the shallows, so it does not climb the beaches (the demo
+  can keep the game's 20 m swell). At the shore the water also sinks, to
+  1 m under the shoreline. It meets the ground at 0.25 m of depth, four times
+  as steeply as the seabed rises, so a flat beach barely above the water
+  stops z-fighting with it in the distance. Under land it stays well below
+  the ground, so the drawn waterline keeps to the seabed's. Its world position comes from
   `uModelMatrix` (refreshed by `Ocean.update` after the plane is re-centred),
   not `p3d_ModelMatrix`, so the waves stay anchored to the world rather than
   to the moving render origin.
@@ -108,16 +152,71 @@ Driven by [`ocean/ocean.py`](../../src/world_builder/ocean/ocean.py) (above):
     (`wavedx`) along per-iteration directions `iWaveDirs`, precomputed in
     Python by `compute_wave_dirs`. `waveGradient` computes the slope
     analytically in one pass instead of a three-sample finite difference.
-  - **Level of detail.** `detailAngle` (view-ray elevation, so the look is
-    consistent at any altitude) and `distFade` (camera distance) fade wave
-    detail toward a flat mirror. `normalIter` decays exponentially with
-    distance (`uWaveFadeK2`); `warpIter` and the warp strength follow
-    `lodFactor = detailAngle × distFade`. Below a `detailAngle` of 0.01 the
-    small waves are skipped.
+  - **Filtering by size on screen** (#12). Sky reflection and water colour
+    are far apart, so the waves alias as soon as they go sub-pixel. Camera
+    distance is the wrong measure: what counts is how much water a pixel
+    covers, and that depends on the grazing angle too. So the shader takes
+    the pixel's footprint from the lens: across the view, the distance times
+    the pixel's angle (`uPixelAngle`, narrower off the screen's centre);
+    along it, that over the sine of the elevation. `dFdx`/`dFdy` of the
+    world position would jump at every edge of the displaced swell mesh, and
+    each triangle would fade its waves differently. Each octave fades by
+    how far its phase moves across the pixel along its own direction:
+    `uAAStart`..`uAAEnd`, from `aa_full_px` (8) down to `aa_gone_px` (4)
+    pixels per wavelength. A wave running across the view therefore stays
+    longer than one running along it. Octave i's frequency is 1.18^i, so the
+    footprint's bounds give two octave ranges up front: those resolved in
+    every direction run in a plain loop, as cheap as unfiltered, and only
+    the octaves in between pay for the fade. Past the last of them nothing
+    is evaluated, and the small waves are skipped only once even the longest
+    one running across the view is gone (cutting them off by the
+    along-the-view footprint drew a hard line). In the coast pose that leaves 0.1 octaves per pixel
+    where there were 2, and 32.7 where there were 34 at 3 m over the sea.
+    Every pixel normalises by the full weight sum (`uWaveWeightSum`), so
+    dropping fine octaves does not inflate the coarse ones.
+  - **What the filter takes away is kept** as slope variance. A fine
+    octave's slope is nearly as large as a coarse one's (`frequency ×
+    weight = 0.944^i`), so dropping it without compensation would turn
+    distant water into a too-bright mirror. The faded octaves' variance
+    (`C_WAVE` per octave, the tail from `uTailVar`, both computed on the
+    CPU) is added to that of the faded swell and of the noise mask, which
+    also fade to their means. That spread, flattened like the resolved
+    normal, does two things:
+    - It picks the fresnel from `uFresnelLUT`. That table is Schlick
+      averaged over Gaussian facets, weighted by their area seen from the
+      eye (`rough_fresnel_table`), so distant water settles on a steady
+      blend of sky and water colour.
+    - It blurs the reflection through its mipmaps (`uReflBlur`): one
+      sample, at the level the ripples would have spread it over.
+    The domain warp and `detailAngle`'s flattening toward a mirror at the
+    horizon are kept.
   - **Swell + frequency modulation.** A large-scale `swellField` (the product
     of two drifting value-noise layers, so it changes shape rather than
-    scrolling) tilts the normal with no distance fade, and also shifts the
-    small-wave phase (`fmPhase`) so the dominant octave's tiling drifts.
+    scrolling) tilts the normal, and also shifts the small-wave phase
+    (`fmPhase`) so the dominant octave's tiling drifts. Its tilt follows
+    the geometry's height: `swell_amplitude / 20` and the depth factor.
+    `set_swell_amplitude()` changes the height live (F12 in the demo). The
+    field mostly spans 0.1 to 0.5, so 20 m of amplitude stands crests about
+    7 m above the troughs, over a swell some 250 m across (`swell_scale`).
+  - **Colour by depth.** Over shallow seabed the water's own colour goes
+    from `shallow_color` to the deep `water_color`. That is Beer–Lambert
+    along the light's way down and the view's back up, with an e-folding
+    depth `shallow_depth` (`deepWaterShare` in `water.glsl`). The terrain's
+    sea surface, drawn above the 14–16 km handover, applies the same tint
+    on top of its own 3,000 m shelf gradient (`Terrain.set_shallow_water`,
+    defaulting to the same shared `SHALLOW_WATER_COLOR` and
+    `SHALLOW_WATER_DEPTH_M`), so coasts keep their colour across it.
+  - **Shoreline foam.** Under `foam_depth` metres of water:
+    - solid at the waterline;
+    - then lines along the depth contours, `foam_spacing` metres of depth
+      apart, running shoreward at `foam_speed` and shifted along the coast
+      by the swell;
+    - broken up by noise.
+    It is drawn wherever the seabed says land too: water drawn there is at
+    the waterline, and where the terrain stands above, it hides the foam.
+    Lines closer than a pixel fade to their mean coverage. The foam fades
+    out where the seabed's texels pass 12–48 m, since coarser ones cannot
+    place a band a metre or two deep. The foam is lit by `iWaterLight`.
   - **Reflection.** The reflection UV is recomputed per fragment from the
     flat (z = 0) surface position: interpolating a vertex clip-space value
     would skew the projective divide per triangle once the swell displaces
@@ -139,7 +238,10 @@ Driven by [`ocean/ocean.py`](../../src/world_builder/ocean/ocean.py) (above):
     atmospheres bound (`uAtmoCount > 0`), `applyAtmospheres` replaces the
     haze, in linear light before the tonemap, along the view ray turned into
     world axes by `uBaseToWorld`, toward `uAtmoSunDir`.
-  - **Debug.** `uDebugMode` 1–8 visualise intermediate quantities (0 is normal
-    rendering): normal, reflection UV, fresnel, world grid, reflection-UV
+  - **Debug.** `uDebugMode` 1–12 (`Ocean.set_debug_mode`; 0 is normal
+    rendering; `terrain_shots.py --ocean-debug`) visualise intermediate
+    quantities: normal, reflection UV, fresnel, world grid, reflection-UV
     clamp, raw reflection sample (display colour), pre-tonemap clipping, FM
-    phase.
+    phase, share of the octaves resolved, unresolved slope spread, octaves
+    evaluated (the loop's cost), depth (black at the waterline to white at
+    50 m; red where the seabed says land, blue beyond the cascades).

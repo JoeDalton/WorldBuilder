@@ -42,6 +42,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation: [Lighting on objects](docs/source/object_lighting.md), how
   models are lit compared with the world and what would make them match.
   (#5)
+- The ocean's seabed (`Ocean.set_seabed`, `ocean.seabed.SeabedMap`): sea-floor
+  heights from the app, baked around the camera on a worker thread. They
+  give the water a colour by depth (shared with the terrain's sea surface,
+  `Terrain.set_shallow_water`), shoreline foam (`Ocean.set_foam`), and a
+  swell that dies out over the shallows. The terrain demo feeds it from the
+  terrain and keeps the game's 20 m swell. (#12)
+- `OceanQuality` and the `OCEAN_QUALITY` presets: every ocean cost/quality
+  trade in one place, changed live (`Ocean.set_quality`, F11 in the demo,
+  `--ocean-quality` in the scripts). `Ocean.set_debug_mode`, with views of
+  the wave filtering and the depth. `Ocean.set_swell_amplitude`, the
+  swell's height live (F12 in the demo). (#12)
+- A `beach` pose in `terrain_shots.py`: the shore nearest the reference
+  point, up close. (#12)
 
 ### Changed
 
@@ -59,6 +72,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The clouds' terminator is gradual instead of a hard line from lit to dark,
   close up and from orbit: their sunlight fades out toward the planet's
   shadow, and the still-lit air above lights them through twilight. (#5)
+- The ocean's waves no longer alias. They fade by their size on screen
+  instead of by camera distance, and what they lose is kept: the fresnel is
+  averaged and the reflection blurred over the unresolved slopes. The
+  `wave_fade_near`, `wave_fade_far` and `wave_fade_k2` arguments are gone.
+  (#12)
+- `TerrainQuery` groups many points by chunk 2.5–3 times faster. (#12)
 
 ### Fixed
 

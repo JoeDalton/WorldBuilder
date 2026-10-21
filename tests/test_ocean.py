@@ -1,6 +1,7 @@
 """
 Unit tests for the ocean's procedural swell-grid mesh
-(world_builder.ocean.make_swell_grid_mesh and border_coords).
+(world_builder.ocean.make_swell_grid_mesh and border_coords), the decoding of
+its reflection, and the CPU side of its screen-space wave filtering.
 
 These build CPU-side geometry only (a GeomVertexData and its index buffer),
 so they run fully headless with no window, GPU context or ShowBase — safe for CI.
@@ -13,8 +14,21 @@ import pytest
 from panda3d.core import GeomVertexReader
 
 from world_builder import PLANET_RADIUS_M
-from world_builder.ocean import aces_tonemap, border_coords, make_swell_grid_mesh
-from world_builder.ocean.ocean import DEFAULT_EXPOSURE
+from world_builder.ocean import (
+    OCEAN_QUALITY,
+    OceanQuality,
+    aces_tonemap,
+    border_coords,
+    make_swell_grid_mesh,
+)
+from world_builder.ocean.ocean import (
+    C_WAVE,
+    DEFAULT_EXPOSURE,
+    FRESNEL_LUT_SLOPE_MAX,
+    rough_fresnel_table,
+    wave_tail_variance,
+    wave_weight_sum,
+)
 
 CURVATURE = 1.0 / (2.0 * PLANET_RADIUS_M)
 
@@ -230,3 +244,65 @@ def test_double_tonemap_would_brighten_a_night_sky():
     """The bug the decode fixes: tonemapping the display colour again."""
     night = np.full(3, 0.13)
     assert aces_tonemap(night)[0] > 1.8 * night[0]
+
+
+# ── Screen-space wave filtering ────────────────────────────────────────────────
+
+
+def test_c_wave_is_the_mean_square_octave_slope():
+    """ocean.frag's C_WAVE: (exp(sin x - 1) cos x)^2 averaged over a period."""
+    x = np.linspace(0.0, 2.0 * math.pi, 200001)
+    assert np.mean((np.exp(np.sin(x) - 1.0) * np.cos(x)) ** 2) == pytest.approx(
+        C_WAVE, rel=1e-5
+    )
+
+
+@pytest.mark.parametrize("iterations", [1, 16, 36, 64])
+def test_wave_weight_sum_matches_the_shader_loop(iterations):
+    weight, total = 1.0, 0.0
+    for _ in range(iterations):
+        total += weight
+        weight *= 0.8  # mix(weight, 0.0, 0.2)
+    assert wave_weight_sum(iterations) == pytest.approx(total)
+
+
+@pytest.mark.parametrize("iterations", [16, 36])
+def test_tail_variance_is_the_unresolved_octaves_slope_variance(iterations):
+    """uTailVar[i]: the normalised slope variance of octaves i.. n - 1."""
+    norm = (10.0 / wave_weight_sum(iterations)) ** 2  # WAVE_HEIGHT / sum of weights
+    per = [C_WAVE * (1.18**i * 0.8**i) ** 2 * norm for i in range(iterations)]
+    tail = wave_tail_variance(iterations)
+    for i in (0, 1, iterations // 2, iterations - 1):
+        assert tail[i] == pytest.approx(sum(per[i:]))
+    assert np.all(tail[iterations:] == 0.0)
+    assert np.all(np.diff(tail) <= 0.0)
+    # Its spread must fit the fresnel table, or distant water clamps to it.
+    assert math.sqrt(tail[0]) <= FRESNEL_LUT_SLOPE_MAX
+
+
+def test_rough_fresnel_is_schlick_on_a_smooth_surface():
+    table = rough_fresnel_table()
+    cos_v = np.linspace(0.0, 1.0, table.shape[1])
+    np.testing.assert_allclose(table[0], 0.04 + 0.96 * (1.0 - cos_v) ** 5, atol=1e-6)
+
+
+def test_rough_fresnel_softens_the_grazing_mirror():
+    """Seen at a grazing angle, a rough sea shows its facets that face the eye,
+    so it reflects less than a mirror; seen from above, its tilted facets
+    reflect a little more."""
+    table = rough_fresnel_table()
+    assert np.all(np.diff(table[:, 0]) < 0.0)  # grazing: less with roughness
+    assert table[-1, -1] > table[0, -1]  # from above: more
+    assert np.all((table >= 0.04 - 1e-6) & (table <= 1.0))
+
+
+def test_quality_presets_order_their_cost():
+    names = ("low", "mid", "high", "ultra")
+    assert OCEAN_QUALITY["high"] == OceanQuality()
+    for cheaper, dearer in zip(names, names[1:]):
+        a, b = OCEAN_QUALITY[cheaper], OCEAN_QUALITY[dearer]
+        assert a.wave_iterations <= b.wave_iterations
+        # A cheaper preset drops octaves sooner (more pixels per wavelength).
+        assert a.aa_gone_px >= b.aa_gone_px and a.aa_full_px >= b.aa_full_px
+    for quality in OCEAN_QUALITY.values():
+        assert quality.aa_full_px > quality.aa_gone_px >= 2.0  # Nyquist

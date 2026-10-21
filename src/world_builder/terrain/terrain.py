@@ -51,6 +51,7 @@ from panda3d.core import (
     Vec3,
 )
 
+from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.terrain.biomes import BIOME_COLORS
 from world_builder.terrain.chunkgen import ChunkData
@@ -346,6 +347,19 @@ class Terrain:
         """
         self.root.set_shader_input("uSeaSurface", 1 if on else 0)
 
+    def set_shallow_water(self, color: ArrayLike, depth: float) -> None:
+        """The sea surface's tint over shallow seabed: give it the swell
+        ocean's (``Ocean(shallow_color=..., shallow_depth=...)``), so the coast
+        keeps its colour across their handover. Defaults to the shared
+        :data:`world_builder.SHALLOW_WATER_COLOR` and
+        :data:`world_builder.SHALLOW_WATER_DEPTH_M`.
+
+        :param color: linear (r, g, b)
+        :param depth: metres over which the deep colour takes over (e-folding)
+        """
+        self.root.set_shader_input("uShallowWater", LVecBase3f(*color))
+        self.root.set_shader_input("uShallowDepth", float(depth))
+
     def set_sun(
         self, direction: ArrayLike, color: ArrayLike, ambient: ArrayLike
     ) -> None:
@@ -466,6 +480,7 @@ class Terrain:
             self._frame_inputs[name] = array
             root.set_shader_input(name, array)
         root.set_shader_input("uSeaSurface", 0)
+        self.set_shallow_water(SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M)
         root.set_shader_input("uDepthBias", 6.0)
         self.set_sun(sun_direction, sun_color, ambient)
 

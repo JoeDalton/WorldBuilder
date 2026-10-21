@@ -1,5 +1,7 @@
 #version 140
 
+#pragma include "seabed.glsl"
+
 in vec4 p3d_Vertex;
 
 uniform mat4 p3d_ModelViewProjectionMatrix;
@@ -15,7 +17,7 @@ uniform mat4 uReflMVP;
 // the geometry and the shading normal derive from one source of truth). The
 // wavelength/drift are shared from Python via iSwellScale / iSwellDrift.
 uniform int   uGeometricSwell;  // 1 = displace the surface, 0 = flat plane
-uniform float uSwellAmplitude;  // vertical swell displacement in world units
+uniform float uSwellAmplitude;  // vertical swell displacement in deep water, world units
 uniform float uSwellGridHalf;   // half-size of the dense displaced grid (local units)
 uniform float iSwellScale;      // swell spatial frequency
 uniform float iSwellDrift;      // swell scroll speed along the wind
@@ -67,7 +69,17 @@ void main() {
         // make_swell_grid_mesh).
         float r     = length(p3d_Vertex.xy);  // local radius within the grid
         float taper = 1.0 - smoothstep(uSwellGridHalf * 0.8, uSwellGridHalf, r);
-        h = uSwellAmplitude * swellField(wp.xy) * taper;
+        // Dying out over the shallows, so it does not climb the beaches.
+        float depth = -seabedHeight(wp.xy);
+        float amp   = uSwellAmplitude * swellDepthFactor(depth);
+        h = amp * swellField(wp.xy) * taper;
+        // Sink at the shore: a flat beach barely above (or under) the water
+        // z-fights with it in the distance. A metre under the shoreline, the
+        // water meets the ground at 0.25 m of depth, four times as steeply as
+        // the seabed rises, and is back at sea level by 0.33 m; under land it
+        // is well below the ground, so the drawn waterline keeps to the
+        // seabed's (where the foam is).
+        h += min(3.0 * depth - 1.0, 0.0) * taper;
     }
     wp.z += h;
 
