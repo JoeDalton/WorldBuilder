@@ -10,7 +10,8 @@ uniform vec3 camPos;
 // R32F, rows of CELLS_PER_ROW cells, each [x, y, z, layerId].
 uniform sampler2D cellParams;
 // LAYER_VEC4S per cloud type (noise.pack_layer_params). Must be declared exactly as
-// in cloud.frag, or the stages fail to link and nothing draws.
+// in cloud_field.glsl (cloud.frag's include), or the stages fail to link and
+// nothing draws.
 uniform vec4 layerParams[96];
 uniform float nearFadeRadii;   // fade a billboard out within this many radii
 // 1 / (2 * planet radius): the deck droops with distance to sink behind the

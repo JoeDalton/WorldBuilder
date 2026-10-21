@@ -2,7 +2,13 @@
 
 **Status: open question, nothing here is implemented.** Parked on 2026-08-24 for
 later. The measurements are the valuable part of this file — they were taken
-against the deck as it stands and would be tedious to re-derive.
+against the flat field's deck (`field.CloudField`) as it stood then and would be
+tedious to re-derive.
+
+A planet's clouds (`sphere.py`) have since taken the far-field half of the hybrid
+below in their own way: beyond the last billboard shell, one deck sphere evaluates
+the field through the slab per fragment, and fades to the weather's expected
+coverage where a pixel spans more than the clouds' features.
 
 ---
 
@@ -124,9 +130,10 @@ yet.** Getting one would need real GPU timer queries.
    (bilateral) upsampling or there are halos around every ship silhouette.
 
    That is the plumbing the `trials/cloud_harris/pure-shader/v20..v42`
-   prototypes (local, untracked) rejected after 23 attempts. Infrastructure catch: `GraphicsManager` only builds an offscreen
-   pipeline when render scale < 1 or MSAA/FXAA is on, so a low-res slice buffer
-   would need that path made unconditional.
+   prototypes (local, untracked) rejected after 23 attempts. Infrastructure catch
+   (in SpaceFlight, the game the clouds were ported from): its `GraphicsManager`
+   only builds an offscreen pipeline when render scale < 1 or MSAA/FXAA is on, so
+   a low-res slice buffer would need that path made unconditional.
 
 4. **"Transparent and blurry anyway" — worth pushing back on.** Cumulus edges
    against blue sky are the sharpest feature in the frame, and the narrow

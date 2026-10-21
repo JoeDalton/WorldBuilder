@@ -80,6 +80,9 @@ void main() {
     float side = uSeaSurface == 1 ? 0.0 : clamp(drawn, -1.0, 1.0);
     gl_Position.z -= side * uDepthBias * (2.0 / 16777216.0) * gl_Position.w;
 
+    // The ocean's reflection camera clips at the water plane (a clip plane
+    // on its initial state), which a shader must apply itself. Panda enables
+    // the clip distance only while a clip plane is on: other passes ignore it.
     gl_ClipDistance[0] = dot(p3d_ClipPlane[0], p3d_ModelViewMatrix * local);
 
     vRelPos = world - uCamPos;

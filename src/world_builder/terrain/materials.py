@@ -20,6 +20,11 @@ Drop one folder per biome into ``world_builder/terrain/textures/`` (names as in
     grass: {tile_m: 2, normal: gl, tint: [1, 1, 1]}
     rock:  {tile_m: 4}
 
+``normal`` is ``gl`` or ``dx`` (guessed from the file name when omitted) and
+``tint`` multiplies the albedo. Files whose names contain preview, metal,
+spec or opacity are skipped. The layer size is the smallest image's, capped
+at ``max_size`` and rounded down to a power of two.
+
 ``tile_m`` (metres per texture repeat) must be a power of two: UVs are kept
 precise by wrapping chunk origins modulo 4096 m, which every tile size and its
 8x macro scale must divide. A biome with no folder, or a missing map, gets a
@@ -36,11 +41,15 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import yaml
 
 from world_builder.terrain.biomes import BIOME_COLORS, BIOMES
+
+if TYPE_CHECKING:  # Panda is imported where used: the noise helpers need none
+    from panda3d.core import Texture
 
 LOGGER = logging.getLogger(__name__)
 
@@ -115,6 +124,7 @@ def load_materials(root: Path = TEXTURES_PATH) -> MaterialSet:
 
     :param root: folder holding one sub-folder per biome
     :returns: the packed set
+    :raises ValueError: if a ``tile_m`` does not divide the UV period
     """
     config = {}
     if (root / "textures.yaml").exists():
@@ -345,7 +355,7 @@ def _pow2_floor(value: int) -> int:
 # ── Panda upload ───────────────────────────────────────────────────────────────
 
 
-def make_texture_array(name: str, layers: np.ndarray, srgb: bool):
+def make_texture_array(name: str, layers: np.ndarray, srgb: bool) -> Texture:
     """Upload (L, S, S, 4) uint8 RGBA layers (top row first) as a 2D array.
 
     :param name: texture name
@@ -370,7 +380,7 @@ def make_texture_array(name: str, layers: np.ndarray, srgb: bool):
     return tex
 
 
-def make_noise_texture():
+def make_noise_texture() -> Texture:
     """:returns: the tiling RGBA noise that breaks up biome boundaries"""
     from panda3d.core import SamplerState, Texture
 

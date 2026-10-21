@@ -5,7 +5,10 @@ numpy on ~5k-element arrays spends much of its time in Python glue that holds
 the GIL, so worker *threads* would still steal frame time from the renderer.
 The default backend is a ``spawn`` process pool (workers import no Panda
 graphics state). The ``thread`` and ``inline`` backends are kept for debugging
-and tests.
+and tests. The pool defaults to one worker per physical core but one
+(:func:`default_workers`), and its processes run at a lower priority
+(:data:`WORKER_NICENESS`), so generation takes only the CPU time the renderer
+leaves.
 
 The executor keeps only a short queue (``max_inflight``), so it can follow a
 moving camera: each :meth:`ChunkExecutor.request` cancels queued work that is
@@ -14,7 +17,8 @@ no longer wanted and tops the queue up in the new priority order.
 Several planets share one pool through *channels*: each has its own spec,
 version, wanted list and results. Each free slot goes to the channel with the
 fewest tasks in flight, so a distant moon wanting a handful of coarse chunks
-is served alongside the planet under the camera rather than after it.
+is served alongside the planet under the camera rather than after it. A
+channel may run its own generator (the clouds' tiles share the pool so).
 """
 
 from __future__ import annotations
@@ -219,8 +223,9 @@ class ChunkExecutor:
         self._fill()
 
     def collect(self, channel: str = DEFAULT_CHANNEL) -> list[ChunkData]:
-        """:returns: a channel's chunks finished since the last call, current
-        version only. Freed slots are refilled from the wanted lists."""
+        """:returns: a channel's chunks (or its generator's results) finished
+        since the last call, current version only. Freed slots are refilled
+        from the wanted lists. A worker's exception is raised here."""
         ch = self._channels.get(channel)
         if ch is None:
             return []

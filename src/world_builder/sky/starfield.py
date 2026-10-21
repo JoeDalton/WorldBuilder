@@ -9,9 +9,12 @@ takes a painted cube map instead (e.g. SpaceFlight's Spacescape skyboxes,
   at most 2x2 pixels at any resolution (a cube map would need ~4096 px a face
   to keep them that small at 1920x1080).
 * **The diffuse light** (the band, its dust lanes, nebulae) is smooth, so a
-  small cube map holds it (:func:`make_glow`), as parameters rather than
-  colours: the sky shader colours them, so the palette and intensity
-  (:class:`NebulaStyle`) are live.
+  small cube map holds it (:func:`make_glow`, uploaded by
+  :func:`glow_texture`), as parameters rather than colours: the sky shader
+  colours them, so the palette and intensity (:class:`NebulaStyle`) are
+  live.
+
+:class:`Starfield` builds both for :class:`sky.Sky`.
 
 Faces follow OpenGL's cube map convention (what ``texture(samplerCube, dir)``
 reads), so :func:`cube_directions` gives the direction of every texel.
@@ -21,8 +24,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
+from numpy.typing import ArrayLike
 from panda3d.core import Filename, SamplerState, Texture
 
 from world_builder.terrain.noise import fbm
@@ -54,12 +59,16 @@ def cube_directions(size: int) -> np.ndarray:
     return out
 
 
-def directions_to_texels(dirs: np.ndarray, size: int):
+def directions_to_texels(
+    dirs: ArrayLike, size: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The cube map texel under each direction (the inverse of
     :func:`cube_directions`).
 
-    :param dirs: (N, 3) directions
-    :returns: face, row, column (N,) float (texel units, centres at .5)
+    :param dirs: (N, 3) directions (any length)
+    :param size: texels per face edge
+    :returns: face (N,) int, row and column (N,) float (texel units,
+        centres at .5)
     """
     dirs = np.asarray(dirs, dtype=np.float64)
     axis = np.argmax(np.abs(dirs), axis=1)
@@ -93,9 +102,9 @@ class NebulaStyle:
     :ivar milky_way: the Milky Way band's linear colour times its intensity
     """
 
-    palette: tuple = NEBULA_PALETTES["violet"]
+    palette: tuple[tuple[float, float, float], ...] = NEBULA_PALETTES["violet"]
     intensity: float = 0.01
-    milky_way: tuple = (0.06, 0.057, 0.051)
+    milky_way: tuple[float, float, float] = (0.06, 0.057, 0.051)
 
 
 @dataclass(frozen=True)
@@ -121,17 +130,19 @@ STAR_BLUE = np.array([0.82, 0.98, 1.25])
 def make_stars(
     seed: int = 3,
     count: int = 14000,
-    galactic_pole=(0.25, -0.55, 0.8),
+    galactic_pole: ArrayLike = (0.25, -0.55, 0.8),
     red: float = 0.25,
     blue: float = 0.25,
 ) -> StarCatalogue:
     """Stars, more of them toward the Milky Way, with a power law of
     brightness (few bright, many faint).
 
+    :param seed: random seed
     :param count: how many stars
     :param galactic_pole: normal of the Milky Way's plane
     :param red: share of stars tinted slightly red (each by a random amount)
     :param blue: share tinted slightly blue; the rest are white
+    :returns: the catalogue, in the star map's frame
     """
     rng = np.random.default_rng(seed)
     pole = np.asarray(galactic_pole, dtype=np.float64)
@@ -160,7 +171,7 @@ def make_stars(
 def make_glow(
     size: int = 256,
     seed: int = 3,
-    galactic_pole=(0.25, -0.55, 0.8),
+    galactic_pole: ArrayLike = (0.25, -0.55, 0.8),
     nebula_scale: float = 1.0,
     nebula_coverage: float = 0.5,
 ) -> np.ndarray:
@@ -172,10 +183,12 @@ def make_glow(
     * b: where the nebula is in its palette
 
     :param size: face resolution, texels (smooth light: 256 is plenty)
+    :param seed: noise seed
     :param galactic_pole: normal of the Milky Way's plane
     :param nebula_scale: size of the nebulae (1 = features of ~0.4 rad)
     :param nebula_coverage: about the share of the sky with some nebula
-    :returns: (6, size, size, 3) float32
+    :returns: (6, size, size, 3) float32, in :func:`cube_directions`'
+        layout
     """
     pole = np.asarray(galactic_pole, dtype=np.float64)
     pole /= np.linalg.norm(pole)
@@ -222,28 +235,34 @@ class Starfield:
     Usage::
 
         sky = Sky(render, Starfield(seed=3), atmospheres)
+
+    :ivar catalogue: the point stars (:func:`make_stars`)
+    :ivar glow: the diffuse light's cube map (:func:`glow_texture`)
     """
 
     def __init__(
         self,
         seed: int = 3,
         stars: int = 14000,
-        galactic_pole=(0.25, -0.55, 0.8),
+        galactic_pole: ArrayLike = (0.25, -0.55, 0.8),
         glow_size: int = 256,
         nebula_scale: float = 1.0,
         nebula_coverage: float = 0.5,
         red: float = 0.25,
         blue: float = 0.25,
-    ):
-        """See :func:`make_stars` and :func:`make_glow` for the parameters."""
+    ) -> None:
+        """See :func:`make_stars` and :func:`make_glow` for the parameters
+        (*stars* is :func:`make_stars`' *count*, *glow_size* :func:`make_glow`'s
+        *size*); both share *seed* and *galactic_pole*."""
         self.catalogue = make_stars(seed, stars, galactic_pole, red, blue)
         self.glow = glow_texture(
             make_glow(glow_size, seed, galactic_pole, nebula_scale, nebula_coverage)
         )
 
 
-def load_cube_map(pattern: str, loader) -> Texture:
-    """A painted cube map (six images, ``#`` = 0-5 in OpenGL face order).
+def load_cube_map(pattern: str, loader: Any) -> Texture:
+    """A painted cube map (six images, ``#`` = 0-5 in OpenGL face order),
+    mipmapped, for :class:`Sky`.
 
     :param pattern: e.g. ``".../skyboxes/purple_#.png"``
     :param loader: the ShowBase loader

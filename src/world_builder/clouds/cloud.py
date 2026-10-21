@@ -8,7 +8,11 @@ rejection-sampling the very field the shader draws, so the field alone bounds ea
 cloud and its crisp edge is the field's edge.
 
 Particles are grouped into spatial CELLS, the units of draw-order sorting and
-toroidal recycling (field.py), stored ragged with an offsets table.
+toroidal recycling (field.py), stored ragged with an offsets table. (A planet's
+billboards are placed the same way, per cube-sphere tile: sphere.py.)
+
+Also here: the per-type presets (:data:`PRESETS`), the quality ladder
+(:class:`CloudQuality`, :func:`at_quality`) and the sprite atlas.
 """
 
 from __future__ import annotations
@@ -36,6 +40,8 @@ from world_builder.clouds.noise import (
 
 
 class CloudType(Enum):
+    """The preset cloud types: the keys of :data:`PRESETS`."""
+
     CUMULUS = "cumulus"
     STRATUS = "stratus"
     CIRRUS = "cirrus"
@@ -181,7 +187,12 @@ PRESETS = {
 
 
 class CloudQuality(Enum):
-    """How much the clouds are allowed to cost. HIGH is what the presets ship."""
+    """How much the clouds are allowed to cost. HIGH is what the presets ship.
+
+    Scales each type's billboard count and sun march (:func:`at_quality`); a
+    planet's clouds also set their octaves and overlap per shell by it
+    (:data:`sphere.SHELL_OCTAVES`, :data:`sphere.VOLUME_FRACTIONS`).
+    """
 
     LOW = "low"
     MID = "mid"
@@ -211,6 +222,8 @@ def at_quality(spec: CloudSpec, quality: CloudQuality) -> CloudSpec:
       volume_fraction instead strips billboards from cloud fringes and loses
       silhouette (measured -18% vs -8.8% at LOW).
 
+    :param spec: the type as authored (at HIGH)
+    :param quality: the level to scale it to
     :returns: a scaled copy (*spec* itself at HIGH)
     :raises KeyError: for an unknown level
     """
@@ -240,6 +253,8 @@ def volume_fraction(radii: np.ndarray, cloud_volume: float) -> float:
     field's own optical depth per metre, whatever the count and radii. Exact, since
     V comes from the rejection-sampling accept rate. Values above 1 are normal.
 
+    :param radii: (n,) billboard radii, metres
+    :param cloud_volume: the cloud's volume, cubic metres
     :returns: phi (0 for no billboards or no volume)
     """
     radii = np.asarray(radii, dtype=np.float64)
@@ -255,6 +270,8 @@ def snap_to_noise_period(spec: DensityField, requested: float) -> tuple[float, b
     field, so no fade is needed. Impossible for an anisotropic field (two periods),
     and not attempted below one period (the fade band covers it).
 
+    :param spec: the layer's field
+    :param requested: the box width asked for, metres
     :returns: (width, seamless)
     """
     scale_x, scale_y = spec.noise_scale[0], spec.noise_scale[1]
@@ -275,7 +292,7 @@ def sample_field_particles(
     volume: np.ndarray,
     domain: float,
     cell_size: float,
-    atlas_rects: list,
+    atlas_rects: list[tuple[float, float, float, float]],
     seed: int = 0,
     batch: int = 50_000,
 ) -> dict:
@@ -286,14 +303,17 @@ def sample_field_particles(
     would double-count and starve the edges. The accept rate measures the cloud
     volume, which is what makes the extinction exact (:func:`volume_fraction`).
 
+    :param spec: the type, its field's threshold resolved
     :param volume: the noise octave, already quantised to the GPU's 8 bits
     :param domain: square domain width, metres (see :func:`snap_to_noise_period`)
     :param cell_size: side of one spatial cell, metres
     :param atlas_rects: sprite rects (u, v, du, dv) to draw thickness profiles from
+    :param seed: RNG seed for the positions, radii and sprites
     :param batch: rejection-sampling batch size
     :returns: dict with ``local`` (n,3) offsets from each particle's cell centre,
         ``radii`` (n,), ``uv`` (n,4), ``cell_centres`` (k,3), ``cell_start``
         (k+1,) ragged offsets, ``phi`` and ``cloud_volume``
+    :raises ValueError: if the field is empty over its slab
     """
     rng = np.random.default_rng(seed)
     field = spec.field
@@ -376,7 +396,7 @@ ATLAS_PNG = _ASSET_DIR / "cloud_atlas.png"
 ATLAS_JSON = _ASSET_DIR / "cloud_atlas.json"
 
 
-def load_cloud_atlas(game: Any) -> tuple[Texture, list]:
+def load_cloud_atlas(game: Any) -> tuple[Texture, list[tuple]]:
     """Load the cloud sprite atlas, linearly filtered and clamped at its edges
     (so a sprite neither wraps nor bleeds into its atlas neighbours).
 
@@ -387,6 +407,7 @@ def load_cloud_atlas(game: Any) -> tuple[Texture, list]:
     scales how much volume a fragment stands for, while the density field decides
     where the cloud ends.
 
+    :param game: the game object, or None to load from disk
     :returns: (Texture, rects) with rects a list of (u, v, du, dv)
     """
     asset_manager = getattr(getattr(game, "app", None), "asset_manager", None)
@@ -403,7 +424,7 @@ def load_cloud_atlas(game: Any) -> tuple[Texture, list]:
     return tex, atlas_rects()
 
 
-def atlas_rects() -> list:
+def atlas_rects() -> list[tuple]:
     """The atlas rects, read from the JSON descriptor with no GL: one dict per
     sprite with u_min, v_min, u_size, v_size, in 0-1 UV space already flipped
     for OpenGL's bottom-left origin.
@@ -421,6 +442,8 @@ def atlas_mean_alpha() -> float:
     """Mean sprite alpha over the atlas: the fraction of a billboard's disc that
     carries thickness, which the extinction must be divided by or every cloud comes
     out proportionally see-through. Read from the PNG, so it works headless.
+
+    :raises OSError: if the atlas PNG cannot be read
     """
     image = PNMImage()
     if not image.read(Filename.from_os_specific(str(ATLAS_PNG))):

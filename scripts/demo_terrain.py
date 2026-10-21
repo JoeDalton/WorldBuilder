@@ -2,18 +2,30 @@
 Standalone flythrough demo for the procedural planet terrain.
 
 Flies a free camera around a small planetary system: a Kerbin-sized planet
-with hand-made stamps (world_builder/terrain/levels/demo.yaml), the
-WorldBuilder ocean and haze, and an airless sand moon 10,000 km away, from
-orbit down to the ground of either. Run it from an environment where
-world_builder is importable::
+(600 km) with hand-made stamps (world_builder/terrain/levels/demo.yaml), its
+atmosphere, its clouds (cumulus over the whole planet, following its
+weather) and the WorldBuilder ocean, an airless sand moon 10,000 km away,
+and a procedural star field, from orbit down to the ground of either. Run it
+from an environment where world_builder is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--radius METRES]
         [--moon-distance METRES] [--no-moon] [--workers N]
         [--backend process|thread|inline]
 
+    --level          the planet's level file (default: the demo level)
+    --radius         overrides the level's planet radius
+    --moon-distance  centre to centre (default 10,000 km)
+    --no-moon        the planet alone
+    --workers        generation processes (default: physical cores - 1)
+    --backend        where chunks and cloud tiles are generated (default
+                     process)
+
 The default backend generates terrain in spawned worker processes, which
 re-import this script: keep the ``if __name__ == "__main__"`` guard. All
-bodies share one pool.
+bodies, and the clouds, share one pool.
+
+The window has no multisampling and no vsync (:func:`window_config`): the
+frame-rate meter shows what a frame costs, not the display's refresh rate.
 
 Frames: positions are float64 in the world frame: the planet's centre at
 the origin, the moon elsewhere, no rotation. Each body's terrain works in its
@@ -42,9 +54,12 @@ Controls (AZERTY):
     F1 - F4         planet preset: earthlike / desert / forest / ice
     N               next seed (the planet)
     L               reload the level file (edit stamps live)
+                    (these three replace the planet, not the moon, and
+                    rebuild its clouds for the new weather)
     O               toggle the ocean
     C               toggle the clouds
     F5              cycle the cloud quality: high / mid / low / off
+                    (rebuilds the clouds; their tiles take a few seconds)
     F6              cycle the nebula's palette
     F7 / F8         dimmer / brighter nebula
     F9 / F10        dimmer / brighter ambient (sky) light
@@ -63,6 +78,19 @@ Controls (AZERTY):
     I / U           raise / lower the sun (here)
     F               print the camera pose and terrain stats
     ESC             quit
+
+The HUD (top left, refreshed 5 times a second) shows the nearest body (its
+preset, seed and radius), the debug view, blend depth and detail; altitude,
+height above the ground, latitude/longitude, cube face, heading, pitch and
+speed factor; the biomes under the camera and the other bodies' distances;
+chunk counts and generation, upload and LOD timings; the depth split and far
+plane; the clouds' quality, tiles and billboards; the ambient scale.
+
+Lighting: the sun is one direction for the whole system; the atmosphere
+reddens it and the planets' shadows hide it. Panda3D's own lights (a
+DirectionalLight and an AmbientLight on render, for anything drawn without
+the world's shaders) follow the light at the camera, and the swell ocean is
+lit as the sea under the camera (Ocean.set_light), so it darkens at night.
 
 Terrain is generated in background processes, coarse first: the world shows
 blurry for a second, then sharpens.
@@ -179,9 +207,12 @@ def window_config(
     make (Panda picks the config with the most samples, x16 on a GTX 1070,
     whatever count is asked for), and it was most of the clouds' cost.
 
+    :param title: the window's title
     :param size: "width height"
     :param offscreen: an offscreen buffer (no display refresh cap or
         throttling: timings are the GPU's)
+    :param vsync: False turns the display's sync off (the demo and the
+        scripts all do)
     """
     lines = [
         f"window-title {title}",
@@ -198,7 +229,7 @@ def window_config(
     loadPrcFileData("", "\n".join(lines))
 
 
-def describe_window(demo) -> str:
+def describe_window(demo: ShowBase) -> str:
     """:returns: the window's kind, size and samples per pixel"""
     win = demo.win
     kind = "window" if isinstance(win, GraphicsWindow) else "offscreen"
@@ -206,7 +237,7 @@ def describe_window(demo) -> str:
     return f"{kind} {win.get_x_size()}x{win.get_y_size()}, MSAA x{samples}"
 
 
-def sun_lighting(azimuth: float, elevation: float):
+def sun_lighting(azimuth: float, elevation: float) -> tuple[np.ndarray, tuple, tuple]:
     """Sun direction (local east/north/up) and colours; a hand-made ramp.
 
     :param azimuth: degrees, 0 = north, increasing toward east
@@ -269,14 +300,14 @@ class TerrainDemo(ShowBase):
 
     def __init__(
         self,
-        level_path,
+        level_path: str,
         backend: str,
         radius: float | None,
         moon_distance: float | None = MOON_DISTANCE_M,
         workers: int | None = None,
         cloud_quality: str = "high",
         cloud_debug: int = 0,
-    ):
+    ) -> None:
         """
         :param level_path: the planet's level file
         :param backend: chunk generation backend, see ChunkExecutor
@@ -456,7 +487,9 @@ class TerrainDemo(ShowBase):
             key=lambda b: float(np.linalg.norm(self.cam_world - b.position)) - b.radius,
         )
 
-    def _true_frame(self, body: Body | None = None):
+    def _true_frame(
+        self, body: Body | None = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """:returns: (east, north, up) of the geographic frame at the nadir"""
         p = self._relative(body)
         lat, lon = latlon(p[None, :] / np.linalg.norm(p))
@@ -472,7 +505,7 @@ class TerrainDemo(ShowBase):
         f = self._orientation.get_forward()
         return np.array([f.x, f.y, f.z])
 
-    def _terrains(self):
+    def _terrains(self) -> list:
         return [body.terrain for body in self.bodies]
 
     # ── scene pieces ───────────────────────────────────────────────────────────
@@ -530,7 +563,7 @@ class TerrainDemo(ShowBase):
 
     # ── per frame ──────────────────────────────────────────────────────────────
 
-    def _update(self, task):
+    def _update(self, task) -> int:
         dt = min(self._clock.get_dt(), 0.1)
         self.body = self._nearest_body()
         self._fly(dt)
@@ -575,7 +608,7 @@ class TerrainDemo(ShowBase):
             self._update_hud()
         return task.cont
 
-    def _fly(self, dt: float):
+    def _fly(self, dt: float) -> None:
         for plus, minus, kind, rate in _ROTATIONS:
             sign = self._keys[plus] - self._keys[minus]
             if sign:
@@ -614,7 +647,7 @@ class TerrainDemo(ShowBase):
             self.cam_world *= self.max_range / distance
         self._ground = ground
 
-    def _update_sun(self):
+    def _update_sun(self) -> None:
         # Sunlight above the air: the atmosphere reddens it where it must.
         self.sky.set_sun(self._sun)
         scale = self.ambient_scale
@@ -642,7 +675,7 @@ class TerrainDemo(ShowBase):
         direct = np.zeros(3) if hidden else np.asarray(SUN_COLOR)
         return direct, np.multiply(SPACE_AMBIENT, self.ambient_scale)
 
-    def _update_lights(self):
+    def _update_lights(self) -> None:
         """Panda3D's sun and ambient lights as they are at the camera, and
         the swell ocean lit as the sea under it."""
         direct, ambient = self._light_at(self.body, self.cam_world)
@@ -666,19 +699,19 @@ class TerrainDemo(ShowBase):
             ) + np.asarray(SKY_AMBIENT)
         self.ocean.set_light(np.clip(light / self._water_reference, 0.0, 1.5))
 
-    def _scale_ambient(self, factor):
+    def _scale_ambient(self, factor: float) -> None:
         self.ambient_scale = max(0.05, min(8.0, self.ambient_scale * factor))
         self._hud_time = -1.0
         print(f"ambient light x{self.ambient_scale:.2f}")
 
-    def set_local_sun(self, azimuth: float, elevation: float):
+    def set_local_sun(self, azimuth: float, elevation: float) -> None:
         """Put the sun at an azimuth/elevation (degrees) as seen from the
         nadir on the nearest body."""
         east, north, up = self._true_frame()
         d, _, _ = sun_lighting(azimuth, elevation)
         self._sun = d[0] * east + d[1] * north + d[2] * up
 
-    def _turn_sun(self, axis: int, degrees: float):
+    def _turn_sun(self, axis: int, degrees: float) -> None:
         """Swing the sun in the sky as seen from the nadir (axis 0 azimuth,
         1 elevation)."""
         east, north, up = self._true_frame()
@@ -692,7 +725,7 @@ class TerrainDemo(ShowBase):
         d, _, _ = sun_lighting(az, el)
         self._sun = d[0] * east + d[1] * north + d[2] * up
 
-    def _update_ocean(self, altitude: float, up: np.ndarray):
+    def _update_ocean(self, altitude: float, up: np.ndarray) -> None:
         if altitude > OCEAN_HANDOVER[1]:
             low = False
         elif altitude < OCEAN_HANDOVER[0]:
@@ -728,7 +761,7 @@ class TerrainDemo(ShowBase):
             for method in methods:
                 method()
 
-    def _update_probe(self):
+    def _update_probe(self) -> None:
         terrain = self.body.terrain
         center = self._relative() + PROBE_DISTANCE * self._forward()
         self._probe_ball.set_pos(*terrain.to_render(center))
@@ -751,7 +784,7 @@ class TerrainDemo(ShowBase):
         lines.draw_to(*(hit_render + normal * 25.0))
         self._probe_normal = self._probe.attach_new_node(lines.create())
 
-    def _update_hud(self):
+    def _update_hud(self) -> None:
         body = self.body
         terrain = body.terrain
         relative = self._relative()
@@ -818,15 +851,15 @@ class TerrainDemo(ShowBase):
 
     # ── key handlers ───────────────────────────────────────────────────────────
 
-    def _set_key(self, key, pressed):
+    def _set_key(self, key: str, pressed: bool) -> None:
         self._keys[key] = pressed
 
-    def _load(self, preset=None):
+    def _load(self, preset: str | None = None) -> tuple:
         return load_level(
             self.level_path, preset=preset, seed=self.seed, radius=self.radius_override
         )
 
-    def _set_spec(self, spec):
+    def _set_spec(self, spec) -> None:
         """Replace the planet (the moon stays) and its weather."""
         self.terrain.set_spec(spec)
         self.set_cloud_quality(self._cloud_quality)
@@ -836,17 +869,17 @@ class TerrainDemo(ShowBase):
                 self._laser_marks.remove((mark, body, _))
         self._apply_ocean()
 
-    def _set_preset(self, name):
+    def _set_preset(self, name: str) -> None:
         self.preset = name
         spec, _ = self._load(name)
         self._set_spec(spec)
 
-    def _next_seed(self):
+    def _next_seed(self) -> None:
         self.seed += 1
         spec, _ = self._load(self.preset)
         self._set_spec(spec)
 
-    def _reload(self):
+    def _reload(self) -> None:
         try:
             spec, self.start_pose = self._load(self.preset)
         except Exception as error:  # a typo in the YAML must not kill the demo
@@ -855,7 +888,7 @@ class TerrainDemo(ShowBase):
         self._set_spec(spec)
         print(f"reloaded {self.level_path}")
 
-    def _apply_ocean(self):
+    def _apply_ocean(self) -> None:
         has_sea = self._ocean_wanted and self.terrain.spec.has_ocean
         swell = has_sea and self._ocean_low
         if swell:
@@ -866,22 +899,22 @@ class TerrainDemo(ShowBase):
             self.ocean.refl_buffer.set_active(False)
         self.terrain.set_sea_surface(has_sea and not self._ocean_low)
 
-    def _toggle_ocean(self):
+    def _toggle_ocean(self) -> None:
         self._ocean_wanted = not self._ocean_wanted
         self._apply_ocean()
 
-    def _toggle_clouds(self):
+    def _toggle_clouds(self) -> None:
         self._clouds_shown = not self._clouds_shown
         self._apply_clouds()
 
-    def _apply_clouds(self):
+    def _apply_clouds(self) -> None:
         if self.clouds is None:
             return
         self.clouds.root.show()
         if not self._clouds_shown:
             self.clouds.root.hide()
 
-    def set_cloud_quality(self, name: str):
+    def set_cloud_quality(self, name: str) -> None:
         """Rebuild the planet's clouds at a quality level (or none: "off").
         The new clouds take over the old ones' worker channel, which drops
         their tiles; the new tiles arrive in a few seconds."""
@@ -905,46 +938,46 @@ class TerrainDemo(ShowBase):
             self.clouds.set_sun(self._sun)
             self._apply_clouds()
 
-    def _cycle_nebula_palette(self):
+    def _cycle_nebula_palette(self) -> None:
         self._palette = (self._palette + 1) % len(NEBULA_PALETTES)
         name = list(NEBULA_PALETTES)[self._palette]
         self.sky.set_nebula(replace(self.sky.nebula, palette=NEBULA_PALETTES[name]))
         print(f"nebula: {name}, intensity {self.sky.nebula.intensity:.3g}")
 
-    def _scale_nebula(self, factor):
+    def _scale_nebula(self, factor: float) -> None:
         intensity = self.sky.nebula.intensity * factor
         self.sky.set_nebula(replace(self.sky.nebula, intensity=intensity))
         print(f"nebula intensity {intensity:.3g}")
 
-    def _cycle_cloud_quality(self):
+    def _cycle_cloud_quality(self) -> None:
         index = CLOUD_QUALITIES.index(self._cloud_quality)
         self.set_cloud_quality(CLOUD_QUALITIES[(index + 1) % len(CLOUD_QUALITIES)])
 
-    def _toggle_reflection(self):
+    def _toggle_reflection(self) -> None:
         self._reflected = not self._reflected
         for terrain in self._terrains():
             terrain.set_reflected(self._reflected)
 
-    def _toggle_textures(self):
+    def _toggle_textures(self) -> None:
         self._textured = not self._textured
         for terrain in self._terrains():
             terrain.set_textured(self._textured)
 
-    def _toggle_wireframe(self):
+    def _toggle_wireframe(self) -> None:
         self._wireframe = not self._wireframe
         for terrain in self._terrains():
             terrain.set_wireframe(self._wireframe)
 
-    def _cycle_debug(self):
+    def _cycle_debug(self) -> None:
         self.set_debug_view((self._debug + 1) % len(_DEBUG_VIEWS))
 
-    def set_debug_view(self, view: int):
+    def set_debug_view(self, view: int) -> None:
         """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts (all bodies)."""
         self._debug = view
         for terrain in self._terrains():
             terrain.set_debug_mode(view)
 
-    def _cycle_detail(self):
+    def _cycle_detail(self) -> None:
         level = (self.terrain.min_level + 1) % (MAX_DROPPED_LEVELS + 1)
         for terrain in self._terrains():
             terrain.set_min_level(level)
@@ -955,13 +988,13 @@ class TerrainDemo(ShowBase):
         text = f"{terrain.grid.spacing(level):.1f} m"
         return f"full ({text})" if level == 0 else f"-{level} levels ({text})"
 
-    def _toggle_probe(self):
+    def _toggle_probe(self) -> None:
         if self._probe.is_hidden():
             self._probe.show()
         else:
             self._probe.hide()
 
-    def _rotate(self, kind: str, degrees: float):
+    def _rotate(self, kind: str, degrees: float) -> None:
         """Turn the camera: yaw about the local vertical, pitch and roll about
         the camera's own right and forward axes."""
         q = LQuaternionf()
@@ -973,7 +1006,7 @@ class TerrainDemo(ShowBase):
             self._orientation = q * self._orientation  # a camera-frame turn
         self._orientation.normalize()
 
-    def _level_roll(self):
+    def _level_roll(self) -> None:
         """Keep the view direction, bring the camera's up into the plane of
         it and the local vertical (no roll)."""
         forward = self._forward()
@@ -984,7 +1017,7 @@ class TerrainDemo(ShowBase):
         right /= norm
         self._orientation = _quat_from_axes(right, forward, np.cross(right, forward))
 
-    def _fire_laser(self):
+    def _fire_laser(self) -> None:
         body = self.body
         direction = self._forward()
         start = self._relative(body)
@@ -1011,17 +1044,23 @@ class TerrainDemo(ShowBase):
         mark.reparent_to(self.render)
         self._laser_marks.append((mark, body, point))
 
-    def _scale_blend(self, factor):
+    def _scale_blend(self, factor: float) -> None:
         depth = max(0.05, min(3.0, self.terrain.blend_depth * factor))
         for terrain in self._terrains():
             terrain.set_blend_depth(depth)
 
-    def _scale_speed(self, factor):
+    def _scale_speed(self, factor: float) -> None:
         self.speed = max(10.0, min(SPEED * 64, self.speed * factor))
 
     def _place_camera(
-        self, lat, lon, altitude, heading, pitch, body: Body | None = None
-    ):
+        self,
+        lat: float,
+        lon: float,
+        altitude: float,
+        heading: float,
+        pitch: float,
+        body: Body | None = None,
+    ) -> None:
         """Put the camera over (lat, lon) of a body (the planet by default),
         with heading and pitch in the local geographic frame (degrees; heading
         counter-clockwise from north, as Panda's H) and no roll."""
@@ -1034,7 +1073,7 @@ class TerrainDemo(ShowBase):
         self.body = body
         self._ground = 0.0
 
-    def _reset_camera(self):
+    def _reset_camera(self) -> None:
         pose = self.start_pose or {}
         spec = self.terrain.spec
         self._place_camera(
@@ -1049,23 +1088,23 @@ class TerrainDemo(ShowBase):
         d, _, _ = sun_lighting(210.0, 35.0)
         self._sun = d[0] * frame.east + d[1] * frame.north + d[2] * frame.up
 
-    def _jump_over(self, body: Body, direction: np.ndarray):
+    def _jump_over(self, body: Body, direction: np.ndarray) -> None:
         """3 radii above a body, along *direction* from its centre, looking down."""
         lat, lon = latlon(direction[None, :] / np.linalg.norm(direction))
         self._place_camera(
             float(lat[0]), float(lon[0]), ORBIT_RADII * body.radius, 0.0, -89.9, body
         )
 
-    def _jump_to_orbit(self):
+    def _jump_to_orbit(self) -> None:
         self._jump_over(self.body, self._relative())
 
-    def _jump_to_next_body(self):
+    def _jump_to_next_body(self) -> None:
         """To the next body, over its side facing the camera."""
         index = self.bodies.index(self.body)
         target = self.bodies[(index + 1) % len(self.bodies)]
         self._jump_over(target, self.cam_world - target.position)
 
-    def _print_pose(self):
+    def _print_pose(self) -> None:
         relative = self._relative()
         up = relative / np.linalg.norm(relative)
         lat, lon = latlon(up[None, :])
@@ -1081,20 +1120,20 @@ class TerrainDemo(ShowBase):
         for body in self.bodies:
             print(f"{body.name} terrain: {body.terrain.stats}")
 
-    def destroy_terrain(self):
+    def destroy_terrain(self) -> None:
         """Remove every body's terrain and stop the shared workers."""
         for terrain in self._terrains():
             terrain.destroy()
         self.executor.shutdown()
 
-    def _quit(self):
+    def _quit(self) -> None:
         self.destroy_terrain()
         sys.exit()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Procedural terrain demo")
-    parser.add_argument("--level", default=str(DEMO_LEVEL))
+    parser.add_argument("--level", default=str(DEMO_LEVEL), help="level file")
     parser.add_argument(
         "--radius", type=float, default=None, help="planet radius, metres"
     )
@@ -1104,12 +1143,15 @@ def main():
         default=MOON_DISTANCE_M,
         help="moon distance, centre to centre, metres",
     )
-    parser.add_argument("--no-moon", action="store_true")
+    parser.add_argument("--no-moon", action="store_true", help="the planet alone")
     parser.add_argument(
         "--workers", type=int, default=None, help="generation processes"
     )
     parser.add_argument(
-        "--backend", default="process", choices=("process", "thread", "inline")
+        "--backend",
+        default="process",
+        choices=("process", "thread", "inline"),
+        help="where chunks and cloud tiles are generated",
     )
     args = parser.parse_args()
     # No vsync: the frame rate shows what a frame costs, not the display.

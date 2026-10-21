@@ -109,3 +109,4 @@ $RECYCLE.BIN/
 
 # Pre-baked cache
 .cache/
+docs/source/apidocs/

@@ -2,15 +2,18 @@
 noise.py — The cloud density field, as data.
 
 A cloud type's shape is ONE continuous world-space density function that every
-billboard fragment of that type samples (datafiles/shaders/cloud.frag). This
-module owns that function: the tileable noise octave it is built from, the per-type
-parameters that shape it (:class:`DensityField`), and a NumPy evaluator that
-reproduces the shader's result exactly, so placement can be driven by the very
-field that is drawn.
+billboard fragment of that type samples (shaders/cloud_field.glsl, included by
+cloud.frag). This module owns that function: the tileable noise octave it is built
+from, the per-type parameters that shape it (:class:`DensityField`), and a NumPy
+evaluator that reproduces the shader's result exactly, so placement can be driven
+by the very field that is drawn: :func:`density` on the flat field,
+:func:`density_on_sphere` on a planet. It also owns the coverage calibration
+(:func:`column_peaks`, :func:`sphere_column_peaks`), the phase function and the
+packing of a type into the shaders' ``layerParams`` (:func:`pack_layer_params`).
 
 Density must be a function of world position ALONE — never per cloud — or
 overlapping billboards disagree about where the boundary is. Design notes:
-docs/source/scenes.md.
+docs/source/clouds.md.
 """
 
 from __future__ import annotations
@@ -33,8 +36,8 @@ NOISE_LATTICE = 16
 NOISE_FEATURE = NOISE_SIZE / NOISE_LATTICE
 
 # Per-octave offsets, so the octaves never re-align into a grid. MUST match
-# OCTAVE_n_OFFSET in cloud.frag (a test reads the shader), or billboards get placed
-# where the shader draws no cloud.
+# OCTAVE_n_OFFSET in cloud_field.glsl (a test reads the shader), or billboards get
+# placed where the shader draws no cloud.
 OCTAVE_OFFSETS = (
     (0.0, 0.0, 0.0),
     (0.31, 0.73, 0.19),
@@ -49,7 +52,8 @@ COVERAGE_GRID = 96
 COVERAGE_LEVELS = 32
 
 #: vec4s per cloud type in the layerParams uniform array, and the most layers one
-#: field may mix (LOD shells count as layers). Must match cloud.frag / cloud.vert.
+#: field may mix (LOD shells, and a planet's deck, count as layers). Must match
+#: cloud_field.glsl / cloud.vert.
 LAYER_VEC4S = 12
 MAX_LAYERS = 8
 
@@ -86,7 +90,7 @@ class DensityField:
     octave_weights: tuple = (0.5, 0.25, 0.125, 0.0625)
     coverage: float = 0.29
     edge_softness: float = 0.48
-    threshold: tuple = None
+    threshold: tuple | None = None
     base_ramp: float = 5.0
     top_erosion: float = 0.40
     top_exponent: float = 3.0
@@ -220,13 +224,13 @@ def phase(optics: CloudOptics, cos_angle: ArrayLike) -> np.ndarray | float:
     )
 
 
-def streak_direction(spec: DensityField) -> tuple:
+def streak_direction(spec: DensityField) -> tuple[float, float]:
     """:returns: the horizontal unit axis (x, y) the field's features are longest
     along. Derived, so stretched billboards cannot comb against the field."""
     return (1.0, 0.0) if spec.noise_scale[0] <= spec.noise_scale[1] else (0.0, 1.0)
 
 
-def field_offset(seed: int) -> tuple:
+def field_offset(seed: int) -> tuple[float, float, float]:
     """:returns: a decorrelating (x, y, z) noise-space offset for a cloud type.
 
     A shifted copy of the stationary, repeat-wrapped volume is an independent field
@@ -349,10 +353,14 @@ def fbm(
 ) -> np.ndarray:
     """The four-octave fbm of the shader's ``cloudFbm``.
 
+    :param volume: the noise octave, indexed [z, y, x]
     :param coords: (..., 3) noise coords (world * noise_scale + offset)
+    :param spec: the field (its octave scales and weights)
     :param octaves: octaves evaluated (2-4); the finer ones count as their
-        mean, so dropping them keeps the coverage (the far shells' saving)
+        mean, so dropping them keeps the fbm's mean (the far shells' saving;
+        see :func:`sphere.octave_offset` for the spread)
     :param octave_mean: the noise's mean; None = *volume*'s
+    :returns: (...) raw fbm, in [0, sum of the weights]
     """
     if octave_mean is None:
         octave_mean = float(volume.mean())
@@ -460,11 +468,17 @@ def sphere_column_peaks(
 
 def threshold_from_peaks(
     peaks: np.ndarray, coverage: float, edge_softness: float, sigma: float
-) -> tuple:
+) -> tuple[float, float]:
     """Read the (lo, hi) threshold window off measured, sorted column peaks.
 
     The peaks never change for a field, so caching them makes a coverage change an
     array index — which is what lets coverage be swept live.
+
+    :param peaks: sorted column peaks (:func:`column_peaks`)
+    :param coverage: the share of columns to hold cloud, in [0, 1]
+    :param edge_softness: the window's width, in *sigma*
+    :param sigma: the fbm's standard deviation (:func:`fbm_sigma`)
+    :returns: (lo, hi) raw fbm values
     """
     width = float(edge_softness) * float(sigma)
     # Exact endpoints: a 0/1 quantile lands ON an observed peak, and the test is
@@ -577,19 +591,27 @@ def pack_layer_params(
 ) -> np.ndarray:
     """Flatten one type into its LAYER_VEC4S rows of the layerParams array.
 
-    The row layout IS the contract with cloud.frag's getField; change both together.
+    The row layout IS the contract with cloud_field.glsl's getField (and the rows
+    cloud.vert and cloud_sphere.vert read directly: 5, 10, 11); change them
+    together.
 
-    :param extinction: per-BILLBOARD extinction (density / volume fraction; see
-        cloud.volume_fraction)
+    :param spec: a resolved field
+    :param extinction: per-BILLBOARD extinction (density / (volume fraction x the
+        sprites' mean alpha); see cloud.volume_fraction), or per metre of path for
+        a planet's deck
     :param wrap_radius: half-width of the toroidal recycle box, metres
     :param wrap_fade_band: metres of fade at the box face (0 when seamless)
-    :param octave_mean: noise volume mean, for :func:`shadow_calibration`
+    :param octave_mean: noise volume mean, for :func:`shadow_calibration` and the
+        octaves not evaluated
+    :param optics: the type's optics (phase weights are solved here)
     :param aspect: billboard long:short ratio (area-preserving, so no recalibration)
     :param fade_in: (lo, hi) camera distances the layer fades in over, None = none
-    :param fade_out: (lo, hi) it fades out over, None = to the horizon haze
+    :param fade_out: (lo, hi) it fades out over, None = never (the horizon haze
+        takes it)
     :param octaves: octaves evaluated (the rest count as *octave_mean*; see
         :func:`fbm`)
     :returns: a (LAYER_VEC4S, 4) float32 array
+    :raises ValueError: for an unresolved field, or gains with no valid phase
     """
     _require_resolved(spec)
     gain, bias = shadow_calibration(spec, octave_mean)
@@ -636,8 +658,10 @@ def density_on_sphere(
     planet-frame position (seamless on a sphere), and the weather map shifts
     the fbm up (overcast) or down (clear) by direction.
 
+    :param volume: the noise octave (quantised, to match the GPU)
     :param weather: (6, n, n, 2) cube map of coverage and shift
         (:func:`weather.weather_cube`)
+    :param spec: a resolved field (a shell's: :meth:`sphere.ShellSpec.field_of`)
     :param points: (..., 3) planet-frame positions, metres
     :param radius: sea-level radius, metres
     :param octaves: octaves evaluated (the shell's; see :func:`fbm`)

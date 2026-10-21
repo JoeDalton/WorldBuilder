@@ -18,7 +18,9 @@ pair that ``CollisionSystem.sensor_into_obstacle`` and
 
 Chunks come from the store the renderer fills. A missing chunk is generated
 on the spot (about 20 ms) when ``generate=True``, else the finest stored
-ancestor answers, which is cheaper and fine for distant bots.
+ancestor answers, which is cheaper and fine for distant bots. With no
+ancestor stored either, the planet is evaluated directly at the point (no
+triangles: the radial direction stands in for the normal).
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import math
 from collections.abc import MutableMapping
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chunkgen import QUADS, VERTS, ChunkData, generate_chunk
@@ -75,7 +78,9 @@ class TerrainQuery:
 
     # ── point queries ──────────────────────────────────────────────────────────
 
-    def height_at(self, points, level: int | None = None, generate: bool = True):
+    def height_at(
+        self, points: ArrayLike, level: int | None = None, generate: bool = True
+    ) -> np.ndarray:
         """Surface height above sea level under (or over) each point.
 
         The sea surface counts if :attr:`include_ocean`.
@@ -89,21 +94,31 @@ class TerrainQuery:
         heights, _ = self._surface(points, self._level(level), generate)
         return heights
 
-    def ground_height_at(self, points, level: int | None = None, generate: bool = True):
+    def ground_height_at(
+        self, points: ArrayLike, level: int | None = None, generate: bool = True
+    ) -> np.ndarray:
         """Like :meth:`height_at`, but ignoring the sea surface."""
         dirs, shape = _directions(points)
         h, _ = self._interpolate(dirs, self._level(level), generate)
         return h.reshape(shape)
 
-    def normal_at(self, points, level: int | None = None, generate: bool = True):
-        """Outward normal of the surface triangle under each point.
+    def normal_at(
+        self, points: ArrayLike, level: int | None = None, generate: bool = True
+    ) -> np.ndarray:
+        """Outward normal of the surface triangle under each point (the local
+        vertical over the sea, if :attr:`include_ocean`).
 
+        :param points: (..., 3) planet-frame positions, metres
+        :param level: see :meth:`height_at`
+        :param generate: see :meth:`height_at`
         :returns: (..., 3) unit normals, planet frame
         """
         _, normals = self._surface(points, self._level(level), generate)
         return normals
 
-    def altitude(self, points, level: int | None = None, generate: bool = True):
+    def altitude(
+        self, points: ArrayLike, level: int | None = None, generate: bool = True
+    ) -> np.ndarray:
         """:returns: metres from each point down to the surface below it
         (negative inside the ground), shaped (...)"""
         p = np.asarray(points, dtype=np.float64)
@@ -113,14 +128,18 @@ class TerrainQuery:
             - self.height_at(p, level, generate)
         )
 
-    def surface_point(self, points, level: int | None = None, generate: bool = True):
+    def surface_point(
+        self, points: ArrayLike, level: int | None = None, generate: bool = True
+    ) -> np.ndarray:
         """:returns: (..., 3) the surface point on each point's radial line"""
         dirs, shape = _directions(points)
         heights, _ = self._surface(dirs, self._level(level), generate)
         return (dirs * (self.radius + heights.reshape(-1))[:, None]).reshape(*shape, 3)
 
-    def biome_weights_at(self, point, generate: bool = True) -> np.ndarray:
-        """:returns: (6,) biome weights at the nearest vertex of the query grid"""
+    def biome_weights_at(self, point: ArrayLike, generate: bool = True) -> np.ndarray:
+        """:returns: (6,) biome weights in [0, 1] at the nearest vertex of the
+        query grid (a stored ancestor's if the chunk is missing; zeros if
+        none is stored and *generate* is off)"""
         dirs, _ = _directions(point)
         chunk = self._chunk(self._key_of(dirs, self.level), generate)
         if chunk is None:
@@ -130,7 +149,7 @@ class TerrainQuery:
         row = int(np.clip(np.rint(fv[0]), 0, QUADS))
         return chunk.weights[row * VERTS + col] / 255.0
 
-    def material_at(self, point, generate: bool = True) -> str:
+    def material_at(self, point: ArrayLike, generate: bool = True) -> str:
         """:returns: "water" over the sea, else the dominant biome's name"""
         if (
             self.include_ocean
@@ -141,7 +160,9 @@ class TerrainQuery:
 
     # ── shape queries ──────────────────────────────────────────────────────────
 
-    def sphere_contact(self, center, radius: float, generate: bool = True):
+    def sphere_contact(
+        self, center: ArrayLike, radius: float, generate: bool = True
+    ) -> tuple[np.ndarray, np.ndarray] | None:
         """Contact between a sphere and the surface.
 
         The grid is read at the level whose spacing is about radius / 4 (and
@@ -204,7 +225,9 @@ class TerrainQuery:
         hit = c - normal * distance
         return hit, normal
 
-    def segment_intersect(self, p0, p1, generate: bool = False):
+    def segment_intersect(
+        self, p0: ArrayLike, p1: ArrayLike, generate: bool = False
+    ) -> tuple[float, np.ndarray, np.ndarray] | None:
         """First crossing of a segment (e.g. a laser) into the surface.
 
         :param p0: (3,) start, planet frame, metres

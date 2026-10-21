@@ -2,10 +2,12 @@
 
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 
-// Terrain fragment shader: biome texture blending, lighting, ACES tonemap and
-// haze. The tonemap and the post-tonemap haze match ocean.frag, so terrain,
-// sea and cloud meet cleanly at the horizon. "Up" is the local vertical of
-// the sphere (vUp), never the render frame's +Z.
+// Terrain fragment shader: biome texture blending, lighting (sunlight through
+// the planet's own air), aerial perspective through every atmosphere, and the
+// ACES tonemap. The atmospheres (in linear light, before the tonemap) and the
+// tonemap match ocean.frag, so terrain, sea and cloud meet cleanly at the
+// horizon. "Up" is the local vertical of the sphere (vUp), never the render
+// frame's +Z.
 
 in vec3 vRelPos;
 in vec2 vUv;
@@ -30,7 +32,7 @@ uniform float uBlendDepth;        // biome transition softness: ~0.1 crisp
 
 uniform vec3  uSunDir;            // toward the sun, render frame
 uniform vec3  uSunColor;          // sunlight above any air
-uniform vec3  uAmbient;           // sky light (none on an airless body)
+uniform vec3  uAmbient;           // sky light (near none on an airless body)
 uniform float uExposure;
 uniform int   uOwnAtmosphere;     // this planet's atmosphere index, -1 = airless
 uniform int   uSeaSurface;
@@ -87,8 +89,9 @@ void main() {
     vec3 up = normalize(vUp);
     float upN = dot(N, up);
     vec3 L = normalize(uSunDir);
-    // Planet-scale day factor: past the terminator neither the sun nor the
-    // blue sky light the ground, whatever the local slope says.
+    // Planet-scale day factor: past the terminator the sun does not light the
+    // ground, whatever the local slope says. Used on an airless body only;
+    // through an atmosphere, atmoSunlight below also does the reddening.
     float day = smoothstep(-0.12, 0.08, dot(up, L));
 
     float w[6] = float[6](vBiomeA.r, vBiomeA.g, vBiomeA.b, vBiomeA.a, vBiomeB.r, vBiomeB.g);

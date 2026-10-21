@@ -20,7 +20,8 @@ Lengths follow the planet's feature scale, like the terrain's.
 
 The clouds never see coverage directly: :func:`shift_table` turns it into the
 fbm shift that gives that coverage, exactly, from the field's sorted column
-peaks (:func:`noise.column_peaks` is the inverse of the coverage function).
+peaks over the planet (:func:`noise.sphere_column_peaks`, like
+:func:`noise.column_peaks`, is the inverse of the coverage function).
 The GPU texture holds both (r = coverage for the far deck, g = the shift for
 the density), so the near field and the far deck agree by construction.
 
@@ -248,9 +249,11 @@ def vortices(spec: WeatherSpec, planet: Planet | None = None) -> list[Vortex]:
     """The planet's weather systems, placed deterministically from the seed.
 
     Extratropical cyclones go in the storm tracks, apart from each other;
-    tropical ones over the sea (none on a dry planet).
+    tropical ones over open sea at 10-25 degrees (none on a dry planet).
 
+    :param spec: the weather
     :param planet: the evaluated planet (built from the spec if None)
+    :returns: the extratropical cyclones, then the tropical ones
     """
     planet = planet or Planet(spec.planet)
     radius = spec.planet.radius
@@ -380,6 +383,7 @@ def orographic(
 
     :param dirs: (N, 3) unit directions
     :param elevation_at: ``(N, 3) dirs -> (N,)`` metres above sea level
+    :param spec: the weather (its orographic gain and slope)
     :param step: metres upwind the slope is measured over
     :returns: (N,) coverage to add (negative in the lee)
     """
@@ -400,22 +404,31 @@ def _wetness(humidity) -> np.ndarray:
     return wet * wet * (3.0 - 2.0 * wet)
 
 
-def climate_factor(spec: WeatherSpec, temperature, humidity) -> np.ndarray:
+def climate_factor(
+    spec: WeatherSpec, temperature: np.ndarray, humidity: np.ndarray
+) -> np.ndarray:
     """What the zonal cover is multiplied by: humidity, and hot dry land
-    cleared (deserts stay clear)."""
+    cleared (deserts stay clear).
+
+    :param temperature: degrees Celsius, as :meth:`terrain.planet.Planet.sample_dirs`
+    :param humidity: in [0, 1], likewise
+    """
     moist = spec.dry_floor + (1.0 - spec.dry_floor) * _wetness(humidity)
     hot = np.clip((temperature - 22.0) / 12.0, 0.0, 1.0)
     dry = 1.0 - np.clip((humidity - 0.2) / 0.35, 0.0, 1.0)
     return moist * (1.0 - spec.desert_clearing * hot * dry)
 
 
-def coverage_at(spec: WeatherSpec, dirs: np.ndarray, planet: Planet | None = None):
+def coverage_at(
+    spec: WeatherSpec, dirs: np.ndarray, planet: Planet | None = None
+) -> np.ndarray:
     """The weather's target coverage at arbitrary directions (no cube map).
 
     The climate is sampled directly here; :func:`coverage_map` samples it on
     a coarse grid and upsamples, which is what makes the map cheap.
 
     :param dirs: (N, 3) unit directions
+    :param planet: the evaluated planet (built from the spec if None)
     :returns: (N,) in [0, 1]
     """
     planet = planet or Planet(spec.planet)
@@ -511,8 +524,13 @@ def coverage_map(spec: WeatherSpec, size: int = WEATHER_SIZE) -> np.ndarray:
 def weather_cube(
     spec: WeatherSpec, table: np.ndarray, size: int = WEATHER_SIZE
 ) -> np.ndarray:
-    """:returns: (6, size, size, 2) float32: coverage, and the fbm shift
-    giving it (:func:`shift_table`)"""
+    """The weather map the clouds draw from (:func:`build_weather_texture`
+    uploads it).
+
+    :param table: the field's shift table (:func:`shift_table`)
+    :returns: (6, size, size, 2) float32: coverage, and the fbm shift
+        giving it
+    """
     cover = coverage_map(spec, size)
     shift = coverage_to_shift(cover, np.asarray(table))
     return np.stack([cover, shift.astype(np.float32)], axis=-1)

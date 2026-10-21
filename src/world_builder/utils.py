@@ -33,7 +33,7 @@ def clamp(value: float, minimum: float, maximum: float) -> float:
     return min(max(value, minimum), maximum)
 
 
-def compute_next_power_of_2(x: float) -> float:
+def compute_next_power_of_2(x: float) -> int:
     """
     Computes the smallest power of two greater than or equal to x
 

@@ -1,20 +1,36 @@
 """
 Frame-time benchmark of the terrain demo in fast, scripted flights.
 
-Runs the real demo (window, workers, both cameras, ocean) with vsync off and
-flies fixed paths, reporting frame times and where the main thread spends
-them::
+Runs the real demo (window, workers, both cameras, atmosphere, clouds,
+ocean, sky) with no multisampling and vsync off, and flies fixed paths,
+reporting frame times and where the main thread spends them::
 
     python scripts/flight_bench.py [--flight low cruise descent] [--seconds S]
         [--profile] [--size "1600 900"] [--workers N] [--offscreen]
         [--cloud-quality high|mid|low|off] [--cloud-debug BITS]
 
-Flights (camera level, boosted, along the coast of the demo level):
-    low      300 m above the ground, ~750 m/s
-    cruise   3 km up, ~7.5 km/s
-    descent  straight down from 3 planet radii to 300 m
+    --flight         the flights to run, in order (default: all three)
+    --seconds        each flight's length, at most (default 15)
+    --profile        cProfile the main thread; prints the top 28 by
+                     cumulative time
+    --size           window or buffer size (default "1600 900")
+    --workers        generation processes (default: physical cores - 1)
+    --offscreen      render to an offscreen buffer: no display refresh cap
+                     or throttling
+    --cloud-quality  default high
+    --cloud-debug    SphericalClouds.set_debug bits (default 0)
+
+Flights (boosted, along the coast of the demo level from its reference
+point, heading west):
+    low      camera level, 300 m above the ground, ~1,500 m/s
+    cruise   camera level, 3 km up, ~15 km/s
+    descent  nose straight down from 3 planet radii, until 400 m above the
+             ground
 
 Each starts from a settled view, so it measures flying, not the initial fill.
+Per flight it prints the frame count, mean fps, frame time (median, p95,
+max), the demo's update (median, p95), chunks generated per second and the
+mean backlog (chunks wanted).
 """
 
 from __future__ import annotations
@@ -44,6 +60,8 @@ FLIGHTS = ("low", "cruise", "descent")
 
 
 def _settle(demo: TerrainDemo, timeout: float = 60.0) -> None:
+    """Step frames until nothing is wanted or generating for 10 frames, or
+    *timeout* seconds."""
     start = time.perf_counter()
     quiet = 0
     while time.perf_counter() - start < timeout and quiet < 10:
@@ -55,6 +73,7 @@ def _settle(demo: TerrainDemo, timeout: float = 60.0) -> None:
 
 
 def _start(demo: TerrainDemo, flight: str) -> None:
+    """Put the camera at a flight's start, boosted, its keys held."""
     spec = demo.terrain.spec
     lat, lon = spec.reference_lat, spec.reference_lon
     if flight == "descent":
@@ -72,11 +91,18 @@ def _start(demo: TerrainDemo, flight: str) -> None:
 
 
 def _release(demo: TerrainDemo) -> None:
+    """Let go of every key."""
     for key in demo._keys:
         demo._keys[key] = False
 
 
-def run(demo: TerrainDemo, flight: str, seconds: float, profile: bool):
+def run(demo: TerrainDemo, flight: str, seconds: float, profile: bool) -> None:
+    """Fly one flight from a settled view and print its timings.
+
+    :param seconds: the flight's length, at most (the descent stops 400 m
+        above the ground)
+    :param profile: also print a cProfile of the main thread
+    """
     _release(demo)
     _start(demo, flight)
     _release(demo)
@@ -86,7 +112,7 @@ def run(demo: TerrainDemo, flight: str, seconds: float, profile: bool):
     generated = sum(body.terrain.stats["generated"] for body in demo.bodies)
     original = demo._update
 
-    def timed(task):
+    def timed(task) -> int:
         start = time.perf_counter()
         result = original(task)
         updates.append(time.perf_counter() - start)
@@ -139,13 +165,21 @@ def run(demo: TerrainDemo, flight: str, seconds: float, profile: bool):
         print(out.getvalue())
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--flight", nargs="*", default=list(FLIGHTS))
-    parser.add_argument("--seconds", type=float, default=15.0)
-    parser.add_argument("--profile", action="store_true")
-    parser.add_argument("--size", default="1600 900")
-    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument(
+        "--flight", nargs="*", default=list(FLIGHTS), help="low, cruise, descent"
+    )
+    parser.add_argument(
+        "--seconds", type=float, default=15.0, help="per flight, at most"
+    )
+    parser.add_argument(
+        "--profile", action="store_true", help="cProfile the main thread"
+    )
+    parser.add_argument("--size", default="1600 900", help='"width height"')
+    parser.add_argument(
+        "--workers", type=int, default=None, help="generation processes"
+    )
     parser.add_argument(
         "--offscreen",
         action="store_true",

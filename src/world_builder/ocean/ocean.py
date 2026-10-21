@@ -18,7 +18,13 @@ It reads from ``game``: ``root_node``, ``method_lists``, ``game_time``
 (``get_current_time()``) and ``app`` (the ShowBase: ``camera``, ``camLens``,
 ``win``, ``graphicsEngine``). Two settings are read when the app has them,
 with defaults otherwise: ``app.graphics_settings.config["render"]
-["reflection_scale"]`` and ``app.graphics_manager.get_render_size()``.
+["reflection_scale"]`` (unless the ``reflection_scale`` argument is given)
+and ``app.graphics_manager.get_render_size()``.
+
+Alone, distant water fades to a haze colour. In a world with atmospheres,
+bind them to :attr:`Ocean.ocean_node` (``Atmospheres.bind``) and keep
+:meth:`Ocean.set_atmosphere_frame` current: they replace the haze. By
+night, :meth:`Ocean.set_light` dims the water's own colour.
 
 The ocean has no collision of its own: physics is the game's business. Its
 surface is the plane z = 0, exact at the camera, where the droop is zero.
@@ -32,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from numpy.typing import ArrayLike
 from panda3d.core import (
     BitMask32,
     Camera,
@@ -238,6 +245,16 @@ def make_swell_grid_mesh(
 
 
 class Ocean:
+    """A camera-locked ocean surface, its planar reflection and its shader.
+
+    :ivar base_node: the ocean's frame (under ``game.root_node``); the water
+        is its plane z = 0
+    :ivar ocean_node: the surface mesh, carrying the shader inputs
+    :ivar refl_buffer: the offscreen reflection buffer
+    :ivar refl_tex: its texture
+    :ivar refl_cam: the mirrored reflection camera's NodePath
+    """
+
     def __init__(
         self,
         game: Any,
@@ -263,7 +280,7 @@ class Ocean:
         reflection_scale: float | None = None,
         vert_shader: Path = _SHADERS / "ocean.vert",
         frag_shader: Path = _SHADERS / "ocean.frag",
-    ):
+    ) -> None:
         """
         Build the ocean surface, its shared reflection buffer, and shader.
 
@@ -396,7 +413,7 @@ class Ocean:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def update(self):
+    def update(self) -> None:
         """Per-frame update (self-registered in ``game.method_lists``)."""
         current_time = self.game.game_time.get_current_time()
         camera_pos = self.game.app.camera.getPos(self.base_node)
@@ -435,7 +452,9 @@ class Ocean:
         self.ocean_node.setShaderInput("iCameraPos", camera_pos)
         self.ocean_node.setShaderInput("uReflMVP", mvp)
 
-    def set_atmosphere_frame(self, base_to_world, sun_direction) -> None:
+    def set_atmosphere_frame(
+        self, base_to_world: LMatrix4f, sun_direction: ArrayLike
+    ) -> None:
         """For a bound atmosphere: how the base node's axes sit in the world
         (the atmospheres work in world axes) and where the sun is.
 
@@ -447,11 +466,14 @@ class Ocean:
         self.ocean_node.setShaderInput("uBaseToWorld", base_to_world)
         self.ocean_node.setShaderInput("uAtmoSunDir", LVecBase3f(*sun_direction))
 
-    def set_light(self, light) -> None:
+    def set_light(self, light: ArrayLike) -> None:
         """How lit the water is, relative to the daylight its colour was
-        chosen in: (r, g, b) multiplying the water's own scattered colour and
-        the reflection's clear colour (1 = as tuned; 0 = night). The sky's
-        reflection darkens by itself."""
+        chosen in: (r, g, b) multiplying the water's own scattered colour
+        (``iWaterLight``) and the reflection's clear colour (1 = as tuned;
+        0 = night). The sky's reflection darkens by itself.
+
+        :param light: linear (r, g, b) factors
+        """
         light = LVecBase3f(*light)
         self.ocean_node.setShaderInput("iWaterLight", light)
         c = self._water_color
@@ -459,7 +481,7 @@ class Ocean:
             LVecBase4f(c[0] * light[0], c[1] * light[1], c[2] * light[2], 1)
         )
 
-    def set_wave_iterations(self, iterations: int):
+    def set_wave_iterations(self, iterations: int) -> None:
         """Adjust wave-detail quality at runtime (e.g. from a settings menu).
 
         Higher = sharper waves up close but more expensive per pixel; lower =
@@ -515,16 +537,20 @@ class Ocean:
         self.refl_buffer.setClearColor(LVecBase4f(*water_color, 1))
 
         self.refl_cam_node = Camera("refl_cam")
-        # Use a wider lens than the main camera to avoid frustum culling
-        # artifacts when turning quickly — the extra margin ensures reflected
-        # objects are never culled at the edges of the reflection buffer.
+        # Use a wider lens than the main camera (1.4x its FOV) to avoid frustum
+        # culling artifacts when turning quickly — the extra margin ensures
+        # reflected objects are never culled at the edges of the reflection
+        # buffer. A copy taken now: later lens changes (FOV, near/far) are not
+        # followed.
         refl_lens = self.game.app.camLens.makeCopy()
         fov = self.game.app.camLens.getFov()
         refl_lens.setFov(fov.x * 1.4, fov.y * 1.4)
         # The reflection camera sits ~2*altitude further from the skybox's far
-        # side than the main camera, so with the same far plane the skybox could
-        # be clipped at the reflected zenith. Push the reflection far plane well
-        # past it so it always renders in full.
+        # side than the main camera, so with the same far plane a skybox that is
+        # real geometry could be clipped at the reflected zenith. Push the
+        # reflection far plane well past it so it always renders in full.
+        # (world_builder's Sky needs none of it: sky.vert puts it on the far
+        # plane whatever the range.)
         refl_lens.setFar(self.game.app.camLens.getFar() * 4.0)
         self.refl_cam_node.setLens(refl_lens)
         self.refl_cam = self.base_node.attachNewNode(self.refl_cam_node)
@@ -555,16 +581,17 @@ class Ocean:
         )
         return refl_tex, uv_scale
 
-    def mirror_camera(self):
+    def mirror_camera(self) -> None:
         """Mirror the reflection camera across the water plane (Z = 0)."""
         pos = self.game.app.camera.getPos(self.base_node)
         hpr = self.game.app.camera.getHpr(self.base_node)
         self.refl_cam.setPos(self.base_node, pos.x, pos.y, -pos.z)
         self.refl_cam.setHpr(self.base_node, hpr.x, -hpr.y, -hpr.z)
 
-    def clean(self):
+    def clean(self) -> None:
         """
-        Cleans the Ocean object
+        Cleans the Ocean object: unregisters its update, destroys the
+        reflection buffer and removes its nodes.
         """
         if self.game.method_lists:
             self.game.method_lists.pop(self.id, None)

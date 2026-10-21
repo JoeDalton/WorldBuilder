@@ -18,7 +18,7 @@ docstring has the overview):
   CPU as a uniform array; `set_wave_iterations()` changes wave detail at
   runtime.
 - **Geometric swell** (`geometric_swell=True`, used by SpaceFlight's ocean
-  level; a prototype with known artifacts, see the
+  level and the terrain demo; a prototype with known artifacts, see the
   [swell artifact report](https://github.com/JoeDalton/WorldBuilder/blob/main/src/world_builder/ocean/OCEAN_SWELL_ARTIFACT_REPORT.md))
   builds `make_swell_grid_mesh` instead: a dense grid that `ocean.vert`
   displaces by the swell, tapered to flat before its edge, ringed by
@@ -26,7 +26,11 @@ docstring has the overview):
 - **Curved over the planet** (swell mode only: four vertices cannot curve).
   Every vertex droops by `d² / 2R`, baked into the mesh. That is exact because
   the mesh is re-centred on the camera, the same origin the cloud shader droops
-  from, and costs nothing per frame. The horizon then dips `sqrt(2h/R)` below
+  from, and costs nothing per frame. With `exact_sphere=True` the mesh lies
+  on the sphere itself instead: the two part by `d⁴ / 8R³` (58 m at 100 km
+  on a 600 km planet), so water meeting real spherical terrain needs it (the
+  terrain demo), while water meeting the drooped flat cloud field keeps the
+  paraboloid. The horizon then dips `sqrt(2h/R)` below
   eye level (1.0° at 1 km, 3.05° at 9 km). The border is rings rather than one
   quad because a quad interpolates linearly and would droop into a cone; the
   spacing is geometric because the flat-cell sag is `spacing² / 8R`, and 28
@@ -40,7 +44,16 @@ docstring has the overview):
 - **Aerial perspective.** Distant water fades to `haze_color` after the
   tonemap, as the clouds do, so sea and sky meet at the horizon. Its
   `haze_distance` (150 km) is much shorter than the clouds' 400 km: the air
-  path to sea level is far denser than to cloud at altitude.
+  path to sea level is far denser than to cloud at altitude. In a world with
+  [atmospheres](atmosphere.md), bind them to `ocean_node`
+  (`Atmospheres.bind`) and call `set_atmosphere_frame(base_to_world,
+  sun_direction)` every frame: they replace the haze, applied in linear
+  light before the tonemap, as on the terrain.
+- **Night.** The water's own colour was chosen in daylight; `set_light(rgb)`
+  scales it (uniform `iWaterLight`) and the reflection buffer's clear colour
+  by the light on the sea relative to that daylight, so the sea is dark by
+  night. The terrain demo computes it with `Atmospheres.light_at`. The
+  reflected sky darkens by itself.
 - **Far plane.** SpaceFlight raises it to 600 km (`CAMERA_FAR_M`), set before
   the scene is built because the reflection camera copies the lens. Panda's
   default 100 km clips the outermost cloud shell and keeps the ocean horizon in
@@ -49,8 +62,16 @@ docstring has the overview):
   `z² / (near · 2^bits)` and is set by the near plane.
 - **Planar reflections.** `make_reflection_buffer` builds an offscreen texture
   buffer and a reflection camera that `mirror_camera` (called from `update`)
-  mirrors about the water plane every frame. A clip plane restricts it to
-  geometry above the water, and a camera-mask bit hides the ocean from it. The
+  mirrors about the water plane every frame. Its lens is a copy of the main
+  camera's taken then, with 1.4× its field of view (so turning quickly never
+  culls what the mirror should show at its edges) and 4× its far distance.
+  A clip plane restricts it to geometry above the water. Its camera mask is
+  bits 0–19 less bit 1, the bit the ocean hides itself from; since Panda
+  draws a node for a camera if any of the camera's bits is shown on it (see
+  `world_builder.depth`), that hide does not exclude the ocean: what keeps
+  the surface out of its own mirror is that the camera below sees only its
+  back faces, which are culled. The terrain is reflected or not with
+  `Terrain.set_reflected` (all of bits 0–19). The
   buffer is sized from the app's `graphics_manager.get_render_size()` when
   it has one (the window size otherwise) times `reflection_scale` (the `Ocean` argument,
   else `app.graphics_settings`, else 0.5), so it tracks the internal render resolution rather than
@@ -76,7 +97,7 @@ Driven by [`ocean/ocean.py`](../../src/world_builder/ocean/ocean.py) (above):
   passthrough plus the optional `uGeometricSwell` mode (which SpaceFlight
   enables): it displaces vertices vertically by the same `swellField` the
   fragment shader samples, tapered to zero near the dense grid's edge so the
-  displaced centre joins the flat border. Its world position comes from
+  displaced centre joins the undisplaced border rings. Its world position comes from
   `uModelMatrix` (refreshed by `Ocean.update` after the plane is re-centred),
   not `p3d_ModelMatrix`, so the waves stay anchored to the world rather than
   to the moving render origin.
@@ -103,10 +124,13 @@ Driven by [`ocean/ocean.py`](../../src/world_builder/ocean/ocean.py) (above):
     [ocean swell artifact report](https://github.com/JoeDalton/WorldBuilder/blob/main/src/world_builder/ocean/OCEAN_SWELL_ARTIFACT_REPORT.md)).
     The ripple-perturbed UV is clamped to the rendered region
     (`uReflUVScale`) so it never samples the power-of-two padding.
-  - **Output.** The fresnel blend of reflection and water colour is
-    ACES-tonemapped (`aces_tonemap`), then hazed toward `uHazeColor` over
-    `uHazeDistance` — after the tonemap, as the cloud field does, so sea and
-    sky meet cleanly at the horizon.
+  - **Output.** The fresnel blend of reflection and water colour (the
+    latter scaled by `iWaterLight`) is ACES-tonemapped (`aces_tonemap`), then
+    hazed toward `uHazeColor` over `uHazeDistance` — after the tonemap, as
+    the cloud field does, so sea and sky meet cleanly at the horizon. With
+    atmospheres bound (`uAtmoCount > 0`), `applyAtmospheres` replaces the
+    haze, in linear light before the tonemap, along the view ray turned into
+    world axes by `uBaseToWorld`, toward `uAtmoSunDir`.
   - **Debug.** `uDebugMode` 1–8 visualise intermediate quantities (0 is normal
     rendering): normal, reflection UV, fresnel, world grid, reflection-UV
     clamp, raw reflection, pre-tonemap clipping, FM phase.

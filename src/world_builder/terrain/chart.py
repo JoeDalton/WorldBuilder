@@ -3,7 +3,7 @@ Local flat maps of the planet sphere, and latitude/longitude.
 
 :class:`AzimuthalEquidistantChart` unrolls the sphere around a reference point
 into flat metres (x east, y north): distances from that point are exact, and
-the sideways stretch is c^2/6 at angular distance c (0.2 % at 50 km on a
+the sideways stretch is c^2/6 at angular distance c (0.12 % at 50 km on a
 600 km planet). Stamps and paints are each defined in their own chart; level
 files give positions in chart metres around their reference point; the
 demo's ocean is anchored to the ground through one. The terrain itself is
@@ -19,6 +19,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 
 @dataclass(frozen=True)
@@ -57,7 +58,7 @@ def latlon(dirs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return lat, lon
 
 
-def dirs_from_latlon(lat_deg, lon_deg) -> np.ndarray:
+def dirs_from_latlon(lat_deg: ArrayLike, lon_deg: ArrayLike) -> np.ndarray:
     """:returns: (N, 3) unit vectors at the given latitudes/longitudes (degrees)"""
     lat = np.radians(np.atleast_1d(np.asarray(lat_deg, dtype=np.float64)))
     lon = np.radians(np.atleast_1d(np.asarray(lon_deg, dtype=np.float64)))
@@ -84,7 +85,7 @@ class AzimuthalEquidistantChart:
         self.radius = radius
         self.frame = TangentFrame.at(lat_deg, lon_deg)
 
-    def to_dirs(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    def to_dirs(self, x: ArrayLike, y: ArrayLike) -> np.ndarray:
         """Directions of flat chart points.
 
         :param x: metres east of the origin, any shape

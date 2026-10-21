@@ -14,7 +14,8 @@ Level files: a planet preset with overrides, plus hand-made stamps and paints.
     stamps:
       - heightmap: stamps/crater.png      # relative to this file
         center: {x: 3000, y: 9000}        # chart metres, or {lat: .., lon: ..}
-        size: [6000, 6000]                # metres east-west, north-south
+        size: [6000, 6000]                # metres east-west, north-south (or
+                                          # one number: a square)
         rotation: 0                       # degrees, counter-clockwise
         height_scale: 900                 # metres per full-white pixel
         height_offset: -315               # metres added to every pixel
@@ -27,14 +28,26 @@ Level files: a planet preset with overrides, plus hand-made stamps and paints.
         colors: {"#808080": rock, "#e0c080": desert}
         falloff: 80
         strength: 1.0
+        tolerance: 0.12                   # colour distance that matches
     camera: {lat: 42.0, lon: 10.0, alt: 600, heading: 0, pitch: -8}
-                                          # demo start pose; alt above sea
-                                          # level, heading from north, or
-                                          # {x, y, z} in chart metres
+                                          # demo start pose: alt in metres
+                                          # above sea level, heading in
+                                          # degrees counter-clockwise from
+                                          # north; or {x, y} in chart metres
+                                          # with z for alt (800 m if unset)
+
+Every key is optional except a stamp's ``heightmap``, ``center`` and ``size``
+and a paint's ``mask`` and ``colors`` (and ``center`` and ``size`` unless it
+reuses a stamp's); the defaults are those of :class:`Stamp` and
+:class:`Paint`. Unknown ``elevation`` or ``climate`` fields are an error.
 
 Positions in chart metres (east, north of the reference point, on an
-azimuthal-equidistant chart) are converted to latitude/longitude at load, so
-a stamp stays put on the planet even if the reference point moves.
+azimuthal-equidistant chart) are converted to latitude/longitude at load: the
+resulting spec holds no chart coordinates, and moving ``reference`` in the
+file moves the chart-placed content with it.
+
+``python -m world_builder.terrain.level`` regenerates the sample images in
+``levels/stamps`` (:func:`write_sample_stamps`).
 """
 
 from __future__ import annotations
@@ -50,6 +63,7 @@ from world_builder.terrain.planet import (
     PRESETS,
     ClimateParams,
     ElevationParams,
+    PlanetSpec,
 )
 from world_builder.terrain.pngio import write_png
 from world_builder.terrain.stamps import Paint, Placement, Stamp
@@ -63,7 +77,7 @@ def load_level(
     preset: str | None = None,
     seed: int | None = None,
     radius: float | None = None,
-):
+) -> tuple[PlanetSpec, dict | None]:
     """Read a level file.
 
     :param path: the YAML file
@@ -73,6 +87,8 @@ def load_level(
     :returns: (resolved PlanetSpec, camera pose or None). The pose is a dict
         with lat, lon (degrees), alt (metres above sea level), heading
         (degrees, counter-clockwise from north) and pitch (degrees)
+    :raises ValueError: on an unknown elevation or climate field, blend mode
+        or biome name
     """
     path = Path(path)
     data = yaml.safe_load(path.read_text()) or {}
@@ -188,9 +204,11 @@ def _placement(entry: dict, chart: AzimuthalEquidistantChart) -> Placement:
 
 
 def write_sample_stamps(folder: Path = LEVELS_PATH / "stamps") -> None:
-    """Generate the demo's sample stamp and paint images.
+    """Generate the demo's sample stamp and paint images: a crater, a mesa,
+    a landing pad and a cliff lake (:func:`cliff_lake`), with their paint
+    masks.
 
-    :param folder: destination
+    :param folder: destination, created if missing
     """
     folder.mkdir(parents=True, exist_ok=True)
     n = 512

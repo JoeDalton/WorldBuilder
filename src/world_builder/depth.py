@@ -6,21 +6,25 @@ depth buffer: with the near plane at 1 m, depth steps are hundreds of metres
 at 100 km. :class:`SplitDepthCameras` (the trick KSP uses with its scaled and
 local cameras) draws the scene twice into the same window: first a far camera
 covering [split, far], then the usual camera covering [near, split] after
-clearing depth. Each range gets the whole depth buffer, so precision stays
-under a metre at the far end of each at any altitude (see :meth:`update`).
+clearing depth. Each range gets the whole depth buffer, so over one planet
+precision stays under a metre at the far end of each at any altitude (see
+:meth:`SplitDepthCameras.update`; :meth:`SplitDepthCameras.system_ranges`
+trades some of it far away for reaching other bodies).
 
 Both cameras see the whole scene graph and Panda culls each to its own
 frustum, so only objects straddling the split are drawn twice. Nothing else
 changes: standard depth, the window's multisampling, existing shaders.
 
 Masks: each camera has one bit of its own, :data:`NEAR_BIT` and
-:data:`FAR_BIT`. ``node.hide(HIDE_FROM_NEAR)`` keeps a node out of the near
-pass (e.g. a sky dome, which belongs to the far pass); other cameras (the
-ocean's reflection) are unaffected. Panda draws a node for a camera if any
-of the camera's bits is still shown on it, so a camera with every bit but
-one could never be hidden from by one bit: with the near camera's mask "all
-but FAR_BIT", ``hide(HIDE_FROM_NEAR)`` did nothing, and the sky was kept out
-of the near pass only by lying beyond its range.
+:data:`FAR_BIT` (its mask, :data:`NEAR_CAMERA_MASK` or
+:data:`FAR_CAMERA_MASK`, is that bit alone). ``node.hide(HIDE_FROM_NEAR)``
+keeps a node out of the near pass (e.g. a sky dome, which belongs to the far
+pass); other cameras (the ocean's reflection) are unaffected. Panda draws a
+node for a camera if any of the camera's bits is still shown on it, so a
+camera with every bit but one could never be hidden from by one bit: with
+the near camera's mask "all but FAR_BIT", ``hide(HIDE_FROM_NEAR)`` did
+nothing, and the sky was kept out of the near pass only by lying beyond its
+range.
 
 Culling: Panda builds a lens's culling frustum (``Lens.make_bounds``) with its
 far end cut at ``1 / lens-far-limit``, 10,000 km by default, whatever the far
@@ -34,9 +38,18 @@ far camera gets explicit cull bounds to its true far plane instead
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
-from panda3d.core import BitMask32, BoundingHexahedron, Camera, PandaNode, Point3
+from panda3d.core import (
+    BitMask32,
+    BoundingHexahedron,
+    Camera,
+    Lens,
+    PandaNode,
+    Point3,
+)
 
 #: Camera bit only the near camera has (outside the ocean reflection's 0-19).
 NEAR_BIT = 21
@@ -46,16 +59,20 @@ FAR_BIT = 22
 HIDE_FROM_NEAR = BitMask32.bit(NEAR_BIT)
 #: ``node.hide(HIDE_FROM_FAR)``: drawn by the near camera only.
 HIDE_FROM_FAR = BitMask32.bit(FAR_BIT)
-#: The cameras' masks: one bit each, so one bit hides from each.
+#: The near camera's mask: its bit alone, so :data:`HIDE_FROM_NEAR` hides
+#: from it.
 NEAR_CAMERA_MASK = BitMask32.bit(NEAR_BIT)
+#: The far camera's mask: its bit alone, so :data:`HIDE_FROM_FAR` hides
+#: from it.
 FAR_CAMERA_MASK = BitMask32.bit(FAR_BIT)
 
 
-def frustum_bounds(lens) -> BoundingHexahedron:
+def frustum_bounds(lens: Lens) -> BoundingHexahedron:
     """A perspective lens's frustum to its true far plane.
 
     What ``lens.make_bounds()`` returns, without its far end cut at
-    ``1 / lens-far-limit`` (10,000 km by default). No film offset.
+    ``1 / lens-far-limit`` (10,000 km by default). No film offset. For a
+    camera's ``set_cull_bounds``, which Panda then culls with instead.
 
     :param lens: a ``PerspectiveLens``
     """
@@ -76,9 +93,22 @@ def frustum_bounds(lens) -> BoundingHexahedron:
 
 
 class SplitDepthCameras:
-    """A far camera under the app's camera, drawn first into the same window."""
+    """A far camera under the app's camera, drawn first into the same window.
 
-    def __init__(self, app, near: float = 1.0, overlap: float = 1.02):
+    Takes over the app's camera: its mask becomes :data:`NEAR_CAMERA_MASK`
+    and its lens's near/far are set by :meth:`update` every frame.
+    :meth:`destroy` restores its mask and depth clearing (the lens keeps the
+    last near/far).
+
+    :ivar far_camera: the far camera's NodePath (a child of ``app.camera``)
+    :ivar far_lens: its lens, a copy of ``app.camLens`` kept in step with it
+    :ivar near_region: the app camera's display region (clears depth)
+    :ivar far_region: the far camera's, sorted just before it
+    :ivar split: the current split distance, metres (0 before :meth:`update`)
+    :ivar far: the current far distance, metres
+    """
+
+    def __init__(self, app: Any, near: float = 1.0, overlap: float = 1.02) -> None:
         """
         :param app: the ShowBase (``camera``, ``cam``, ``camLens``, ``win``)
         :param near: near plane of the near camera, metres
@@ -156,7 +186,9 @@ class SplitDepthCameras:
         return split, 1.05 * (eye + peak)
 
     @staticmethod
-    def system_ranges(bodies, near_split: float = 2000.0) -> tuple[float, float]:
+    def system_ranges(
+        bodies: Iterable[tuple[float, ...]], near_split: float = 2000.0
+    ) -> tuple[float, float]:
         """Split and far distances for a camera among several bodies.
 
         The split follows the nearest body (it bounds the nearest ground);

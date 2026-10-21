@@ -14,7 +14,7 @@
 //
 // Premultiplied "over", back to front: with alpha = 1 - exp2(-opticalDepth), N
 // overlapping billboards leave transmittance exp2(-sum of depths), i.e. the
-// billboards along a view ray ARE the steps of a raymarch. See docs/scenes.md.
+// billboards along a view ray ARE the steps of a raymarch. See docs/source/clouds.md.
 uniform sampler2D p3d_Texture0;  // puff atlas: alpha = per-quad THICKNESS profile
 uniform vec3  camPos;
 

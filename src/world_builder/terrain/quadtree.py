@@ -6,9 +6,12 @@ identity (and its cached data) does not depend on where the camera is. A node
 splits when the camera is closer than ``K`` times its size, measured in 3D to
 the node's box: the patch's tangent-frame box, bounded radially by its height
 range. That keeps every chunk at about ``QUADS / K`` vertices across its own
-distance, i.e. roughly constant on screen.
+distance, i.e. roughly constant on screen. A split node merges back only
+past ``hysteresis`` times that distance, so a hovering camera does not make
+chunks flicker.
 
-Nodes wholly behind the planet's bulge are culled (exact sphere geometry).
+Nodes wholly behind the planet's bulge are culled (exact sphere geometry), as
+are nodes wholly beyond the optional ``max_distance``.
 There is no frustum culling here: turning the camera must never reveal holes
 or coarse ground, and Panda culls the drawn nodes itself.
 
@@ -26,6 +29,8 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
+
+from numpy.typing import ArrayLike
 
 from world_builder.terrain.cubesphere import CubeGrid, Key
 
@@ -90,20 +95,20 @@ class LodSelector:
         self._split: set[Key] = set()
         self._geometry: dict[Key, tuple] = {}
 
-    def reset(self):
+    def reset(self) -> None:
         """Forget the hysteresis state (after a spec change)."""
         self._split.clear()
 
     def select(
         self,
-        camera: tuple[float, float, float],
+        camera: ArrayLike,
         ready: Callable[[Key], bool],
         bounds: Callable[[Key], tuple[float, float] | None],
     ) -> Selection:
         """One LOD pass.
 
-        :param camera: camera position in the planet frame (centre at the
-            origin), metres
+        :param camera: (3,) camera position in the planet frame (centre at
+            the origin), metres
         :param ready: whether a key's chunk can be drawn now
         :param bounds: a key's (h_min, h_max) when known, else None. Return
             the same tuple object for a key while its bounds do not change
@@ -139,7 +144,7 @@ class LodSelector:
 
     # ── internals ──────────────────────────────────────────────────────────────
 
-    def _begin(self, camera) -> None:
+    def _begin(self, camera: ArrayLike) -> None:
         """Per-pass camera terms."""
         x, y, z = (float(c) for c in camera)
         self._camera = (x, y, z)

@@ -1,15 +1,16 @@
-# Performance notes (terrain)
+# Performance notes
 
-Known computational costs and open concerns for `world_builder.terrain`, with
-the measurements behind them. Frame rate in the demo is currently high (GTX
-1070, i7-6700K: 4 cores / 8 threads), so nothing here is urgent. This page
-records where the time goes, what was tried, and what to look at first if it
-becomes a problem.
+Known computational costs and open concerns for `world_builder.terrain` and,
+in §13, the atmosphere, sky and clouds drawn with it, with the measurements
+behind them. Frame rate in the demo is currently high (GTX 1070, i7-6700K: 4
+cores / 8 threads), so nothing here is urgent. This page records where the
+time goes, what was tried, and what to look at first if it becomes a problem.
 
 Measured with `python -m world_builder.terrain.bench`, headless demo runs,
-and `python scripts/flight_bench.py` (frame times in scripted fast flights,
+`python scripts/flight_bench.py` (frame times in scripted fast flights,
 `--profile` for the main thread, `--offscreen` to avoid the display's refresh
-cap or throttling).
+cap or throttling) and `python scripts/terrain_shots.py` (settled frame times
+at fixed poses, §13).
 CPU timings on this machine are noisy (frequency scaling): treat them as
 ±30 %. Since the move to the cube-sphere (600 km planet by default), the
 figures in §3–5 and §10 are re-measured; §1, §2 and §6–9 still hold as written.
@@ -290,14 +291,15 @@ the easy levers are fewer macro samples, no triplanar, and a shorter
 
 ## 10. Descent from orbit
 
-Speed in the demo grows with height above ground (`150 m/s × h / 300 m`), so
-a descent is exponential: about 2 s per factor of e, 0.4 s boosted. Chunk
-demand is roughly constant per factor of altitude, about one ring of ~66
-chunks per halving of the altitude: ~16 chunks/s unboosted, ~80/s boosted,
-against the pool's ~50–67/s (§1). Boosting all the way down therefore shows
-coarser ground for a moment near the bottom (the coarse parent stays visible,
-never holes). The fixes are those of §1 and §2, plus generating in-view
-chunks first.
+Speed in the demo grows with height above ground (`SPEED × h / 300 m`), so a
+descent is exponential. With `SPEED` at 150 m/s, as measured below, that was
+about 2 s per factor of e, 0.4 s boosted; it is 300 m/s now, which halves
+both. Chunk demand is roughly constant per factor of altitude, about one ring
+of ~66 chunks per halving of the altitude: at 150 m/s, ~16 chunks/s
+unboosted, ~80/s boosted (twice that now), against the pool's ~50–67/s (§1).
+Boosting all the way down therefore shows coarser ground for a moment near
+the bottom (the coarse parent stays visible, never holes). The fixes are
+those of §1 and §2, plus generating in-view chunks first.
 
 Scripted descents from 3 radii to 300 m above the demo's coast (6 workers,
 1280×720):
@@ -307,12 +309,12 @@ Scripted descents from 3 radii to 300 m above the demo's coast (6 workers,
 | Unboosted | 18.5 s | 20 / 46 ms | 4.1 / 15 ms | 1 | on arrival |
 | Boosted (5×) | 4.5 s | 20 / 45 ms | 2.7 / 6 ms | 7 | 8 s later |
 
-The LOD pass runs every frame during a descent (every upload triggers one),
-and each pass visits more nodes while many children are still missing: hence
-its p95. Throttling it to every other frame while only uploads changed is the
-first lever (§4). One frame of ~600 ms appears if the swell ocean has never
-been drawn before the 15 km handover (its shaders compile then); the demo
-starts on the ground, where they compile at startup.
+The LOD pass ran every frame during these descents (every upload triggered
+one), and each pass visits more nodes while many children are still missing:
+hence its p95. It has since been throttled to every 3rd frame while only
+uploads changed (§4). One frame of ~600 ms appears if the swell ocean has
+never been drawn before the 15 km handover (its shaders compile then); the
+demo starts on the ground, where they compile at startup.
 
 Depth partitioning (`world_builder.depth`) culls and draws the scene twice
 (far camera, then near camera). Panda's cull is C++; only chunks straddling
@@ -346,8 +348,8 @@ guards it.
 ## 12. Frame time in fast flight
 
 `scripts/flight_bench.py`, fast flight 300 m over the demo coast, boosted
-(~750 m/s), terrain refining all the way (~115 chunks/s generated, ~140
-wanted):
+(~750 m/s as first written; ~1,500 m/s with today's 300 m/s base speed),
+terrain refining all the way (~115 chunks/s generated, ~140 wanted):
 
 | Step | fps | Demo update, median / p95 |
 |---|---|---|
@@ -355,15 +357,15 @@ wanted):
 | Workers niced, physical cores − 1, LOD hot loop (window) | 48 (capped) | 7.8 / 13.5 ms |
 | + per-frame uniforms written in place, throttled passes and HUD, cheap ground query (offscreen) | 89 | 4.7 / 8.4 ms |
 
-Cruising at 3 km (~7.5 km/s) and descending from orbit run at 400–800 fps
-offscreen.
+Cruising at 3 km (~7.5 km/s as first written; ~15 km/s now) and descending
+from orbit run at 400–800 fps offscreen.
 
 What changed besides §1 and §4:
 
-- **Per-frame shader inputs** (camera, planet centre, haze shell, sun) are
-  `PTA` arrays bound once and written in place. Setting new values on the
-  terrain root made a new render state per input per frame, for Panda to
-  compose and garbage-collect.
+- **Per-frame shader inputs** (camera, planet centre, sun; since then the
+  atmospheres' too) are `PTA` arrays bound once and written in place.
+  Setting new values on the terrain root made a new render state per input
+  per frame, for Panda to compose and garbage-collect.
 - **The HUD** refreshes 5 times a second; its text geometry was rebuilt
   every frame (~1 ms).
 - **The ground query under the camera** skips `np.unique` for a single point,
@@ -473,10 +475,14 @@ CPU-bound. The weather map costs ~2 s of main-thread time when the clouds
 are built (startup, a planet change), then is cached; each worker builds its
 own copy once.
 
+Savings found but not yet made are listed in the
+[performance backlog](performance_backlog.md).
+
 ## Not covered
 
-The ocean and clouds were moved from SpaceFlight unchanged and were not
-profiled here. The clouds' profiling and an open alternative design are in
-`world_builder/clouds/view_aligned_slicing.md`; the ocean's main cost is its
-reflection pass, which re-renders the scene (terrain included, unless M turns
-it off).
+The ocean was not profiled on its own: its main cost is its reflection
+pass, which re-renders the scene (terrain, sky and clouds; M takes the
+terrain out of it), measured as a whole in the
+[performance backlog](performance_backlog.md). The flat cloud field's
+profiling and an open alternative design are in
+`world_builder/clouds/view_aligned_slicing.md`.

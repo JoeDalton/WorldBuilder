@@ -21,15 +21,16 @@ Each atmosphere is an exponential medium around a sphere: Rayleigh scattering
 Earth's air (Bruneton 2017's constants) over a 60 km shell; every value is in
 `AtmosphereParams`.
 
-For a view ray, `atmosphere.glsl` marches 8 samples through each atmosphere
-the ray crosses. At each sample:
+For a view ray, `atmosphere.glsl` marches 8 samples (`ATMO_STEPS`) through
+each atmosphere the ray crosses (a ray that meets the ground stops there).
+At each sample:
 
 - the density of both media, for the optical depth back to the camera;
 - the optical depth toward the sun, **analytically**: the Chapman function in
   its erfcx form, `Ch(x, χ) = √(πx/2) · erfcx(√(x/2) cos χ)`, with a fitted
   `erfcx` within 0.33 %. Against a numerical integral it is within ~1.5 % at
   every altitude and angle; below the horizon it goes through the tangent
-  point, and samples in the planet's shadow get no sun;
+  point (`atmoDepthToward`);
 - the sunlight reaching it, times the density, times the transmittance back
   to the camera.
 
@@ -44,13 +45,17 @@ horizon in steps.
 crosses ~11 air masses (Earth's ~38), so it reached the terminator bright and
 barely red. `sunset_radius` (default Earth's, 6,371 km) takes the slant path
 as over a planet of that radius: the Chapman function's curvature argument
-is scaled, which lengthens grazing paths and leaves the sun overhead as it
-was (within a few tenths of a percent). `None` is the physical path. It
-applies everywhere the sun's depth is taken: the sky, the ground, the clouds.
+is scaled by `sunset_radius / radius` (never below 1; the `curve` argument of
+`atmoDepthToward`, uniform `uAtmoExtra.y`), which lengthens grazing paths
+and leaves the sun overhead as it was (within a few tenths of a percent).
+`None` is the physical path. It applies everywhere the sun's depth is
+taken: the sky, the ground, the clouds, and the CPU's `depth_toward`.
 
 **Twilight fill.** A flat share of the sunlight (`multiple_scattering`,
-0.12) stands in for light scattered more than once: it reaches every sample,
-lit or not, fading as the sun goes 17° below the sample's horizon. Without it
+0.12, uniform `uAtmoExtra.x`) stands in for light scattered more than once:
+it reaches every sample, lit or not, dimmed only by the air back to the
+camera, and fades out as the sun goes from 6° above the sample's horizon to
+17° below. Without it
 the planet's shadow on the air at dusk (the band below the pink "Belt of
 Venus" opposite the sun) was black, with stars showing through; with it, it
 is blue-grey. By day it lifts the sky by a few percent.
@@ -65,8 +70,10 @@ when a ray crosses two atmospheres.
 - **Terrain:** aerial perspective per pixel, and its sunlight goes through
   its own planet's air (red at sunset, nothing in the planet's shadow).
 - **Sky:** the scattered light toward each direction, over the stars and the
-  sun's disc. The eye adapts: stars fade as `exp(-sky luminance × 60)`, so they
-  are gone by day and out at dusk.
+  sun's disc. The eye adapts: stars fade as `exp(-sky luminance × 60)`
+  (`star_adaptation`), so they are gone by day and out at dusk. Directions
+  that meet a planet's ground (`atmoHitsGround`) show no stars or sun, only
+  the air in front.
 - **Other bodies:** a moon is a terrain like any other, seen through the
   planet's air: dimmed and tinted by day, untouched from space.
 - **The ocean** (opt-in, `Atmospheres.bind(ocean.ocean_node)` and
@@ -82,11 +89,13 @@ nodes and rewrites them in place once a frame, in float64 where it matters
 
 ### Lighting anything else
 
-`Atmospheres.light_at(index, point, sun, sun_colour, sky_light)` gives the
-light at a point as the terrain's shader lights its ground: the sunlight
-through the air (none in the planet's shadow), and the sky light fading
-through twilight. `transmittance_to_sun` is the shader's formula on the CPU
-(the Chapman function, `depth_toward`); `in_shadow` covers airless bodies.
+`Atmospheres.light_at(index, point_world, sun_direction, sun_color,
+sky_light)` gives the light at a point as the terrain's shader lights its
+ground: the sunlight through the air (none in the planet's shadow), and the
+sky light fading through twilight (`twilight`, the terrain's
+`smoothstep(-0.2, 0.2, cos)`). `transmittance_to_sun` is the shader's
+`atmoSunlight` on the CPU (the Chapman function, `depth_toward`, with the
+same `sunset_radius` scale); `in_shadow` covers airless bodies.
 
 The demo uses them each frame for:
 
@@ -119,9 +128,12 @@ would plug into.
 
 ## Sky
 
-`Sky` draws a camera-centred sphere first, behind everything, with the far
-camera only (`hide(HIDE_FROM_NEAR)`), and scales it inside the far camera's
-range every frame. Its shader shows:
+`Sky` draws a camera-centred sphere first, behind everything, without depth,
+with the far camera only (`hide(HIDE_FROM_NEAR)`: the near pass would paint
+it over the far one), and recentres it every frame (`Sky.update`).
+`sky.vert` puts the sphere on the far plane whatever the camera's range, so
+the ocean's reflection camera, with a range of its own, still sees it whole.
+Its shader shows:
 
 - **the procedural star field** (`Starfield`), in two parts:
   - **point stars** (`make_stars`: 14,000 by default, more toward a Milky
@@ -143,7 +155,8 @@ range every frame. Its shader shows:
     brighten. The nebulae's size and coverage are generation parameters
     (`nebula_scale`, `nebula_coverage`).
 - or **a painted cube map**: `load_cube_map(pattern, loader)` (SpaceFlight's
-  `models/skyboxes/purple_#.png`). Rotate either with `star_hpr`;
+  `models/skyboxes/purple_#.png`), its full white at `star_intensity`
+  (linear). Rotate either with `star_hpr` (`Sky.set_star_rotation`);
 - **the sun's disc**, twice its real size so it reads at any resolution,
   reddened by the air at sunset;
 - through every atmosphere, then the terrain's tonemap.
@@ -175,7 +188,7 @@ tunables):
 
 | Component | What it does |
 |---|---|
-| Zonal circulation | A curve of latitude: wet equatorial band (~0.7), dry subtropical highs (~0.15 at 20–35°), storm tracks (~0.55 at 50–60°), polar caps (~0.4). `season` moves it north or south. |
+| Zonal circulation | A curve of latitude (`WeatherSpec.zonal`): wet equatorial band (~0.7), dry subtropical highs (~0.15 at 24–33°), storm tracks (~0.55 at 52–62°), polar caps (~0.4). `season` moves it north or south. |
 | Extratropical cyclones | A few in the storm tracks (6 on the 600 km planet, scaled by area in features). Each is a vortex that winds the mesoscale texture into spiral arms (counter-clockwise in the north, clockwise in the south), plus a comma of cloud along one wound arm: its head curls poleward of the low, its tail trails equatorward and west as the cold front, with clear air behind it. |
 | Tropical cyclones | One or two over open sea at 10–25°: a tight two-armed spiral, an eyewall and a clear eye. None on a planet without sea. |
 | Mesoscale texture | fbm (160 km and finer) wound by the same vortices: ragged edges, streaks around the systems. |
@@ -210,8 +223,9 @@ crossfade by distance on optical depth (the flat field's `lod_shells`
 layout). Each shell costs about half the previous.
 
 Per pixel, the cost depends on the quality (`CloudQuality`: HIGH, MID,
-LOW; the demo's F5 cycles them and off), which sets the billboard sizes, the
-sun march's steps, and:
+LOW; the demo's F5 cycles them and off; ULTRA, above HIGH, keeps all four
+octaves on every shell), which sets the billboard sizes, the sun march's
+steps, and:
 
 - **Octaves per shell** (`sphere.SHELL_OCTAVES`): HIGH evaluates all 4 up to
   shell 2 and drops the finest from shell 3 on; MID and LOW drop more,

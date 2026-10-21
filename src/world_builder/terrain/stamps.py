@@ -80,6 +80,7 @@ class Placement:
         return np.nonzero(dirs @ up > cos_reach)[0]
 
     def inside(self, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        """:returns: whether each (u, v) of :meth:`local` lies on the image"""
         return (np.abs(u) < self.width / 2.0) & (np.abs(v) < self.height / 2.0)
 
     def edge_weight(self, u: np.ndarray, v: np.ndarray, falloff: float) -> np.ndarray:
@@ -89,7 +90,9 @@ class Placement:
             return (depth > 0.0).astype(np.float64)
         return smoothstep(0.0, falloff, depth)
 
-    def pixel(self, u: np.ndarray, v: np.ndarray, shape: tuple[int, int]):
+    def pixel(
+        self, u: np.ndarray, v: np.ndarray, shape: tuple[int, int]
+    ) -> tuple[np.ndarray, np.ndarray]:
         """:returns: (row, column) fractional pixel coordinates, top row first"""
         rows, cols = shape
         col = (u / self.width + 0.5) * (cols - 1)
@@ -101,7 +104,9 @@ class Placement:
 class Stamp:
     """A heightmap stamp. See the module docstring for the blend modes.
 
-    :ivar heightmap: image path (absolute, or relative to the working dir)
+    :ivar heightmap: image path (absolute, or relative to the working dir;
+        level files resolve theirs against the level's folder). Any image
+        Panda reads; a 16-bit grayscale PNG keeps the full precision
     :ivar placement: where it lies
     :ivar height_scale: metres per full-white pixel
     :ivar height_offset: metres added to every pixel
@@ -172,7 +177,7 @@ class Stamp:
 class Paint:
     """A biome paint mask.
 
-    :ivar mask: colour image path
+    :ivar mask: colour image path (as :attr:`Stamp.heightmap`)
     :ivar placement: where it lies
     :ivar colors: ((hex colour, biome name), ...)
     :ivar falloff: blur radius, metres, softening painted edges

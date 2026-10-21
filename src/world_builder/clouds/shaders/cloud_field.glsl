@@ -1,7 +1,9 @@
 // The cloud density field and the sun march through it, shared by the
 // fragment stage (cloud.frag) and the planet billboards' vertex stage
-// (cloud_sphere.vert, for the layer parameters). Include with #pragma include. noise.py mirrors all of it on the
-// CPU (fbm, density_on_sphere), which is what billboard placement runs on.
+// (cloud_sphere.vert: the layer parameters, sunDir, uCloudDebug). Include with
+// #pragma include. noise.py mirrors the density on the CPU (fbm, density,
+// density_on_sphere), which is what billboard placement runs on; the sun
+// march has no CPU copy.
 uniform sampler3D cloudNoise;    // one tileable octave of value noise, R8
 uniform vec3  noiseOffset;       // wind advection, in METRES
 uniform float noiseSize;         // volume resolution, for the coord → uvw divide
@@ -178,7 +180,8 @@ float cloudDensity(Field f, vec3 p) {
     vec3 coord = p * f.noiseScale + f.noiseOrigin;
     // Exact early-outs: the octaves still to come add at most their maxima,
     // and at or below the threshold the smoothstep is 0. Most of a billboard
-    // quad is clear air, which then costs one or two fetches, not five.
+    // quad is clear air, which then costs one or two noise fetches, not four
+    // (plus the weather's, on a planet).
     float floor_ = f.threshLo + thresholdLift(f, h);
     float rest = highOctavesMax(f);
     float raw = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x

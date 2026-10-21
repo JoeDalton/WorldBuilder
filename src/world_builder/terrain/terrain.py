@@ -24,6 +24,12 @@ coarser with altitude, so orbital speeds do not re-place every chunk each
 frame). Chunks sit under the root at ``centre - origin`` and only move when the
 snapped origin does. Near the camera every float32 number involved is small.
 Use :meth:`Terrain.to_render` to place other objects the same way.
+
+Lighting: the sun's colour is given above any air. With its own atmosphere
+(``atmosphere=``) the shader passes it through that air (reddened near the
+terminator, gone in the planet's shadow); an airless body only has a
+day/night line. The sky light fades out through twilight. The terrain is then
+seen through every atmosphere of the world along the sight line.
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
+from numpy.typing import ArrayLike
 from panda3d.core import (
     BitMask32,
     LVecBase3f,
@@ -81,12 +88,27 @@ UPLOADS_PER_FRAME = 6
 UPLOAD_MS_PER_FRAME = 4.0
 #: Biome transition softness (see terrain.frag uBlendDepth).
 DEFAULT_BLEND_DEPTH = 1.0
-#: Every camera bit of the ocean's reflection camera (bits 0-19).
+#: Every bit the ocean's reflection camera may carry (its mask is bits 0-19
+#: less the ocean's own bit 1). Panda draws a node for a camera while any of
+#: the camera's bits is still shown on it, so all of them are hidden at once;
+#: the main cameras (all bits, or the split-depth bits 21 and 22) still see it.
 REFLECTION_CAMERA_BITS = BitMask32(0xFFFFF)
 
 
 class Terrain:
-    """Draws one planet's terrain around a moving camera."""
+    """Draws one planet's terrain around a moving camera.
+
+    :ivar root: the node every drawn chunk hangs under (shader inputs live here)
+    :ivar position: the planet centre in the world frame, float64 metres
+    :ivar spec: the current (resolved) planet spec; change it with
+        :meth:`set_spec`
+    :ivar planet: the :class:`Planet` evaluating it
+    :ivar grid: its chunk grid
+    :ivar query: collision and height queries on the drawn triangles
+    :ivar materials: the biome textures (share them with other terrains)
+    :ivar executor: the generation pool
+    :ivar stats: counters and timings for an on-screen readout
+    """
 
     def __init__(
         self,
@@ -97,13 +119,13 @@ class Terrain:
         atmospheres: Atmospheres | None = None,
         atmosphere: int | None = None,
         max_distance: float | None = None,
-        sun_direction=(0.4, 0.5, 0.6),
-        sun_color=(2.4, 2.25, 2.0),
-        ambient=(0.35, 0.45, 0.65),
+        sun_direction: ArrayLike = (0.4, 0.5, 0.6),
+        sun_color: ArrayLike = (2.4, 2.25, 2.0),
+        ambient: ArrayLike = (0.35, 0.45, 0.65),
         exposure: float = 0.9,
         materials: MaterialSet | None = None,
         min_level: int = 0,
-        position=(0.0, 0.0, 0.0),
+        position: ArrayLike = (0.0, 0.0, 0.0),
         executor: ChunkExecutor | None = None,
     ):
         """
@@ -111,16 +133,20 @@ class Terrain:
             by large distances (use ``render``, not the game root)
         :param spec: the planet
         :param backend: chunk generation backend, see :class:`ChunkExecutor`
-        :param workers: generation worker count
+            (ignored with *executor*)
+        :param workers: generation worker count; None =
+            :func:`workers.default_workers` (ignored with *executor*)
         :param atmospheres: the world's atmospheres: the terrain is seen
             through all of them (aerial perspective); None = no air anywhere
         :param atmosphere: index of this planet's own atmosphere in
-            *atmospheres* (reddens its sunlight); None = airless
+            *atmospheres*: its sunlight passes through it (reddened low, none
+            in the planet's shadow); None = airless
         :param max_distance: terrain beyond this 3D distance is not drawn;
             None = out to the horizon
-        :param sun_direction: toward the sun
+        :param sun_direction: toward the sun, planet frame
         :param sun_color: direct light above any air, linear (may exceed 1)
-        :param ambient: sky light, linear (near zero on an airless body)
+        :param ambient: sky light, linear (near zero on an airless body); the
+            shader fades it out through twilight
         :param exposure: pre-tonemap exposure, as the ocean's
         :param materials: biome textures; loaded from the textures folder if None
         :param min_level: finest LOD level drawn (0 = full detail, about 2 m
@@ -219,8 +245,12 @@ class Terrain:
         self._last_select_pos = None
         self.stats["finest"] = self.grid.max_level
 
-    def update(self, camera_world, camera_render=(0.0, 0.0, 0.0)) -> None:
-        """Per-frame update.
+    def update(
+        self, camera_world: ArrayLike, camera_render: ArrayLike = (0.0, 0.0, 0.0)
+    ) -> None:
+        """Per-frame update: re-base the root, take finished chunks, upload a
+        few, and run an LOD pass when the camera has moved enough (or new
+        chunks wait to be shown).
 
         :param camera_world: camera position in the world frame, metres,
             float64 (the planet frame if :attr:`position` is the origin)
@@ -281,15 +311,15 @@ class Terrain:
         """Sea-level radius, metres."""
         return self.spec.radius
 
-    def to_planet(self, point_world) -> np.ndarray:
+    def to_planet(self, point_world: ArrayLike) -> np.ndarray:
         """:returns: a world-frame point in this planet's frame (float64)"""
         return np.asarray(point_world, dtype=np.float64) - self.position
 
-    def altitude(self, camera_planet) -> float:
+    def altitude(self, camera_planet: ArrayLike) -> float:
         """:returns: metres above sea level of a planet-frame position"""
         return float(np.linalg.norm(camera_planet)) - self.spec.radius
 
-    def to_render(self, point_planet) -> np.ndarray:
+    def to_render(self, point_planet: ArrayLike) -> np.ndarray:
         """Where a planet-frame point is in the render frame this frame.
 
         Computed in float64 against the camera, so near the camera it is
@@ -306,14 +336,26 @@ class Terrain:
 
     def set_sea_surface(self, on: bool) -> None:
         """Draw the sea as flat water at sea level (seen from high up, where
-        the swell ocean is not shown), instead of the bare seabed."""
+        the swell ocean is not shown), instead of the bare seabed.
+
+        Seabed vertices are lifted to sea level and shaded as water, tinted by
+        depth, reflecting the sky light at grazing angles.
+
+        :param on: water on; off (the default) draws the seabed for the swell
+            ocean to cover
+        """
         self.root.set_shader_input("uSeaSurface", 1 if on else 0)
 
-    def set_sun(self, direction, color, ambient) -> None:
+    def set_sun(
+        self, direction: ArrayLike, color: ArrayLike, ambient: ArrayLike
+    ) -> None:
         """Relight the terrain (no rebuild).
 
         :param direction: toward the sun, planet frame (the render frame's
             axes are the planet's)
+        :param color: direct light above any air, linear (reddened by the
+            planet's own atmosphere, if any, in the shader)
+        :param ambient: sky light, linear (near zero on an airless body)
         """
         frame = self._frame_inputs
         frame["uSunDir"][0] = Vec3(*direction).normalized()
@@ -321,7 +363,8 @@ class Terrain:
         frame["uAmbient"][0] = LVecBase3f(*ambient)
 
     def set_debug_mode(self, mode: int) -> None:
-        """0 shaded, 1 LOD level, 2 biomes, 3 slope, 4 normals, 5 skirts."""
+        """Debug view: 0 shaded, 1 LOD level, 2 biomes (flat colours, lit),
+        3 slope, 4 normals, 5 skirts (magenta, over LOD-tinted shading)."""
         self.root.set_shader_input("uDebugMode", int(mode))
 
     def set_textured(self, textured: bool) -> None:
@@ -334,13 +377,19 @@ class Terrain:
         self.root.set_shader_input("uBlendDepth", float(depth))
 
     def set_wireframe(self, on: bool) -> None:
+        """Toggle wireframe rendering of every chunk."""
         if on:
             self.root.set_render_mode_wireframe()
         else:
             self.root.clear_render_mode()
 
     def set_reflected(self, reflected: bool) -> None:
-        """Whether the ocean's reflection camera draws the terrain (doubles cost)."""
+        """Whether the ocean's reflection camera draws the terrain (on by
+        default; it draws the terrain a second time).
+
+        The reflection pass clips at the water plane: the vertex shader writes
+        ``gl_ClipDistance`` from Panda's clip plane for it.
+        """
         if reflected:
             self.root.show(REFLECTION_CAMERA_BITS)
         else:

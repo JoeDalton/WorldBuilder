@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 
 import numpy as np
+from numpy.typing import ArrayLike
 from panda3d.core import (
     ColorBlendAttrib,
     Geom,
@@ -43,8 +44,19 @@ SUN_ANGULAR_RADIUS = math.radians(0.55)
 class Sky:
     """A sky sphere around the camera.
 
-    Draw it with the far camera only (``hide`` it from the near one), recentre
-    and scale it every frame inside the far camera's range (:meth:`update`).
+    Draw it with the far camera only (``hide(depth.HIDE_FROM_NEAR)``):
+    it draws first, without depth, over whatever is there, so the near pass
+    would paint it over the far one. Recentre it every frame
+    (:meth:`update`). ``sky.vert`` puts it on the far plane whatever its
+    scale, so any camera that draws it (the ocean's reflection, with a range
+    of its own) sees it whole.
+
+    With a :class:`starfield.Starfield`, the point stars are a child node,
+    :attr:`stars`, drawn just after the sphere and added to it.
+
+    :ivar node: the sphere (shader inputs, bins, transform)
+    :ivar stars: the point stars' node; None with a painted cube map
+    :ivar nebula: the current :class:`starfield.NebulaStyle`
     """
 
     def __init__(
@@ -55,11 +67,11 @@ class Sky:
         star_intensity: float = 0.6,
         star_brightness: float = 8.0,
         nebula: NebulaStyle = NebulaStyle(),
-        sun_radiance=(4000.0, 3800.0, 3500.0),
+        sun_radiance: ArrayLike = (4000.0, 3800.0, 3500.0),
         exposure: float = 0.9,
-        star_hpr=(0.0, 0.0, 0.0),
+        star_hpr: ArrayLike = (0.0, 0.0, 0.0),
         star_adaptation: float = 60.0,
-    ):
+    ) -> None:
         """
         :param parent: usually ``render``; the sphere is placed at the camera
         :param stars: a procedural :class:`starfield.Starfield` (point stars
@@ -153,11 +165,15 @@ class Sky:
         self.node.set_shader_input("uNebulaPalette", palette)
 
     def set_star_brightness(self, brightness: float) -> None:
-        """Scale the procedural stars' flux."""
+        """Scale the procedural stars' flux (``star_brightness``; no effect on
+        a painted map)."""
         self.node.set_shader_input("uStarBrightness", float(brightness))
 
-    def set_star_rotation(self, hpr) -> None:
-        """Turn the star map in the world (degrees)."""
+    def set_star_rotation(self, hpr: ArrayLike) -> None:
+        """Turn the star map in the world (``star_hpr``).
+
+        :param hpr: heading, pitch, roll, degrees
+        """
         rotation = NodePath("star_rotation")
         rotation.set_hpr(*hpr)
         # The shader maps world directions into the map: the inverse rotation.
@@ -167,12 +183,16 @@ class Sky:
         matrix.invert_in_place()
         self.node.set_shader_input("uStarRotation", matrix)
 
-    def set_sun(self, direction) -> None:
-        """:param direction: toward the sun, world frame"""
+    def set_sun(self, direction: ArrayLike) -> None:
+        """Place the sun's disc (and the light the air scatters).
+
+        :param direction: toward the sun, world frame (any length)
+        """
         self._sun[0] = LVecBase3f(*Vec3(*direction).normalized())
 
-    def update(self, camera_render, far: float) -> None:
-        """Per frame: around the camera, inside the far camera's range.
+    def update(self, camera_render: ArrayLike, far: float) -> None:
+        """Per frame: around the camera, inside the far camera's range (the
+        scale is a margin only: ``sky.vert`` draws it on the far plane).
 
         :param camera_render: the camera's position in the render frame
         :param far: the far camera's far distance
@@ -181,6 +201,7 @@ class Sky:
         self.node.set_scale(0.9 * far)
 
     def remove(self) -> None:
+        """Take the sky (and its stars) off the scene."""
         self.node.remove_node()
 
 

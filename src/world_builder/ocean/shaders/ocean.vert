@@ -63,7 +63,8 @@ void main() {
     float h = 0.0;
     if (uGeometricSwell == 1) {
         // Taper to zero before the dense grid's edge so the displaced centre
-        // joins the flat border ring seamlessly (see make_swell_grid_mesh).
+        // joins the undisplaced border rings seamlessly (see
+        // make_swell_grid_mesh).
         float r     = length(p3d_Vertex.xy);  // local radius within the grid
         float taper = 1.0 - smoothstep(uSwellGridHalf * 0.8, uSwellGridHalf, r);
         h = uSwellAmplitude * swellField(wp.xy) * taper;

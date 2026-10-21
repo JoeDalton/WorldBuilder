@@ -30,6 +30,7 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 #: Quads per chunk side; vertices per side is one more.
 QUADS = 64
@@ -67,7 +68,7 @@ def _warp(a: np.ndarray) -> np.ndarray:
     return np.where(np.abs(a) == 1.0, np.sign(a), x)
 
 
-def face_dirs(face: int, a, b) -> np.ndarray:
+def face_dirs(face: int, a: ArrayLike, b: ArrayLike) -> np.ndarray:
     """Directions of face points.
 
     Accepts parameters beyond [-1, 1] (the face extended past its edges, for
@@ -134,7 +135,9 @@ class KeyBox:
     cos_radius: float
     sin_radius: float
 
-    def extents(self, r_min: float, r_max: float):
+    def extents(
+        self, r_min: float, r_max: float
+    ) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]]:
         """Box extents along (t_u, t_v, up) for radii [r_min, r_max].
 
         :returns: ((u_lo, u_hi), (v_lo, v_hi), (w_lo, w_hi)), metres from the
@@ -191,7 +194,7 @@ class CubeGrid:
 
     # ── indices and directions ─────────────────────────────────────────────────
 
-    def param(self, k) -> np.ndarray:
+    def param(self, k: ArrayLike) -> np.ndarray:
         """:returns: face parameter of level-0 indices (exact)"""
         return (2.0 * np.asarray(k, dtype=np.float64) - self.n0) / self.n0
 
@@ -206,8 +209,9 @@ class CubeGrid:
         level, _, i, _ = key
         return (i * QUADS + np.arange(-border, VERTS + border, dtype=np.int64)) << level
 
-    def grid_indices(self, key: Key, border: int = 0):
-        """:returns: (ka, kb), level-0 indices of the columns and rows"""
+    def grid_indices(self, key: Key, border: int = 0) -> tuple[np.ndarray, np.ndarray]:
+        """:returns: (ka, kb), level-0 indices of the columns and rows, each
+        (VERTS + 2 border,) int64"""
         level, _, i, j = key
         steps = np.arange(-border, VERTS + border, dtype=np.int64)
         return (i * QUADS + steps) << level, (j * QUADS + steps) << level
@@ -254,7 +258,9 @@ class CubeGrid:
         level, face, i, j = key
         return level + 1, face, i >> 1, j >> 1
 
-    def locate(self, dirs: np.ndarray, level: int):
+    def locate(
+        self, dirs: np.ndarray, level: int
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """The chunk at *level* under each direction, and where in it.
 
         :param dirs: (N, 3) directions

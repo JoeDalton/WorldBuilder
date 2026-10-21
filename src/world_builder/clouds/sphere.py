@@ -13,24 +13,33 @@ same function, so the pattern seen from orbit is the one you fly into:
   draws them, generated per cube-sphere tile in the shared worker pool by
   rejection sampling of the density. Each shell doubles the billboards' size
   and the tiles' (``lod_shells``' trade: each shell costs half the previous)
-  and crossfades with the next by distance, on optical depth. The far shells
-  are cheaper per pixel: fewer octaves (the dropped ones count as their mean,
-  so the coverage holds) and fewer overlapping billboards
-  (:data:`VOLUME_FRACTIONS`).
+  and crossfades with the next by distance, on optical depth. Below ULTRA the
+  far shells are cheaper per pixel: fewer octaves (:data:`SHELL_OCTAVES`; the
+  dropped ones count as their mean and the shell's threshold moves to make up
+  for the lost spread, so the coverage holds) and, at MID and LOW, fewer
+  overlapping billboards (:data:`VOLUME_FRACTIONS`). The vertex stage drops a
+  billboard outside its shell's band, faded out near the camera, or off
+  screen, before working out its air and sunlight.
 * **far** (beyond the last shell, up to orbit): the *deck*, a sphere at
   mid-slab height whose fragments evaluate the density through the slab's
   depth. Billboards would thin out at that scale (their covered area falls as
   1 / size); the deck covers the planet with a few thousand triangles.
+  Where a pixel spans more than the clouds' features it fades to the
+  weather's expected coverage, and near the terminator its sunlight falls
+  with the sun's incidence, as a sheet's does.
 
 The clouds are geometry that depth-tests against the scene, like the flat
 field: terrain occludes them with no depth plumbing. Premultiplied "over"
 needs back to front: the deck draws first, then each shell in its own
 back-to-front bin, coarsest first (a coarse tile holding the camera has its
 centre near it, but its visible billboards are all farther than the finer
-shells'); within a tile the particles are re-sorted, the tiles the camera
-has moved past most first. Seen through the atmospheres
+shells'); within a tile the particles are re-sorted, a few tiles a frame,
+the stalest first. Seen through the atmospheres
 (``atmosphere.Atmospheres``), lit by sunlight reddened by the planet's own
-air. Static: no wind yet.
+air; drawn in the ocean's reflection too (all of it is above the sea, so the
+shaders keep it whole against the mirror's clip plane). Static: no wind yet.
+
+Design notes: docs/source/atmosphere.md, "Planet clouds".
 """
 
 from __future__ import annotations
@@ -40,9 +49,10 @@ import math
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from numpy.typing import ArrayLike
 from panda3d.core import (
     BoundingBox,
     ColorBlendAttrib,
@@ -101,6 +111,9 @@ from world_builder.terrain.cubesphere import QUADS, CubeGrid, face_dirs, grid_fo
 from world_builder.terrain.planet import PlanetSpec
 from world_builder.terrain.quadtree import LodSelector
 
+if TYPE_CHECKING:
+    from world_builder.terrain.workers import ChunkExecutor
+
 _SHADERS = Path(__file__).parent / "shaders"
 #: Cull bins, between opaque (20) and transparent (30): the deck's first,
 #: then one back-to-front bin per shell, the coarsest first (sort
@@ -108,7 +121,8 @@ _SHADERS = Path(__file__).parent / "shaders"
 CLOUD_BIN = "cloud_sphere"
 _CLOUD_BIN_SORT = 21
 _SHELL_BIN_SORT = 28
-#: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box).
+#: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box),
+#: rounded to the nearest level of the planet's grid.
 BASE_TILE_SIZE = 8000.0
 #: Tiles uploaded per frame, and re-sorted per frame (the stalest: new tiles,
 #: then those the camera moved past most, relative to their distance).
@@ -154,7 +168,7 @@ class ShellSpec:
     """One billboard LOD shell.
 
     :ivar level: cube-sphere level of its tiles
-    :ivar radius: (min, max) billboard radius, metres
+    :ivar radius: (min, max) billboard radius, metres (at the quality)
     :ivar volume_fraction: billboard sphere volume per unit cloud volume
     :ivar octaves: noise octaves evaluated (placement and drawing agree)
     :ivar threshold_offset: added to the field's threshold, so the coverage
@@ -162,7 +176,7 @@ class ShellSpec:
     """
 
     level: int
-    radius: tuple
+    radius: tuple[float, float]
     volume_fraction: float
     octaves: int = 4
     threshold_offset: float = 0.0
@@ -207,7 +221,7 @@ class CloudTile:
     :ivar centre: (3,) float64 planet-frame point the particles are relative to
     :ivar particles: (n, 9) float32: x, y, z (relative to centre), radius, sprite
         rect (u, v, du, dv), layer (shell index)
-    :ivar gen_ms: generation time
+    :ivar gen_ms: generation time, milliseconds
     """
 
     key: Key
@@ -247,7 +261,10 @@ def octave_offset(full: np.ndarray, fewer: np.ndarray) -> float:
     coverage gives it back (within 2 %, tested).
 
     :param full: the full field's sorted column peaks
+        (:func:`noise.sphere_column_peaks`)
     :param fewer: the same columns' with fewer octaves
+    :returns: the offset to add to both ends of the threshold
+        (:attr:`ShellSpec.threshold_offset`)
     """
     q = np.linspace(0.05, 0.95, 19)
     return float(np.mean(np.quantile(fewer, q) - np.quantile(full, q)))
@@ -278,12 +295,16 @@ def generate_cloud_tile(
     """Place one tile's billboards where the density field is non-zero.
 
     The worker-process entry point. Rejection sampling, as the flat field's
-    :func:`cloud.sample_field_particles`: the accept rate measures the cloud
-    volume, which sets the count for the shell's volume fraction.
+    :func:`cloud.sample_field_particles`, with the shell's octaves and
+    threshold: the accept rate measures the cloud volume, which sets the
+    count for the shell's volume fraction. A sparse tile gives up after 40
+    batches with what it found.
 
     :param spec: the clouds
-    :param key: the tile
+    :param key: the tile, (level, face, i, j); its level picks the shell
     :param version: carried through to the result
+    :param batch: candidate points per rejection-sampling batch
+    :returns: the tile's billboards, deterministic for *spec*'s seed and *key*
     """
     start = time.perf_counter()
     level, face, i, j = key
@@ -431,7 +452,8 @@ def _tile_node(tile: CloudTile) -> tuple[NodePath, GeomTriangles]:
 
 
 def _deck_mesh(radius: float, quads: int = DECK_QUADS) -> GeomNode:
-    """A cube-sphere of radius *radius*, both sides drawn."""
+    """A cube-sphere of radius *radius*, never culled (the caller makes it
+    two-sided: the camera may be above or below it)."""
     t = np.linspace(-1.0, 1.0, quads + 1)
     a, b = np.meshgrid(t, t)
     positions, indices = [], []
@@ -478,16 +500,26 @@ class SphericalClouds:
 
         clouds = SphericalClouds(render, planet_radius, executor,
                                  atmospheres=atmospheres, atmosphere=0)
+        clouds.set_sun(sun_direction)
         # every frame, camera in the world frame (float64):
         clouds.update(camera_world)
+
+    :ivar root: the node everything hangs under (hide it to hide the clouds)
+    :ivar deck: the far deck's node
+    :ivar tiles_root: the billboard tiles' rebased root
+    :ivar field: the density field, threshold resolved for the planet
+    :ivar weather: (6, n, n, 2) cube map of coverage and fbm shift
+    :ivar spec: what the workers are given (:class:`SphereCloudSpec`)
+    :ivar stats: tiles shown, billboards in them, tiles pending, and a
+        running mean of a tile's generation time (``gen_ms``), per update
     """
 
     def __init__(
         self,
         parent: NodePath,
         radius: float,
-        executor,
-        position=(0.0, 0.0, 0.0),
+        executor: ChunkExecutor,
+        position: ArrayLike = (0.0, 0.0, 0.0),
         atmospheres: Atmospheres | None = None,
         atmosphere: int | None = None,
         cloud_type: CloudType = CloudType.CUMULUS,
@@ -498,7 +530,7 @@ class SphericalClouds:
         seed: int = 7,
         weather_seed: int = 11,
         quality: CloudQuality = CloudQuality.HIGH,
-        volume_fractions: tuple | None = None,
+        volume_fractions: tuple[float, ...] | None = None,
         sun_brightness: float = 2.8,
         sky_strength: float = 0.35,
         sky_occlusion: float = 0.55,
@@ -528,12 +560,23 @@ class SphericalClouds:
             *planet* with *weather_seed*
         :param seed: noise seed (field and placement)
         :param weather_seed: weather systems' seed
-        :param quality: billboard budget (see :class:`cloud.CloudQuality`)
+        :param quality: the clouds' cost (see :class:`cloud.CloudQuality`):
+            billboard sizes and sun-march steps (:func:`cloud.at_quality`),
+            octaves per shell (:data:`SHELL_OCTAVES`) and, unless given,
+            the volume fractions
         :param volume_fractions: billboard overlap per shell, the last
             repeating; None = :data:`VOLUME_FRACTIONS` at *quality*
+        :param sun_brightness: direct-term gain (as :class:`field.CloudField`'s)
+        :param sky_strength: ambient sky weight (live: :meth:`set_sky_light`)
+        :param sky_occlusion: fraction of sky light reaching the slab's
+            underside
+        :param exposure: cloud radiance scale before the soft-knee roll-off
+        :param near_fade_radii: fade a billboard within this many of its radii
+            of the camera (0 = off)
         :param channel: the executor channel for the tiles; None = one of its
             own. Reusing a removed instance's channel cancels its work
         :param game: the game object, for its asset manager (None: from disk)
+        :raises ValueError: for a shell count out of range
         """
         if not 1 <= shells < MAX_LAYERS:
             raise ValueError(f"1 to {MAX_LAYERS - 1} shells")
@@ -722,8 +765,19 @@ class SphericalClouds:
 
     # ── public ────────────────────────────────────────────────────────────────
 
-    def set_sun(self, direction, sun_color=None, sky_color=None) -> None:
-        """:param direction: toward the sun, world frame"""
+    def set_sun(
+        self,
+        direction: ArrayLike,
+        sun_color: ArrayLike | None = None,
+        sky_color: ArrayLike | None = None,
+    ) -> None:
+        """Move the sun and/or restate its colours (uniform writes only).
+
+        :param direction: toward the sun, world frame (need not be unit)
+        :param sun_color: RGB of direct sunlight, or None to keep; white by
+            default, since the planet's own air colours it
+        :param sky_color: RGB of the ambient sky light, or None to keep
+        """
         d = np.asarray(direction, dtype=float)
         self._sun[0] = LVecBase3f(*(d / np.linalg.norm(d)))
         if sun_color is not None:
@@ -732,19 +786,32 @@ class SphericalClouds:
             self.root.set_shader_input("skyColor", Vec3(*sky_color))
 
     def set_sky_light(self, strength: float) -> None:
-        """The sky's (ambient) light on the clouds, as ``sky_strength``."""
+        """The sky's (ambient) light on the clouds, as ``sky_strength``.
+
+        :param strength: the new ambient sky weight
+        """
         self.root.set_shader_input("skyStrength", float(strength))
 
     def set_pixel_angle(self, radians: float) -> None:
         """The angle one pixel spans (vertical fov / window height): how far
-        the deck can show the clouds' own detail before averaging it."""
+        the deck can show the clouds' own detail and self-shadowing before
+        averaging them (0.001 until set).
+
+        :param radians: the angle per pixel
+        """
         self.root.set_shader_input("uPixelAngle", float(radians))
 
-    def update(self, camera_world, camera_render=(0.0, 0.0, 0.0)) -> None:
+    def update(
+        self, camera_world: ArrayLike, camera_render: ArrayLike = (0.0, 0.0, 0.0)
+    ) -> None:
         """Per frame: select, generate, upload, sort, place.
 
+        The tiles are reselected once the camera has moved the larger of
+        200 m and 0.5 % of its altitude, and every 30 frames.
+
         :param camera_world: camera in the world frame, metres (float64)
-        :param camera_render: camera in the render frame
+        :param camera_render: camera in the render frame (the origin when
+            the scene is drawn camera-relative)
         """
         self._frame += 1
         cam = np.asarray(camera_world, dtype=np.float64) - self.position
@@ -774,8 +841,11 @@ class SphericalClouds:
         )
 
     def set_debug(self, flags: int) -> None:
-        """Profiling switches (cloud.frag's ``uCloudDebug`` bits): 1 no sun
-        march, 2 no atmosphere, 4 no high octaves, 8 flat colour."""
+        """Profiling switches (cloud_field.glsl's ``uCloudDebug`` bits): 1 no
+        sun march, 2 no atmosphere, 4 two octaves only, 8 flat colour.
+
+        :param flags: the bits, 0 = normal
+        """
         self.root.set_shader_input("uCloudDebug", int(flags))
 
     def remove(self) -> None:

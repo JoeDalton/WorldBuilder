@@ -2,30 +2,46 @@
 Render the terrain demo from fixed poses to PNG: a visual regression check.
 
 The shaders cannot be validated headless (see tests/test_terrain_mesh.py), so
-this drives the real demo: for each pose it waits until the terrain has
-finished refining (or a timeout), then saves a screenshot::
+this drives the real demo (planet, moon, atmosphere, clouds, ocean, sky): for
+each pose it waits until the terrain has finished refining (or a timeout),
+times a few frames, then saves a screenshot::
 
-    python scripts/terrain_shots.py [--out DIR] [--radius METRES]
-        [--pose NAME ...] [--timeout SECONDS] [--size "1600 900"]
-        [--offscreen] [--cloud-quality high|mid|low|off] [--cloud-debug BITS]
-        [--frames N]
+    python scripts/terrain_shots.py [--out DIR] [--level FILE]
+        [--radius METRES] [--pose NAME ...] [--timeout SECONDS]
+        [--size "1600 900"] [--offscreen]
+        [--cloud-quality high|mid|low|off] [--cloud-debug BITS] [--frames N]
 
-Once a pose has settled, N frames are timed (vsync off), each waiting for
-the GPU to finish (a one-pixel read back): CPU and GPU time in series, so a
-difference between two runs is the difference in work. Without the wait,
-an offscreen frame is not held back by the GPU at all.
+    --out            where the PNGs go (default ./terrain_shots)
+    --level          the planet's level file (default: the demo level)
+    --radius         overrides the level's planet radius
+    --pose           the poses to shoot (default: all, in the order below)
+    --timeout        seconds to wait for a pose to settle (default 90)
+    --size           window or buffer size (default "1600 900")
+    --offscreen      render to an offscreen buffer, not a window
+    --cloud-quality  default high
+    --cloud-debug    SphericalClouds.set_debug bits (cloud.frag's
+                     uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
+                     octaves at most, 8 flat colour; default 0)
+    --frames         frames timed once settled (default 60)
 
-Every pose is lit by the same local sun (azimuth 210, elevation 35), but
-sunset (the sun 3 degrees up in the west, looked at) and night_orbit.
-in_clouds flies through the cloud deck.
+No multisampling, vsync off. Once a pose has settled, N frames are timed,
+each waiting for the GPU to finish (a one-pixel read back): CPU and GPU time
+in series, so a difference between two runs is the difference in work.
+Without the wait, an offscreen frame is not held back by the GPU at all. Each
+pose prints whether it settled, the body's chunk count and finest level, the
+cloud billboards, the LOD pass and the median frame time.
+
 Poses: ground (the level's start), coast (2 km up over the reference point),
 high (20 km up), swell / sea_surface (either side of the ocean handover at
 15 km: the swell ocean, then the terrain's own flat sea), stratosphere (200 km
-up), orbit (3 radii up, looking down),
-corner (over a cube corner, where three faces meet), lod (the LOD debug view
-from 20 km), moonrise (the moon over the northern horizon, from the start
-area), moon_orbit (3 moon radii up, looking down), moon_ground (2 km over the
-moon's sand).
+up), orbit (3 radii up, looking down), corner (over a cube corner, where three
+faces meet), lod (the LOD debug view from 20 km), in_clouds (inside the cloud
+deck, 2.7 km up), sunset (600 m up, looking west at the sun 3 degrees up),
+moonrise (the moon over the northern horizon, from the start area),
+moon_orbit (3 moon radii up, looking down), moon_ground (2 km over the
+moon's sand), night_orbit (1.5 radii up, looking down at the terminator: the
+sun 60 degrees below the nadir's horizon). Every other pose has the sun at
+azimuth 210, elevation 35, as seen there.
 """
 
 from __future__ import annotations
@@ -96,13 +112,16 @@ def _poses(demo: TerrainDemo) -> dict:
         lat, lon = (float(v[0]) for v in latlon(facing[None, :]))
         poses["moon_orbit"] = (lat, lon, 3.0 * moon.radius, 0.0, -89.9, 0, 1)
         poses["moon_ground"] = (lat + 1.0, lon, 2000.0, 0.0, -15.0, 0, 1)
-    # The terminator from orbit: the sun set an hour ago at the nadir.
+    # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     return poses
 
 
 def _settle(demo: TerrainDemo, timeout: float) -> bool:
-    """Step frames until nothing is wanted or generating for a while."""
+    """Step frames until nothing is wanted or generating for 10 frames.
+
+    :returns: whether that happened before *timeout* seconds
+    """
     start = time.perf_counter()
     quiet = 0
     while time.perf_counter() - start < timeout:
@@ -116,15 +135,23 @@ def _settle(demo: TerrainDemo, timeout: float) -> bool:
     return False
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--out", type=Path, default=Path("terrain_shots"))
-    parser.add_argument("--level", default=str(DEMO_LEVEL))
-    parser.add_argument("--radius", type=float, default=None)
-    parser.add_argument("--pose", nargs="*", default=None)
-    parser.add_argument("--timeout", type=float, default=90.0)
-    parser.add_argument("--size", default="1600 900")
-    parser.add_argument("--offscreen", action="store_true")
+    parser.add_argument(
+        "--out", type=Path, default=Path("terrain_shots"), help="PNG directory"
+    )
+    parser.add_argument("--level", default=str(DEMO_LEVEL), help="level file")
+    parser.add_argument(
+        "--radius", type=float, default=None, help="planet radius, metres"
+    )
+    parser.add_argument("--pose", nargs="*", default=None, help="default: all")
+    parser.add_argument(
+        "--timeout", type=float, default=90.0, help="seconds to settle a pose"
+    )
+    parser.add_argument("--size", default="1600 900", help='"width height"')
+    parser.add_argument(
+        "--offscreen", action="store_true", help="an offscreen buffer, no window"
+    )
     parser.add_argument("--cloud-quality", default="high", choices=CLOUD_QUALITIES)
     parser.add_argument(
         "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"

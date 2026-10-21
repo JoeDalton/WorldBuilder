@@ -157,11 +157,16 @@ class ClimateParams:
 class PlanetSpec:
     """Everything that defines one planet; frozen and picklable.
 
+    :ivar name: preset name, for display
+    :ivar seed: noise seed; each seed is a different planet
     :ivar radius: sea-level radius, metres; the planetary-scale features
         follow it (see the module docstring)
     :ivar reference_lat: latitude of the origin of chart-metre coordinates in
         level files (stamp centres, camera poses), degrees
     :ivar reference_lon: its longitude, degrees
+    :ivar has_ocean: whether sea level holds water: beaches, a drawn sea
+        surface, and the sea counted as solid by queries. Without one the
+        lowlands are dry basins
     :ivar has_vegetation: False for a barren world (no grass, no forest)
     :ivar stamps: hand-made heightmaps (:class:`stamps.Stamp`), in order
     :ivar paints: biome paint masks (:class:`stamps.Paint`), in order
@@ -517,7 +522,9 @@ class Planet:
             self._stamp_bases[index] = float(elevation[0])
         return self._stamp_bases[index]
 
-    def _apply_stamps(self, dirs, elevation, spacing):
+    def _apply_stamps(
+        self, dirs: np.ndarray, elevation: np.ndarray, spacing: float
+    ) -> np.ndarray:
         for index, stamp in enumerate(self.spec.stamps):
             elevation = stamp.apply(
                 dirs, elevation, spacing, self.spec.radius, self.stamp_base(index)
@@ -553,7 +560,9 @@ class Planet:
         return self.low_band(dirs).reshape(len(lb), len(la), -1)
 
 
-def _catmull_rom_weights(coords: np.ndarray, step: float):
+def _catmull_rom_weights(
+    coords: np.ndarray, step: float
+) -> tuple[np.ndarray, np.ndarray]:
     """Separable Catmull-Rom weights onto a lattice of multiples of *step*.
 
     Interpolates exactly at the nodes, so a coarse chunk whose vertices sit on

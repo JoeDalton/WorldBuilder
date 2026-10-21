@@ -10,13 +10,14 @@ yet.
 python scripts/demo_terrain.py            # 3D flight: planet, moon, orbit to ground (controls in the script)
 python scripts/terrain_shots.py           # the demo from fixed poses, to PNG
 python -m world_builder.terrain.preview   # globe and top-down maps of every preset, to PNG
+python -m world_builder.terrain.preview --weather   # each globe under its clouds' weather
 python -m world_builder.terrain.bench     # chunk, LOD and worker timings
 python scripts/flight_bench.py            # frame times in scripted fast flights
 python -m world_builder.terrain.level     # regenerate the sample stamp images
 pytest tests/test_terrain_*.py tests/test_depth.py
 ```
 
-All of them take `--radius` (metres) where it applies.
+The demo, the shots, the preview and the bench take `--radius` (metres).
 
 ## Layers
 
@@ -24,7 +25,7 @@ All of them take `--radius` (metres) where it applies.
 |---|---|---|
 | Planet definition | `noise`, `chart`, `planet`, `biomes`, `stamps`, `level` | Pure functions of a **direction on the unit sphere**, in float64 numpy. The renderer and the collision queries read the same planet. |
 | Chunks | `cubesphere`, `chunkgen`, `quadtree`, `workers` | The six faces of a cube pushed onto the sphere, each a quadtree of tiles with 65×65 vertices plus skirts. Generated coarse-first in spawned worker processes. |
-| Rendering | `mesh`, `materials`, `terrain`, `shaders/`, `world_builder.depth` | Panda3D. True geometry, camera-relative placement, depth split between two cameras, biome texture arrays, the ocean's tonemap, and every atmosphere along the sight line (`world_builder.atmosphere`). |
+| Rendering | `mesh`, `materials`, `terrain`, `shaders/`, `world_builder.depth` | Panda3D. True geometry, camera-relative placement, depth split between two cameras, biome texture arrays, sunlight through the planet's own air, the ocean's tonemap, and every atmosphere along the sight line (`world_builder.atmosphere`). |
 | Queries | `query` | `height_at`, `altitude`, `normal_at`, `sphere_contact`, `segment_intersect`, `material_at` on planet-frame positions, all on the same triangles that are drawn. |
 
 ### Planet scale
@@ -36,7 +37,8 @@ The radius is the one knob (`PlanetSpec.radius`, `planet.radius` in a level,
   ranges and climate bands are given for a 600 km planet and multiplied by
   `feature_scale` (radius / 600 km unless set). An Earth-sized planet gets
   ten-times-bigger continents rather than ten times as many.
-- **Mountain height** follows the square root of that scale, kept between 2 and 7 km.
+- **Mountain height** follows the square root of that scale, the factor
+  kept within 2/4.8 to 7/4.8: 2 to 7 km for the default 4.8 km crests.
 - **Ground-level character does not scale:** hills, detail, local climate
   patches and biome rules are in metres, so the ground looks the same at
   any radius.
@@ -59,7 +61,8 @@ The elevation is built up in stages:
 4. Hills, then detail.
 5. Stamps.
 
-Detail is band-limited to the chunk's vertex spacing. Fields with nothing
+Detail is band-limited to the chunk's vertex spacing: octaves shorter than
+about four samples fade out, so coarse chunks never alias. Fields with nothing
 shorter than about 10 km (the "low band") are sampled on a lattice of each
 cube face (230 m at 600 km, scaled with the features) and interpolated. That
 costs under 5 cm of error and saves about half the time.
@@ -77,15 +80,21 @@ On top of that:
 
 ### Hand-made content
 
-The hand-made pieces are listed in a level YAML; `levels/demo.yaml` documents the format.
+The hand-made pieces are listed in a level YAML. The `world_builder.terrain.level`
+module docstring documents the format, and the package's `levels/demo.yaml` is
+the demo's level.
 
 - **Stamps** are 16-bit grayscale PNG heightmaps.
 - **Paints** are colour PNGs that force biomes.
 
 Each stamp or paint is placed by latitude and longitude, or by chart metres
-around the level's reference point, with a size and rotation. Stamps blend in
-one of these modes: `replace`, `add`, `max`, `min`, or `flatten` (level to the
-ground height at the stamp's centre).
+around the level's reference point, with a size and rotation; a paint can
+reuse a stamp's placement. Stamps blend in one of these modes: `replace`,
+`add`, `max`, `min`, or `flatten` (level to the ground height at the stamp's
+centre), fading in over `falloff` metres from their edges. Coarse chunks read
+a box-filtered mip of the image, so a stamp never aliases. The level also
+holds the demo's start pose, by latitude, longitude and altitude or by chart
+`x`, `y` and `z`.
 
 The demo reloads the level when you press **L**.
 
@@ -107,10 +116,11 @@ Chunk keys are `(level, face, i, j)`.
 
 ### LOD
 
-- A tile splits when the camera is nearer than K = 2 times its size. The
-  distance is measured to a box in the tile's own tangent frame, bounded by
-  its height range.
-- Tiles wholly behind the planet's bulge are culled, using exact sphere geometry.
+- A tile splits when the camera is nearer than K = 2 times its size, and
+  merges back only 15 % farther out. The distance is measured to a box in
+  the tile's own tangent frame, bounded by its height range.
+- Tiles wholly behind the planet's bulge are culled, using exact sphere
+  geometry, as are tiles wholly beyond `max_distance` when it is set.
 - Away from face seams, a ring holds about 66 tiles per level, as on the
   flat chart. Near a seam, the two faces' grids don't align and both
   contribute partial rings.
@@ -128,9 +138,9 @@ than the camera through the world:
 
 - The camera stays at (or near) the render origin.
 - The terrain root is offset by `origin − camera`, computed in float64.
-  `origin` is the camera snapped to a 3D grid: 4 km near the ground, and
-  altitude / 16 above that, so orbital speeds do not re-place every tile
-  each frame.
+  `origin` is the camera snapped to a 3D grid: 4 km up to 64 km of
+  altitude, then doubled as often as needed to stay at least altitude / 16,
+  so orbital speeds do not re-place every tile each frame.
 - Tiles hang under the root at `centre − origin`, and their vertices are
   float32 offsets from their own float64 centre.
 - `Terrain.to_render(p)` places any other planet-frame object the same way.
@@ -158,6 +168,21 @@ Nothing else changes:
 - the existing shaders
 - the terrain's coastline depth bias
 - the ocean's reflection camera, which keeps its own copy of the lens
+
+## Lighting
+
+`Terrain(sun_direction=, sun_color=, ambient=)` and `Terrain.set_sun` take
+the sunlight *above any air* and the sky light, both linear.
+
+- **Through its own air.** With `atmosphere=` (the index of its own
+  atmosphere in `atmospheres=`), the shader passes the sunlight through that
+  air (`atmoSunlight`): reddened near the terminator, gone in the planet's
+  shadow. An airless body just has a soft day/night line.
+- **Sky light fades through twilight**, as the sun goes from about 12°
+  above the local horizon to 12° below it, so the night side is dark rather
+  than lit by a blue sky.
+- **Aerial perspective** comes last, in linear light before the tonemap:
+  the terrain is seen through every atmosphere the sight line crosses.
 
 ## Several planets
 
@@ -217,9 +242,16 @@ planet's surface by day the moon is a pale disc in a blue sky (see
   50 km, at which point the wave pattern jumps once. Its droop uses the
   terrain's radius (`Ocean(planet_radius=..., exact_sphere=True)`), and it is
   seen through the atmosphere like everything else.
-- **Above 15 km the swell ocean is hidden.** The terrain draws the sea itself
-  instead (`Terrain.set_sea_surface`): seabed vertices are lifted to sea
-  level and shaded as water, tinted by depth.
+- **Above 15 km the swell ocean is hidden** (handed over between 14 and
+  16 km). The terrain draws the sea itself instead
+  (`Terrain.set_sea_surface`): seabed vertices are lifted to sea level and
+  shaded as water, tinted by depth, with the sky light reflected at grazing
+  angles.
+- **The swell ocean reflects the terrain.** The ocean's reflection camera
+  draws the scene a second time; `Terrain.set_reflected(False)` (**M** in the
+  demo) hides the terrain from it by `REFLECTION_CAMERA_BITS`. Its clip
+  plane at the water is applied by the terrain's vertex shader
+  (`gl_ClipDistance`), since a custom shader does not get it for free.
 - **Sky, haze and the limb** come from the planet's atmosphere (single
   scattering), and the clouds from one planet-wide density field: see
   [Atmosphere, sky and planet clouds](atmosphere.md). The terrain takes
@@ -228,9 +260,9 @@ planet's surface by day the moon is a pale disc in a blue sky (see
 
 ## Textures
 
-Put PBR sets in `textures/<biome>/` for the six biomes: snow, rock, grass, forest, desert and beach. Files are recognised by name (`*Color*` / `*_diff*` / `*albedo*`, `*Normal*` / `*_nor_gl*`, `*Displacement*` / `*height*`, `*Rough*`, `*AO*` / `*AmbientOcclusion*`).
+Put PBR sets in `src/world_builder/terrain/textures/<biome>/` for the six biomes: snow, rock, grass, forest, desert and beach. Files are recognised by name, case-insensitively (`*color*` / `*diff*` / `*albedo*`, `*normal*` / `*nor_gl*`, `*displacement*` / `*height*` / `*bump*`, `*rough*`, `*AO*` / `*AmbientOcclusion*`); names with preview, metal, spec or opacity are skipped.
 
-The ambientCG and Poly Haven naming schemes both work, and a DirectX normal map is detected from `dx` in its name. Any biome or map that is missing falls back to a procedural placeholder. Tile sizes are set in `textures/textures.yaml`.
+The ambientCG and Poly Haven naming schemes both work, and a DirectX normal map is detected from `dx` in its name. Any biome or map that is missing falls back to a procedural placeholder. `textures/textures.yaml` sets each biome's tile size (`tile_m`, a power of two up to 512 m), normal convention (`normal: gl | dx`) and albedo `tint`, and the layer size cap (`max_size`).
 
 ## Paths to SpaceFlight
 

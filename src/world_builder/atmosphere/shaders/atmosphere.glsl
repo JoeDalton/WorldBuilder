@@ -120,8 +120,9 @@ vec2 atmoShadow(vec3 o, vec3 dir, vec3 sunDir, float R) {
 }
 
 // One atmosphere's effect on the segment [0, tmax] of a view ray: what the
-// background is multiplied by, and the light scattered toward the eye. near is
-// where the segment starts (for ordering several atmospheres).
+// background is multiplied by, and the light scattered toward the eye, from
+// steps samples. near is where the segment starts (for ordering several
+// atmospheres).
 void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
                  out vec3 transmittance, out vec3 inscatter, out float near) {
     transmittance = vec3(1.0);
@@ -224,7 +225,8 @@ bool atmoHitsGround(vec3 dir) {
 // What every atmosphere along a view ray does to whatever lies at distance
 // dist in direction dir: seen = background * transmittance + inscatter.
 // Atmospheres are composed far to near (they normally do not overlap).
-// steps: samples per atmosphere (ATMO_STEPS per pixel; fewer per vertex).
+// steps: samples per atmosphere (ATMO_STEPS per pixel, the overload below;
+// fewer per vertex).
 void atmosphereAlong(vec3 dir, float dist, vec3 sunDir, int steps,
                      out vec3 transmittance, out vec3 inscatter) {
     transmittance = vec3(1.0);

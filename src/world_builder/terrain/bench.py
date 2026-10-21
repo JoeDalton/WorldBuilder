@@ -32,7 +32,9 @@ def _best_ms(fn, repeats: int = 5) -> float:
     return best
 
 
-def main():
+def main() -> None:
+    """Print the timings: simplex noise, one chunk per level, the LOD pass at
+    :data:`LOD_ALTITUDES`, and the process pool's throughput."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--workers", type=int, default=default_workers())
     parser.add_argument("--radius", type=float, default=None, help="metres")

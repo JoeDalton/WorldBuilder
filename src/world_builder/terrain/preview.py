@@ -8,7 +8,8 @@ colour times hillshade, with water drawn blue on planets with an ocean.
 
 With --weather, each row is instead the globe under its clouds' weather
 (clouds.weather: white where the sky is covered), then the coverage alone, to
-tune the weather systems::
+tune the weather systems; airless presets (no humidity) are skipped. Sheets
+are written to --out (``terrain_preview`` by default)::
 
     python -m world_builder.terrain.preview [--seed N] [--radius M] [--out DIR]
         [--preset NAME ...] [--size PX] [--weather]
@@ -117,7 +118,8 @@ def render_globe(planet: Planet, height: int, linear: bool = False) -> np.ndarra
     :param planet: the planet
     :param height: pixels pole to pole; the map is twice as wide
     :param linear: return the linear colour (southmost row first) instead
-    :returns: (height, 2 * height, 3) uint8, with the reference point marked
+    :returns: (height, 2 * height, 3) uint8, north up, with the reference
+        point marked; float linear colour, south up, if *linear*
     """
     spec = planet.spec
     dirs = _globe_dirs(height)
@@ -145,7 +147,10 @@ def render_weather(planet: Planet, height: int, seed: int = 11) -> np.ndarray:
     """The globe under its weather, then the coverage alone (white =
     overcast), side by side.
 
-    :returns: (height, 4 * height + 4, 3) uint8
+    :param planet: the planet the weather follows
+    :param height: pixels pole to pole of each globe
+    :param seed: the weather's seed (:class:`clouds.weather.WeatherSpec`)
+    :returns: (height, 4 * height + 4, 3) uint8, north up
     """
     from world_builder.clouds.weather import WeatherSpec, coverage_map, sample_cube
 
@@ -179,7 +184,8 @@ def render_sheet(specs: list[PlanetSpec], size: int) -> np.ndarray:
     return np.vstack(rows[:-1])
 
 
-def main():
+def main() -> None:
+    """Command-line entry point (see the module docstring)."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--radius", type=float, default=None, help="metres")

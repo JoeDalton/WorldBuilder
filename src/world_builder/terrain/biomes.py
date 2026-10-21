@@ -50,7 +50,9 @@ SLOPE_SCALE = 8.0
 def slope_degrees(elevation: np.ndarray, spacing: float, step: int = 1) -> np.ndarray:
     """Terrain slope by central differences over +-*step* samples.
 
-    The outermost *step* rows/columns are left at the nearest valid value;
+    For flat grids (the preview's maps); chunks measure the slope against
+    the local vertical with :func:`slope_from_normals`. The outermost *step*
+    rows/columns get no difference (their slope reads 0 along that axis);
     callers sample a border wide enough to discard them.
 
     :param elevation: (n, n) heights, metres
