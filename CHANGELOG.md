@@ -25,19 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Planet clouds (`clouds.sphere.SphericalClouds`): billboard shells near the
   camera and a deck far away, one pattern from the ground to orbit, following
   a weather map (`clouds.weather`: circulation, cyclones, climate, terrain),
-  their cost scaled by `CloudQuality`. (#2)
+  their cost set by their settings (`CloudSettings`, #18). (#2)
 - `Ocean.set_light`, to light the water as the sea under the camera (dark at
-  night), and an `Ocean` `reflection_scale` argument. (#2)
+  night), and a setting for its reflection's resolution (now
+  `OceanSettings.reflection_scale`). (#2)
 - `ocean.aces_tonemap`, the NumPy twin of the shaders' tonemap. (#4)
 - `clouds.noise.sun_optical_depth_on_sphere` (the clouds' sun march on the
   CPU) and `deck_light_table` (the far deck's averaged lighting). (#5)
 - Scripts: `terrain_shots.py` (fixed poses to PNG, with GPU-bound frame
   times; `night_sea` checks the sea's reflection by night, [#4) and
   `flight_bench.py` (frame times in scripted fast flights). (#2)
-- The terrain demo gains the moon, the atmosphere, clouds (F5 cycles their
-  quality), the sky (F6 to F8 for the nebulae), an ambient scale (F9 / F10)
-  and Panda3D lights that follow the light at the camera (#2); and a white
-  test ball ahead of the start pose, to judge the lighting on models (#5).
+- The terrain demo gains the moon, the atmosphere, clouds, the sky and
+  Panda3D lights that follow the light at the camera (#2); and a white test
+  ball ahead of the start pose, to judge the lighting on models (#5).
 - Scene-graph tests on a live ShowBase (`tests/test_scene.py`). (#2)
 - Documentation: [Lighting on objects](docs/source/object_lighting.md), how
   models are lit compared with the world and what would make them match.
@@ -45,18 +45,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The ocean's seabed (`Ocean.set_seabed`, `ocean.seabed.SeabedMap`): sea-floor
   heights from the app, baked around the camera on a worker thread. They
   give the water a colour by depth (shared with the terrain's sea surface,
-  `Terrain.set_shallow_water`), shoreline foam (`Ocean.set_foam`), and a
+  `Terrain.set_shallow_water`), shoreline foam, and a
   swell that dies out over the shallows. The terrain demo feeds it from the
   terrain and keeps the game's 20 m swell. (#12)
-- `OceanQuality` and the `OCEAN_QUALITY` presets: every ocean cost/quality
-  trade in one place, changed live (`Ocean.set_quality`, F11 in the demo,
-  `--ocean-quality` in the scripts). `Ocean.set_debug_mode`, with views of
-  the wave filtering and the depth. `Ocean.set_swell_amplitude`, the
-  swell's height live (F12 in the demo). (#12)
+- `Ocean.set_debug_mode`, with views of the wave filtering and the depth.
+  `Ocean.set_swell_amplitude`, the swell's height live. (#12)
 - A `beach` pose in `terrain_shots.py`: the shore nearest the reference
   point, up close. (#12)
+- Quality settings for every part of a world, for a game's settings menu
+  ([Quality settings](docs/source/quality.md)) (#18):
+  - one frozen dataclass of knobs per part: `TerrainSettings`,
+    `AtmosphereSettings`, `SkySettings`, `CloudSettings`, `OceanSettings`;
+  - each with LOW / MID / HIGH / ULTRA presets (the shared `QualityLevel`);
+  - each field described for a menu (label, range or choices, unit,
+    live / rebuild / restart);
+  - `settings=` and `set_settings()` on `Terrain`, `Atmospheres`, `Sky`,
+    `SphericalClouds`, `CloudField` / `Clouds` and `Ocean`;
+  - `world_builder.settings.WorldSettings` bundles them, with lenient,
+    versioned `to_dict()` / `from_dict()` for a settings file;
+  - discoverable without naming a knob: `WorldSettings.schema()` describes
+    every one as plain data (id, label, kind, range or choices, unit, how
+    it applies, default and per-level values), each object declares the
+    section it takes (`SETTINGS_TYPE`), and `WorldSettings.apply(*objects)`
+    / `settings_for(object)` hand them over; a renamed knob keeps reading
+    its old id (`RENAMED`).
+
+  New knobs:
+  - **Terrain:** the finest detail (`min_level`: MID drops one LOD level,
+    LOW three), the LOD distance, texture distance and filtering, its caches
+    and upload budget, texture size, workers.
+  - **Atmosphere:** the march's steps per pixel and per vertex (a uniform
+    now, not a `#define`).
+  - **Sky:** the share of stars drawn, the glow's size.
+  - **Clouds:** each of the old level's parts on its own, their
+    reflection, their tile budgets.
+  - **Ocean:** its reflection's resolution and margin, and the swell mesh,
+    which it remakes.
+
+  The demo takes `--quality` and a `--<part>-quality` per part, as do
+  `terrain_shots.py` and `flight_bench.py`.
 
 ### Changed
+
+- The atmosphere's step count is a uniform: HIGH frames ~2 ms faster at sea
+  level (the loop is no longer unrolled), with the same image. The
+  reflection camera's mask is `world_builder.depth.REFLECTION_CAMERA_MASK`.
+  The ocean sizes its reflection from the main camera's display region, not
+  a game's `graphics_manager`. (#18)
+- The terrain demo keeps only its flight controls, the sun (J / K / I / U)
+  and each part's quality preset (F1 - F5: terrain, air, sky, clouds,
+  ocean; F6 all). (#18)
 
 - Faster frames: worker processes at lower priority, one per physical core
   but one; a cheaper LOD pass, run less often; per-frame shader inputs
@@ -78,6 +116,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `wave_fade_near`, `wave_fade_far` and `wave_fade_k2` arguments are gone.
   (#12)
 - `TerrainQuery` groups many points by chunk 2.5–3 times faster. (#12)
+
+### Removed
+
+- Every way to set a part's cost but its settings (#18):
+  - `CloudQuality`, `QUALITY_SCALES`, `at_quality`, `VOLUME_FRACTIONS` and
+    `SHELL_OCTAVES` (use `QualityLevel` and `CloudSettings.preset`);
+  - `CloudField(quality=, resort_frames=)` and its read of
+    `game.app.graphics_settings.config["clouds"]["quality"]`;
+  - `SphericalClouds(quality=, shells=, volume_fractions=)`;
+  - `Ocean(wave_iterations=, reflection_scale=, swell_grid_subdivs=)`,
+    `set_wave_iterations`, `set_foam`, and its read of
+    `graphics_settings.config["render"]["reflection_scale"]`;
+  - `Terrain(min_level=, workers=)`, `set_min_level`, `set_textured` and
+    `set_reflected`;
+  - the module constants that mirrored knobs (`STORE_SIZE`,
+    `NODE_CACHE_SIZE`, the upload and LOD budgets, `TILE_CACHE`,
+    `REFLECTION_FOV_SCALE`, `DEFAULT_REFLECTION_SCALE`,
+    `REFLECTION_CAMERA_BITS`).
 
 ### Fixed
 

@@ -26,15 +26,14 @@ from panda3d.core import CullBinManager, NodePath, Vec3, loadPrcFileData
 
 from world_builder.clouds import (
     PRESETS,
-    QUALITY_SCALES,
     CloudField,
     CloudLayer,
     CloudOptics,
-    CloudQuality,
     Clouds,
+    CloudSettings,
     CloudType,
     DensityField,
-    at_quality,
+    with_settings,
 )
 from world_builder.clouds.cloud import atlas_rects as read_atlas_rects
 from world_builder.clouds.cloud import (
@@ -64,6 +63,7 @@ from world_builder.clouds.noise import (
     streak_direction,
     value_noise_volume,
 )
+from world_builder.quality import QualityLevel
 
 # Must be set before ShowBase is constructed.
 loadPrcFileData("", "window-type none")
@@ -124,16 +124,9 @@ def resolved(volume):
 
 
 def _make_field(game, layers, **kwargs):
-    """Build a CloudField under a throwaway parent (no rendering).
-
-    Quality is pinned to HIGH — the authored presets — because the `game` fixture
-    wraps the REAL app, whose graphics_settings reads the developer's own
-    configuration/graphics.yaml. Without this, setting cloud quality in the menu
-    silently changes what the suite asserts, and CI disagrees with local.
-    Tests that mean to exercise the settings-reading path pass quality=None.
-    """
+    """Build a CloudField under a throwaway parent (no rendering), at the HIGH
+    settings (the authored presets) unless told otherwise."""
     kwargs.setdefault("domain", TEST_DOMAIN)
-    kwargs.setdefault("quality", CloudQuality.HIGH)
     return CloudField(
         parent=NodePath("test_parent"), game=game, layers=layers, **kwargs
     )
@@ -734,7 +727,7 @@ def test_buffer_offsets_tile_the_index_buffer(game):
 def test_index_buffer_is_a_permutation_after_a_full_cycle(game):
     """Every particle must be drawn exactly once — the ragged gather is the part
     most likely to drop or duplicate one."""
-    field = _make_field(game, CUMULUS, resort_frames=4)
+    field = _make_field(game, CUMULUS, settings=CloudSettings(resort_frames=4))
     for _ in range(8):  # > resort_frames → at least one full cycle
         field.update(Vec3(120, -80, 1200), 1 / 60.0)
     assert field._stage.min() >= 0
@@ -746,7 +739,7 @@ def test_index_buffer_is_a_permutation_after_a_full_cycle(game):
 def test_particles_are_sorted_back_to_front_within_a_cell(game):
     """Premultiplied "over" is order-dependent, so this ordering is what makes the
     accumulation correct rather than merely plausible."""
-    field = _make_field(game, CUMULUS, resort_frames=1)
+    field = _make_field(game, CUMULUS, settings=CloudSettings(resort_frames=1))
     cam = Vec3(300, -200, 1250)
     field.update(cam, 1 / 60.0)
     cam_xyz = np.array([cam.x, cam.y, cam.z], np.float32)
@@ -977,13 +970,19 @@ def test_set_coverage_leaves_other_layers_alone(game):
     )
 
 
-# ── Quality (cloud.py) ─────────────────────────────────────────────────────────
+# ── Quality (cloud.py's CloudSettings) ─────────────────────────────────────────
+
+LEVELS = list(QualityLevel)
+
+
+def _scaled(spec, level):
+    return with_settings(spec, CloudSettings.preset(level))
 
 
 def test_high_is_exactly_what_the_presets_ship():
     """HIGH must be the identity, or the authored look would depend on a setting."""
     for spec in PRESETS.values():
-        assert at_quality(spec, CloudQuality.HIGH) is spec
+        assert _scaled(spec, QualityLevel.HIGH) is spec
 
 
 def test_quality_preserves_the_sun_marchs_reach():
@@ -994,19 +993,21 @@ def test_quality_preserves_the_sun_marchs_reach():
     is a change of look, not of quality."""
     for cloud_type, spec in PRESETS.items():
         reach = spec.optics.sun_steps * spec.optics.sun_step_length
-        for quality in CloudQuality:
-            optics = at_quality(spec, quality).optics
+        for level in LEVELS:
+            optics = _scaled(spec, level).optics
             assert optics.sun_steps * optics.sun_step_length == pytest.approx(reach), (
-                f"{cloud_type.value} at {quality.value} changed its march reach"
+                f"{cloud_type.value} at {level.value} changed its march reach"
             )
 
 
 def test_quality_never_marches_zero_steps():
     """A type that already marches few steps (cirrus marches 2) must not be scaled
     into marching none, which would remove self-shadowing outright."""
+    lowest = dict(CloudSettings.knobs())["march_scale"].range[0]
     for spec in PRESETS.values():
-        for quality in CloudQuality:
-            assert at_quality(spec, quality).optics.sun_steps >= 1
+        for march in (lowest, CloudSettings.preset(QualityLevel.LOW).march_scale):
+            settings = replace(CloudSettings(), march_scale=march)
+            assert with_settings(spec, settings).optics.sun_steps >= 1
 
 
 def test_quality_leaves_volume_fraction_alone():
@@ -1015,9 +1016,8 @@ def test_quality_leaves_volume_fraction_alone():
     of a cloud's screen area at LOW (against 8.8% this way), because at a cloud's
     fringe removing billboards removes the silhouette rather than thinning it."""
     for spec in PRESETS.values():
-        for quality in CloudQuality:
-            scaled = at_quality(spec, quality)
-            assert scaled.volume_fraction == spec.volume_fraction
+        for level in LEVELS:
+            assert _scaled(spec, level).volume_fraction == spec.volume_fraction
 
 
 def test_quality_scales_the_radius_as_the_cube_root_of_the_count():
@@ -1025,9 +1025,9 @@ def test_quality_scales_the_radius_as_the_cube_root_of_the_count():
     fall as the cube of the radius — the same conservation law lod_shells uses for
     distance. This is what makes the count land on the requested ratio."""
     spec = PRESETS[CloudType.CUMULUS]
-    for quality, (count, _march) in QUALITY_SCALES.items():
-        scaled = at_quality(spec, quality)
-        for shipped, got in zip(spec.radius, scaled.radius):
+    for level in LEVELS:
+        count = CloudSettings.preset(level).count_scale
+        for shipped, got in zip(spec.radius, _scaled(spec, level).radius):
             assert got == pytest.approx(shipped * count ** (-1.0 / 3.0))
 
 
@@ -1035,98 +1035,55 @@ def test_quality_is_relative_so_types_keep_their_character():
     """Scales are multipliers, not absolutes: a thin veil must still march fewer
     steps than a 2.4 km tower at every level, because that difference is about the
     types' geometry rather than about quality."""
-    for quality in CloudQuality:
-        cirrus = at_quality(PRESETS[CloudType.CIRRUS], quality).optics.sun_steps
-        tower = at_quality(PRESETS[CloudType.CUMULONIMBUS], quality).optics.sun_steps
-        assert cirrus < tower, quality
+    for level in LEVELS:
+        cirrus = _scaled(PRESETS[CloudType.CIRRUS], level).optics.sun_steps
+        tower = _scaled(PRESETS[CloudType.CUMULONIMBUS], level).optics.sun_steps
+        assert cirrus < tower, level
 
 
 def test_the_march_is_stepped_more_gently_than_the_billboards():
     """Deliberate asymmetry: billboards are a pure cost, but the sun march is what
     makes clouds shadow themselves, which is most of what gives them form. Halving
     it per level would put cumulus at a single sample by LOW."""
-    for quality, (count, march) in QUALITY_SCALES.items():
-        if count < 1.0:
-            assert march > count, quality
-        elif count > 1.0:
-            assert march < count, quality
+    for level in LEVELS:
+        s = CloudSettings.preset(level)
+        if s.count_scale < 1.0:
+            assert s.march_scale > s.count_scale, level
+        elif s.count_scale > 1.0:
+            assert s.march_scale < s.count_scale, level
 
 
 def test_quality_scales_reach_the_built_billboard_count(game):
     """End to end: the ratio asked for is the ratio placed."""
     counts = {}
-    for quality in CloudQuality:
-        field = _make_field(game, CUMULUS, quality=quality)
-        counts[quality] = field._n
-    reference = counts[CloudQuality.HIGH]
-    for quality, (count, _march) in QUALITY_SCALES.items():
+    for level in LEVELS:
+        field = _make_field(game, CUMULUS, settings=CloudSettings.preset(level))
+        counts[level] = field._n
+    reference = counts[QualityLevel.HIGH]
+    for level in LEVELS:
+        count = CloudSettings.preset(level).count_scale
         # Placement is a rejection sample, so allow a few percent of noise.
-        assert counts[quality] / reference == pytest.approx(count, rel=0.05), counts
+        assert counts[level] / reference == pytest.approx(count, rel=0.05), counts
 
 
 def test_quality_does_not_disturb_the_coverage_calibration(game):
     """Quality touches the billboards and the march, never the FIELD — so how much
     of the sky is cloud must not depend on the graphics setting."""
     windows = set()
-    for quality in CloudQuality:
-        field = _make_field(game, CUMULUS, quality=quality)
+    for level in LEVELS:
+        field = _make_field(game, CUMULUS, settings=CloudSettings.preset(level))
         windows.add(field._layer_specs[0].field.threshold)
     assert len(windows) == 1, windows
 
 
-def test_a_field_defaults_to_the_players_setting(game):
-    """Read from the graphics settings the way the ocean reads its reflection
-    scale, rather than threaded in by every caller."""
-    settings = types.SimpleNamespace(config={"clouds": {"quality": "low"}})
-    app = types.SimpleNamespace(
-        loader=game.app.loader,
-        graphics_settings=settings,
-    )
-    field = _make_field(types.SimpleNamespace(app=app), CUMULUS, quality=None)
-    assert field._quality is CloudQuality.LOW
-    # An explicit argument still wins.
-    field = _make_field(
-        types.SimpleNamespace(app=app), CUMULUS, quality=CloudQuality.ULTRA
-    )
-    assert field._quality is CloudQuality.ULTRA
-
-
-@pytest.mark.parametrize(
-    "config",
-    [None, {}, {"clouds": {}}, {"clouds": {"quality": "nonsense"}}],
-)
-def test_a_missing_or_unknown_quality_means_the_authored_look(game, config):
-    """The demo builds its field from a stub game with no settings at all. Absent
-    or unreadable must mean HIGH — the presets' own values — never a crash and
-    never a silent downgrade."""
-    app = types.SimpleNamespace(
-        loader=game.app.loader,
-        graphics_settings=(
-            None if config is None else types.SimpleNamespace(config=config)
-        ),
-    )
-    field = _make_field(types.SimpleNamespace(app=app), CUMULUS, quality=None)
-    assert field._quality is CloudQuality.HIGH
-
-
-def test_the_suite_does_not_read_the_developers_quality_setting(game):
-    """The `game` fixture wraps the real app, so CloudField's default
-    quality=None would read this machine's configuration/graphics.yaml and make
-    CI disagree with local. _make_field pins HIGH; this asserts it keeps doing so.
-    """
+def test_a_field_without_settings_is_the_authored_look(game):
+    """No settings means HIGH — the presets' own values — never a downgrade."""
     field = _make_field(game, CUMULUS)
-    assert field._quality is CloudQuality.HIGH
+    assert field.settings == CloudSettings()
     optics = field._layer_specs[0].optics
     shipped = PRESETS[CloudType.CUMULUS].optics
     assert optics.sun_steps == shipped.sun_steps
     assert optics.sun_step_length == pytest.approx(shipped.sun_step_length)
-
-
-def test_cloud_quality_names_are_ordered_cheapest_first():
-    """Games build quality menus from these names (SpaceFlight checks its own
-    settings list against them), and a slider's stops rely on "drag right costs
-    more"."""
-    assert [q.value for q in CloudQuality] == ["low", "mid", "high", "ultra"]
 
 
 def test_cloudfield_uses_the_cloud_bin(game):
@@ -1239,3 +1196,38 @@ def test_an_empty_field_is_refused(volume, atlas_rects, resolved):
         sample_field_particles(
             empty, volume, domain=2000.0, cell_size=1000.0, atlas_rects=atlas_rects
         )
+
+
+# ── Settings (world_builder.quality) ───────────────────────────────────────────
+
+
+def test_a_field_changes_its_settings_live_and_by_rebuild(game):
+    """The march and the reflection change live; the billboard count places
+    the field again, under the same parent, keeping the wind's drift and the
+    live edits."""
+    from dataclasses import replace
+
+    from world_builder.clouds.cloud import CloudSettings
+    from world_builder.depth import REFLECTION_CAMERA_MASK
+
+    field = _make_field(game, CUMULUS)
+    parent = field.node.get_parent()
+    field.update(Vec3(0, 0, 0), dt=10.0)  # the wind has moved the field
+    drift = field._noise_offset.copy()
+    field.set_coverage(coverage=0.2)
+    steps = field._layer_specs[0].optics.sun_steps
+    n = field._n
+
+    field.set_settings(replace(field.settings, march_scale=0.5, reflected=False))
+    assert field._n == n  # not rebuilt
+    assert field._layer_specs[0].optics.sun_steps < steps
+    assert field.node.is_hidden(REFLECTION_CAMERA_MASK)
+    assert CloudSettings.level_of(field.settings) is None  # custom settings
+
+    field.set_settings(CloudSettings.preset(QualityLevel.LOW))
+    assert field._n / n == pytest.approx(0.25, rel=0.1)
+    assert field.node.get_parent() == parent
+    assert parent.find_all_matches("cloud_field").get_num_paths() == 1  # old gone
+    np.testing.assert_allclose(field._noise_offset, drift)
+    assert field._layer_specs[0].field.coverage == pytest.approx(0.2)
+    assert CloudSettings.level_of(field.settings) is QualityLevel.LOW

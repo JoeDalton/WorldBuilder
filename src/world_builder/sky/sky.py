@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -33,12 +35,50 @@ from panda3d.core import (
 )
 
 from world_builder.atmosphere import Atmospheres, bind_defaults
+from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 from world_builder.sky.starfield import NebulaStyle, StarCatalogue, Starfield
 
 SHADER_PATH = Path(__file__).parent / "shaders"
 #: The sun's angular radius as drawn (about twice the real one: a disc that
 #: reads at any resolution), radians.
 SUN_ANGULAR_RADIUS = math.radians(0.55)
+
+
+@dataclass(frozen=True)
+class SkySettings(QualitySettings):
+    """What the procedural sky costs (:mod:`world_builder.quality`); neither
+    does anything with a painted cube map. Its real per-pixel cost is the
+    air's (``AtmosphereSettings.steps``).
+
+    :ivar star_fraction: the share of the point stars drawn, the brightest
+        (each runs a short march through the air). Live
+    :ivar glow_size: the diffuse light's cube map, texels per face (made
+        once per size, at a little startup time). Rebuild
+    """
+
+    star_fraction: float = knob(
+        1.0,
+        "Stars",
+        unit="x",
+        range=(0.05, 1.0),
+        help="The share of the stars drawn: the faintest go first.",
+    )
+    glow_size: int = knob(
+        256,
+        "Milky Way detail",
+        REBUILD,
+        unit="px",
+        choices={"64": 64, "128": 128, "256": 256, "512": 512},
+        advanced=True,
+        help="The diffuse light's resolution, per cube face.",
+    )
+
+    LABEL: ClassVar = "Sky"
+    PRESETS: ClassVar = {
+        QualityLevel.LOW: {"star_fraction": 0.4, "glow_size": 128},
+        QualityLevel.MID: {"star_fraction": 0.7},
+        QualityLevel.ULTRA: {"glow_size": 512},
+    }
 
 
 class Sky:
@@ -59,6 +99,9 @@ class Sky:
     :ivar nebula: the current :class:`starfield.NebulaStyle`
     """
 
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = SkySettings
+
     def __init__(
         self,
         parent: NodePath,
@@ -71,6 +114,7 @@ class Sky:
         exposure: float = 0.9,
         star_hpr: ArrayLike = (0.0, 0.0, 0.0),
         star_adaptation: float = 60.0,
+        settings: SkySettings | None = None,
     ) -> None:
         """
         :param parent: usually ``render``; the sphere is placed at the camera
@@ -88,7 +132,22 @@ class Sky:
         :param star_adaptation: stars dim as exp(-sky luminance * this):
             the eye adapting to a bright sky (a twilight sky of luminance
             ~0.05 hides all but the brightest)
+        :param settings: what the sky costs (:class:`SkySettings`;
+            :meth:`set_settings` changes it); None = the HIGH preset
         """
+        self._starfield = stars if isinstance(stars, Starfield) else None
+        glow = None
+        if settings is None:
+            # The starfield's glow as built (its size, if a settings choice).
+            settings = SkySettings()
+            if self._starfield is not None:
+                glow = self._starfield.glow
+                sizes = dict(SkySettings.knobs())["glow_size"].choices.values()
+                if self._starfield.glow_size in sizes:
+                    settings = replace(settings, glow_size=self._starfield.glow_size)
+        elif self._starfield is not None:
+            glow = self._starfield.glow_at(settings.glow_size)
+        self._settings = settings
         self.node = parent.attach_new_node(_sphere(48, 24))
         self.node.node().set_bounds(OmniBoundingVolume())
         self.node.node().set_final(True)
@@ -111,7 +170,7 @@ class Sky:
         self._sun[0] = LVecBase3f(0.0, 0.0, 1.0)
         procedural = isinstance(stars, Starfield)
         self.node.set_shader_inputs(
-            uStars=stars.glow if procedural else stars,
+            uStars=glow if procedural else stars,
             uGlowMode=1 if procedural else 0,
             uStarIntensity=float(star_intensity),
             uStarBrightness=float(star_brightness),
@@ -151,6 +210,36 @@ class Sky:
                     ColorBlendAttrib.O_one,
                 )
             )
+            self._show_stars(self._settings.star_fraction)
+
+    @property
+    def settings(self) -> SkySettings:
+        """What the sky costs (:meth:`set_settings`)."""
+        return self._settings
+
+    def set_settings(self, settings: SkySettings) -> None:
+        """Change what the sky costs: the star share live, the glow's size
+        by a new cube map (made once per size)."""
+        changes = self._settings.changes(settings)
+        if not changes:
+            return
+        self._settings = settings
+        if self._starfield is None:
+            return
+        if "glow_size" in changes:
+            self.node.set_shader_input(
+                "uStars", self._starfield.glow_at(settings.glow_size)
+            )
+        self._show_stars(settings.star_fraction)
+
+    def _show_stars(self, fraction: float) -> None:
+        """Draw the brightest *fraction* of the stars (they are stored
+        brightest first)."""
+        geom = self.stars.node().modify_geom(0)
+        total = geom.get_vertex_data().get_num_rows()
+        points = GeomPoints(Geom.UH_static)
+        points.add_next_vertices(max(1, round(total * fraction)))
+        geom.set_primitive(0, points)
 
     def set_nebula(self, style: NebulaStyle) -> None:
         """Colour the procedural glow (no effect on a painted map)."""
@@ -206,8 +295,8 @@ class Sky:
 
 
 def _star_points(catalogue: StarCatalogue) -> GeomNode:
-    """One point per star: its direction (on the unit sphere, in the star
-    map's frame) and (tint, flux)."""
+    """One point per star, brightest first: its direction (on the unit
+    sphere, in the star map's frame) and (tint, flux)."""
     fmt = GeomVertexArrayFormat()
     fmt.add_column(
         InternalName.get_vertex(), 3, GeomEnums.NT_float32, GeomEnums.C_point
@@ -218,10 +307,13 @@ def _star_points(catalogue: StarCatalogue) -> GeomNode:
     combined = GeomVertexFormat()
     combined.add_array(fmt)
     n = len(catalogue.flux)
+    # Brightest first, so drawing the first N keeps the same sky's brightest
+    # (SkySettings.star_fraction); the order is otherwise irrelevant (added).
+    order = np.argsort(-catalogue.flux, kind="stable")
     data = np.empty((n, 7), dtype=np.float32)
-    data[:, 0:3] = catalogue.dirs
-    data[:, 3:6] = catalogue.colour
-    data[:, 6] = catalogue.flux
+    data[:, 0:3] = catalogue.dirs[order]
+    data[:, 3:6] = catalogue.colour[order]
+    data[:, 6] = catalogue.flux[order]
     vdata = GeomVertexData(
         "stars", GeomVertexFormat.register_format(combined), Geom.UH_static
     )

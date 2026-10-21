@@ -57,6 +57,13 @@ NEAR_BIT = 21
 FAR_BIT = 22
 #: ``node.hide(HIDE_FROM_NEAR)``: drawn by the far camera only.
 HIDE_FROM_NEAR = BitMask32.bit(NEAR_BIT)
+#: The ocean's reflection camera's mask: camera bits 0-19. Panda draws a node
+#: for a camera if any of the camera's bits is still shown on it, so a node is
+#: hidden from the reflection by hiding *all* of these
+#: (``node.hide(REFLECTION_CAMERA_MASK)``); hiding one bit does nothing. The
+#: main cameras keep other bits (21 and 22 here, or all of them by default)
+#: and still see it.
+REFLECTION_CAMERA_MASK = BitMask32(0xFFFFF)
 #: ``node.hide(HIDE_FROM_FAR)``: drawn by the near camera only.
 HIDE_FROM_FAR = BitMask32.bit(FAR_BIT)
 #: The near camera's mask: its bit alone, so :data:`HIDE_FROM_NEAR` hides

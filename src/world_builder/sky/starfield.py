@@ -255,9 +255,18 @@ class Starfield:
         (*stars* is :func:`make_stars`' *count*, *glow_size* :func:`make_glow`'s
         *size*); both share *seed* and *galactic_pole*."""
         self.catalogue = make_stars(seed, stars, galactic_pole, red, blue)
-        self.glow = glow_texture(
-            make_glow(glow_size, seed, galactic_pole, nebula_scale, nebula_coverage)
-        )
+        self._glow_args = (seed, galactic_pole, nebula_scale, nebula_coverage)
+        self.glow_size = int(glow_size)
+        self.glow = glow_texture(make_glow(self.glow_size, *self._glow_args))
+        self._glows = {self.glow_size: self.glow}
+
+    def glow_at(self, size: int) -> Texture:
+        """:returns: the diffuse light's cube map at another size (the same
+        sky; made once per size)"""
+        size = int(size)
+        if size not in self._glows:
+            self._glows[size] = glow_texture(make_glow(size, *self._glow_args))
+        return self._glows[size]
 
 
 def load_cube_map(pattern: str, loader: Any) -> Texture:

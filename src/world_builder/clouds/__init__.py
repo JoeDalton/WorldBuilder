@@ -4,7 +4,7 @@ In-scene billboard clouds.
     noise.py   — what a cloud type looks like: its density field (DensityField)
                  and the tileable 3D value-noise volume it is built from.
     cloud.py   — where a type's billboards go (sample_field_particles), presets
-                 (PRESETS, CloudSpec) and quality scaling (CloudQuality).
+                 (PRESETS, CloudSpec) and what they cost (CloudSettings).
     field.py   — the drawable flat field (CloudField: geometry, sorting, wind,
                  live set_sun / set_optics / set_coverage) and the game wrapper
                  (Clouds).
@@ -22,11 +22,12 @@ open alternative: view_aligned_slicing.md.
 
 from world_builder.clouds.cloud import (
     PRESETS,
-    QUALITY_SCALES,
-    CloudQuality,
+    CloudSettings,
     CloudSpec,
     CloudType,
-    at_quality,
+    scale_count,
+    scale_march,
+    with_settings,
 )
 from world_builder.clouds.field import CloudField, CloudLayer, Clouds
 from world_builder.clouds.noise import (
@@ -44,11 +45,12 @@ __all__ = [
     "CloudType",
     "CloudSpec",
     "CloudOptics",
-    "CloudQuality",
+    "CloudSettings",
     "DensityField",
     "PRESETS",
-    "QUALITY_SCALES",
-    "at_quality",
+    "scale_count",
+    "scale_march",
+    "with_settings",
     "build_noise_texture",
     "measure_coverage",
     "resolve_field",

@@ -34,14 +34,16 @@ seen through every atmosphere of the world along the sight line.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import (
-    BitMask32,
     LVecBase3f,
     LVecBase4f,
     NodePath,
@@ -53,6 +55,8 @@ from panda3d.core import (
 
 from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 from world_builder.atmosphere import Atmospheres, bind_defaults
+from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.quality import RESTART, QualityLevel, QualitySettings, knob
 from world_builder.terrain.biomes import BIOME_COLORS
 from world_builder.terrain.chunkgen import ChunkData
 from world_builder.terrain.materials import (
@@ -71,29 +75,178 @@ SHADER_PATH = Path(__file__).parent / "shaders"
 #: The terrain root is re-based to the camera snapped to this grid, metres;
 #: above ORIGIN_SNAP * 16 of altitude the grid grows to altitude / 16.
 ORIGIN_SNAP = 4096.0
-#: Generated chunks kept in memory (about 205 KB each), at most.
-STORE_SIZE = 2000
-#: Uploaded chunks kept on the GPU, shown or not, at most.
-NODE_CACHE_SIZE = 1200
-#: Below the caps, a terrain keeps this many times what its current selection
-#: needs (at least MIN_RESIDENT): a planet seen only from afar shrinks to a
-#: few hundred chunks instead of holding the ground it was last close to.
+LOGGER = logging.getLogger(__name__)
+#: Below the caps (``TerrainSettings.store_size``, ``node_cache_size``), a
+#: terrain keeps this many times what its current selection needs (at least
+#: MIN_RESIDENT): a planet seen only from afar shrinks to a few hundred chunks
+#: instead of holding the ground it was last close to.
 RESIDENT_FACTOR = 3
 MIN_RESIDENT = 256
-#: An LOD pass runs at least this often (frames), and after uploads at most
-#: this often (it always runs at once when the camera has moved enough).
-SELECT_EVERY = 15
-SELECT_EVERY_ON_UPLOAD = 3
-#: Upload budget per frame.
-UPLOADS_PER_FRAME = 6
-UPLOAD_MS_PER_FRAME = 4.0
 #: Biome transition softness (see terrain.frag uBlendDepth).
 DEFAULT_BLEND_DEPTH = 1.0
-#: Every bit the ocean's reflection camera may carry (its mask is bits 0-19
-#: less the ocean's own bit 1). Panda draws a node for a camera while any of
-#: the camera's bits is still shown on it, so all of them are hidden at once;
-#: the main cameras (all bits, or the split-depth bits 21 and 22) still see it.
-REFLECTION_CAMERA_BITS = BitMask32(0xFFFFF)
+
+
+@dataclass(frozen=True)
+class TerrainSettings(QualitySettings):
+    """What the terrain costs (:mod:`world_builder.quality`). All live but
+    ``texture_size`` and ``workers``, which take effect at the next start.
+
+    :ivar min_level: finest detail dropped: LOD levels below the finest
+        (about 2 m vertex spacing at any radius), each doubling the spacing.
+        Collision queries follow (they read the drawn grid), so the ground
+        a ship hits stays the one on screen
+    :ivar split_factor: how far detail reaches: a chunk splits nearer than
+        this many of its own sizes
+    :ivar detail_far: textures fade to the biomes' mean colours by this
+        distance, metres, and are not sampled beyond
+    :ivar anisotropy: the textures' anisotropic filtering (sharpness at
+        grazing angles)
+    :ivar textured: textures, or flat biome colours (cheapest)
+    :ivar reflected: drawn in the ocean's reflection
+    :ivar node_cache_size: uploaded chunks kept on the GPU, at most (at most
+        ``store_size``)
+    :ivar store_size: generated chunks kept in memory (~205 KB each), at most
+    :ivar uploads_per_frame: chunks uploaded per frame, at most
+    :ivar upload_ms_per_frame: and milliseconds spent on it
+    :ivar select_every: frames between LOD passes, at most
+    :ivar select_every_on_upload: frames between passes while uploading
+    :ivar texture_size: biome texture size, texels (at most the textures'
+        own and ``textures.yaml``'s ``max_size``)
+    :ivar workers: generation processes for a terrain that makes its own
+        pool (0 = one per physical core but one)
+    """
+
+    min_level: int = knob(
+        0,
+        "Finest detail dropped",
+        unit="levels",
+        range=(0, 8),
+        help="Each level doubles the ground's finest vertex spacing (0 = about "
+        "2 m): fewer chunks to generate and draw. Collisions follow the drawn "
+        "ground.",
+    )
+    split_factor: float = knob(
+        2.0,
+        "Detail distance",
+        unit="x",
+        range=(1.25, 3.0),
+        help="How far fine detail reaches: more chunks, generated and drawn.",
+    )
+    detail_far: float = knob(
+        4000.0,
+        "Texture distance",
+        unit="m",
+        range=(500.0, 10000.0),
+        help="Textures fade to flat colours by this distance and are not "
+        "sampled beyond.",
+    )
+    anisotropy: int = knob(
+        8,
+        "Texture filtering",
+        unit="x",
+        choices={"1x": 1, "2x": 2, "4x": 4, "8x": 8, "16x": 16},
+        help="Anisotropic filtering: sharp ground at grazing angles.",
+    )
+    textured: bool = knob(True, "Textures", help="Off: flat biome colours.")
+    reflected: bool = knob(
+        True,
+        "In reflections",
+        help="Draw the terrain in the sea's reflection (about 1.1 ms).",
+    )
+    node_cache_size: int = knob(
+        1200,
+        "Chunks kept on the GPU",
+        unit="chunks",
+        range=(300, 4000),
+        advanced=True,
+    )
+    store_size: int = knob(
+        2000,
+        "Chunks kept in memory",
+        unit="chunks",
+        range=(500, 6000),
+        advanced=True,
+        help="About 205 KB each.",
+    )
+    uploads_per_frame: int = knob(
+        6,
+        "Uploads per frame",
+        unit="chunks",
+        range=(1, 32),
+        advanced=True,
+    )
+    upload_ms_per_frame: float = knob(
+        4.0,
+        "Upload time per frame",
+        unit="ms",
+        range=(0.5, 16.0),
+        advanced=True,
+    )
+    select_every: int = knob(
+        15,
+        "LOD pass period",
+        unit="frames",
+        range=(1, 60),
+        advanced=True,
+    )
+    select_every_on_upload: int = knob(
+        3,
+        "LOD pass period while loading",
+        unit="frames",
+        range=(1, 15),
+        advanced=True,
+    )
+    texture_size: int = knob(
+        2048,
+        "Texture size",
+        RESTART,
+        unit="px",
+        choices={"256": 256, "512": 512, "1024": 1024, "2048": 2048, "4096": 4096},
+        help="Biome texture resolution (video memory, load time).",
+    )
+    workers: int = knob(
+        0,
+        "Generation processes",
+        RESTART,
+        range=(0, 64),
+        advanced=True,
+        help="0 = one per physical core but one.",
+    )
+
+    LABEL: ClassVar = "Terrain"
+    PRESETS: ClassVar = {
+        QualityLevel.LOW: {
+            "min_level": 4,
+            "split_factor": 1.5,
+            "detail_far": 1500.0,
+            "anisotropy": 2,
+            "reflected": False,
+            "node_cache_size": 800,
+            "store_size": 1200,
+            "uploads_per_frame": 4,
+            "upload_ms_per_frame": 2.5,
+            "texture_size": 512,
+        },
+        QualityLevel.MID: {
+            "min_level": 2,
+            "split_factor": 1.75,
+            "detail_far": 2500.0,
+            "anisotropy": 4,
+            "node_cache_size": 1000,
+            "store_size": 1600,
+            "upload_ms_per_frame": 3.0,
+            "texture_size": 1024,
+        },
+        QualityLevel.ULTRA: {
+            "split_factor": 2.5,
+            "detail_far": 6000.0,
+            "anisotropy": 16,
+            "node_cache_size": 1800,
+            "store_size": 3000,
+            "uploads_per_frame": 8,
+            "upload_ms_per_frame": 6.0,
+        },
+    }
 
 
 class Terrain:
@@ -111,12 +264,14 @@ class Terrain:
     :ivar stats: counters and timings for an on-screen readout
     """
 
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = TerrainSettings
+
     def __init__(
         self,
         parent: NodePath,
         spec: PlanetSpec,
         backend: str = "process",
-        workers: int | None = None,
         atmospheres: Atmospheres | None = None,
         atmosphere: int | None = None,
         max_distance: float | None = None,
@@ -125,9 +280,9 @@ class Terrain:
         ambient: ArrayLike = (0.35, 0.45, 0.65),
         exposure: float = 0.9,
         materials: MaterialSet | None = None,
-        min_level: int = 0,
         position: ArrayLike = (0.0, 0.0, 0.0),
         executor: ChunkExecutor | None = None,
+        settings: TerrainSettings | None = None,
     ):
         """
         :param parent: node to hang the terrain root under; must not be offset
@@ -135,8 +290,6 @@ class Terrain:
         :param spec: the planet
         :param backend: chunk generation backend, see :class:`ChunkExecutor`
             (ignored with *executor*)
-        :param workers: generation worker count; None =
-            :func:`workers.default_workers` (ignored with *executor*)
         :param atmospheres: the world's atmospheres: the terrain is seen
             through all of them (aerial perspective); None = no air anywhere
         :param atmosphere: index of this planet's own atmosphere in
@@ -149,15 +302,18 @@ class Terrain:
         :param ambient: sky light, linear (near zero on an airless body); the
             shader fades it out through twilight
         :param exposure: pre-tonemap exposure, as the ocean's
-        :param materials: biome textures; loaded from the textures folder if None
-        :param min_level: finest LOD level drawn (0 = full detail, about 2 m
-            vertex spacing; each level up doubles the spacing)
+        :param materials: biome textures; loaded from the textures folder if
+            None (at ``settings.texture_size``)
         :param position: the planet centre in the world frame, metres
             (float64; settable later through :attr:`position`)
         :param executor: a generation pool shared with other terrains (this
             terrain takes its own channel and does not shut it down); None
-            creates a private one from *backend* and *workers*
+            creates a private one from *backend* and ``settings.workers``
+        :param settings: what the terrain costs (:class:`TerrainSettings`;
+            :meth:`set_settings` changes it); None = the HIGH preset
         """
+        settings = settings or TerrainSettings()
+        self._settings = settings
         self.root = parent.attach_new_node("terrain")
         self.root.set_shader(
             Shader.load(
@@ -167,9 +323,9 @@ class Terrain:
             )
         )
         self.max_distance = max_distance
-        self.materials = materials or load_materials()
+        self.materials = materials or load_materials(max_size=settings.texture_size)
         self.blend_depth = DEFAULT_BLEND_DEPTH
-        self.min_level = min_level
+        self.min_level = settings.min_level
         self._set_static_inputs(sun_direction, sun_color, ambient, exposure)
         bind_defaults(self.root)
         if atmospheres is not None:
@@ -180,7 +336,9 @@ class Terrain:
 
         self.position = np.asarray(position, dtype=np.float64)
         self._owns_executor = executor is None
-        self.executor = executor or ChunkExecutor(backend=backend, workers=workers)
+        self.executor = executor or ChunkExecutor(
+            backend=backend, workers=settings.workers or None
+        )
         self._channel = f"terrain-{id(self):x}"
         self.planet: Planet | None = None
         self.query: TerrainQuery | None = None
@@ -213,6 +371,47 @@ class Terrain:
             "generated": 0,
         }
         self.set_spec(spec)
+        self._apply_settings(settings)
+
+    # ── settings ───────────────────────────────────────────────────────────────
+
+    @property
+    def settings(self) -> TerrainSettings:
+        """What the terrain costs (:meth:`set_settings`)."""
+        return self._settings
+
+    def set_settings(self, settings: TerrainSettings) -> None:
+        """Change what the terrain costs: live, but ``texture_size`` and
+        ``workers``, which only a new terrain takes (logged). Lower caches
+        evict on the next update, never a chunk the drawn selection needs.
+        """
+        changes = self._settings.changes(settings)
+        if not changes:
+            return
+        self._settings = settings
+        for name, mode in changes.items():
+            if mode == RESTART:
+                LOGGER.info(f"terrain setting {name} takes effect at the next start")
+        self._apply_settings(settings)
+
+    def _apply_settings(self, settings: TerrainSettings) -> None:
+        # The finest level drawn; collision queries read the same level's
+        # grid, so the physical ground stays the one on screen.
+        self.min_level = min(settings.min_level, self.grid.max_level)
+        self.selector.min_level = self.min_level
+        self.query.level = self.min_level
+        self.selector.split_factor = settings.split_factor
+        self._last_select_pos = None
+        self.root.set_shader_input("uDetailFar", float(settings.detail_far))
+        for texture in self._textures:
+            texture.set_anisotropic_degree(settings.anisotropy)
+        self.root.set_shader_input("uTextured", int(settings.textured))
+        # The reflection pass draws the terrain a second time; it clips at
+        # the water plane (the vertex shader writes gl_ClipDistance).
+        if settings.reflected:
+            self.root.show(REFLECTION_CAMERA_MASK)
+        else:
+            self.root.hide(REFLECTION_CAMERA_MASK)
 
     # ── public API ─────────────────────────────────────────────────────────────
 
@@ -239,6 +438,7 @@ class Terrain:
             max_distance=self.max_distance,
             horizon_floor=0.0 if self.spec.has_ocean else UNKNOWN_BOUNDS[0],
             min_level=self.min_level,
+            split_factor=self._settings.split_factor,
         )
         self.query = TerrainQuery(
             self.planet, self.store, version=version, level=self.min_level
@@ -276,11 +476,16 @@ class Terrain:
             )
 
         uploaded = self._upload()
-        # Re-select after moving a quarter of a leaf (29 m at 600 km), or a
-        # 250th of the altitude: well inside the selector's 15 % hysteresis
-        # band (a leaf splits at 2 leaf sizes), so no split or merge waits
-        # visibly, and fast flight does not run a pass every frame.
-        threshold = max(self.grid.chunk_size(0) / 4.0, 0.004 * self.altitude(cam))
+        # Re-select after moving a quarter of a leaf (29 m at 600 km) at the
+        # default split factor of 2, or a 250th of the altitude: well inside
+        # the selector's 15 % hysteresis band (a leaf splits at split_factor
+        # leaf sizes), so no split or merge waits visibly, and fast flight
+        # does not run a pass every frame.
+        settings = self._settings
+        threshold = max(
+            settings.split_factor * self.grid.chunk_size(0) / 8.0,
+            0.004 * self.altitude(cam),
+        )
         moved = (
             self._last_select_pos is None
             or np.linalg.norm(cam - self._last_select_pos) > threshold
@@ -291,8 +496,8 @@ class Terrain:
         since = self._frame - self._last_select_frame
         if (
             moved
-            or (uploaded and since >= SELECT_EVERY_ON_UPLOAD)
-            or since >= SELECT_EVERY
+            or (uploaded and since >= settings.select_every_on_upload)
+            or since >= settings.select_every
         ):
             self._select(cam)
 
@@ -381,10 +586,6 @@ class Terrain:
         3 slope, 4 normals, 5 skirts (magenta, over LOD-tinted shading)."""
         self.root.set_shader_input("uDebugMode", int(mode))
 
-    def set_textured(self, textured: bool) -> None:
-        """Toggle textures (off: flat biome colours)."""
-        self.root.set_shader_input("uTextured", 1 if textured else 0)
-
     def set_blend_depth(self, depth: float) -> None:
         """Biome transition softness: ~0.1 crisp height-cut edges, >= 1 smooth."""
         self.blend_depth = depth
@@ -396,29 +597,6 @@ class Terrain:
             self.root.set_render_mode_wireframe()
         else:
             self.root.clear_render_mode()
-
-    def set_reflected(self, reflected: bool) -> None:
-        """Whether the ocean's reflection camera draws the terrain (on by
-        default; it draws the terrain a second time).
-
-        The reflection pass clips at the water plane: the vertex shader writes
-        ``gl_ClipDistance`` from Panda's clip plane for it.
-        """
-        if reflected:
-            self.root.show(REFLECTION_CAMERA_BITS)
-        else:
-            self.root.hide(REFLECTION_CAMERA_BITS)
-
-    def set_min_level(self, level: int) -> None:
-        """Finest LOD level drawn: 0 = full detail; each step up drops one level.
-
-        Collision queries follow: they read the same level's grid, so the
-        physical ground stays the one on screen.
-        """
-        self.min_level = max(0, min(int(level), self.grid.max_level))
-        self.selector.min_level = self.min_level
-        self.query.level = self.min_level
-        self._last_select_pos = None
 
     def set_max_distance(self, max_distance: float | None) -> None:
         """Draw distance cap; None = out to the horizon."""
@@ -438,12 +616,11 @@ class Terrain:
     def _set_static_inputs(self, sun_direction, sun_color, ambient, exposure):
         root = self.root
         m = self.materials
-        root.set_shader_input(
-            "uAlbedoH", make_texture_array("terrain_albedo_h", m.albedo_height, True)
-        )
-        root.set_shader_input(
-            "uNormRA", make_texture_array("terrain_normal_ra", m.normal_rough_ao, False)
-        )
+        albedo = make_texture_array("terrain_albedo_h", m.albedo_height, True)
+        normal = make_texture_array("terrain_normal_ra", m.normal_rough_ao, False)
+        self._textures = (albedo, normal)  # their anisotropy is a setting
+        root.set_shader_input("uAlbedoH", albedo)
+        root.set_shader_input("uNormRA", normal)
         root.set_shader_input("uNoise", make_noise_texture())
         tile = PTA_float.empty_array(len(m.tile_m))
         mean = PTA_LVecBase3f.empty_array(len(m.tile_m))
@@ -513,7 +690,7 @@ class Terrain:
     def _evict_store(self) -> None:
         """Drop least recently used chunks past the resident limit, never one
         the selection depends on or one waiting for upload."""
-        excess = len(self.store) - self._resident(STORE_SIZE)
+        excess = len(self.store) - self._resident(self._settings.store_size)
         if excess <= 0:
             return
         protected = self._keep | set(self._wanted)
@@ -532,9 +709,9 @@ class Terrain:
         start = time.perf_counter()
         count = 0
         for key in self._wanted:
-            if count >= UPLOADS_PER_FRAME:
+            if count >= self._settings.uploads_per_frame:
                 break
-            if (time.perf_counter() - start) * 1e3 > UPLOAD_MS_PER_FRAME:
+            if (time.perf_counter() - start) * 1e3 > self._settings.upload_ms_per_frame:
                 break
             chunk = self.store.get(key)
             if chunk is None or key in self.nodes:
@@ -560,7 +737,8 @@ class Terrain:
         return count
 
     def _evict_nodes(self) -> None:
-        excess = len(self.nodes) - self._resident(NODE_CACHE_SIZE)
+        cap = min(self._settings.node_cache_size, self._settings.store_size)
+        excess = len(self.nodes) - self._resident(cap)
         if excess <= 0:
             return
         # Wanted chunks were just uploaded for the next selection to use.

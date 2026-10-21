@@ -10,16 +10,22 @@ from an environment where world_builder is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--radius METRES]
         [--moon-distance METRES] [--no-moon] [--workers N]
-        [--backend process|thread|inline] [--cloud-quality high|mid|low|off]
+        [--backend process|thread|inline] [--quality low|mid|high|ultra]
+        [--terrain-quality L] [--atmosphere-quality L] [--sky-quality L]
+        [--clouds-quality L] [--ocean-quality L] [--no-clouds]
 
     --level          the planet's level file (default: the demo level)
     --radius         overrides the level's planet radius
     --moon-distance  centre to centre (default 10,000 km)
     --no-moon        the planet alone
-    --workers        generation processes (default: physical cores - 1)
+    --workers        generation processes (the terrain's ``workers``
+                     setting; default: physical cores - 1)
     --backend        where chunks and cloud tiles are generated (default
                      process)
-    --cloud-quality  the clouds' quality at start (default high; F5 cycles it)
+    --quality        every part's quality preset at start (default high;
+                     world_builder.settings.WorldSettings)
+    --<part>-quality one part's preset, over --quality
+    --no-clouds      no clouds at all
 
 The default backend generates terrain in spawned worker processes, which
 re-import this script: keep the ``if __name__ == "__main__"`` guard. All
@@ -52,42 +58,22 @@ Controls (AZERTY):
     TAB             jump to the next body: 3 radii up on the side facing you
     END / R         back to the level's start pose
 
-    F1 - F4         planet preset: earthlike / desert / forest / ice
-    N               next seed (the planet)
-    L               reload the level file (edit stamps live)
-                    (these three replace the planet, not the moon, and
-                    rebuild its clouds for the new weather)
-    O               toggle the ocean
-    C               toggle the clouds
-    F5              cycle the cloud quality: high / mid / low / off
-                    (rebuilds the clouds; their tiles take a few seconds)
-    F6              cycle the nebula's palette
-    F7 / F8         dimmer / brighter nebula
-    F9 / F10        dimmer / brighter ambient (sky) light
-    M               toggle the terrain in the ocean's reflection
-    F11             cycle the ocean quality: high / mid / low / ultra
-    F12             cycle the swell's deep-water height: 20 / 40 / 60 / 10 m
-    , / ;           sharper / softer biome transitions
-    T               toggle textures (off: flat biome colours)
-    B               toggle wireframe
-    V               cycle the debug view: shaded / LOD / biomes / slope /
-                    normals / skirts
-    P               cycle the detail: full, then dropping the finest LOD levels
-                    one at a time (vertex spacing doubling each time)
-    G               toggle the collision probe: a 20 m sphere ahead of the
-                    camera showing its contact point and normal
-    SPACE           fire a probe laser along the view; marks the hit
     J / K           swing the sun around the sky (azimuth, here)
     I / U           raise / lower the sun (here)
+    F1 - F5         cycle one part's quality preset, low / mid / high / ultra:
+                    terrain, air, sky, clouds, ocean (each part's own
+                    settings; a cloud or ocean change may refill a moment)
+    F6              cycle every part's preset at once
     F               print the camera pose and terrain stats
     ESC             quit
 
 The HUD (top left, refreshed 5 times a second) shows the nearest body (its
-preset, seed and radius), the debug view, blend depth and detail; altitude,
-height above the ground, latitude/longitude, cube face, heading, pitch and
-speed factor; the biomes under the camera and the other bodies' distances;
-chunk counts and generation, upload and LOD timings; the depth split and far
-plane; the clouds' quality, tiles and billboards; the ambient scale.
+preset, seed and radius) and the finest detail drawn; altitude, height above
+the ground, latitude/longitude, cube face, heading, pitch and speed factor;
+the biomes under the camera and the other bodies' distances; chunk counts
+and generation, upload and LOD timings; the depth split and far plane; the
+clouds' tiles and billboards; each part's quality preset ("custom" when it
+differs from every preset).
 
 Lighting: the sun is one direction for the whole system; the atmosphere
 reddens it and the planets' shadows hide it. Panda3D's own lights (a
@@ -117,21 +103,20 @@ from panda3d.core import (
     ClockObject,
     DirectionalLight,
     GraphicsWindow,
-    LineSegs,
     LMatrix3f,
     LQuaternionf,
     LVecBase3f,
     TextNode,
-    TransparencyAttrib,
     Vec3,
     loadPrcFileData,
 )
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
-from world_builder.clouds.cloud import CloudQuality
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
-from world_builder.sky import NEBULA_PALETTES, Sky, Starfield
+from world_builder.quality import QualityLevel
+from world_builder.settings import SECTIONS, WorldSettings
+from world_builder.sky import Sky, Starfield
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import (
     AzimuthalEquidistantChart,
@@ -152,7 +137,6 @@ SPEED = 300.0  # metres/second at low altitude
 BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground
 ORBIT_RADII = 3.0  # HOME and TAB jump this high
-MAX_DROPPED_LEVELS = 5  # P cycles the finest drawn level from 0 to this
 # The moon: centre-to-centre distance, and where it hangs in the start view
 # (this far from the start point's vertical, toward its north).
 MOON_DISTANCE_M = 10_000e3
@@ -177,12 +161,9 @@ CLOUD_SKY_LIGHT = 0.35
 WATER_TUNED_ELEVATION = 35.0
 CLOUD_BASE = 2200.0  # metres above sea level: above the start pose
 HUD_PERIOD = 0.2  # seconds between HUD refreshes
-PROBE_RADIUS = 20.0
-PROBE_DISTANCE = 60.0
 # The white ball ahead of the start pose (judging the lights on objects).
 TEST_BALL_DIAMETER = 20.0
 TEST_BALL_DISTANCE = 150.0  # metres ahead of the start pose, level with it
-LASER_RANGE = 30000.0
 
 _ROTATIONS = (
     ("s", "z", "pitch", 40.0),
@@ -201,12 +182,15 @@ _CONTROLS = (
     "shift",
     *(key for row in (*_ROTATIONS, *_TRANSLATIONS, *_SUN_KEYS) for key in row[:2]),
 )
-#: F5 cycles the clouds through these.
-CLOUD_QUALITIES = ("high", "mid", "low", "off")
-#: F11 cycles the ocean through these (world_builder.ocean.OCEAN_QUALITY).
-OCEAN_QUALITIES = ("high", "mid", "low", "ultra")
-#: F12 cycles the swell's deep-water height through these, metres.
-SWELL_HEIGHTS = (20.0, 40.0, 60.0, 10.0)
+#: F1 - F5 cycle these parts' presets (WorldSettings sections), F6 all.
+QUALITY_KEYS = (
+    ("f1", "terrain"),
+    ("f2", "atmosphere"),
+    ("f3", "sky"),
+    ("f4", "clouds"),
+    ("f5", "ocean"),
+)
+QUALITY_ALL_KEY = "f6"
 _DEBUG_VIEWS = ("shaded", "LOD", "biomes", "slope", "normals", "skirts")
 
 
@@ -309,6 +293,20 @@ class Body:
         return self.terrain.radius
 
 
+def _level_name(world: WorldSettings, section: str) -> str:
+    """:returns: the preset a section is, or "custom" """
+    level = world.section_level(section)
+    return "custom" if level is None else level.value
+
+
+def _next_level(level: QualityLevel | None) -> QualityLevel:
+    """:returns: the next preset, cheapest after dearest (HIGH after custom)"""
+    if level is None:
+        return QualityLevel.HIGH
+    levels = list(QualityLevel)
+    return levels[(levels.index(level) + 1) % len(levels)]
+
+
 class TerrainDemo(ShowBase):
     """A free-flying camera around and onto a planet and its moon."""
 
@@ -318,10 +316,9 @@ class TerrainDemo(ShowBase):
         backend: str,
         radius: float | None,
         moon_distance: float | None = MOON_DISTANCE_M,
-        workers: int | None = None,
-        cloud_quality: str = "high",
+        settings: WorldSettings | None = None,
+        clouds: bool = True,
         cloud_debug: int = 0,
-        ocean_quality: str = "high",
         ocean_debug: int = 0,
     ) -> None:
         """
@@ -329,11 +326,11 @@ class TerrainDemo(ShowBase):
         :param backend: chunk generation backend, see ChunkExecutor
         :param radius: overrides the level's planet radius, metres
         :param moon_distance: centre-to-centre, metres; None = no moon
-        :param workers: generation processes; None = the machine's default
-        :param cloud_quality: one of :data:`CLOUD_QUALITIES`
+        :param settings: what every part costs (:class:`WorldSettings`;
+            F1 - F6 change it); None = HIGH
+        :param clouds: draw the planet's clouds
         :param cloud_debug: the clouds' profiling switches
             (:meth:`SphericalClouds.set_debug`)
-        :param ocean_quality: one of :data:`OCEAN_QUALITIES`
         :param ocean_debug: the ocean's debug view (:meth:`Ocean.set_debug_mode`)
         """
         super().__init__()
@@ -351,19 +348,20 @@ class TerrainDemo(ShowBase):
         self._orientation = LQuaternionf()
         self.speed = SPEED
 
-        self.level_path = level_path
-        self.radius_override = radius
-        self.preset = None
         spec, self.start_pose = load_level(level_path, radius=radius)
-        self.seed = spec.seed
 
         from world_builder.terrain.terrain import Terrain
         from world_builder.terrain.workers import ChunkExecutor
 
+        world = settings or WorldSettings()
+        self.world = world
+        self._clouds_on = clouds
         print("starting terrain workers ...")
-        self.executor = ChunkExecutor(backend=backend, workers=workers)
+        self.executor = ChunkExecutor(
+            backend=backend, workers=world.terrain.workers or None
+        )
         # The planet's air: everything is seen through it, the moon included.
-        self.atmospheres = Atmospheres()
+        self.atmospheres = Atmospheres(world.atmosphere)
         self.atmospheres.add(spec.radius, AtmosphereParams())
         self.terrain = Terrain(
             parent=self.render,
@@ -373,6 +371,7 @@ class TerrainDemo(ShowBase):
             atmosphere=0,
             sun_color=SUN_COLOR,
             ambient=SKY_AMBIENT,
+            settings=world.terrain,
         )
         self.home = Body("planet", self.terrain, atmosphere=True)
         self.bodies = [self.home]
@@ -386,75 +385,41 @@ class TerrainDemo(ShowBase):
                 ambient=SPACE_AMBIENT,
                 position=self._moon_position(spec, moon_distance),
                 materials=self.terrain.materials,
+                settings=world.terrain,
             )
             self.bodies.append(Body("moon", moon, atmosphere=False))
         self.max_range = MAX_RANGE_FACTOR * (moon_distance or 10.0 * spec.radius)
         self.body = self.home  # the nearest body, updated every frame
 
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
-        self.sky = Sky(self.render, Starfield(), self.atmospheres)
-        self._palette = 0
+        self.sky = Sky(self.render, Starfield(), self.atmospheres, settings=world.sky)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.clouds = None
-        self._clouds_shown = True
         self._cloud_debug = cloud_debug
-        self.set_cloud_quality(cloud_quality)
+        self._rebuild_clouds()
         # Built before the depth split changes the lens: the ocean's
         # reflection camera copies it once.
         self.ocean = self._make_ocean()
-        self.set_ocean_quality(ocean_quality)
         self.ocean.set_debug_mode(ocean_debug)
         self.depth = SplitDepthCameras(self, near=1.0)
-        self._ocean_wanted = True
         self._ocean_low = True  # below the handover band
         self._apply_ocean()
-        self._reflected = True
-        self._textured = True
-        self._wireframe = False
         self._debug = 0
-        self._probe = self._make_probe()
         # Panda3D lights for anything not drawn by the world's own shaders
         # (models, ships): the sun and the sky as they are at the camera.
         self.sun_light = self.render.attach_new_node(DirectionalLight("sun"))
         self.ambient_light = self.render.attach_new_node(AmbientLight("ambient"))
         self.render.set_light(self.sun_light)
         self.render.set_light(self.ambient_light)
-        self.ambient_scale = 1.0
         self._water_reference = None
-        self._laser_marks: list[tuple[object, Body, np.ndarray]] = []
         self._ground = 0.0
 
         self._keys = dict.fromkeys(_CONTROLS, False)
         for key in _CONTROLS:
             self.accept(key, self._set_key, [key, True])
             self.accept(f"{key}-up", self._set_key, [key, False])
-        presses = (
-            ("f1", self._set_preset, ["earthlike"]),
-            ("f2", self._set_preset, ["desert"]),
-            ("f3", self._set_preset, ["forest"]),
-            ("f4", self._set_preset, ["ice"]),
-            ("n", self._next_seed, []),
-            ("l", self._reload, []),
-            ("o", self._toggle_ocean, []),
-            ("c", self._toggle_clouds, []),
-            ("f5", self._cycle_cloud_quality, []),
-            ("f6", self._cycle_nebula_palette, []),
-            ("f7", self._scale_nebula, [1 / 1.5]),
-            ("f8", self._scale_nebula, [1.5]),
-            ("f9", self._scale_ambient, [1 / 1.25]),
-            ("f10", self._scale_ambient, [1.25]),
-            ("m", self._toggle_reflection, []),
-            ("f11", self._cycle_ocean_quality, []),
-            ("f12", self._cycle_swell, []),
-            ("t", self._toggle_textures, []),
-            ("b", self._toggle_wireframe, []),
-            ("v", self._cycle_debug, []),
-            ("p", self._cycle_detail, []),
-            ("g", self._toggle_probe, []),
+        presses = [
             ("y", self._level_roll, []),
-            ("space", self._fire_laser, []),
-            (",", self._scale_blend, [0.8]),
-            (";", self._scale_blend, [1.25]),
             ("page_up", self._scale_speed, [2.0]),
             ("page_down", self._scale_speed, [0.5]),
             ("home", self._jump_to_orbit, []),
@@ -463,7 +428,9 @@ class TerrainDemo(ShowBase):
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
             ("escape", self._quit, []),
-        )
+            (QUALITY_ALL_KEY, self._cycle_all_quality, []),
+        ]
+        presses += [(key, self._cycle_quality, [name]) for key, name in QUALITY_KEYS]
         for key, method, args in presses:
             self.accept(key, method, extraArgs=args)
         if isinstance(self.win, GraphicsWindow):
@@ -553,6 +520,7 @@ class TerrainDemo(ShowBase):
         )
         ocean = Ocean(
             game=self._game,
+            settings=self.world.ocean,
             geometric_swell=True,
             # The game's 20 m swell, in deep water: the seabed (set_seabed,
             # below) makes it die out over the shallows, so it does not drown
@@ -584,23 +552,6 @@ class TerrainDemo(ShowBase):
         level = int(math.floor(math.log2(max(texel / grid.spacing0, 1.0))))
         level = min(max(level, query.level), grid.max_level)
         return query.ground_height_at(points, level=level, generate=False)
-
-    def _make_probe(self):
-        # Under render, re-placed every frame from planet-frame positions.
-        probe = self.render.attach_new_node("probe")
-        ball = self.loader.load_model("models/misc/sphere")
-        ball.set_scale(PROBE_RADIUS)
-        ball.set_color(0.3, 0.7, 1.0, 0.35)
-        ball.set_transparency(TransparencyAttrib.M_alpha)
-        ball.reparent_to(probe)
-        self._probe_ball = ball
-        self._probe_hit = self.loader.load_model("models/misc/sphere")
-        self._probe_hit.set_scale(1.5)
-        self._probe_hit.set_color(1.0, 0.2, 0.1, 1.0)
-        self._probe_hit.reparent_to(probe)
-        self._probe_normal = probe.attach_new_node("normal")
-        probe.hide()
-        return probe
 
     def _make_test_ball(self):
         """A white ball ahead of the start pose, level with it, lit by Panda3D's
@@ -648,16 +599,12 @@ class TerrainDemo(ShowBase):
         home_altitude = float(np.linalg.norm(self._relative(self.home))) - self.radius
         self.atmospheres.update(self.cam_world)
         self.sky.update((0.0, 0.0, 0.0), far)
-        if self.clouds is not None and self._clouds_shown:
+        if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
             self.clouds.set_pixel_angle(fov / max(self.win.get_y_size(), 1))
             self.clouds.update(self.cam_world)
         self._update_sun()
         self._update_ocean(home_altitude, home_up)
-        if not self._probe.is_hidden():
-            self._update_probe()
-        for mark, body, point in self._laser_marks:
-            mark.set_pos(*body.terrain.to_render(point))
         self._test_ball.set_pos(*self.home.terrain.to_render(self._test_ball_point))
         # Text geometry is rebuilt on every change: a few times a second is
         # plenty to read, and saves ~1 ms a frame.
@@ -709,15 +656,12 @@ class TerrainDemo(ShowBase):
     def _update_sun(self) -> None:
         # Sunlight above the air: the atmosphere reddens it where it must.
         self.sky.set_sun(self._sun)
-        scale = self.ambient_scale
         if self.clouds is not None:
             self.clouds.set_sun(self._sun)
-            self.clouds.set_sky_light(CLOUD_SKY_LIGHT * scale)
+            self.clouds.set_sky_light(CLOUD_SKY_LIGHT)
         for body in self.bodies:
             ambient = SKY_AMBIENT if body.atmosphere else SPACE_AMBIENT
-            body.terrain.set_sun(
-                tuple(self._sun), SUN_COLOR, np.multiply(ambient, scale)
-            )
+            body.terrain.set_sun(tuple(self._sun), SUN_COLOR, ambient)
         self._update_lights()
 
     def _light_at(self, body: Body, point_world) -> tuple[np.ndarray, np.ndarray]:
@@ -728,11 +672,11 @@ class TerrainDemo(ShowBase):
                 point_world,
                 self._sun,
                 SUN_COLOR,
-                np.multiply(SKY_AMBIENT, self.ambient_scale),
+                np.asarray(SKY_AMBIENT),
             )
         hidden = in_shadow(point_world - body.position, self._sun, body.radius)
         direct = np.zeros(3) if hidden else np.asarray(SUN_COLOR)
-        return direct, np.multiply(SPACE_AMBIENT, self.ambient_scale)
+        return direct, np.asarray(SPACE_AMBIENT)
 
     def _update_lights(self) -> None:
         """Panda3D's sun and ambient lights as they are at the camera, and
@@ -757,11 +701,6 @@ class TerrainDemo(ShowBase):
                 elevation
             ) + np.asarray(SKY_AMBIENT)
         self.ocean.set_light(np.clip(light / self._water_reference, 0.0, 1.5))
-
-    def _scale_ambient(self, factor: float) -> None:
-        self.ambient_scale = max(0.05, min(8.0, self.ambient_scale * factor))
-        self._hud_time = -1.0
-        print(f"ambient light x{self.ambient_scale:.2f}")
 
     def set_local_sun(self, azimuth: float, elevation: float) -> None:
         """Put the sun at an azimuth/elevation (degrees) as seen from the
@@ -823,29 +762,6 @@ class TerrainDemo(ShowBase):
             for method in methods:
                 method()
 
-    def _update_probe(self) -> None:
-        terrain = self.body.terrain
-        center = self._relative() + PROBE_DISTANCE * self._forward()
-        self._probe_ball.set_pos(*terrain.to_render(center))
-        contact = terrain.query.sphere_contact(center, PROBE_RADIUS)
-        self._probe_normal.remove_node()
-        if contact is None:
-            self._probe_hit.hide()
-            self._probe_ball.set_color(0.3, 0.7, 1.0, 0.35)
-            self._probe_normal = self._probe.attach_new_node("normal")
-            return
-        hit, normal = contact
-        hit_render = terrain.to_render(hit)
-        self._probe_hit.show()
-        self._probe_hit.set_pos(*hit_render)
-        self._probe_ball.set_color(1.0, 0.5, 0.2, 0.35)
-        lines = LineSegs()
-        lines.set_thickness(3)
-        lines.set_color(1.0, 1.0, 0.2, 1.0)
-        lines.move_to(*hit_render)
-        lines.draw_to(*(hit_render + normal * 25.0))
-        self._probe_normal = self._probe.attach_new_node(lines.create())
-
     def _update_hud(self) -> None:
         body = self.body
         terrain = body.terrain
@@ -867,12 +783,16 @@ class TerrainDemo(ShowBase):
         split_km, far_km = self.depth.split / 1e3, self.depth.far / 1e3
         cs = self.clouds.stats if self.clouds is not None else None
         clouds = (
-            f"clouds {self._cloud_quality}: {cs['tiles']} tiles, "
+            f"clouds: {cs['tiles']} tiles, "
             f"{cs['billboards']:,} billboards, {cs['pending']} generating "
             f"({cs['gen_ms']:.0f} ms/tile)"
             if cs is not None
             else "clouds off"
-        ) + f"   ocean {self._ocean_quality}"
+        )
+        quality = "   ".join(
+            f"{SECTIONS[name].LABEL.lower()} {_level_name(self.world, name)}"
+            for _, name in QUALITY_KEYS
+        )
         others = "   ".join(
             f"{b.name} {np.linalg.norm(self._relative(b)) / 1e3:,.0f} km "
             f"({b.terrain.stats['shown']} chunks)"
@@ -882,7 +802,6 @@ class TerrainDemo(ShowBase):
         lines = [
             f"{body.name}: {spec.name}  seed {spec.seed}  radius "
             f"{spec.radius / 1e3:,.0f} km   view: {_DEBUG_VIEWS[self._debug]}"
-            f"   blend {self.terrain.blend_depth:.2f}"
             f"   detail: {self._detail_text()}",
             f"altitude {altitude:,.0f} m   above ground {above:,.0f} m"
             f"   lat {lat[0]:.4f}  lon {lon[0]:.4f}  face {face_name}"
@@ -896,9 +815,8 @@ class TerrainDemo(ShowBase):
             f"({self.executor.workers} workers)   "
             f"upload {s['upload_ms']:.2f} ms/chunk   LOD pass {s['select_ms']:.1f} ms"
             f"   depth split {split_km:,.1f} km, far {far_km:,.0f} km",
-            clouds
-            + ("" if self._clouds_shown else " (hidden)")
-            + f"   ambient x{self.ambient_scale:.2f}",
+            clouds,
+            f"quality: {quality}",
         ]
         self._hud.setText("\n".join(lines))
 
@@ -916,43 +834,8 @@ class TerrainDemo(ShowBase):
     def _set_key(self, key: str, pressed: bool) -> None:
         self._keys[key] = pressed
 
-    def _load(self, preset: str | None = None) -> tuple:
-        return load_level(
-            self.level_path, preset=preset, seed=self.seed, radius=self.radius_override
-        )
-
-    def _set_spec(self, spec) -> None:
-        """Replace the planet (the moon stays) and its weather."""
-        self.terrain.set_spec(spec)
-        self.ocean.set_seabed(self._seabed_heights)  # drops the old planet's
-        self.set_cloud_quality(self._cloud_quality)
-        for mark, body, _ in list(self._laser_marks):
-            if body is self.home:
-                mark.remove_node()
-                self._laser_marks.remove((mark, body, _))
-        self._apply_ocean()
-
-    def _set_preset(self, name: str) -> None:
-        self.preset = name
-        spec, _ = self._load(name)
-        self._set_spec(spec)
-
-    def _next_seed(self) -> None:
-        self.seed += 1
-        spec, _ = self._load(self.preset)
-        self._set_spec(spec)
-
-    def _reload(self) -> None:
-        try:
-            spec, self.start_pose = self._load(self.preset)
-        except Exception as error:  # a typo in the YAML must not kill the demo
-            print(f"level reload failed: {error}")
-            return
-        self._set_spec(spec)
-        print(f"reloaded {self.level_path}")
-
     def _apply_ocean(self) -> None:
-        has_sea = self._ocean_wanted and self.terrain.spec.has_ocean
+        has_sea = self.terrain.spec.has_ocean
         swell = has_sea and self._ocean_low
         if swell:
             self.ocean.base_node.show()
@@ -962,96 +845,47 @@ class TerrainDemo(ShowBase):
             self.ocean.refl_buffer.set_active(False)
         self.terrain.set_sea_surface(has_sea and not self._ocean_low)
 
-    def _toggle_ocean(self) -> None:
-        self._ocean_wanted = not self._ocean_wanted
-        self._apply_ocean()
-
-    def _toggle_clouds(self) -> None:
-        self._clouds_shown = not self._clouds_shown
-        self._apply_clouds()
-
-    def _apply_clouds(self) -> None:
-        if self.clouds is None:
-            return
-        self.clouds.root.show()
-        if not self._clouds_shown:
-            self.clouds.root.hide()
-
-    def set_cloud_quality(self, name: str) -> None:
-        """Rebuild the planet's clouds at a quality level (or none: "off").
-        The new clouds take over the old ones' worker channel, which drops
-        their tiles; the new tiles arrive in a few seconds."""
+    def _rebuild_clouds(self) -> None:
+        """New clouds for the planet (its weather changes with it). They take
+        over the old ones' worker channel, which drops their tiles."""
         if self.clouds is not None:
             self.clouds.remove()
             self.clouds = None
-        self._cloud_quality = name
-        if name != "off":
-            self.clouds = SphericalClouds(
-                self.render,
-                self.radius,
-                self.executor,
-                atmospheres=self.atmospheres,
-                atmosphere=0,
-                altitude=CLOUD_BASE,
-                planet=self.terrain.spec,
-                quality=CloudQuality(name),
-                channel="clouds",
-            )
-            self.clouds.set_debug(self._cloud_debug)
-            self.clouds.set_sun(self._sun)
-            self._apply_clouds()
+        if not self._clouds_on:
+            return
+        self.clouds = SphericalClouds(
+            self.render,
+            self.radius,
+            self.executor,
+            atmospheres=self.atmospheres,
+            atmosphere=0,
+            altitude=CLOUD_BASE,
+            planet=self.terrain.spec,
+            settings=self.world.clouds,
+            channel="clouds",
+        )
+        self.clouds.set_debug(self._cloud_debug)
+        self.clouds.set_sun(self._sun)
 
-    def _cycle_nebula_palette(self) -> None:
-        self._palette = (self._palette + 1) % len(NEBULA_PALETTES)
-        name = list(NEBULA_PALETTES)[self._palette]
-        self.sky.set_nebula(replace(self.sky.nebula, palette=NEBULA_PALETTES[name]))
-        print(f"nebula: {name}, intensity {self.sky.nebula.intensity:.3g}")
+    def _cycle_quality(self, section: str) -> None:
+        """One part (a WorldSettings section) to its next preset."""
+        level = _next_level(self.world.section_level(section))
+        self._set_world(self.world.with_section_level(section, level))
+        print(f"{SECTIONS[section].LABEL} quality: {level.value}")
 
-    def _scale_nebula(self, factor: float) -> None:
-        intensity = self.sky.nebula.intensity * factor
-        self.sky.set_nebula(replace(self.sky.nebula, intensity=intensity))
-        print(f"nebula intensity {intensity:.3g}")
+    def _cycle_all_quality(self) -> None:
+        """Every part to the next preset."""
+        level = _next_level(self.world.level)
+        self._set_world(WorldSettings.preset(level))
+        print(f"quality: {level.value}")
 
-    def _cycle_cloud_quality(self) -> None:
-        index = CLOUD_QUALITIES.index(self._cloud_quality)
-        self.set_cloud_quality(CLOUD_QUALITIES[(index + 1) % len(CLOUD_QUALITIES)])
-
-    def set_ocean_quality(self, name: str) -> None:
-        """The ocean's cost/quality preset (live, no rebuild)."""
-        from world_builder.ocean import OCEAN_QUALITY
-
-        self._ocean_quality = name
-        self.ocean.set_quality(OCEAN_QUALITY[name])
-
-    def _cycle_ocean_quality(self) -> None:
-        index = OCEAN_QUALITIES.index(self._ocean_quality)
-        self.set_ocean_quality(OCEAN_QUALITIES[(index + 1) % len(OCEAN_QUALITIES)])
-        print(f"ocean quality: {self._ocean_quality}")
-
-    def _cycle_swell(self) -> None:
-        heights = SWELL_HEIGHTS
-        nearest = min(heights, key=lambda h: abs(h - self.ocean.swell_amplitude))
-        height = heights[(heights.index(nearest) + 1) % len(heights)]
-        self.ocean.set_swell_amplitude(height)
-        print(f"swell: {height:g} m in deep water")
-
-    def _toggle_reflection(self) -> None:
-        self._reflected = not self._reflected
-        for terrain in self._terrains():
-            terrain.set_reflected(self._reflected)
-
-    def _toggle_textures(self) -> None:
-        self._textured = not self._textured
-        for terrain in self._terrains():
-            terrain.set_textured(self._textured)
-
-    def _toggle_wireframe(self) -> None:
-        self._wireframe = not self._wireframe
-        for terrain in self._terrains():
-            terrain.set_wireframe(self._wireframe)
-
-    def _cycle_debug(self) -> None:
-        self.set_debug_view((self._debug + 1) % len(_DEBUG_VIEWS))
+    def _set_world(self, world: WorldSettings) -> None:
+        """Hand every part its section. What only a restart changes (the
+        terrain's texture size and workers) is logged and left as it is."""
+        self.world = world
+        world.apply(*self._terrains(), self.atmospheres, self.sky, self.ocean)
+        if self.clouds is not None:
+            world.apply(self.clouds)
 
     def set_debug_view(self, view: int) -> None:
         """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts (all bodies)."""
@@ -1059,22 +893,11 @@ class TerrainDemo(ShowBase):
         for terrain in self._terrains():
             terrain.set_debug_mode(view)
 
-    def _cycle_detail(self) -> None:
-        level = (self.terrain.min_level + 1) % (MAX_DROPPED_LEVELS + 1)
-        for terrain in self._terrains():
-            terrain.set_min_level(level)
-
     def _detail_text(self) -> str:
         terrain = self.body.terrain
         level = terrain.min_level
         text = f"{terrain.grid.spacing(level):.1f} m"
         return f"full ({text})" if level == 0 else f"-{level} levels ({text})"
-
-    def _toggle_probe(self) -> None:
-        if self._probe.is_hidden():
-            self._probe.show()
-        else:
-            self._probe.hide()
 
     def _rotate(self, kind: str, degrees: float) -> None:
         """Turn the camera: yaw about the local vertical, pitch and roll about
@@ -1098,38 +921,6 @@ class TerrainDemo(ShowBase):
             return  # looking straight up or down: any roll is level
         right /= norm
         self._orientation = _quat_from_axes(right, forward, np.cross(right, forward))
-
-    def _fire_laser(self) -> None:
-        body = self.body
-        direction = self._forward()
-        start = self._relative(body)
-        hit = body.terrain.query.segment_intersect(
-            start, start + LASER_RANGE * direction
-        )
-        if hit is None:
-            print("laser: no hit within range")
-            return
-        t, point, normal = hit
-        distance = t * LASER_RANGE
-        material = body.terrain.query.material_at(point, generate=False)
-        height = float(np.linalg.norm(point)) - body.radius
-        up = point / np.linalg.norm(point)
-        print(
-            f"laser: hit the {body.name} at {distance:,.0f} m, {material}, "
-            f"height {height:.1f} m, slope "
-            f"{math.degrees(math.acos(np.clip(normal @ up, -1.0, 1.0))):.0f} deg"
-        )
-        mark = self.loader.load_model("models/misc/sphere")
-        mark.set_scale(max(2.0, distance * 0.004))
-        mark.set_color(1.0, 0.9, 0.1, 1.0)
-        mark.set_light_off()
-        mark.reparent_to(self.render)
-        self._laser_marks.append((mark, body, point))
-
-    def _scale_blend(self, factor: float) -> None:
-        depth = max(0.05, min(3.0, self.terrain.blend_depth * factor))
-        for terrain in self._terrains():
-            terrain.set_blend_depth(depth)
 
     def _scale_speed(self, factor: float) -> None:
         self.speed = max(10.0, min(SPEED * 64, self.speed * factor))
@@ -1227,26 +1018,12 @@ def main() -> None:
     )
     parser.add_argument("--no-moon", action="store_true", help="the planet alone")
     parser.add_argument(
-        "--workers", type=int, default=None, help="generation processes"
-    )
-    parser.add_argument(
         "--backend",
         default="process",
         choices=("process", "thread", "inline"),
         help="where chunks and cloud tiles are generated",
     )
-    parser.add_argument(
-        "--cloud-quality",
-        default="high",
-        choices=CLOUD_QUALITIES,
-        help="the clouds' quality at start (F5 cycles it)",
-    )
-    parser.add_argument(
-        "--ocean-quality",
-        default="high",
-        choices=OCEAN_QUALITIES,
-        help="the ocean's quality at start (F11 cycles it)",
-    )
+    add_world_arguments(parser)
     args = parser.parse_args()
     # No vsync: the frame rate shows what a frame costs, not the display.
     window_config("Procedural terrain demo", vsync=False)
@@ -1256,10 +1033,43 @@ def main() -> None:
         args.backend,
         args.radius,
         moon,
-        args.workers,
-        cloud_quality=args.cloud_quality,
-        ocean_quality=args.ocean_quality,
+        settings=settings_from_args(args),
+        clouds=not args.no_clouds,
     ).run()
+
+
+def add_world_arguments(parser: argparse.ArgumentParser) -> None:
+    """The quality arguments every script built on the demo takes:
+    ``--quality``, a ``--<part>-quality`` per WorldSettings section,
+    ``--workers`` (the terrain's setting) and ``--no-clouds``."""
+    levels = [level.value for level in QualityLevel]
+    parser.add_argument(
+        "--quality", default="high", choices=levels, help="every part's preset"
+    )
+    for section in SECTIONS:
+        parser.add_argument(
+            f"--{section}-quality",
+            default=None,
+            choices=levels,
+            help=f"the {section}'s preset, over --quality",
+        )
+    parser.add_argument(
+        "--workers", type=int, default=None, help="generation processes"
+    )
+    parser.add_argument("--no-clouds", action="store_true", help="no clouds")
+
+
+def settings_from_args(args: argparse.Namespace) -> WorldSettings:
+    """:returns: the WorldSettings :func:`add_world_arguments`' arguments ask
+    for"""
+    settings = WorldSettings.preset(args.quality)
+    for section in SECTIONS:
+        level = getattr(args, f"{section}_quality")
+        if level is not None:
+            settings = settings.with_section_level(section, level)
+    if args.workers is not None:
+        settings = settings.with_value("terrain", "workers", args.workers)
+    return settings
 
 
 if __name__ == "__main__":

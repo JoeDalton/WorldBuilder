@@ -10,7 +10,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from world_builder.clouds.cloud import PRESETS, CloudQuality, CloudType
+from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.noise import (
     DECK_LIGHT_COS_MIN,
     deck_light_table,
@@ -39,6 +39,7 @@ from world_builder.clouds.weather import (
     vortices,
     weather_cube,
 )
+from world_builder.quality import QualityLevel
 from world_builder.sky.starfield import cube_directions
 from world_builder.terrain.chart import TangentFrame, dirs_from_latlon
 from world_builder.terrain.cubesphere import face_dirs, grid_for
@@ -437,7 +438,7 @@ def test_clouds_draw_tiles_around_the_camera(showbase):
         R,
         executor,
         altitude=2200.0,
-        shells=2,
+        settings=CloudSettings(shells=2),
         planet=PLANETS["forest"],
     )
     try:
@@ -470,20 +471,20 @@ def test_clouds_draw_tiles_around_the_camera(showbase):
 
 
 def test_lower_quality_places_fewer_billboards(showbase):
-    """The quality presets (the demo's F5): bigger billboards and less
+    """The quality presets (the demo's F4): bigger billboards and less
     overlap, so the same tile holds fewer of them; the far shells evaluate
     fewer octaves."""
     executor = ChunkExecutor(backend="inline")
     counts = {}
     try:
-        for quality in (CloudQuality.HIGH, CloudQuality.LOW):
+        for quality in (QualityLevel.HIGH, QualityLevel.LOW):
             clouds = SphericalClouds(
                 showbase.render,
                 R,
                 executor,
                 altitude=2200.0,
                 planet=PLANETS["forest"],
-                quality=quality,
+                settings=CloudSettings.preset(quality),
                 channel="clouds",
             )
             spec = clouds.spec
@@ -492,13 +493,13 @@ def test_lower_quality_places_fewer_billboards(showbase):
             face, i, j, _, _ = grid_for(R).locate(dirs, shell.level)
             key = (shell.level, int(face[0]), int(i[0]), int(j[0]))
             counts[quality] = len(generate_cloud_tile(spec, key).particles)
-            expected = {CloudQuality.HIGH: [4, 4, 4, 3], CloudQuality.LOW: [4, 3, 3, 2]}
+            expected = {QualityLevel.HIGH: [4, 4, 4, 3], QualityLevel.LOW: [4, 3, 3, 2]}
             assert [s.octaves for s in spec.shells] == expected[quality]
             clouds.remove()
     finally:
         executor.shutdown()
-    assert counts[CloudQuality.HIGH] > 0
-    assert counts[CloudQuality.LOW] < 0.5 * counts[CloudQuality.HIGH]
+    assert counts[QualityLevel.HIGH] > 0
+    assert counts[QualityLevel.LOW] < 0.5 * counts[QualityLevel.HIGH]
 
 
 def test_deck_mesh_is_a_sphere():

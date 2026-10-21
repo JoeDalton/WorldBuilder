@@ -14,10 +14,10 @@ same function, so the pattern seen from orbit is the one you fly into:
   rejection sampling of the density. Each shell doubles the billboards' size
   and the tiles' (``lod_shells``' trade: each shell costs half the previous)
   and crossfades with the next by distance, on optical depth. Below ULTRA the
-  far shells are cheaper per pixel: fewer octaves (:data:`SHELL_OCTAVES`; the
+  far shells are cheaper per pixel: fewer octaves (``CloudSettings.shell_octaves``; the
   dropped ones count as their mean and the shell's threshold moves to make up
   for the lost spread, so the coverage holds) and, at MID and LOW, fewer
-  overlapping billboards (:data:`VOLUME_FRACTIONS`). The vertex stage drops a
+  overlapping billboards (``overlap_near``, ``overlap_far``). The vertex stage drops a
   billboard outside its shell's band, faded out near the camera, or off
   screen, before working out its air and sunlight.
 * **far** (beyond the last shell, up to orbit): the *deck*, a sphere at
@@ -51,7 +51,7 @@ import math
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -82,12 +82,12 @@ from panda3d.core import (
 from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.clouds.cloud import (
     PRESETS,
-    CloudQuality,
+    CloudSettings,
     CloudType,
-    at_quality,
     atlas_mean_alpha,
     atlas_rects,
     load_cloud_atlas,
+    with_settings,
 )
 from world_builder.clouds.noise import (
     DECK_LIGHT_COS_MIN,
@@ -113,6 +113,8 @@ from world_builder.clouds.weather import (
     shift_table,
     weather_cube,
 )
+from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.quality import REBUILD
 from world_builder.terrain.cubesphere import QUADS, CubeGrid, face_dirs, grid_for
 from world_builder.terrain.planet import PlanetSpec
 from world_builder.terrain.quadtree import LodSelector
@@ -132,37 +134,10 @@ _SHELL_BIN_SORTS = (29, 28, 27, 26, 24, 23, 22)
 #: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box),
 #: rounded to the nearest level of the planet's grid.
 BASE_TILE_SIZE = 8000.0
-#: Tiles uploaded per frame, and re-sorted per frame (the stalest: new tiles,
-#: then those the camera moved past most, relative to their distance).
-UPLOADS_PER_FRAME = 3
-RESORTS_PER_FRAME = 4
-#: Tiles kept (shown or not) beyond those wanted, for flying back and forth.
-TILE_CACHE = 160
 #: Quads per face edge of the deck sphere.
 DECK_QUADS = 48
 #: The deck's optical depth cap (the billboards' is ~1.5 per quad).
 DECK_MAX_OPTICAL_DEPTH = 6.0
-#: Billboard volume per unit of cloud volume, per shell (the last repeats),
-#: by quality: how many billboards overlap. Opacity does not depend on it
-#: (the extinction is divided by it), the cost does; the near shell keeps
-#: the most, where overlap shows as smoothness.
-VOLUME_FRACTIONS = {
-    CloudQuality.ULTRA: (2.5, 2.5),
-    CloudQuality.HIGH: (2.5, 2.5),
-    CloudQuality.MID: (2.0, 1.5),
-    CloudQuality.LOW: (1.5, 1.0),
-}
-#: Noise octaves per shell (the last repeats, and goes to the deck), by
-#: quality. The finest octave (~125 m features for cumulus) is still ~6 px
-#: at shell 1's far edge (27 km) at 1600x900, ~3 px at shell 2's (54 km), so
-#: dropping it is only invisible from shell 3 on.
-SHELL_OCTAVES = {
-    CloudQuality.ULTRA: (4,),
-    CloudQuality.HIGH: (4, 4, 4, 3),
-    CloudQuality.MID: (4, 4, 3, 3),
-    CloudQuality.LOW: (4, 3, 3, 2),
-}
-
 Key = tuple[int, int, int, int]
 _CORNERS = np.array([(-1, -1), (1, -1), (1, 1), (-1, 1)], dtype=np.float32)
 _QUAD_TRIS = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
@@ -176,7 +151,7 @@ class ShellSpec:
     """One billboard LOD shell.
 
     :ivar level: cube-sphere level of its tiles
-    :ivar radius: (min, max) billboard radius, metres (at the quality)
+    :ivar radius: (min, max) billboard radius, metres (at the settings' count)
     :ivar volume_fraction: billboard sphere volume per unit cloud volume
     :ivar octaves: noise octaves evaluated (placement and drawing agree)
     :ivar threshold_offset: added to the field's threshold, so the coverage
@@ -538,6 +513,9 @@ class SphericalClouds:
         running mean of a tile's generation time (``gen_ms``), per update
     """
 
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = CloudSettings
+
     def __init__(
         self,
         parent: NodePath,
@@ -548,13 +526,11 @@ class SphericalClouds:
         atmosphere: int | None = None,
         cloud_type: CloudType = CloudType.CUMULUS,
         altitude: float | None = None,
-        shells: int = 4,
         planet: PlanetSpec | None = None,
         weather: WeatherSpec | None = None,
         seed: int = 7,
         weather_seed: int = 11,
-        quality: CloudQuality = CloudQuality.HIGH,
-        volume_fractions: tuple[float, ...] | None = None,
+        settings: CloudSettings | None = None,
         sun_brightness: float = 2.8,
         sky_strength: float = 0.35,
         sky_occlusion: float = 0.55,
@@ -576,20 +552,15 @@ class SphericalClouds:
         :param cloud_type: the cloud type (its preset's field and optics)
         :param altitude: base of the cloud slab above sea level, metres; None
             keeps the type's
-        :param shells: billboard LOD shells before the deck takes over (at
-            most :data:`noise.MAX_LAYERS` - 1)
         :param planet: the planet the weather follows (climate, terrain);
             None = an earthlike one of this radius
         :param weather: the weather in full; None = the defaults for
             *planet* with *weather_seed*
         :param seed: noise seed (field and placement)
         :param weather_seed: weather systems' seed
-        :param quality: the clouds' cost (see :class:`cloud.CloudQuality`):
-            billboard sizes and sun-march steps (:func:`cloud.at_quality`),
-            octaves per shell (:data:`SHELL_OCTAVES`) and, unless given,
-            the volume fractions
-        :param volume_fractions: billboard overlap per shell, the last
-            repeating; None = :data:`VOLUME_FRACTIONS` at *quality*
+        :param settings: what the clouds cost (:class:`cloud.CloudSettings`:
+            the billboards, their shells and octaves, the sun march, the
+            tile budgets; :meth:`set_settings` changes it); None = HIGH
         :param sun_brightness: direct-term gain (as :class:`field.CloudField`'s)
         :param sky_strength: ambient sky weight (live: :meth:`set_sky_light`)
         :param sky_occlusion: fraction of sky light reaching the slab's
@@ -600,10 +571,8 @@ class SphericalClouds:
         :param channel: the executor channel for the tiles; None = one of its
             own. Reusing a removed instance's channel cancels its work
         :param game: the game object, for its asset manager (None: from disk)
-        :raises ValueError: for a shell count out of range
         """
-        if not 1 <= shells < MAX_LAYERS:
-            raise ValueError(f"1 to {MAX_LAYERS - 1} shells")
+        settings = settings or CloudSettings()
         _ensure_bin()
         self.radius = float(radius)
         self.position = np.asarray(position, dtype=np.float64)
@@ -627,11 +596,162 @@ class SphericalClouds:
         table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
         #: (6, n, n, 2): coverage and fbm shift (the workers rebuild it)
         self.weather = _weather(weather, table)
-        fractions = volume_fractions or VOLUME_FRACTIONS[quality]
-        schedule = SHELL_OCTAVES[quality]
-        octave_mean = float(volume.mean())
+        self._preset = preset
+        self._seed = seed
+        self._peaks = peaks
+        self._weather_spec = weather
+        self._table = table
+        self._octave_mean = float(volume.mean())
         base_level = max(0, round(math.log2(BASE_TILE_SIZE / self.grid.chunk_size(0))))
+        self._base_level = base_level
+        self._settings = settings
+        params, deck_light = self._configure(settings)
+        self._version = executor.set_spec(
+            self.spec, self._channel, generator=generate_cloud_tile
+        )
+
+        # ── Nodes and shared inputs ──
+        tile_shader, deck_shader = _shaders()
+        self.root = parent.attach_new_node("spherical_clouds")
+        self.tiles_root = self.root.attach_new_node("cloud_tiles")
+        self.tiles_root.set_shader(tile_shader)
+        self.deck = self.root.attach_new_node(
+            _deck_mesh(self.radius + field.slab[0] + 0.5 * field.slab[1])
+        )
+        self.deck.set_shader(deck_shader)
+        self.deck.set_two_sided(True)
+        self.deck.set_shader_inputs(uDeck=1, uDeckLayer=self._deck_layer)
+        self.tiles_root.set_shader_inputs(uDeck=0, uDeckLayer=0)
+        atlas, _ = load_cloud_atlas(game)
+        self.tiles_root.set_texture(atlas)
+        self.deck.set_texture(atlas)
+
+        root = self.root
+        root.set_transparency(TransparencyAttrib.M_none)
+        root.set_depth_test(True)
+        root.set_depth_write(False)
+        root.set_bin(CLOUD_BIN, 0)
+        root.set_attrib(
+            ColorBlendAttrib.make(
+                ColorBlendAttrib.M_add,
+                ColorBlendAttrib.O_one,
+                ColorBlendAttrib.O_one_minus_incoming_alpha,
+            )
+        )
+        layer_params = PTA_LVecBase4f()
+        for row in params.reshape(-1, 4):
+            layer_params.push_back(LVecBase4f(*(float(v) for v in row)))
+        self._layer_params = layer_params
+        bind_defaults(root)
+        if atmospheres is not None:
+            atmospheres.bind(root)
+        self._camera_planet = PTA_LVecBase3f.empty_array(1)
+        self._camera_render = PTA_LVecBase3f.empty_array(1)
+        self._planet_render = PTA_LVecBase3f.empty_array(1)
+        self._sun = PTA_LVecBase3f.empty_array(1)
+        self._sun[0] = LVecBase3f(0.0, 0.0, 1.0)
+        root.set_shader_inputs(
+            layerParams=layer_params,
+            cloudNoise=build_noise_texture(volume),
+            noiseSize=float(NOISE_SIZE),
+            noiseOffset=Vec3(0, 0, 0),
+            weatherMap=build_weather_texture(self.weather),
+            deckLight=build_deck_light_texture(deck_light),
+            deckLightCosMin=DECK_LIGHT_COS_MIN,
+            uSpherical=1,
+            planetRadius=self.radius,
+            uOwnAtmosphere=-1 if atmosphere is None else int(atmosphere),
+            camPos=self._camera_planet,
+            uCamRender=self._camera_render,
+            uPlanetCentre=self._planet_render,
+            sunDir=self._sun,
+            # White: the planet's air colours it (atmoSunlight in cloud.frag).
+            sunColor=Vec3(1.0, 1.0, 1.0),
+            skyColor=Vec3(0.45, 0.6, 0.85),
+            hazeColor=Vec3(0.45, 0.6, 0.85),
+            sunBrightness=float(sun_brightness),
+            skyStrength=float(sky_strength),
+            skyOcclusion=float(sky_occlusion),
+            exposure=float(exposure),
+            horizonFade=0.0,
+            uPixelAngle=0.001,
+            earthCurvature=0.0,
+            nearFadeRadii=float(near_fade_radii),
+            uCloudDebug=0,
+        )
+
+        self._tiles: dict[Key, _Tile] = {}
+        self._wanted: list[Key] = []
+        self._shown: set[Key] = set()
+        self._ready: dict[Key, CloudTile] = {}
+        self._origin = None
+        self._camera = np.zeros(3)
+        self._last_select = None
+        self._frame = 0
+        self._selector = LodSelector(self.grid)
+        self._slab_box = (field.slab[0], field.slab[0] + field.slab[1])
+        self._apply_live(settings)
+
+    # ── settings ──────────────────────────────────────────────────────────────
+
+    @property
+    def settings(self) -> CloudSettings:
+        """What the clouds cost (:meth:`set_settings`)."""
+        return self._settings
+
+    def set_settings(self, settings: CloudSettings) -> None:
+        """Change what the clouds cost. The sun march and the budgets apply
+        live; the billboard count, overlap, octaves and shells re-plan the
+        shells and regenerate every tile (on the same worker channel), so the
+        near clouds refill over a few seconds; the deck stays.
+
+        :param settings: the new settings (``resort_frames`` is the flat
+            field's and does nothing here)
+        """
+        changes = self._settings.changes(settings)
+        if not changes:
+            return
+        self._settings = settings
+        params, deck_light = self._configure(settings)
+        if REBUILD in changes.values():
+            self._version = self.executor.set_spec(
+                self.spec, self._channel, generator=generate_cloud_tile
+            )
+            for tile in self._tiles.values():
+                tile.node.remove_node()
+            self._tiles.clear()
+            self._ready.clear()
+            self._shown.clear()
+            self._wanted = []
+            self._last_select = None
+            self.root.set_shader_input(
+                "deckLight", build_deck_light_texture(deck_light)
+            )
+            self.deck.set_shader_input("uDeckLayer", self._deck_layer)
+        for i, row in enumerate(params.reshape(-1, 4)):
+            self._layer_params[i] = LVecBase4f(*(float(v) for v in row))
+        self._apply_live(settings)
+
+    def _apply_live(self, settings: CloudSettings) -> None:
+        if settings.reflected:
+            self.root.show(REFLECTION_CAMERA_MASK)
+        else:
+            self.root.hide(REFLECTION_CAMERA_MASK)
+
+    def _configure(self, settings: CloudSettings) -> tuple[np.ndarray, np.ndarray]:
+        """Plan the shells and the deck for some settings: sets the bands,
+        the deck's layer and :attr:`spec` (what the workers get).
+
+        :returns: the packed layer parameters and the deck's light table
+        """
+        preset, field, peaks, seed = self._preset, self.field, self._peaks, self._seed
+        shells = settings.shells
+        fractions = (settings.overlap_near, settings.overlap_far)
+        schedule = settings.shell_octaves
+        octave_mean = self._octave_mean
+        base_level = self._base_level
         tile0 = self.grid.chunk_size(base_level)
+        table = self._table
 
         # The shells and their crossfade bands (lod_shells' layout, for a
         # tile four times smaller than the box), then the deck.
@@ -645,7 +765,7 @@ class SphericalClouds:
         params = np.zeros((MAX_LAYERS, LAYER_VEC4S, 4), dtype=np.float32)
         for k in range(shells):
             scale = 2.0**k
-            spec = at_quality(
+            spec = with_settings(
                 replace(
                     preset,
                     radius=(preset.radius[0] * scale, preset.radius[1] * scale),
@@ -654,7 +774,7 @@ class SphericalClouds:
                         max_optical_depth=preset.optics.max_optical_depth * scale,
                     ),
                 ),
-                quality,
+                settings,
             )
             fraction = fractions[min(k, len(fractions) - 1)]
             octaves = schedule[min(k, len(schedule) - 1)]
@@ -705,93 +825,11 @@ class SphericalClouds:
             radius=self.radius,
             field=field,
             noise_seed=seed,
-            weather=weather,
+            weather=self._weather_spec,
             shift_table=table,
             shells=tuple(shell_specs),
         )
-        self._version = executor.set_spec(
-            self.spec, self._channel, generator=generate_cloud_tile
-        )
-
-        # ── Nodes and shared inputs ──
-        tile_shader, deck_shader = _shaders()
-        self.root = parent.attach_new_node("spherical_clouds")
-        self.tiles_root = self.root.attach_new_node("cloud_tiles")
-        self.tiles_root.set_shader(tile_shader)
-        self.deck = self.root.attach_new_node(
-            _deck_mesh(self.radius + field.slab[0] + 0.5 * field.slab[1])
-        )
-        self.deck.set_shader(deck_shader)
-        self.deck.set_two_sided(True)
-        self.deck.set_shader_inputs(uDeck=1, uDeckLayer=self._deck_layer)
-        self.tiles_root.set_shader_inputs(uDeck=0, uDeckLayer=0)
-        atlas, _ = load_cloud_atlas(game)
-        self.tiles_root.set_texture(atlas)
-        self.deck.set_texture(atlas)
-
-        root = self.root
-        root.set_transparency(TransparencyAttrib.M_none)
-        root.set_depth_test(True)
-        root.set_depth_write(False)
-        root.set_bin(CLOUD_BIN, 0)
-        root.set_attrib(
-            ColorBlendAttrib.make(
-                ColorBlendAttrib.M_add,
-                ColorBlendAttrib.O_one,
-                ColorBlendAttrib.O_one_minus_incoming_alpha,
-            )
-        )
-        layer_params = PTA_LVecBase4f()
-        for row in params.reshape(-1, 4):
-            layer_params.push_back(LVecBase4f(*(float(v) for v in row)))
-        bind_defaults(root)
-        if atmospheres is not None:
-            atmospheres.bind(root)
-        self._camera_planet = PTA_LVecBase3f.empty_array(1)
-        self._camera_render = PTA_LVecBase3f.empty_array(1)
-        self._planet_render = PTA_LVecBase3f.empty_array(1)
-        self._sun = PTA_LVecBase3f.empty_array(1)
-        self._sun[0] = LVecBase3f(0.0, 0.0, 1.0)
-        root.set_shader_inputs(
-            layerParams=layer_params,
-            cloudNoise=build_noise_texture(volume),
-            noiseSize=float(NOISE_SIZE),
-            noiseOffset=Vec3(0, 0, 0),
-            weatherMap=build_weather_texture(self.weather),
-            deckLight=build_deck_light_texture(deck_light),
-            deckLightCosMin=DECK_LIGHT_COS_MIN,
-            uSpherical=1,
-            planetRadius=self.radius,
-            uOwnAtmosphere=-1 if atmosphere is None else int(atmosphere),
-            camPos=self._camera_planet,
-            uCamRender=self._camera_render,
-            uPlanetCentre=self._planet_render,
-            sunDir=self._sun,
-            # White: the planet's air colours it (atmoSunlight in cloud.frag).
-            sunColor=Vec3(1.0, 1.0, 1.0),
-            skyColor=Vec3(0.45, 0.6, 0.85),
-            hazeColor=Vec3(0.45, 0.6, 0.85),
-            sunBrightness=float(sun_brightness),
-            skyStrength=float(sky_strength),
-            skyOcclusion=float(sky_occlusion),
-            exposure=float(exposure),
-            horizonFade=0.0,
-            uPixelAngle=0.001,
-            earthCurvature=0.0,
-            nearFadeRadii=float(near_fade_radii),
-            uCloudDebug=0,
-        )
-
-        self._tiles: dict[Key, _Tile] = {}
-        self._wanted: list[Key] = []
-        self._shown: set[Key] = set()
-        self._ready: dict[Key, CloudTile] = {}
-        self._origin = None
-        self._camera = np.zeros(3)
-        self._last_select = None
-        self._frame = 0
-        self._selector = LodSelector(self.grid)
-        self._slab_box = (field.slab[0], field.slab[0] + field.slab[1])
+        return params, deck_light
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -947,16 +985,17 @@ class SphericalClouds:
             self._channel,
         )
         # Forget tiles far out of use.
-        if len(self._tiles) > len(wanted) + TILE_CACHE:
+        cache = self._settings.tile_cache
+        if len(self._tiles) > len(wanted) + cache:
             for key in [k for k in self._tiles if k not in wanted_set][
-                : len(self._tiles) - len(wanted) - TILE_CACHE
+                : len(self._tiles) - len(wanted) - cache
             ]:
                 self._tiles.pop(key).node.remove_node()
 
     def _upload(self) -> None:
         count = 0
         for key in self._wanted:
-            if count >= UPLOADS_PER_FRAME:
+            if count >= self._settings.uploads_per_frame:
                 break
             tile = self._ready.pop(key, None)
             if tile is None or key in self._tiles:
@@ -1006,7 +1045,7 @@ class SphericalClouds:
             gap = float(np.linalg.norm(tile.data.centre - cam)) - tile.reach
             stale.append((moved / max(gap, 0.05 * tile.reach, 1.0), key))
         stale.sort(reverse=True)
-        for score, key in stale[:RESORTS_PER_FRAME]:
+        for score, key in stale[: self._settings.resorts_per_frame]:
             if score < 1e-3:  # a tenth of a degree: nothing visible changes
                 break
             tile = self._tiles[key]

@@ -8,7 +8,7 @@ clouds and water drawn over it apply the atmospheres themselves (see
 tinted by the air in front of it, and stars fade out by day.
 """
 
-from world_builder.sky.sky import Sky
+from world_builder.sky.sky import Sky, SkySettings
 from world_builder.sky.starfield import (
     NEBULA_PALETTES,
     NebulaStyle,
@@ -19,6 +19,7 @@ from world_builder.sky.starfield import (
 )
 
 __all__ = [
+    "SkySettings",
     "NEBULA_PALETTES",
     "NebulaStyle",
     "Sky",

@@ -35,7 +35,6 @@ out vec3 vTwilight;
 
 // Samples of the air per vertex (8 per pixel elsewhere): it barely changes
 // across a billboard.
-const int AIR_STEPS = 4;
 
 void main() {
     vLayer = int(i_layer + 0.5);
@@ -111,7 +110,7 @@ void main() {
     vAtmoT = vec3(1.0);
     vAtmoS = vec3(0.0);
     if ((uCloudDebug & 2) == 0) {
-        atmosphereAlong(rel / dist, dist, sunDir, AIR_STEPS, vAtmoT, vAtmoS);
+        atmosphereAlong(rel / dist, dist, sunDir, uAtmoVertexSteps, vAtmoT, vAtmoS);
     }
     vSunTint = vec3(1.0);
     vSkyTint = 1.0;

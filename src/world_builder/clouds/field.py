@@ -7,7 +7,8 @@ terrain occlude them with no depth plumbing. Every particle of every layer lives
 ONE Geom whose vertex data never changes after the build; the camera-facing quad is
 built in the vertex shader, cell centres move in a small per-cell texture (wind +
 toroidal recycling), and only the INDEX buffer is re-sorted, back to front for
-premultiplied-over blending, spread round-robin over ``resort_frames`` frames.
+premultiplied-over blending, spread round-robin over ``CloudSettings.resort_frames``
+frames.
 
 The clouds draw in their own "cloud" bin, between "opaque" and "transparent", with
 no depth write: every translucent effect composites over them, but an effect behind
@@ -23,7 +24,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -53,14 +54,14 @@ from world_builder import PLANET_RADIUS_M
 from world_builder.atmosphere import bind_defaults
 from world_builder.clouds.cloud import (
     PRESETS,
-    CloudQuality,
+    CloudSettings,
     CloudSpec,
     CloudType,
-    at_quality,
     atlas_mean_alpha,
     load_cloud_atlas,
     sample_field_particles,
     snap_to_noise_period,
+    with_settings,
 )
 from world_builder.clouds.noise import (
     LAYER_VEC4S,
@@ -77,6 +78,7 @@ from world_builder.clouds.noise import (
     value_noise_volume,
     with_threshold,
 )
+from world_builder.depth import REFLECTION_CAMERA_MASK
 from world_builder.utils import magnitude
 
 _SHADERS = Path(__file__).parent / "shaders"
@@ -195,19 +197,6 @@ def _ensure_cloud_bins():
         manager.add_bin(_CLOUD_BIN, CullBinManager.BT_fixed, _CLOUD_BIN_SORT)
 
 
-def _settings_quality(game: Any) -> CloudQuality:
-    """The player's cloud quality, or HIGH when there is no setting to read (e.g.
-    the demo's stub game): never a crash or a downgrade."""
-    config = getattr(getattr(game, "app", None), "graphics_settings", None)
-    name = (getattr(config, "config", None) or {}).get("clouds", {}).get("quality")
-    try:
-        return CloudQuality(name)
-    except ValueError:
-        if name is not None:
-            LOGGER.warning(f"unknown cloud quality {name!r}; using high")
-        return CloudQuality.HIGH
-
-
 @functools.cache
 def _cloud_shader() -> Shader:
     return Shader.load(
@@ -319,10 +308,14 @@ class CloudField:
 
     Built in the constructor; call :meth:`update` once per frame. A layer's field
     is its shape (rebuild to change); its optics, coverage and the sun can be
-    changed live with :meth:`set_optics`, :meth:`set_coverage`, :meth:`set_sun`.
+    changed live with :meth:`set_optics`, :meth:`set_coverage`, :meth:`set_sun`,
+    and what it costs with :meth:`set_settings`.
 
     :ivar node: the field's one GeomNode, under *parent*
     """
+
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = CloudSettings
 
     def __init__(
         self,
@@ -343,13 +336,12 @@ class CloudField:
         horizon_distance: float = 400000.0,
         planet_radius: float = PLANET_RADIUS_M,
         near_fade_radii: float = 2.5,
-        quality: CloudQuality | None = None,
-        resort_frames: int = 8,
         seed: int = 7,
+        settings: CloudSettings | None = None,
     ):
         """
         :param parent: NodePath the cloud geometry goes under
-        :param game: the game object (sprite atlas, graphics settings)
+        :param game: the game object (its sprite atlas)
         :param layers: list of :class:`CloudLayer` (default: a cumulus deck)
         :param domain: recycle-box side for layers that don't set one; the default
             is exactly one noise period at the cumulus feature size
@@ -370,11 +362,12 @@ class CloudField:
         :param planet_radius: metres; the deck droops by d²/2R (0 = flat)
         :param near_fade_radii: fade a billboard within this many of its radii of
             the camera, so it never smears across the screen or clips (0 = off)
-        :param quality: a :class:`CloudQuality`; None reads the graphics settings
-            (HIGH if absent). Scales each layer's own request, so it composes with
-            lod_shells and explicit overrides
-        :param resort_frames: frames one full re-sort is spread over
         :param seed: RNG seed for the noise volume and placement
+        :param settings: what the clouds cost (:class:`cloud.CloudSettings`;
+            only its billboard count, sun march, reflection and re-sort period
+            apply to a flat field). The count and march scale each layer's own
+            request, so they compose with lod_shells and explicit overrides.
+            None = HIGH
         """
         self._parent = parent
         self._game = game
@@ -400,10 +393,67 @@ class CloudField:
             0.0 if not planet_radius else 1.0 / (2.0 * float(planet_radius))
         )
         self._near_fade_radii = near_fade_radii
-        self._quality = quality if quality is not None else _settings_quality(game)
-        self._resort_frames = max(1, int(resort_frames))
+        settings = settings or CloudSettings()
+        self._settings = settings
+        self._resort_frames = settings.resort_frames
         self._seed = seed
+        # Live coverage and optics edits, replayed over a rebuild.
+        self._edits: list[tuple[str, int | None, dict]] = []
         self._build()
+        self._apply_reflected()
+
+    @property
+    def settings(self) -> CloudSettings:
+        """What the clouds cost (:meth:`set_settings`)."""
+        return self._settings
+
+    def set_settings(self, settings: CloudSettings) -> None:
+        """Change what the clouds cost. The sun march, the reflection and the
+        re-sort period apply live; the billboard count re-places them (a
+        rebuild, keeping the wind's drift and the live edits). The planet
+        clouds' fields (overlap, octaves, shells, tile budgets) do nothing
+        here.
+        """
+        changes = self._settings.changes(settings)
+        if not changes:
+            return
+        self._settings = settings
+        self._resort_frames = settings.resort_frames
+        if "count_scale" in changes:
+            self._rebuild()
+        elif "march_scale" in changes:
+            # From each layer's authored optics, then its live edits again.
+            for index, layer in enumerate(self._layers):
+                optics = self._layer_spec(layer).optics
+                for kind, which, values in self._edits:
+                    if kind == "optics" and which in (None, index):
+                        optics = replace(optics, **values)
+                spec = self._layer_specs[index]
+                self._layer_specs[index] = replace(spec, optics=optics)
+                self._repack(index)
+            self._upload_layer_params()
+        self._apply_reflected()
+
+    def _apply_reflected(self) -> None:
+        if self._settings.reflected:
+            self.node.show(REFLECTION_CAMERA_MASK)
+        else:
+            self.node.hide(REFLECTION_CAMERA_MASK)
+
+    def _rebuild(self) -> None:
+        """Place the billboards again, where the wind has taken the old ones."""
+        old_node, drift = self.node, self._noise_offset.copy()
+        self._build()
+        # The field moved by -drift; billboards are placed in field space.
+        self._noise_offset = drift
+        self._cell_centres -= drift.astype(np.float32)
+        self.node.set_shader_input("noiseOffset", Vec3(*drift))
+        old_node.remove_node()
+        for kind, which, values in self._edits:
+            if kind == "coverage":
+                self._apply_coverage(which, **values)
+            else:
+                self._apply_optics(which, values)
 
     def _layer_spec(self, layer: CloudLayer) -> CloudSpec:
         overrides = {
@@ -411,8 +461,8 @@ class CloudField:
             for name in _SPEC_OVERRIDES
             if getattr(layer, name) is not None
         }
-        return at_quality(
-            replace(PRESETS[layer.cloud_type], **overrides), self._quality
+        return with_settings(
+            replace(PRESETS[layer.cloud_type], **overrides), self._settings
         )
 
     def _build(self):
@@ -636,7 +686,14 @@ class CloudField:
         :param edge_softness: new window width in sigma, or None to keep
         :returns: the resulting :class:`DensityField` per layer
         """
+        self._edits.append(
+            ("coverage", layer, {"coverage": coverage, "edge_softness": edge_softness})
+        )
+        return self._apply_coverage(layer, coverage, edge_softness)
 
+    def _apply_coverage(
+        self, layer: int | None, coverage: float | None, edge_softness: float | None
+    ) -> list[DensityField]:
         def edit(index: int, spec: CloudSpec) -> CloudSpec:
             field = spec.field
             changed = replace(
@@ -670,6 +727,10 @@ class CloudField:
                 f"not CloudOptics parameters: {sorted(unknown)}. Shape parameters "
                 "live in DensityField and need a rebuild."
             )
+        self._edits.append(("optics", layer, dict(changes)))
+        return self._apply_optics(layer, changes)
+
+    def _apply_optics(self, layer: int | None, changes: dict) -> list[CloudOptics]:
         self._edit_layers(
             layer,
             lambda index, spec: replace(spec, optics=replace(spec.optics, **changes)),
@@ -805,6 +866,9 @@ class Clouds:
     :ivar field: the :class:`CloudField`
     """
 
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = CloudSettings
+
     def __init__(
         self,
         game: Any,
@@ -817,6 +881,15 @@ class Clouds:
             parent=game.root_node, game=game, layers=layers, **field_kwargs
         )
         game.method_lists[self.id] = [self.update]
+
+    @property
+    def settings(self) -> CloudSettings:
+        """What the clouds cost (:meth:`CloudField.set_settings`)."""
+        return self.field.settings
+
+    def set_settings(self, settings: CloudSettings) -> None:
+        """:meth:`CloudField.set_settings`."""
+        self.field.set_settings(settings)
 
     def update(self) -> None:
         """Per-frame: drive wind/recycle/sort against the current camera."""
