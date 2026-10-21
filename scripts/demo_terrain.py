@@ -10,7 +10,7 @@ from an environment where world_builder is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--radius METRES]
         [--moon-distance METRES] [--no-moon] [--workers N]
-        [--backend process|thread|inline]
+        [--backend process|thread|inline] [--cloud-quality high|mid|low|off]
 
     --level          the planet's level file (default: the demo level)
     --radius         overrides the level's planet radius
@@ -19,6 +19,7 @@ from an environment where world_builder is importable::
     --workers        generation processes (default: physical cores - 1)
     --backend        where chunks and cloud tiles are generated (default
                      process)
+    --cloud-quality  the clouds' quality at start (default high; F5 cycles it)
 
 The default backend generates terrain in spawned worker processes, which
 re-import this script: keep the ``if __name__ == "__main__"`` guard. All
@@ -230,11 +231,13 @@ def window_config(
 
 
 def describe_window(demo: ShowBase) -> str:
-    """:returns: the window's kind, size and samples per pixel"""
+    """:returns: the window's kind and size, and its samples per pixel if
+    more than one"""
     win = demo.win
     kind = "window" if isinstance(win, GraphicsWindow) else "offscreen"
-    samples = max(1, win.get_fb_properties().get_multisamples())
-    return f"{kind} {win.get_x_size()}x{win.get_y_size()}, MSAA x{samples}"
+    samples = win.get_fb_properties().get_multisamples()
+    msaa = f", MSAA x{samples}" if samples > 1 else ""
+    return f"{kind} {win.get_x_size()}x{win.get_y_size()}{msaa}"
 
 
 def sun_lighting(azimuth: float, elevation: float) -> tuple[np.ndarray, tuple, tuple]:
@@ -1153,11 +1156,24 @@ def main() -> None:
         choices=("process", "thread", "inline"),
         help="where chunks and cloud tiles are generated",
     )
+    parser.add_argument(
+        "--cloud-quality",
+        default="high",
+        choices=CLOUD_QUALITIES,
+        help="the clouds' quality at start (F5 cycles it)",
+    )
     args = parser.parse_args()
     # No vsync: the frame rate shows what a frame costs, not the display.
     window_config("Procedural terrain demo", vsync=False)
     moon = None if args.no_moon else args.moon_distance
-    TerrainDemo(args.level, args.backend, args.radius, moon, args.workers).run()
+    TerrainDemo(
+        args.level,
+        args.backend,
+        args.radius,
+        moon,
+        args.workers,
+        cloud_quality=args.cloud_quality,
+    ).run()
 
 
 if __name__ == "__main__":

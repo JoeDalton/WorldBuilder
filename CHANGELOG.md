@@ -53,3 +53,13 @@ Changes since 0.1.0 (the port from SpaceFlight).
   `lens-far-limit`): the far camera gets explicit cull bounds.
 - `hide(HIDE_FROM_NEAR)` did nothing: each split-depth camera now has a
   camera bit of its own.
+- The ocean was not hidden from its own reflection camera (the same Panda
+  camera-mask rule): it now hides from the whole `REFLECTION_CAMERA_MASK`.
+- The reflection camera follows the main camera's field of view (it was
+  copied once).
+- The flat cloud field's vertex shader writes `gl_ClipDistance[0]`, so the
+  ocean's reflection pass no longer clips it at random.
+- The planet clouds' cull bins no longer tie with the flat field's (sort 25).
+- `flight_bench.py` sampled the ground under the previous camera position
+  when placing a low flight.
+- The worker-priority test failed on Windows (no `os.nice`).

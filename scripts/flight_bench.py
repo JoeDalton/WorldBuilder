@@ -83,6 +83,8 @@ def _start(demo: TerrainDemo, flight: str) -> None:
         demo._keys["arrow_up"] = True
     else:
         altitude = 300.0 if flight == "low" else 3000.0
+        # Over the start first: the ground is sampled under the camera.
+        demo._place_camera(lat, lon, altitude, 90.0, 0.0)
         ground = float(demo.terrain.planet.sample_dirs(demo._up()[None, :])[0][0])
         demo._place_camera(lat, lon, max(ground, 0.0) + altitude, 90.0, 0.0)
         demo._keys["arrow_up"] = True

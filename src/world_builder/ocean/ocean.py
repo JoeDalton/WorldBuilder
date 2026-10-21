@@ -76,7 +76,15 @@ _MAX_EYE_ALTITUDE_M = 20000.0
 _HORIZON_MARGIN = 1.1
 
 # Camera mask bit used to hide the ocean from the reflection camera
-_OCEAN_BIT = BitMask32.bit(1)
+#: The reflection camera's mask: camera bits 0-19. Panda draws a node for a
+#: camera if any of the camera's bits is still shown on it, so a node is
+#: hidden from the reflection by hiding *all* of these
+#: (``node.hide(REFLECTION_CAMERA_MASK)``); hiding one bit does nothing. The
+#: main cameras keep other bits (world_builder.depth's 21 and 22, or all of
+#: them by default) and still see it.
+REFLECTION_CAMERA_MASK = BitMask32(0xFFFFF)
+#: The reflection's field of view, relative to the main camera's.
+REFLECTION_FOV_SCALE = 1.4
 
 # Max wave iterations the shader's iWaveDirs[] array can hold (must match the
 # MAX_WAVE_ITER #define in ocean.frag).
@@ -406,8 +414,8 @@ class Ocean:
         bind_defaults(self.ocean_node)
         self.ocean_node.setShaderInput("uBaseToWorld", LMatrix4f.identMat())
         self.ocean_node.setShaderInput("uAtmoSunDir", LVecBase3f(0.0, 0.0, 1.0))
-        # Hide the ocean from the reflection camera
-        self.ocean_node.hide(_OCEAN_BIT)
+        # Not in its own mirror.
+        self.ocean_node.hide(REFLECTION_CAMERA_MASK)
 
         self.game.method_lists[self.id] = [self.update]
 
@@ -418,6 +426,13 @@ class Ocean:
         current_time = self.game.game_time.get_current_time()
         camera_pos = self.game.app.camera.getPos(self.base_node)
         self.mirror_camera()
+        # Follow the main camera's field of view (window resizes, zoom). Its
+        # far plane is not followed: world_builder.depth sets the main lens
+        # to the near camera's short range every frame.
+        fov = self.game.app.camLens.getFov()
+        self.refl_cam_node.getLens().setFov(
+            fov.x * REFLECTION_FOV_SCALE, fov.y * REFLECTION_FOV_SCALE
+        )
 
         # Reflection view-projection, for the shaders' reflection lookup
         view = LMatrix4f()
@@ -537,14 +552,14 @@ class Ocean:
         self.refl_buffer.setClearColor(LVecBase4f(*water_color, 1))
 
         self.refl_cam_node = Camera("refl_cam")
-        # Use a wider lens than the main camera (1.4x its FOV) to avoid frustum
-        # culling artifacts when turning quickly — the extra margin ensures
-        # reflected objects are never culled at the edges of the reflection
-        # buffer. A copy taken now: later lens changes (FOV, near/far) are not
-        # followed.
+        # Use a wider lens than the main camera (REFLECTION_FOV_SCALE times its
+        # FOV) to avoid frustum culling artifacts when turning quickly — the
+        # extra margin ensures reflected objects are never culled at the edges
+        # of the reflection buffer. update() follows the main camera's FOV;
+        # near and far are the ones taken here.
         refl_lens = self.game.app.camLens.makeCopy()
         fov = self.game.app.camLens.getFov()
-        refl_lens.setFov(fov.x * 1.4, fov.y * 1.4)
+        refl_lens.setFov(fov.x * REFLECTION_FOV_SCALE, fov.y * REFLECTION_FOV_SCALE)
         # The reflection camera sits ~2*altitude further from the skybox's far
         # side than the main camera, so with the same far plane a skybox that is
         # real geometry could be clipped at the reflected zenith. Push the
@@ -555,13 +570,12 @@ class Ocean:
         self.refl_cam_node.setLens(refl_lens)
         self.refl_cam = self.base_node.attachNewNode(self.refl_cam_node)
 
-        # Use only the lower 20 bits, excluding bit 1 (_OCEAN_BIT)
-        self.refl_cam_node.setCameraMask(BitMask32(0xFFFFF & ~2))
+        self.refl_cam_node.setCameraMask(REFLECTION_CAMERA_MASK)
 
         # TODO(perf): the reflection re-renders all scene geometry. Objects that
-        # contribute little (small, distant) could be excluded with another
-        # camera-mask bit as a "do not reflect" flag, as _OCEAN_BIT does for the
-        # ocean. Worth it with many minor objects, not for one large hero object.
+        # contribute little (small, distant) could be kept out of it with
+        # ``node.hide(REFLECTION_CAMERA_MASK)``, as the ocean itself is. Worth
+        # it with many minor objects, not for one large hero object.
 
         self.refl_buffer.makeDisplayRegion(0, 1, 0, 1).setCamera(self.refl_cam)
 

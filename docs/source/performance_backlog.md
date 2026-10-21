@@ -47,10 +47,12 @@ drawn after the opaque bin with a depth test and only the visible sky gets
 shaded.
 
 - A fixed bin between `opaque` (20) and the clouds, for the dome (draw order
-  0) and the stars (1). The clouds must stay after it, so their bins move
-  up one: `_CLOUD_BIN_SORT` 21 → 22, `_SHELL_BIN_SORT` 28 → 29 in
-  `clouds/sphere.py`. Shells use `29 - shell`, still below `transparent`
-  (30) for up to 7 shells.
+  0) and the stars (1), at sort 21. The clouds must stay after it: the deck
+  moves to 22 (`_CLOUD_BIN_SORT` in `clouds/sphere.py`), and the shells keep
+  `_SHELL_BIN_SORTS` minus 22, which leaves 6 bins between 23 and 29 (25 is
+  the flat field's, kept free so the two never tie). The planet uses 4
+  shells, so 6 is enough; `SphericalClouds` would need its shell limit
+  lowered from `MAX_LAYERS - 1` to 6.
 - On the sky node: depth test on with `DepthTestAttrib.M_less_equal`, depth
   write off.
 - Measured with a temporary rebinding: start 14.8 → 14.4 ms, dusk

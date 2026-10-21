@@ -116,11 +116,13 @@ if TYPE_CHECKING:
 
 _SHADERS = Path(__file__).parent / "shaders"
 #: Cull bins, between opaque (20) and transparent (30): the deck's first,
-#: then one back-to-front bin per shell, the coarsest first (sort
-#: ``_SHELL_BIN_SORT - shell``).
+#: then one back-to-front bin per shell, the coarsest first.
 CLOUD_BIN = "cloud_sphere"
 _CLOUD_BIN_SORT = 21
-_SHELL_BIN_SORT = 28
+#: The shells' bin sorts, shell 0 (the nearest, drawn last) first. 25 is
+#: skipped: it is the flat field's bin (``field._CLOUD_BIN_SORT``), and a tie
+#: would leave the two kinds' order undefined in one scene.
+_SHELL_BIN_SORTS = (29, 28, 27, 26, 24, 23, 22)
 #: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box),
 #: rounded to the nearest level of the planet's grid.
 BASE_TILE_SIZE = 8000.0
@@ -379,7 +381,7 @@ def _ensure_bin():
             manager.add_bin(
                 _shell_bin(shell),
                 CullBinManager.BT_back_to_front,
-                _SHELL_BIN_SORT - shell,
+                _SHELL_BIN_SORTS[shell],
             )
 
 

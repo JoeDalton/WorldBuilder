@@ -6,14 +6,15 @@ clouds' bookkeeping. The shaders' output is checked by
 scripts/terrain_shots.py, not here.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from panda3d.core import LVecBase3f, NodePath, Texture
+from panda3d.core import BitMask32, CullBinManager, LVecBase3f, NodePath, Texture
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
-from world_builder.clouds import sphere
+from world_builder.clouds import field, sphere
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import (
     FAR_CAMERA_MASK,
@@ -115,6 +116,81 @@ def test_ocean_updates_and_mirrors_the_camera(window, ocean):
     window.graphicsEngine.render_frame()
     made.update()  # the reflection texture is realized: the UV scale is set
     assert getattr(made, "_uv_scale_set", False)
+
+
+def _drawn(node: NodePath, camera_mask: BitMask32) -> bool:
+    """Panda's rule: drawn if any of the camera's bits is shown, or not
+    controlled, on the node."""
+    n = node.node()
+    shown = n.get_draw_show_mask() | ~n.get_draw_control_mask()
+    return not (shown & camera_mask).is_zero()
+
+
+def test_ocean_is_not_in_its_own_mirror(ocean):
+    """Hidden from the whole reflection mask (one bit hid nothing), seen by
+    the main cameras."""
+    from world_builder.ocean.ocean import REFLECTION_CAMERA_MASK
+
+    made, _ = ocean
+    reflection = made.refl_cam_node.get_camera_mask()
+    assert reflection == REFLECTION_CAMERA_MASK
+    assert not _drawn(made.ocean_node, reflection)
+    assert _drawn(made.ocean_node, NEAR_CAMERA_MASK)
+    assert _drawn(made.ocean_node, FAR_CAMERA_MASK)
+    assert _drawn(made.ocean_node, BitMask32.all_on())  # a default camera
+
+
+def test_reflection_follows_the_main_field_of_view(window, ocean):
+    from world_builder.ocean.ocean import REFLECTION_FOV_SCALE
+
+    made, _ = ocean
+    lens = window.camLens
+    before = lens.get_fov()
+    try:
+        lens.set_fov(50.0, 30.0)
+        made.update()
+        fov = made.refl_cam_node.get_lens().get_fov()
+        np.testing.assert_allclose(
+            tuple(fov), (50.0 * REFLECTION_FOV_SCALE, 30.0 * REFLECTION_FOV_SCALE)
+        )
+    finally:
+        lens.set_fov(before)
+
+
+def test_everything_drawn_in_the_mirror_writes_its_clip_distance():
+    """The reflection pass turns a clip plane on; a vertex shader drawn
+    through it that leaves gl_ClipDistance[0] unwritten is clipped at
+    random."""
+    src = Path(__file__).parent.parent / "src" / "world_builder"
+    shaders = [
+        "terrain/shaders/terrain.vert",
+        "clouds/shaders/cloud.vert",
+        "clouds/shaders/cloud_sphere.vert",
+        "clouds/shaders/cloud_deck.vert",
+        "sky/shaders/sky.vert",
+        "sky/shaders/stars.vert",
+    ]
+    for name in shaders:
+        assert "gl_ClipDistance[0]" in (src / name).read_text(), name
+
+
+def test_cloud_bins_never_tie(showbase):
+    """The planet clouds' bins (deck, then one per shell) are ordered, sit
+    between opaque and transparent, and never tie with the flat field's."""
+    sphere._ensure_bin()
+    field._ensure_cloud_bins()
+    manager = CullBinManager.get_global_ptr()
+
+    def sort(name):
+        return manager.get_bin_sort(manager.find_bin(name))
+
+    deck = sort(sphere.CLOUD_BIN)
+    shells = [sort(sphere._shell_bin(k)) for k in range(sphere.MAX_LAYERS - 1)]
+    flat = sort(field._CLOUD_BIN)
+    assert all(20 < s < 30 for s in [deck, *shells])
+    assert shells == sorted(shells, reverse=True) and len(set(shells)) == len(shells)
+    assert deck < min(shells)
+    assert flat not in [deck, *shells]
 
 
 def test_ocean_light_and_settings(ocean):

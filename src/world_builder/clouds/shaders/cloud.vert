@@ -90,6 +90,10 @@ void main() {
                          + up    * (corner.y * i_radius / stretch);
 
     gl_Position = p3d_ModelViewProjectionMatrix * vec4(wp, 1.0);
+    // Clouds are above the sea, even where the droop takes them below the
+    // flat water plane far away: the ocean's reflection pass (whose clip
+    // plane is on) keeps them whole. Undefined when not written.
+    gl_ClipDistance[0] = 1.0;
     worldPos    = wp;
     vUv         = i_uv_st.xy + (corner * 0.5 + 0.5) * i_uv_st.zw;
     vRadius     = i_radius;

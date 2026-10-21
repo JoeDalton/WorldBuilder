@@ -70,7 +70,8 @@ def test_lower_priority_tolerates_a_refusal(monkeypatch):
     def refuse(increment):
         raise OSError("not permitted")
 
-    monkeypatch.setattr(os, "nice", refuse)
+    # raising=False: Windows has no os.nice (the helper checks for it).
+    monkeypatch.setattr(os, "nice", refuse, raising=False)
     workers._lower_priority(10)  # no exception: runs at normal priority
     workers._lower_priority(0)
 
