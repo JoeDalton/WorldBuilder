@@ -53,7 +53,9 @@ docstring has the overview):
   scales it (uniform `iWaterLight`) and the reflection buffer's clear colour
   by the light on the sea relative to that daylight, so the sea is dark by
   night. The terrain demo computes it with `Atmospheres.light_at`. The
-  reflected sky darkens by itself.
+  reflected sky darkens by itself. The clear colour is stored tonemapped
+  (`aces_tonemap`, the numpy twin of the shader's), like everything else in
+  the buffer.
 - **Far plane.** SpaceFlight raises it to 600 km (`CAMERA_FAR_M`), set before
   the scene is built because the reflection camera copies the lens. Panda's
   default 100 km clips the outermost cloud shell and keeps the ocean horizon in
@@ -123,7 +125,13 @@ Driven by [`ocean/ocean.py`](../../src/world_builder/ocean/ocean.py) (above):
     displaced geometry (see the
     [ocean swell artifact report](https://github.com/JoeDalton/WorldBuilder/blob/main/src/world_builder/ocean/OCEAN_SWELL_ARTIFACT_REPORT.md)).
     The ripple-perturbed UV is clamped to the rendered region
-    (`uReflUVScale`) so it never samples the power-of-two padding.
+    (`uReflUVScale`) so it never samples the power-of-two padding. The
+    buffer holds *display* colours (the sky and terrain tonemap themselves,
+    with the same exposure), so the sample is decoded back to linear light
+    (`aces_inverse`, divided by `uExposure`) before the blend. Otherwise the
+    output tonemap applies twice and lifts the dark: a night sky's
+    reflection came out about twice as bright as the sky. A full mirror now
+    shows exactly the sky's own colour.
   - **Output.** The fresnel blend of reflection and water colour (the
     latter scaled by `iWaterLight`) is ACES-tonemapped (`aces_tonemap`), then
     hazed toward `uHazeColor` over `uHazeDistance` — after the tonemap, as
@@ -133,4 +141,5 @@ Driven by [`ocean/ocean.py`](../../src/world_builder/ocean/ocean.py) (above):
     world axes by `uBaseToWorld`, toward `uAtmoSunDir`.
   - **Debug.** `uDebugMode` 1–8 visualise intermediate quantities (0 is normal
     rendering): normal, reflection UV, fresnel, world grid, reflection-UV
-    clamp, raw reflection, pre-tonemap clipping, FM phase.
+    clamp, raw reflection sample (display colour), pre-tonemap clipping, FM
+    phase.

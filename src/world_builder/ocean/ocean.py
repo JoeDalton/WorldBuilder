@@ -89,6 +89,40 @@ REFLECTION_FOV_SCALE = 1.4
 # Max wave iterations the shader's iWaveDirs[] array can hold (must match the
 # MAX_WAVE_ITER #define in ocean.frag).
 _MAX_WAVE_ITER = 64
+#: Pre-tonemap exposure; the sky's and the terrain's default, which the
+#: shader's decoding of the reflection assumes.
+DEFAULT_EXPOSURE = 0.9
+
+# ocean.frag's ACES fit, as row-major matrices (GLSL's mat3 literals are
+# column-major, so these are their transposes).
+_ACES_M1 = np.array(
+    [
+        [0.59719, 0.35458, 0.04823],
+        [0.07600, 0.90834, 0.01566],
+        [0.02840, 0.13383, 0.83777],
+    ]
+)
+_ACES_M2 = np.array(
+    [
+        [1.60475, -0.53108, -0.07367],
+        [-0.10208, 1.10813, -0.00605],
+        [-0.00327, -0.07276, 1.07602],
+    ]
+)
+
+
+def aces_tonemap(color: ArrayLike, exposure: float = DEFAULT_EXPOSURE) -> np.ndarray:
+    """ocean.frag's ``aces_tonemap(color * exposure)``: linear light to the
+    display colour (gamma 1/2.2) that the sky and terrain write.
+
+    :param color: linear (r, g, b)
+    :param exposure: pre-tonemap exposure
+    :return: display (r, g, b) in [0, 1]
+    """
+    v = _ACES_M1 @ (np.asarray(color, dtype=np.float64) * exposure)
+    a = v * (v + 0.0245786) - 0.000090537
+    b = v * (0.983729 * v + 0.4329510) + 0.238081
+    return np.clip(_ACES_M2 @ (a / b), 0.0, 1.0) ** (1.0 / 2.2)
 
 
 def compute_wave_dirs(wind_dir: LVecBase2f, wind_strength: float) -> PTA_LVecBase2f:
@@ -339,6 +373,7 @@ class Ocean:
         self.game = game
         self.id = uuid.uuid4()
         self.base_node = self.game.root_node.attachNewNode("ocean")
+        self._exposure = DEFAULT_EXPOSURE
 
         # ── Reflection buffer ─────────────────────────────────────────────────
         settings = getattr(self.game.app, "graphics_settings", None)
@@ -401,7 +436,7 @@ class Ocean:
         self.ocean_node.setShaderInput("uFmDepth", float(fm_depth))
         self.ocean_node.setShaderInput("uDebugMode", 0)
         self.ocean_node.setShaderInput("uWaveOff", 0)
-        self.ocean_node.setShaderInput("uExposure", 0.9)
+        self.ocean_node.setShaderInput("uExposure", self._exposure)
         self.ocean_node.setShaderInput("uWaveFadeNear", float(wave_fade_near))
         self.ocean_node.setShaderInput("uWaveFadeFar", float(wave_fade_far))
         self.ocean_node.setShaderInput("uWaveFadeK2", float(wave_fade_k2))
@@ -484,17 +519,15 @@ class Ocean:
     def set_light(self, light: ArrayLike) -> None:
         """How lit the water is, relative to the daylight its colour was
         chosen in: (r, g, b) multiplying the water's own scattered colour
-        (``iWaterLight``) and the reflection's clear colour (1 = as tuned;
-        0 = night). The sky's reflection darkens by itself.
+        (``iWaterLight``) and the colour the reflection is cleared to (seen
+        where it renders nothing; 1 = as tuned, 0 = night). The sky's
+        reflection darkens by itself.
 
         :param light: linear (r, g, b) factors
         """
         light = LVecBase3f(*light)
         self.ocean_node.setShaderInput("iWaterLight", light)
-        c = self._water_color
-        self.refl_buffer.setClearColor(
-            LVecBase4f(c[0] * light[0], c[1] * light[1], c[2] * light[2], 1)
-        )
+        self.refl_buffer.setClearColor(self._clear_color(self._water_color, light))
 
     def set_wave_iterations(self, iterations: int) -> None:
         """Adjust wave-detail quality at runtime (e.g. from a settings menu).
@@ -549,7 +582,7 @@ class Ocean:
         # Clear the reflection buffer to the water colour, so wherever the
         # reflection camera renders nothing (no skybox/geometry) the reflection
         # blends into the water.
-        self.refl_buffer.setClearColor(LVecBase4f(*water_color, 1))
+        self.refl_buffer.setClearColor(self._clear_color(water_color))
 
         self.refl_cam_node = Camera("refl_cam")
         # Use a wider lens than the main camera (REFLECTION_FOV_SCALE times its
@@ -594,6 +627,20 @@ class Ocean:
             buf_h / compute_next_power_of_2(buf_h),
         )
         return refl_tex, uv_scale
+
+    def _clear_color(
+        self, water_color: ArrayLike, light: ArrayLike = (1.0, 1.0, 1.0)
+    ) -> LVecBase4f:
+        """The reflection buffer's clear colour: the lit water colour as the
+        display colour the shader decodes the reflection from (like the sky
+        and terrain drawn into it, it is tonemapped).
+
+        :param water_color: linear (r, g, b)
+        :param light: linear (r, g, b) factors (:meth:`set_light`)
+        :return: display RGBA
+        """
+        lit = np.asarray(water_color, dtype=np.float64) * np.asarray(light)
+        return LVecBase4f(*aces_tonemap(lit, self._exposure), 1.0)
 
     def mirror_camera(self) -> None:
         """Mirror the reflection camera across the water plane (Z = 0)."""

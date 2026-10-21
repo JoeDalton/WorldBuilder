@@ -40,8 +40,9 @@ deck, 2.7 km up), sunset (600 m up, looking west at the sun 3 degrees up),
 moonrise (the moon over the northern horizon, from the start area),
 moon_orbit (3 moon radii up, looking down), moon_ground (2 km over the
 moon's sand), night_orbit (1.5 radii up, looking down at the terminator: the
-sun 60 degrees below the nadir's horizon). Every other pose has the sun at
-azimuth 210, elevation 35, as seen there.
+sun 60 degrees below the nadir's horizon), night_sea (3 m over the sea, the
+sun 8 degrees down: the sky's reflection must be as dark as the sky). Every
+other pose has the sun at azimuth 210, elevation 35, as seen there.
 """
 
 from __future__ import annotations
@@ -69,7 +70,11 @@ from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 
 CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
 #: Sun (azimuth, elevation) per pose, as seen there; default (210, 35).
-SUNS = {"sunset": (270.0, 3.0), "night_orbit": (90.0, -60.0)}
+SUNS = {
+    "sunset": (270.0, 3.0),
+    "night_orbit": (90.0, -60.0),
+    "night_sea": (90.0, -8.0),
+}
 
 
 def _poses(demo: TerrainDemo) -> dict:
@@ -114,6 +119,8 @@ def _poses(demo: TerrainDemo) -> dict:
         poses["moon_ground"] = (lat + 1.0, lon, 2000.0, 0.0, -15.0, 0, 1)
     # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
+    # At sea level by night: the sky's reflection must be as dark as the sky.
+    poses["night_sea"] = (-6.272, -52.0456, 3.0, -115.0, 2.0, 0, 0)
     return poses
 
 

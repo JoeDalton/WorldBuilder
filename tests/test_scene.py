@@ -21,6 +21,7 @@ from world_builder.depth import (
     NEAR_CAMERA_MASK,
     SplitDepthCameras,
 )
+from world_builder.ocean import aces_tonemap
 from world_builder.sky import Sky
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PRESETS
@@ -198,10 +199,11 @@ def test_ocean_light_and_settings(ocean):
     made.set_light((0.5, 0.25, 0.0))
     light = _input(made.ocean_node, "iWaterLight")
     np.testing.assert_allclose(tuple(light)[:3], (0.5, 0.25, 0.0))
+    # The shader decodes the reflection as display colours, so where it
+    # renders nothing it must find the lit water's colour tonemapped.
     clear = made.refl_buffer.get_clear_color()
-    np.testing.assert_allclose(
-        tuple(clear)[:3], np.multiply(tuple(made._water_color), (0.5, 0.25, 0.0))
-    )
+    lit = np.multiply(tuple(made._water_color), (0.5, 0.25, 0.0))
+    np.testing.assert_allclose(tuple(clear)[:3], aces_tonemap(lit), atol=1e-6)
     made.set_atmosphere_frame(made.base_node.get_mat(), (0.0, 0.0, 1.0))
     made.set_wave_iterations(12)
     made.set_wave_iterations(10**6)  # clamped to the shader's maximum

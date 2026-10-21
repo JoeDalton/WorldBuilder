@@ -204,6 +204,29 @@ vec3 aces_tonemap(vec3 color) {
     return pow(clamp(m2 * (a / b), 0.0, 1.0), vec3(1.0 / 2.2));
 }
 
+// Exact inverse of aces_tonemap (before its exposure): display colour back to
+// the linear light it came from. The matrices are m1 and m2 inverted; the
+// rational fit w = a(v) / b(v) is solved per channel as a quadratic in v. A
+// display of 1 decodes to ~25, so the clamped highlights stay bright.
+vec3 aces_inverse(vec3 display) {
+    mat3 m1i = mat3(
+         1.764741, -0.147028, -0.036337,
+        -0.675778,  1.160252, -0.162436,
+        -0.088963, -0.013224,  1.198773
+    );
+    mat3 m2i = mat3(
+        0.643038, 0.059269, 0.005962,
+        0.311187, 0.931436, 0.063929,
+        0.045775, 0.009295, 0.930118
+    );
+    vec3 w = min(m2i * pow(clamp(display, 0.0, 1.0), vec3(2.2)), vec3(1.0));
+    vec3 qa = 1.0 - 0.983729 * w;
+    vec3 qb = 0.0245786 - 0.4329510 * w;
+    vec3 qc = -(0.000090537 + 0.238081 * w);
+    vec3 v = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa);
+    return max(m1i * v, vec3(0.0));
+}
+
 // ---------------------------------------------------------------------------
 void main() {
     float dist = length(vWorldPos - iCameraPos);
@@ -288,7 +311,13 @@ void main() {
     // Clamp to the rendered region [0, uReflUVScale] — beyond it is the
     // texture's power-of-two padding (clear colour), so the ripple must never
     // push the sample out there or it picks up bright/garbage edge texels.
-    vec3 reflected = texture(iReflectionTex, clamp(perturbedUV, vec2(0.0), uReflUVScale)).rgb;
+    vec3 reflSample = texture(iReflectionTex, clamp(perturbedUV, vec2(0.0), uReflUVScale)).rgb;
+    // The reflection holds DISPLAY colours: the sky and terrain tonemap
+    // themselves, with this same exposure. Decode them to linear light before
+    // the fresnel blend and the tonemap below, or that tonemap applies twice
+    // and lifts the dark (a night sky's reflection came out twice as bright as
+    // the sky). A full mirror then shows exactly the sky's own colour.
+    vec3 reflected = aces_inverse(reflSample) / uExposure;
     vec3 scattered = iWaterColor * iWaterLight * (1.0 - fresnel);
 
     vec3 C = fresnel * reflected + scattered;
@@ -305,9 +334,9 @@ void main() {
     } else if (uDebugMode == 5) { // reflUV clamp indicator (red = clamped)
         vec2 cl = clamp(perturbedUV, vec2(0.0), uReflUVScale);
         bool clamped = (cl != perturbedUV);
-        fragColor = vec4(clamped ? 1.0 : 0.0, reflected.g, 0.0, 1.0); return;
-    } else if (uDebugMode == 6) { // raw reflected colour (pre fresnel/tonemap)
-        fragColor = vec4(reflected, 1.0); return;
+        fragColor = vec4(clamped ? 1.0 : 0.0, reflSample.g, 0.0, 1.0); return;
+    } else if (uDebugMode == 6) { // raw reflection sample (display colour)
+        fragColor = vec4(reflSample, 1.0); return;
     } else if (uDebugMode == 7) { // pre-tonemap C*2 > 1 saturation (red=clipped chan)
         vec3 lin = C * 2.0;
         fragColor = vec4(step(1.0, lin.r), step(1.0, lin.g), step(1.0, lin.b), 1.0); return;
