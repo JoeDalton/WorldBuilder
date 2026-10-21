@@ -13,7 +13,8 @@ import pytest
 from panda3d.core import GeomVertexReader
 
 from world_builder import PLANET_RADIUS_M
-from world_builder.ocean import border_coords, make_swell_grid_mesh
+from world_builder.ocean import aces_tonemap, border_coords, make_swell_grid_mesh
+from world_builder.ocean.ocean import DEFAULT_EXPOSURE
 
 CURVATURE = 1.0 / (2.0 * PLANET_RADIUS_M)
 
@@ -174,3 +175,58 @@ def test_exact_sphere_droop_lies_on_the_sphere():
         make_swell_grid_mesh(4000.0, 8, 150e3, curvature=1.0 / (2.0 * radius))
     )
     assert np.max(parabolic[:, 2] - v[:, 2]) > 50.0
+
+
+# ── Reflection decoding ─────────────────────────────────────────────────────────
+
+# ocean.frag's aces_inverse, row-major (its GLSL literals are column-major).
+_M1_INV = np.array(
+    [
+        [1.764741, -0.675778, -0.088963],
+        [-0.147028, 1.160252, -0.013224],
+        [-0.036337, -0.162436, 1.198773],
+    ]
+)
+_M2_INV = np.array(
+    [
+        [0.643038, 0.311187, 0.045775],
+        [0.059269, 0.931436, 0.009295],
+        [0.005962, 0.063929, 0.930118],
+    ]
+)
+
+
+def _aces_inverse(display):
+    """A port of ocean.frag's aces_inverse: display colour to linear light."""
+    w = np.minimum(_M2_INV @ np.clip(display, 0.0, 1.0) ** 2.2, 1.0)
+    qa = 1.0 - 0.983729 * w
+    qb = 0.0245786 - 0.4329510 * w
+    qc = -(0.000090537 + 0.238081 * w)
+    v = (-qb + np.sqrt(np.maximum(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa)
+    return np.maximum(_M1_INV @ v, 0.0)
+
+
+@pytest.mark.parametrize("level", [0.01, 0.05, 0.13, 0.3, 0.6, 0.9])
+@pytest.mark.parametrize("tint", [(1.0, 1.0, 1.0), (0.6, 0.7, 1.0), (1.0, 0.5, 0.3)])
+def test_reflection_decode_round_trips_the_display_colour(level, tint):
+    """The reflection holds display colours (the sky tonemaps itself). Decoding
+    one and tonemapping it again must give it back, or a full mirror shows a
+    different sky: the night sky's reflection was twice as bright as the sky
+    when the sample was tonemapped twice. (A tinted colour at full display is
+    clipped, so not invertible; white at 1 is, below.)"""
+    display = level * np.array(tint)
+    linear = _aces_inverse(display) / DEFAULT_EXPOSURE
+    np.testing.assert_allclose(aces_tonemap(linear), display, atol=2e-3)
+
+
+def test_reflection_decode_keeps_white_highlights_bright():
+    """Full white decodes to a finite, bright radiance that maps back to it."""
+    linear = _aces_inverse(np.ones(3)) / DEFAULT_EXPOSURE
+    assert np.all(np.isfinite(linear)) and np.all(linear > 10.0)
+    np.testing.assert_allclose(aces_tonemap(linear), 1.0, atol=2e-3)
+
+
+def test_double_tonemap_would_brighten_a_night_sky():
+    """The bug the decode fixes: tonemapping the display colour again."""
+    night = np.full(3, 0.13)
+    assert aces_tonemap(night)[0] > 1.8 * night[0]

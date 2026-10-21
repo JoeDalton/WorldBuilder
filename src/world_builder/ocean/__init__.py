@@ -11,6 +11,7 @@ with the geometric swell: ``OCEAN_SWELL_ARTIFACT_REPORT.md``.
 
 from world_builder.ocean.ocean import (
     Ocean,
+    aces_tonemap,
     border_coords,
     compute_wave_dirs,
     make_plane_mesh,
@@ -19,6 +20,7 @@ from world_builder.ocean.ocean import (
 
 __all__ = [
     "Ocean",
+    "aces_tonemap",
     "border_coords",
     "compute_wave_dirs",
     "make_plane_mesh",
