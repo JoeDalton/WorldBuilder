@@ -47,7 +47,7 @@ The radius is the one knob (`PlanetSpec.radius`, `planet.radius` in a level,
 - **The finest tile** is `QUADS` (64) quads of that spacing: 1.8 m spacing and
   115 m tiles at 600 km. The knob is `cubesphere.TARGET_SPACING` (2 m; the grid
   rounds to the nearest power of two). At runtime, `TerrainSettings.min_level`
-  (`Terrain(settings=)`, `set_settings`, or `set_min_level`; P in the demo)
+  (`Terrain(settings=)`, `set_settings`; MID drops one level, LOW three)
   stops refining at a coarser level, and collision follows. That and the
   terrain's other cost knobs (LOD distance, texture distance and filtering,
   caches, upload budget) are listed in [Quality settings](quality.md).
@@ -251,8 +251,8 @@ planet's surface by day the moon is a pale disc in a blue sky (see
   shaded as water, tinted by depth, with the sky light reflected at grazing
   angles.
 - **The swell ocean reflects the terrain.** The ocean's reflection camera
-  draws the scene a second time; `Terrain.set_reflected(False)` (**M** in the
-  demo) hides the terrain from it by `REFLECTION_CAMERA_BITS`. Its clip
+  draws the scene a second time; `TerrainSettings.reflected` off (LOW's)
+  hides the terrain from it by `depth.REFLECTION_CAMERA_MASK`. Its clip
   plane at the water is applied by the terrain's vertex shader
   (`gl_ClipDistance`), since a custom shader does not get it for free.
 - **Sky, haze and the limb** come from the planet's atmosphere (single

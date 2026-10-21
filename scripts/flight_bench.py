@@ -7,21 +7,22 @@ reporting frame times and where the main thread spends them::
 
     python scripts/flight_bench.py [--flight low cruise descent] [--seconds S]
         [--profile] [--size "1600 900"] [--workers N] [--offscreen]
-        [--quality high|ultra|low|mid] [--cloud-quality high|mid|low|ultra|off]
+        [--quality low|mid|high|ultra] [--<part>-quality LEVEL] [--no-clouds]
         [--cloud-debug BITS]
-        [--ocean-quality high|mid|low|ultra]
 
     --flight         the flights to run, in order (default: all three)
     --seconds        each flight's length, at most (default 15)
     --profile        cProfile the main thread; prints the top 28 by
                      cumulative time
     --size           window or buffer size (default "1600 900")
-    --workers        generation processes (default: physical cores - 1)
+    --workers        generation processes (the terrain's setting; default:
+                     physical cores - 1)
     --offscreen      render to an offscreen buffer: no display refresh cap
                      or throttling
-    --quality        the whole world's preset (WorldSettings), default high
-    --cloud-quality  the clouds' preset, over --quality (default: --quality)
-    --ocean-quality  the ocean's preset, over --quality (default: --quality)
+    --quality        every part's preset (WorldSettings), default high
+    --<part>-quality one part's preset over it: terrain, atmosphere, sky,
+                     clouds, ocean
+    --no-clouds      no clouds at all
     --cloud-debug    SphericalClouds.set_debug bits (default 0)
 
 Flights (boosted, along the coast of the demo level from its reference
@@ -52,11 +53,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import (  # noqa: E402
-    CLOUD_QUALITIES,
-    OCEAN_QUALITIES,
-    QUALITIES,
     TerrainDemo,
+    add_world_arguments,
     describe_window,
+    settings_from_args,
     window_config,
 )
 
@@ -186,37 +186,27 @@ def main() -> None:
     )
     parser.add_argument("--size", default="1600 900", help='"width height"')
     parser.add_argument(
-        "--workers", type=int, default=None, help="generation processes"
-    )
-    parser.add_argument(
         "--offscreen",
         action="store_true",
         help="render to an offscreen buffer: no display refresh cap or throttling",
     )
-    parser.add_argument("--quality", default="high", choices=QUALITIES)
-    parser.add_argument("--cloud-quality", default=None, choices=CLOUD_QUALITIES)
-    parser.add_argument("--ocean-quality", default=None, choices=OCEAN_QUALITIES)
+    add_world_arguments(parser)
     parser.add_argument(
         "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"
     )
     args = parser.parse_args()
     window_config("Flight benchmark", args.size, args.offscreen, vsync=False)
+    settings = settings_from_args(args)
     demo = TerrainDemo(
         str(DEMO_LEVEL),
         "process",
         None,
-        workers=args.workers,
-        cloud_quality=args.cloud_quality,
-        ocean_quality=args.ocean_quality,
-        quality=args.quality,
+        settings=settings,
+        clouds=not args.no_clouds,
         cloud_debug=args.cloud_debug,
     )
     demo.setFrameRateMeter(False)
-    print(
-        describe_window(demo),
-        f"quality {args.quality}, clouds {args.cloud_quality or args.quality}, "
-        f"ocean {args.ocean_quality or args.quality}",
-    )
+    print(describe_window(demo), f"settings {settings.to_dict()}")
     try:
         for flight in args.flight:
             run(demo, flight, args.seconds, args.profile)

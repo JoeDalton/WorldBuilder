@@ -1,21 +1,24 @@
 """
 Every quality vs performance knob of a world, in one object a game's
-settings menu can show and save (:mod:`world_builder.quality`).
+settings menu can show and save (:mod:`world_builder.quality`), without the
+game naming any knob or WorldBuilder class.
 
 Usage::
 
     from world_builder.settings import WorldSettings
 
-    settings = WorldSettings.from_dict(config.get("graphics", {}))  # lenient
-    terrain = Terrain(render, spec, settings=settings.terrain)
-    atmospheres = Atmospheres(settings=settings.atmosphere)
+    settings = WorldSettings.from_dict(config.get("world"))  # lenient
+    # Build each object with its section, found by its type:
+    terrain = Terrain(render, spec, settings=settings.settings_for(Terrain))
     ...
-    # A menu: one row per knob, grouped by section.
-    for section, name, knob, value in settings.knobs():
-        ...  # knob.label, knob.range / knob.choices, knob.unit, knob.apply
-    settings = settings.with_value("terrain", "detail_far", 2500.0)
-    terrain.set_settings(settings.terrain)  # and so on per object
-    config["graphics"] = settings.to_dict()  # {"preset": ..., "overrides": ...}
+    # A menu, from plain data: the levels, then each section's knobs.
+    schema = WorldSettings.schema()
+    for section in schema["sections"]:
+        for knob in section["knobs"]:
+            ...  # knob["label"], ["kind"], ["range"] / ["choices"], ["apply"]
+    settings = settings.with_value(section["id"], knob["id"], value)
+    settings.apply(terrain, atmospheres, sky, clouds, ocean)  # each its own
+    config["world"] = settings.to_dict()  # {"version", "preset", "overrides"}
 
 A preset (:meth:`WorldSettings.preset`) sets every section to the same
 level; changing one knob afterwards makes it "custom" (:meth:`is_custom`),
@@ -38,6 +41,11 @@ from world_builder.sky.sky import SkySettings
 from world_builder.terrain.terrain import TerrainSettings
 
 LOGGER = logging.getLogger(__name__)
+
+#: The saved format's version (:meth:`WorldSettings.to_dict`). Data without
+#: one, or from an older version, is read the same: knob ids only change
+#: through ``QualitySettings.RENAMED``.
+FORMAT_VERSION = 1
 
 #: The sections, in menu order: name -> settings class.
 SECTIONS: dict[str, type[QualitySettings]] = {
@@ -73,6 +81,48 @@ class WorldSettings:
             **{name: kind.preset(level) for name, kind in SECTIONS.items()},
         )
 
+    @staticmethod
+    def schema() -> dict[str, Any]:
+        """The whole world's knobs as plain data (JSON-ready), for a game to
+        build its menu from without naming any.
+
+        :returns: ``version``; ``levels`` ([{``id``, ``label``}], cheapest
+            first); ``sections`` ([{``id``, ``label``, ``knobs``}], each knob
+            as :meth:`quality.QualitySettings.schema` describes it)
+        """
+        return {
+            "version": FORMAT_VERSION,
+            "levels": [{"id": lv.value, "label": lv.label} for lv in QualityLevel],
+            "sections": [
+                {"id": name, "label": kind.LABEL, "knobs": kind.schema()}
+                for name, kind in SECTIONS.items()
+            ],
+        }
+
+    def settings_for(self, target: Any) -> QualitySettings:
+        """The section a WorldBuilder object (or class) takes, found by its
+        ``SETTINGS_TYPE``: to build it with (``settings=``).
+
+        :raises TypeError: for an object that takes no world settings
+        """
+        kind = getattr(target, "SETTINGS_TYPE", None)
+        for name, section in SECTIONS.items():
+            if kind is section:
+                return getattr(self, name)
+        raise TypeError(f"{target!r} takes no world settings")
+
+    def apply(self, *objects: Any) -> None:
+        """Give each object its section (``set_settings``), whatever its
+        type: a game hands over the WorldBuilder objects it made, and need
+        not know which section each takes. A section that did not change
+        costs nothing.
+
+        :raises TypeError: for an object that takes no world settings
+        """
+        for target in objects:
+            settings = self.settings_for(target)  # first: it names the error
+            target.set_settings(settings)
+
     def is_custom(self) -> bool:
         """:returns: whether a knob differs from :attr:`level`'s preset"""
         return self != WorldSettings.preset(self.level)
@@ -95,6 +145,18 @@ class WorldSettings:
         changed = type(current).from_overrides(current, {name: value}, section)
         return dataclasses.replace(self, **{section: changed})
 
+    def section_level(self, section: str) -> QualityLevel | None:
+        """:returns: the preset one section is; None = custom"""
+        settings = getattr(self, section)
+        return type(settings).level_of(settings)
+
+    def with_section_level(
+        self, section: str, level: QualityLevel | str
+    ) -> WorldSettings:
+        """:returns: these settings with one section at a preset (a menu's
+        per-part preset selector)"""
+        return dataclasses.replace(self, **{section: SECTIONS[section].preset(level)})
+
     def with_level(self, level: QualityLevel | str) -> WorldSettings:
         """:returns: the preset *level* (a menu's preset selector)"""
         return WorldSettings.preset(level)
@@ -108,7 +170,11 @@ class WorldSettings:
             changed = getattr(self, section).overrides(getattr(base, section))
             if changed:
                 overrides[section] = changed
-        return {"preset": self.level.value, "overrides": overrides}
+        return {
+            "version": FORMAT_VERSION,
+            "preset": self.level.value,
+            "overrides": overrides,
+        }
 
     @classmethod
     def from_dict(cls, data: Any) -> WorldSettings:
@@ -117,7 +183,8 @@ class WorldSettings:
         preset's, an out-of-range one is clamped (each with a warning;
         never an exception).
 
-        :param data: {"preset": name, "overrides": {section: {knob: value}}}
+        :param data: {"version": n, "preset": name, "overrides": {section:
+            {knob: value}}} (as :meth:`to_dict` writes it)
         """
         if data is None:
             return cls.preset(QualityLevel.HIGH)

@@ -15,11 +15,10 @@ Usage:
 ``game.method_lists``, so no manual per-frame call is needed.
 
 It reads from ``game``: ``root_node``, ``method_lists``, ``game_time``
-(``get_current_time()``) and ``app`` (the ShowBase: ``camera``, ``camLens``,
-``win``, ``graphicsEngine``). Two settings are read when the app has them,
-with defaults otherwise: ``app.graphics_settings.config["render"]
-["reflection_scale"]`` (unless ``settings`` or the ``reflection_scale``
-argument is given) and ``app.graphics_manager.get_render_size()``.
+(``get_current_time()``) and ``app`` (the ShowBase: ``camera``, ``cam``,
+``camLens``, ``win``, ``graphicsEngine``). The 3D render's size is the main
+camera's display region's (``app.cam``), so a game rendering the scene at
+a lower resolution than its window sizes the reflection off that.
 
 What it costs is :class:`OceanSettings` (``settings=``, :meth:`Ocean.set_settings`),
 with LOW / MID / HIGH / ULTRA presets (:mod:`world_builder.quality`).
@@ -37,7 +36,7 @@ from __future__ import annotations
 
 import math
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -74,10 +73,6 @@ from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 from world_builder.utils import compute_next_power_of_2
 
 _SHADERS = Path(__file__).parent / "shaders"
-#: Reflection resolution, as a fraction of the render size: the HIGH
-#: ``OceanSettings.reflection_scale``.
-DEFAULT_REFLECTION_SCALE = 0.5
-
 # The surface must reach past the horizon from the highest eye, so its own bulge
 # hides its edge: sqrt(2*R*altitude) is ~505 km at 20 km, plus a margin.
 _MAX_EYE_ALTITUDE_M = 20000.0
@@ -86,9 +81,6 @@ _HORIZON_MARGIN = 1.1
 # The reflection camera's mask (world_builder.depth.REFLECTION_CAMERA_MASK,
 # imported above): hide a node from the reflection with
 # node.hide(REFLECTION_CAMERA_MASK).
-#: The reflection's field of view, relative to the main camera's: the HIGH
-#: ``OceanSettings.reflection_fov_scale``.
-REFLECTION_FOV_SCALE = 1.4
 
 # Max wave iterations the shader's iWaveDirs[] array can hold (must match the
 # MAX_WAVE_ITER #define in ocean.frag).
@@ -139,7 +131,7 @@ class OceanSettings(QualitySettings):
         first (at most 3; only baked once :meth:`Ocean.set_seabed` is given
         a sampler): fewer or coarser bake faster and sample the same
     :ivar depth_colour: tint the water over shallow seabed
-    :ivar foam: shoreline foam (:meth:`Ocean.set_foam` turns it alone)
+    :ivar foam: shoreline foam
     :ivar foam_noise: break the foam up with noise; off, plain lines
     :ivar swell_by_depth: the swell dies out over the shallows
     :ivar reflection_scale: the reflection's resolution, as a fraction of
@@ -202,7 +194,7 @@ class OceanSettings(QualitySettings):
         True, "Swell calms in shallows", help="The swell dies out near the shore."
     )
     reflection_scale: float = knob(
-        DEFAULT_REFLECTION_SCALE,
+        0.5,
         "Reflection quality",
         REBUILD,
         unit="x",
@@ -210,7 +202,7 @@ class OceanSettings(QualitySettings):
         help="The sea reflection's resolution, as a fraction of the view's.",
     )
     reflection_fov_scale: float = knob(
-        REFLECTION_FOV_SCALE,
+        1.4,
         "Reflection margin",
         unit="x",
         range=(1.0, 2.0),
@@ -228,6 +220,7 @@ class OceanSettings(QualitySettings):
         help="The geometric swell's mesh, quads per side.",
     )
 
+    LABEL: ClassVar = "Ocean"
     PRESETS: ClassVar = {
         QualityLevel.LOW: {
             "wave_iterations": 16,
@@ -535,6 +528,9 @@ class Ocean:
     :ivar refl_cam: the mirrored reflection camera's NodePath
     """
 
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = OceanSettings
+
     def __init__(
         self,
         game: Any,
@@ -543,9 +539,7 @@ class Ocean:
         wind_dir: LVecBase2f = LVecBase2f(1.0, 0.0),
         wind_strength: float = 0.5,
         settings: OceanSettings | None = None,
-        wave_iterations: int | None = None,
         geometric_swell: bool = False,
-        swell_grid_subdivs: int | None = None,
         swell_grid_half: float = 4000.0,
         swell_amplitude: float = 20.0,
         swell_scale: float = 0.004,
@@ -564,7 +558,6 @@ class Ocean:
         swell_deep: float = 60.0,
         planet_radius: float = PLANET_RADIUS_M,
         exact_sphere: bool = False,
-        reflection_scale: float | None = None,
         vert_shader: Path = _SHADERS / "ocean.vert",
         frag_shader: Path = _SHADERS / "ocean.frag",
     ) -> None:
@@ -577,15 +570,11 @@ class Ocean:
         :param wind_dir: Wind direction in the XY plane (normalised).
         :param wind_strength: How strongly the waves align to the wind; 0 =
             random, 1 = fully aligned.
-        :param settings: what the ocean costs (:class:`OceanSettings`;
-            :meth:`set_settings` changes it); None = the HIGH preset, with the
-            game's ``graphics_settings.config["render"]["reflection_scale"]``
-            when it has one
-        :param wave_iterations: overrides ``settings.wave_iterations``.
+        :param settings: what the ocean costs (:class:`OceanSettings`,
+            including the reflection's resolution and the swell mesh's
+            tessellation; :meth:`set_settings` changes it); None = HIGH
         :param geometric_swell: Prototype mode that geometrically displaces the
             surface by the swell rather than only shading it.
-        :param swell_grid_subdivs: Tessellation of the dense centre grid used by
-            the geometric-swell mode.
         :param swell_grid_half: Half-size of the dense grid, in world units.
         :param swell_amplitude: Vertical swell displacement in deep water, in
             world units (it dies out over the shallows: swell_shallow,
@@ -620,8 +609,6 @@ class Ocean:
         :param exact_sphere: Curve the geometric-swell surface on the exact
             sphere rather than the d^2 / 2R paraboloid (see
             :func:`make_swell_grid_mesh`): for real spherical terrain.
-        :param reflection_scale: overrides ``settings.reflection_scale``: the
-            reflection's resolution as a fraction of the view's
         :param vert_shader: Path to ocean.vert.
         :param frag_shader: Path to ocean.frag.
         """
@@ -630,22 +617,7 @@ class Ocean:
         self.base_node = self.game.root_node.attachNewNode("ocean")
         self._exposure = DEFAULT_EXPOSURE
 
-        # ── Settings ──────────────────────────────────────────────────────────
-        if settings is None:
-            settings = OceanSettings()
-            graphics = getattr(
-                getattr(self.game.app, "graphics_settings", None), "config", None
-            )
-            configured = ((graphics or {}).get("render") or {}).get("reflection_scale")
-            if configured is not None:
-                settings = settings.with_value("reflection_scale", configured)
-        for name, value in (
-            ("reflection_scale", reflection_scale),
-            ("wave_iterations", wave_iterations),
-            ("swell_grid_subdivs", swell_grid_subdivs),
-        ):
-            if value is not None:
-                settings = settings.with_value(name, value)
+        settings = settings or OceanSettings()
         self._settings = settings
 
         # ── Reflection buffer ─────────────────────────────────────────────────
@@ -910,10 +882,6 @@ class Ocean:
         self.swell_amplitude = float(amplitude)
         self.ocean_node.setShaderInput("uSwellAmplitude", self.swell_amplitude)
 
-    def set_foam(self, enabled: bool) -> None:
-        """Shoreline foam on or off (the settings' ``foam``, alone)."""
-        self.set_settings(replace(self._settings, foam=bool(enabled)))
-
     def set_debug_mode(self, mode: int) -> None:
         """Debug view (``uDebugMode`` in ocean.frag): 0 shaded, 1 normal,
         2 reflection UV, 3 fresnel, 4 world grid, 5 reflection UV clamp,
@@ -922,18 +890,6 @@ class Ocean:
         evaluated (the cost), 12 depth (black at the waterline, white at
         50 m; red on land, blue beyond the seabed's cascades)."""
         self.ocean_node.setShaderInput("uDebugMode", int(mode))
-
-    def set_wave_iterations(self, iterations: int) -> None:
-        """Adjust wave-detail quality at runtime (e.g. from a settings menu).
-
-        Higher = sharper waves up close but more expensive per pixel; lower =
-        smoother and cheaper. Far and grazing water evaluates fewer anyway,
-        as its waves go sub-pixel.
-
-        :param iterations: Wave-detail iteration count, clamped to the shader's
-            maximum.
-        """
-        self.set_settings(self._settings.with_value("wave_iterations", iterations))
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -1048,12 +1004,16 @@ class Ocean:
         return make_plane_mesh(args["outer_half"] * 2.0)
 
     def _render_size(self) -> tuple[int, int]:
-        """:returns: the 3D render's size in pixels (a downscale of the window
-        when the app's render scale is active)"""
-        manager = getattr(self.game.app, "graphics_manager", None)
-        if manager is not None:
-            return manager.get_render_size()
-        return self.game.app.win.get_x_size(), self.game.app.win.get_y_size()
+        """:returns: the 3D render's size in pixels: the main camera's display
+        region's (a buffer smaller than the window when the game renders the
+        scene at a lower resolution), else the window's"""
+        app = self.game.app
+        camera = getattr(app, "cam", None)
+        if camera is not None and camera.node().get_num_display_regions():
+            region = camera.node().get_display_region(0)
+            if region.get_pixel_width() > 0:
+                return region.get_pixel_width(), region.get_pixel_height()
+        return app.win.get_x_size(), app.win.get_y_size()
 
     def _pixel_angle(self, fov_y: float) -> float:
         """:returns: a pixel's angle at the screen's centre, radians (the

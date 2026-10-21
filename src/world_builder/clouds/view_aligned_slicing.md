@@ -47,7 +47,7 @@ Frame time with the deck minus frame time with it hidden:
 
 ### Cost vs billboard count, at fixed 1280×720
 
-From the quality ladder (`CloudQuality`):
+From the quality presets (`CloudSettings.preset`):
 
 | level | billboards | ms/frame |
 |---|---|---|

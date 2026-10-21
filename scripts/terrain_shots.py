@@ -9,9 +9,8 @@ times a few frames, then saves a screenshot::
     python scripts/terrain_shots.py [--out DIR] [--level FILE]
         [--radius METRES] [--pose NAME ...] [--timeout SECONDS]
         [--size "1600 900"] [--offscreen]
-        [--quality high|ultra|low|mid] [--cloud-quality high|mid|low|ultra|off]
-        [--cloud-debug BITS] [--frames N]
-        [--ocean-quality high|mid|low|ultra] [--ocean-debug MODE]
+        [--quality low|mid|high|ultra] [--<part>-quality LEVEL] [--no-clouds]
+        [--workers N] [--cloud-debug BITS] [--frames N] [--ocean-debug MODE]
 
     --out            where the PNGs go (default ./terrain_shots)
     --level          the planet's level file (default: the demo level)
@@ -20,13 +19,15 @@ times a few frames, then saves a screenshot::
     --timeout        seconds to wait for a pose to settle (default 90)
     --size           window or buffer size (default "1600 900")
     --offscreen      render to an offscreen buffer, not a window
-    --quality        the whole world's preset (WorldSettings), default high
-    --cloud-quality  the clouds' preset, over --quality (default: --quality)
+    --quality        every part's preset (WorldSettings), default high
+    --<part>-quality one part's preset over it: terrain, atmosphere, sky,
+                     clouds, ocean
+    --no-clouds      no clouds at all
+    --workers        generation processes (the terrain's setting)
     --cloud-debug    SphericalClouds.set_debug bits (cloud.frag's
                      uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
                      octaves at most, 8 flat colour; default 0)
     --frames         frames timed once settled (default 60)
-    --ocean-quality  the ocean's preset, over --quality (default: --quality)
     --ocean-debug    Ocean.set_debug_mode view (ocean.frag's uDebugMode:
                      9 octaves resolved, 10 unresolved slope spread, ...;
                      default 0)
@@ -68,11 +69,10 @@ from panda3d.core import Filename
 sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import (  # noqa: E402
-    CLOUD_QUALITIES,
-    OCEAN_QUALITIES,
-    QUALITIES,
     TerrainDemo,
+    add_world_arguments,
     describe_window,
+    settings_from_args,
     window_config,
 )
 
@@ -210,37 +210,31 @@ def main() -> None:
     parser.add_argument(
         "--offscreen", action="store_true", help="an offscreen buffer, no window"
     )
-    parser.add_argument("--quality", default="high", choices=QUALITIES)
-    parser.add_argument("--cloud-quality", default=None, choices=CLOUD_QUALITIES)
+    add_world_arguments(parser)
     parser.add_argument(
         "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"
     )
     parser.add_argument(
         "--frames", type=int, default=60, help="frames timed once settled"
     )
-    parser.add_argument("--ocean-quality", default=None, choices=OCEAN_QUALITIES)
     parser.add_argument(
         "--ocean-debug", type=int, default=0, help="Ocean.set_debug_mode view"
     )
     args = parser.parse_args()
     window_config("Terrain shots", args.size, args.offscreen, vsync=False)
     args.out.mkdir(parents=True, exist_ok=True)
+    settings = settings_from_args(args)
     demo = TerrainDemo(
         args.level,
         "process",
         args.radius,
-        cloud_quality=args.cloud_quality,
+        settings=settings,
+        clouds=not args.no_clouds,
         cloud_debug=args.cloud_debug,
-        ocean_quality=args.ocean_quality,
-        quality=args.quality,
         ocean_debug=args.ocean_debug,
     )
     demo.setFrameRateMeter(False)
-    print(
-        describe_window(demo),
-        f"quality {args.quality}, clouds {args.cloud_quality or args.quality}, "
-        f"ocean {args.ocean_quality or args.quality}",
-    )
+    print(describe_window(demo), f"settings {settings.to_dict()}")
     win = demo.win
     probe = win.make_display_region(0, 1 / win.get_x_size(), 0, 1 / win.get_y_size())
     poses = _poses(demo)

@@ -18,6 +18,14 @@ Building a settings object by hand is strict: a bad value raises.
 Reading one from data (:meth:`QualitySettings.from_overrides`, a saved
 config) is lenient: out-of-range values are clamped, bad ones keep the base
 value, unknown names are skipped, each with a warning, never an exception.
+
+A game should not name the knobs: :meth:`QualitySettings.schema` (and
+:meth:`world_builder.settings.WorldSettings.schema` for a whole world)
+describes every one as plain data — id, label, kind, range or choices,
+unit, how it applies, default and per-level values — to build a menu
+from, so knobs WorldBuilder adds later appear in it unchanged. The ids are
+what saved settings are keyed by; a renamed knob keeps reading its old id
+(:attr:`QualitySettings.RENAMED`).
 """
 
 from __future__ import annotations
@@ -48,6 +56,11 @@ class QualityLevel(Enum):
     MID = "mid"
     HIGH = "high"
     ULTRA = "ultra"
+
+    @property
+    def label(self) -> str:
+        """:returns: its name in a menu ("Low", ...)"""
+        return self.value.title()
 
     @classmethod
     def parse(cls, value: Any, default: QualityLevel | None = None) -> QualityLevel:
@@ -122,11 +135,16 @@ class QualitySettings:
     """What every settings dataclass shares (a mixin for frozen dataclasses
     whose fields are all :func:`knob` fields).
 
+    :cvar LABEL: the section's name in a menu
     :cvar PRESETS: per level, the fields that differ from the defaults (the
         HIGH values)
+    :cvar RENAMED: old field name -> new, read from saved data so a renamed
+        knob keeps its saved value
     """
 
+    LABEL: ClassVar[str] = ""
     PRESETS: ClassVar[dict[QualityLevel, dict[str, Any]]] = {}
+    RENAMED: ClassVar[dict[str, str]] = {}
 
     def __post_init__(self):
         hints = typing.get_type_hints(type(self))
@@ -152,6 +170,46 @@ class QualitySettings:
     def knobs(cls) -> list[tuple[str, Knob]]:
         """:returns: (field name, its knob), in field order: a menu's rows"""
         return [(f.name, f.metadata["knob"]) for f in dataclasses.fields(cls)]
+
+    @classmethod
+    def schema(cls) -> list[dict[str, Any]]:
+        """Every knob as plain data (JSON-ready), in field order: what a menu
+        is built from without naming any knob.
+
+        :returns: per knob: ``id``, ``label``, ``kind`` ("bool", "int",
+            "float" or "choice"), ``unit``, ``range`` ([lowest, highest] or
+            None), ``step`` (1 for whole numbers, else None), ``choices``
+            (labels, or None), ``apply`` (:data:`LIVE`, :data:`REBUILD`,
+            :data:`RESTART`), ``advanced``, ``help``, ``default`` and
+            ``presets`` (level name -> value), values as saved (choices by
+            label)
+        """
+        hints = typing.get_type_hints(cls)
+        presets = {level: cls.preset(level) for level in QualityLevel}
+        default = cls()
+        out = []
+        for name, k in cls.knobs():
+            kind = "choice" if k.choices is not None else hints[name].__name__
+            out.append(
+                {
+                    "id": name,
+                    "label": k.label,
+                    "kind": kind,
+                    "unit": k.unit,
+                    "range": list(k.range) if k.range is not None else None,
+                    "step": 1 if kind == "int" else None,
+                    "choices": list(k.choices) if k.choices is not None else None,
+                    "apply": k.apply,
+                    "advanced": k.advanced,
+                    "help": k.help,
+                    "default": _encode(k, getattr(default, name)),
+                    "presets": {
+                        level.value: _encode(k, getattr(p, name))
+                        for level, p in presets.items()
+                    },
+                }
+            )
+        return out
 
     @classmethod
     def level_of(cls: type[S], settings: S) -> QualityLevel | None:
@@ -198,6 +256,7 @@ class QualitySettings:
         knobs = dict(cls.knobs())
         values = {}
         for name, raw in data.items():
+            name = cls.RENAMED.get(name, name)
             k = knobs.get(name)
             if k is None:
                 LOGGER.warning(f"unknown setting {prefix}{name}, ignored")

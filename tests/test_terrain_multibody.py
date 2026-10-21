@@ -136,11 +136,12 @@ def test_the_moon_is_sand(moon_spec):
 
 @pytest.fixture
 def two_bodies(showbase, planet_spec, moon_spec):
-    from world_builder.terrain.terrain import Terrain
+    from world_builder.terrain.terrain import Terrain, TerrainSettings
 
     # Coarse (no level finer than 7) to keep the inline generation short.
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    planet = Terrain(showbase.render, planet_spec, executor=executor, min_level=7)
+    coarse = TerrainSettings(min_level=7)
+    planet = Terrain(showbase.render, planet_spec, executor=executor, settings=coarse)
     moon_position = np.array([3.0e6, 9.0e6, 1.0e6])
     moon = Terrain(
         showbase.render,
@@ -148,7 +149,7 @@ def two_bodies(showbase, planet_spec, moon_spec):
         executor=executor,
         position=moon_position,
         materials=planet.materials,
-        min_level=7,
+        settings=coarse,
     )
     yield planet, moon
     planet.destroy()

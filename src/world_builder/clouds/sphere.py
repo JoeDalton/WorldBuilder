@@ -14,10 +14,10 @@ same function, so the pattern seen from orbit is the one you fly into:
   rejection sampling of the density. Each shell doubles the billboards' size
   and the tiles' (``lod_shells``' trade: each shell costs half the previous)
   and crossfades with the next by distance, on optical depth. Below ULTRA the
-  far shells are cheaper per pixel: fewer octaves (:data:`SHELL_OCTAVES`; the
+  far shells are cheaper per pixel: fewer octaves (``CloudSettings.shell_octaves``; the
   dropped ones count as their mean and the shell's threshold moves to make up
   for the lost spread, so the coverage holds) and, at MID and LOW, fewer
-  overlapping billboards (:data:`VOLUME_FRACTIONS`). The vertex stage drops a
+  overlapping billboards (``overlap_near``, ``overlap_far``). The vertex stage drops a
   billboard outside its shell's band, faded out near the camera, or off
   screen, before working out its air and sunlight.
 * **far** (beyond the last shell, up to orbit): the *deck*, a sphere at
@@ -51,7 +51,7 @@ import math
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -82,7 +82,6 @@ from panda3d.core import (
 from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.clouds.cloud import (
     PRESETS,
-    CloudQuality,
     CloudSettings,
     CloudType,
     atlas_mean_alpha,
@@ -135,20 +134,10 @@ _SHELL_BIN_SORTS = (29, 28, 27, 26, 24, 23, 22)
 #: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box),
 #: rounded to the nearest level of the planet's grid.
 BASE_TILE_SIZE = 8000.0
-#: Tiles uploaded per frame, and re-sorted per frame (the stalest: new tiles,
-#: then those the camera moved past most, relative to their distance), and
-#: kept (shown or not) beyond those wanted, for flying back and forth: the
-#: HIGH values of :class:`cloud.CloudSettings`' own knobs.
-UPLOADS_PER_FRAME = CloudSettings.uploads_per_frame
-RESORTS_PER_FRAME = CloudSettings.resorts_per_frame
-TILE_CACHE = CloudSettings.tile_cache
 #: Quads per face edge of the deck sphere.
 DECK_QUADS = 48
 #: The deck's optical depth cap (the billboards' is ~1.5 per quad).
 DECK_MAX_OPTICAL_DEPTH = 6.0
-# VOLUME_FRACTIONS and SHELL_OCTAVES (by quality) live in cloud.py, as the
-# presets of CloudSettings; imported above, and still importable from here.
-
 Key = tuple[int, int, int, int]
 _CORNERS = np.array([(-1, -1), (1, -1), (1, 1), (-1, 1)], dtype=np.float32)
 _QUAD_TRIS = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
@@ -162,7 +151,7 @@ class ShellSpec:
     """One billboard LOD shell.
 
     :ivar level: cube-sphere level of its tiles
-    :ivar radius: (min, max) billboard radius, metres (at the quality)
+    :ivar radius: (min, max) billboard radius, metres (at the settings' count)
     :ivar volume_fraction: billboard sphere volume per unit cloud volume
     :ivar octaves: noise octaves evaluated (placement and drawing agree)
     :ivar threshold_offset: added to the field's threshold, so the coverage
@@ -524,6 +513,9 @@ class SphericalClouds:
         running mean of a tile's generation time (``gen_ms``), per update
     """
 
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = CloudSettings
+
     def __init__(
         self,
         parent: NodePath,
@@ -534,13 +526,10 @@ class SphericalClouds:
         atmosphere: int | None = None,
         cloud_type: CloudType = CloudType.CUMULUS,
         altitude: float | None = None,
-        shells: int | None = None,
         planet: PlanetSpec | None = None,
         weather: WeatherSpec | None = None,
         seed: int = 7,
         weather_seed: int = 11,
-        quality: CloudQuality = CloudQuality.HIGH,
-        volume_fractions: tuple[float, ...] | None = None,
         settings: CloudSettings | None = None,
         sun_brightness: float = 2.8,
         sky_strength: float = 0.35,
@@ -563,20 +552,15 @@ class SphericalClouds:
         :param cloud_type: the cloud type (its preset's field and optics)
         :param altitude: base of the cloud slab above sea level, metres; None
             keeps the type's
-        :param shells: overrides ``settings.shells``: billboard LOD shells
-            before the deck takes over (at most :data:`noise.MAX_LAYERS` - 1)
         :param planet: the planet the weather follows (climate, terrain);
             None = an earthlike one of this radius
         :param weather: the weather in full; None = the defaults for
             *planet* with *weather_seed*
         :param seed: noise seed (field and placement)
         :param weather_seed: weather systems' seed
-        :param quality: the clouds' cost as a preset, when *settings* is
-            not given (:meth:`cloud.CloudSettings.preset`)
-        :param volume_fractions: overrides the settings' billboard overlap:
-            (nearest shell, the others), or one for all
-        :param settings: what the clouds cost (:class:`cloud.CloudSettings`;
-            :meth:`set_settings` changes it); None = the *quality* preset
+        :param settings: what the clouds cost (:class:`cloud.CloudSettings`:
+            the billboards, their shells and octaves, the sun march, the
+            tile budgets; :meth:`set_settings` changes it); None = HIGH
         :param sun_brightness: direct-term gain (as :class:`field.CloudField`'s)
         :param sky_strength: ambient sky weight (live: :meth:`set_sky_light`)
         :param sky_occlusion: fraction of sky light reaching the slab's
@@ -587,23 +571,8 @@ class SphericalClouds:
         :param channel: the executor channel for the tiles; None = one of its
             own. Reusing a removed instance's channel cancels its work
         :param game: the game object, for its asset manager (None: from disk)
-        :raises ValueError: for a shell count out of range, or more than two
-            volume fractions
         """
-        if settings is None:
-            settings = CloudSettings.preset(quality)
-        if volume_fractions is not None:
-            if not 1 <= len(volume_fractions) <= 2:
-                raise ValueError("one or two volume fractions (near, far)")
-            settings = replace(
-                settings,
-                overlap_near=float(volume_fractions[0]),
-                overlap_far=float(volume_fractions[-1]),
-            )
-        if shells is not None:
-            if not 1 <= shells < MAX_LAYERS:
-                raise ValueError(f"1 to {MAX_LAYERS - 1} shells")
-            settings = replace(settings, shells=int(shells))
+        settings = settings or CloudSettings()
         _ensure_bin()
         self.radius = float(radius)
         self.position = np.asarray(position, dtype=np.float64)

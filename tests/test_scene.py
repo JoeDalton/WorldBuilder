@@ -16,17 +16,18 @@ from panda3d.core import BitMask32, CullBinManager, LVecBase3f, NodePath, Textur
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
 from world_builder.clouds import field, sphere
+from world_builder.clouds.cloud import CloudSettings
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import (
     FAR_CAMERA_MASK,
     NEAR_CAMERA_MASK,
+    REFLECTION_CAMERA_MASK,
     SplitDepthCameras,
 )
-from world_builder.ocean import aces_tonemap
+from world_builder.ocean import OceanSettings, aces_tonemap
 from world_builder.sky import Sky
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PRESETS
-from world_builder.terrain.terrain import REFLECTION_CAMERA_BITS
 from world_builder.terrain.workers import ChunkExecutor
 
 R = 600e3
@@ -97,7 +98,7 @@ def ocean(window):
         geometric_swell=True,
         planet_radius=R,
         exact_sphere=True,
-        reflection_scale=0.25,
+        settings=OceanSettings(reflection_scale=0.25),
     )
     yield made, game
     if made.game is not None:
@@ -143,18 +144,15 @@ def test_ocean_is_not_in_its_own_mirror(ocean):
 
 
 def test_reflection_follows_the_main_field_of_view(window, ocean):
-    from world_builder.ocean.ocean import REFLECTION_FOV_SCALE
-
     made, _ = ocean
+    scale = made.settings.reflection_fov_scale
     lens = window.camLens
     before = lens.get_fov()
     try:
         lens.set_fov(50.0, 30.0)
         made.update()
         fov = made.refl_cam_node.get_lens().get_fov()
-        np.testing.assert_allclose(
-            tuple(fov), (50.0 * REFLECTION_FOV_SCALE, 30.0 * REFLECTION_FOV_SCALE)
-        )
+        np.testing.assert_allclose(tuple(fov), (50.0 * scale, 30.0 * scale))
     finally:
         lens.set_fov(before)
 
@@ -206,10 +204,6 @@ def test_ocean_light_and_settings(ocean):
     lit = np.multiply(tuple(made._water_color), (0.5, 0.25, 0.0))
     np.testing.assert_allclose(tuple(clear)[:3], aces_tonemap(lit), atol=1e-6)
     made.set_atmosphere_frame(made.base_node.get_mat(), (0.0, 0.0, 1.0))
-    made.set_wave_iterations(12)
-    assert _input(made.ocean_node, "iIterationsNormal")[0] == 12
-    made.set_wave_iterations(10**6)  # clamped to the shader's maximum
-    assert _input(made.ocean_node, "iIterationsNormal")[0] == 64
 
 
 def test_ocean_settings_set_its_uniforms(ocean):
@@ -235,10 +229,10 @@ def test_ocean_settings_set_its_uniforms(ocean):
         assert _input(node, "uRoughFresnel")[0] == 1
         assert made.refl_tex.uses_mipmaps()
         assert len(made.seabed.cascades) == 3
-        made.set_foam(False)
-        assert _input(node, "uFoamOn")[0] == 0 and not made.settings.foam
-        made.set_foam(True)
-        assert _input(node, "uFoamOn")[0] == 1
+        made.set_settings(replace(made.settings, foam=False))
+        assert _input(node, "uFoamOn")[0] == 0
+        made.set_settings(made.settings.with_value("wave_iterations", 10**6))
+        assert _input(node, "iIterationsNormal")[0] == 64  # clamped
         made.set_debug_mode(10)
         assert _input(node, "uDebugMode")[0] == 10
         made.set_swell_amplitude(45.0)
@@ -285,31 +279,6 @@ def test_ocean_reflection_and_swell_mesh_rebuild(window, ocean):
     finally:
         made.set_settings(kept)
         made.refl_buffer.set_active(True)
-
-
-def test_ocean_reads_the_games_reflection_scale(window):
-    from world_builder.ocean import Ocean
-
-    root = window.render.attach_new_node("sea2")
-    game = SimpleNamespace(
-        app=SimpleNamespace(
-            camera=window.camera,
-            camLens=window.camLens,
-            win=window.win,
-            graphicsEngine=window.graphicsEngine,
-            graphics_settings=SimpleNamespace(
-                config={"render": {"reflection_scale": 0.3}}
-            ),
-        ),
-        root_node=root,
-        method_lists={},
-        game_time=SimpleNamespace(get_current_time=lambda: 0.0),
-    )
-    made = Ocean(game=game, planet_radius=R)
-    try:
-        assert made.settings.reflection_scale == pytest.approx(0.3)
-    finally:
-        made.clean()
 
 
 def test_ocean_seabed_bakes_from_its_update(ocean):
@@ -388,10 +357,15 @@ def test_sky_with_a_painted_cube_map(showbase):
 
 @pytest.fixture(scope="module")
 def terrain(showbase):
-    from world_builder.terrain.terrain import Terrain
+    from world_builder.terrain.terrain import Terrain, TerrainSettings
 
     executor = ChunkExecutor(backend="inline", inline_budget=16)
-    made = Terrain(showbase.render, PRESETS["moon"], executor=executor, min_level=7)
+    made = Terrain(
+        showbase.render,
+        PRESETS["moon"],
+        executor=executor,
+        settings=TerrainSettings(min_level=7),
+    )
     yield made
     made.destroy()
     executor.shutdown()
@@ -401,8 +375,6 @@ def test_terrain_settings(terrain):
     root = terrain.root
     terrain.set_debug_mode(3)
     assert _input(root, "uDebugMode")[0] == 3
-    terrain.set_textured(False)
-    assert _input(root, "uTextured")[0] == 0
     terrain.set_blend_depth(0.3)
     assert terrain.blend_depth == 0.3
     terrain.set_sea_surface(True)
@@ -419,13 +391,6 @@ def test_terrain_settings(terrain):
     assert root.has_render_mode()
     terrain.set_wireframe(False)
     assert not root.has_render_mode()
-    terrain.set_reflected(False)
-    assert root.is_hidden(REFLECTION_CAMERA_BITS)
-    terrain.set_reflected(True)
-    assert not root.is_hidden(REFLECTION_CAMERA_BITS)
-    terrain.set_min_level(99)
-    assert terrain.min_level == terrain.grid.max_level
-    terrain.set_min_level(7)
     terrain.set_max_distance(5e3)
     assert terrain.selector.max_distance == 5e3
     terrain.set_max_distance(None)
@@ -450,7 +415,7 @@ def clouds(showbase):
         R,
         executor,
         altitude=2200.0,
-        shells=2,
+        settings=CloudSettings(shells=2),
         planet=PRESETS["forest"],
     )
     yield made, executor
@@ -576,12 +541,12 @@ def test_terrain_settings_apply_live(terrain):
         assert _input(terrain.root, "uDetailFar")[0] == pytest.approx(1500.0)
         assert _input(terrain.root, "uTextured")[0] == 0
         assert all(t.get_anisotropic_degree() == 2 for t in terrain._textures)
-        assert terrain.root.is_hidden(REFLECTION_CAMERA_BITS)
+        assert terrain.root.is_hidden(REFLECTION_CAMERA_MASK)
         terrain.set_spec(terrain.spec)
         assert terrain.selector.split_factor == 1.6
-        # The one-purpose setters keep the settings true.
-        terrain.set_textured(True)
-        assert terrain.settings.textured
+        # Past the grid's deepest level, the deepest is drawn.
+        terrain.set_settings(replace(new, min_level=8))
+        assert terrain.min_level == min(8, terrain.grid.max_level)
     finally:
         terrain.set_settings(kept)
     assert terrain.selector.split_factor == kept.split_factor

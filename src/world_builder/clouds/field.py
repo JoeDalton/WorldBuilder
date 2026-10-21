@@ -7,7 +7,8 @@ terrain occlude them with no depth plumbing. Every particle of every layer lives
 ONE Geom whose vertex data never changes after the build; the camera-facing quad is
 built in the vertex shader, cell centres move in a small per-cell texture (wind +
 toroidal recycling), and only the INDEX buffer is re-sorted, back to front for
-premultiplied-over blending, spread round-robin over ``resort_frames`` frames.
+premultiplied-over blending, spread round-robin over ``CloudSettings.resort_frames``
+frames.
 
 The clouds draw in their own "cloud" bin, between "opaque" and "transparent", with
 no depth write: every translucent effect composites over them, but an effect behind
@@ -23,7 +24,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -53,7 +54,6 @@ from world_builder import PLANET_RADIUS_M
 from world_builder.atmosphere import bind_defaults
 from world_builder.clouds.cloud import (
     PRESETS,
-    CloudQuality,
     CloudSettings,
     CloudSpec,
     CloudType,
@@ -197,19 +197,6 @@ def _ensure_cloud_bins():
         manager.add_bin(_CLOUD_BIN, CullBinManager.BT_fixed, _CLOUD_BIN_SORT)
 
 
-def _settings_quality(game: Any) -> CloudQuality:
-    """The player's cloud quality, or HIGH when there is no setting to read (e.g.
-    the demo's stub game): never a crash or a downgrade."""
-    config = getattr(getattr(game, "app", None), "graphics_settings", None)
-    name = (getattr(config, "config", None) or {}).get("clouds", {}).get("quality")
-    try:
-        return CloudQuality(name)
-    except ValueError:
-        if name is not None:
-            LOGGER.warning(f"unknown cloud quality {name!r}; using high")
-        return CloudQuality.HIGH
-
-
 @functools.cache
 def _cloud_shader() -> Shader:
     return Shader.load(
@@ -327,6 +314,9 @@ class CloudField:
     :ivar node: the field's one GeomNode, under *parent*
     """
 
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = CloudSettings
+
     def __init__(
         self,
         parent: NodePath,
@@ -346,14 +336,12 @@ class CloudField:
         horizon_distance: float = 400000.0,
         planet_radius: float = PLANET_RADIUS_M,
         near_fade_radii: float = 2.5,
-        quality: CloudQuality | None = None,
-        resort_frames: int | None = None,
         seed: int = 7,
         settings: CloudSettings | None = None,
     ):
         """
         :param parent: NodePath the cloud geometry goes under
-        :param game: the game object (sprite atlas, graphics settings)
+        :param game: the game object (its sprite atlas)
         :param layers: list of :class:`CloudLayer` (default: a cumulus deck)
         :param domain: recycle-box side for layers that don't set one; the default
             is exactly one noise period at the cumulus feature size
@@ -374,16 +362,12 @@ class CloudField:
         :param planet_radius: metres; the deck droops by d²/2R (0 = flat)
         :param near_fade_radii: fade a billboard within this many of its radii of
             the camera, so it never smears across the screen or clips (0 = off)
-        :param quality: a :class:`CloudQuality` preset, when *settings* is not
-            given; None reads the graphics settings (HIGH if absent). Scales each
-            layer's own request, so it composes with lod_shells and explicit
-            overrides
-        :param resort_frames: overrides ``settings.resort_frames``: frames one
-            full re-sort is spread over
         :param seed: RNG seed for the noise volume and placement
         :param settings: what the clouds cost (:class:`cloud.CloudSettings`;
             only its billboard count, sun march, reflection and re-sort period
-            apply to a flat field); None = the *quality* preset
+            apply to a flat field). The count and march scale each layer's own
+            request, so they compose with lod_shells and explicit overrides.
+            None = HIGH
         """
         self._parent = parent
         self._game = game
@@ -409,14 +393,8 @@ class CloudField:
             0.0 if not planet_radius else 1.0 / (2.0 * float(planet_radius))
         )
         self._near_fade_radii = near_fade_radii
-        if settings is None:
-            level = quality if quality is not None else _settings_quality(game)
-            settings = CloudSettings.preset(level)
-        if resort_frames is not None:
-            settings = replace(settings, resort_frames=max(1, int(resort_frames)))
+        settings = settings or CloudSettings()
         self._settings = settings
-        #: The preset the settings are, or None when custom.
-        self._quality = CloudSettings.level_of(settings)
         self._resort_frames = settings.resort_frames
         self._seed = seed
         # Live coverage and optics edits, replayed over a rebuild.
@@ -440,7 +418,6 @@ class CloudField:
         if not changes:
             return
         self._settings = settings
-        self._quality = CloudSettings.level_of(settings)
         self._resort_frames = settings.resort_frames
         if "count_scale" in changes:
             self._rebuild()
@@ -888,6 +865,9 @@ class Clouds:
 
     :ivar field: the :class:`CloudField`
     """
+
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = CloudSettings
 
     def __init__(
         self,

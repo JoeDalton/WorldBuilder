@@ -213,16 +213,17 @@ the true horizon.
 
 Each chunk is 4,481 vertices (36 bytes each) and ~9,000 triangles (grid +
 two-sided skirts): ~2.5 M vertices and ~5 M triangles near the ground, in
-~600 draw calls. The ocean's reflection pass now draws the terrain too (M
+~600 draw calls. The ocean's reflection pass now draws the terrain too (`reflected`
 toggles it), which doubles all of that.
 
 Levers, all in `TerrainSettings` ([Quality settings](quality.md)):
 
-- `min_level` (P in the demo): each dropped level removes ~40–60 chunks.
+- `min_level` (MID drops one, LOW three): each dropped level removes ~40–60
+  chunks.
 - `split_factor` K = 1.5 instead of 2 (LOW's): ~40 chunks per level instead
   of ~66, with coarser triangles on screen (~16 px instead of ~12 px at the
   near edge of each ring).
-- `reflected` off (M; LOW's).
+- `reflected` off (LOW's).
 - `max_distance` (a 3D cap; off by default, since from orbit it would cull
   the whole planet).
 
@@ -431,8 +432,8 @@ identically at 1600×900 and 3200×1800. `terrain_shots.py` now waits for the
 GPU after every timed frame (a one-pixel read back), so a frame is CPU plus
 GPU in series, and the difference between two runs is the difference in
 work. Its options: `--size`, `--offscreen`, `--quality
-low|mid|high|ultra` (the whole world's preset), `--cloud-quality
-high|mid|low|ultra|off` and `--ocean-quality` (over it), `--cloud-debug BITS` (cloud.frag's `uCloudDebug`: 1 no
+low|mid|high|ultra` (the whole world's preset), a `--<part>-quality` per
+part over it (`--clouds-quality`, `--ocean-quality`, ...), `--no-clouds`, `--cloud-debug BITS` (cloud.frag's `uCloudDebug`: 1 no
 sun march, 2 no atmosphere, 4 two octaves only, 8 flat colour), `--frames
 N`. `flight_bench.py` takes the same.
 
@@ -471,7 +472,7 @@ longer than above): HIGH ~3.9 ms at the start, ~6.5 ms in the deck, ~1 ms at
 20 km, about what it cost before.
 
 The debug switches confirm where the rest goes: with no MSAA, no single cost
-dominates. Overdraw is what is left, and the quality presets (F5) trade it.
+dominates. Overdraw is what is left, and the clouds' quality presets (F4 in the demo) trade it.
 
 Fast flight (§12) is unchanged: 61 fps flying low offscreen (59 before),
 CPU-bound. The weather map costs ~2 s of main-thread time when the clouds

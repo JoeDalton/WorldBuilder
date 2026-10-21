@@ -63,7 +63,7 @@ class AtmosphereSettings(QualitySettings):
 
     steps: int = knob(
         8,
-        "Air quality",
+        "Quality",
         unit="samples",
         range=(2, 16),
         help="Samples along each pixel's view ray through the air: fewer band "
@@ -71,13 +71,14 @@ class AtmosphereSettings(QualitySettings):
     )
     vertex_steps: int = knob(
         4,
-        "Air quality on stars and clouds",
+        "Quality on stars and clouds",
         unit="samples",
         range=(1, 8),
         advanced=True,
         help="The same, per vertex, for the stars and the cloud billboards.",
     )
 
+    LABEL: ClassVar = "Air"
     PRESETS: ClassVar = {
         QualityLevel.LOW: {"steps": 4, "vertex_steps": 2},
         QualityLevel.MID: {"steps": 6, "vertex_steps": 3},
@@ -138,6 +139,9 @@ class Atmospheres:
         # every frame, camera in the world frame (float64):
         atmospheres.update(camera_world)
     """
+
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = AtmosphereSettings
 
     def __init__(self, settings: AtmosphereSettings | None = None) -> None:
         """

@@ -12,24 +12,15 @@ from dataclasses import fields, replace
 import pytest
 
 from world_builder.atmosphere import AtmosphereSettings
-from world_builder.clouds.cloud import (
-    PRESETS,
-    QUALITY_SCALES,
-    SHELL_OCTAVES,
-    VOLUME_FRACTIONS,
-    CloudQuality,
-    CloudSettings,
-    CloudType,
-    at_quality,
-    with_settings,
-)
+from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType, with_settings
 from world_builder.quality import (
     APPLY_MODES,
     Knob,
     QualityLevel,
     knob,
 )
-from world_builder.settings import SECTIONS, WorldSettings
+from world_builder.settings import FORMAT_VERSION, SECTIONS, WorldSettings
+from world_builder.terrain.terrain import TerrainSettings
 
 LEVELS = list(QualityLevel)
 #: Per section, the fields whose cost must not fall from LOW to ULTRA (bools:
@@ -66,11 +57,10 @@ COST_FIELDS = {
 }
 
 
-def test_the_levels_are_the_clouds_old_ones():
-    """SpaceFlight 0.1.0 reads CloudQuality's values, in this order."""
-    assert CloudQuality is QualityLevel
-    assert [q.value for q in CloudQuality] == ["low", "mid", "high", "ultra"]
-    assert CloudQuality("low") is QualityLevel.LOW
+def test_the_levels_go_cheapest_first():
+    """A menu's slider stops rely on "drag right costs more"."""
+    assert [q.value for q in QualityLevel] == ["low", "mid", "high", "ultra"]
+    assert [q.label for q in QualityLevel] == ["Low", "Mid", "High", "Ultra"]
 
 
 @pytest.mark.parametrize("value", ["High", " low ", QualityLevel.MID, "ULTRA"])
@@ -117,6 +107,16 @@ def test_presets_are_within_their_knobs(section, level):
 
 
 @pytest.mark.parametrize("section", list(SECTIONS))
+def test_presets_are_distinct(section):
+    """A preset must be recognisable from its settings (a menu shows which
+    one a part is at, and cycling must move on)."""
+    kind = SECTIONS[section]
+    presets = [kind.preset(level) for level in LEVELS]
+    assert len(set(presets)) == len(presets)
+    assert [kind.level_of(p) for p in presets] == LEVELS
+
+
+@pytest.mark.parametrize("section", list(SECTIONS))
 def test_presets_order_their_cost(section):
     presets = [SECTIONS[section].preset(level) for level in LEVELS]
     for name in COST_FIELDS[section]:
@@ -124,19 +124,15 @@ def test_presets_order_their_cost(section):
         assert values == sorted(values), (name, values)
 
 
-def test_the_cloud_presets_are_the_old_tables():
-    for level in LEVELS:
-        s = CloudSettings.preset(level)
-        assert (s.count_scale, s.march_scale) == QUALITY_SCALES[level]
-        assert (s.overlap_near, s.overlap_far) == (
-            VOLUME_FRACTIONS[level][0],
-            VOLUME_FRACTIONS[level][-1],
-        )
-        assert s.shell_octaves == SHELL_OCTAVES[level]
-        spec = PRESETS[CloudType.CUMULUS]
-        assert with_settings(spec, s) == at_quality(spec, level)
+def test_high_clouds_are_the_authored_types():
     spec = PRESETS[CloudType.CUMULUS]
-    assert at_quality(spec, CloudQuality.HIGH) is spec
+    assert with_settings(spec, CloudSettings.preset(QualityLevel.HIGH)) is spec
+
+
+def test_lower_presets_drop_terrain_detail():
+    """MID drops one level of the finest LOD, LOW two more."""
+    dropped = [TerrainSettings.preset(level).min_level for level in LEVELS]
+    assert dropped == [3, 1, 0, 0]
 
 
 def test_the_constructor_is_strict():
@@ -183,7 +179,7 @@ def test_a_choice_is_saved_and_loaded_by_its_label():
 def test_world_presets_round_trip(level):
     settings = WorldSettings.preset(level)
     data = settings.to_dict()
-    assert data == {"preset": level.value, "overrides": {}}
+    assert data == {"version": FORMAT_VERSION, "preset": level.value, "overrides": {}}
     assert not settings.is_custom()
     assert WorldSettings.from_dict(json.loads(json.dumps(data))) == settings
 
@@ -246,3 +242,88 @@ def test_atmosphere_steps_cost_samples_per_pixel():
     """The air's steps are the per-pixel march: LOW halves HIGH's."""
     low, high = (AtmosphereSettings.preset(level).steps for level in ("low", "high"))
     assert math.isclose(low / high, 0.5)
+
+
+# ── Discoverable by a game, without naming a knob ──────────────────────────────
+
+
+def test_the_schema_is_plain_data_for_every_knob():
+    schema = WorldSettings.schema()
+    assert json.loads(json.dumps(schema)) == schema
+    assert schema["version"] == FORMAT_VERSION
+    assert [lv["id"] for lv in schema["levels"]] == [lv.value for lv in LEVELS]
+    assert [sec["id"] for sec in schema["sections"]] == list(SECTIONS)
+    for section in schema["sections"]:
+        assert section["label"]
+        kind = SECTIONS[section["id"]]
+        assert [k["id"] for k in section["knobs"]] == [f.name for f in fields(kind)]
+        for k in section["knobs"]:
+            assert k["kind"] in ("bool", "int", "float", "choice")
+            assert (k["kind"] == "choice") == (k["choices"] is not None)
+            assert set(k["presets"]) == {lv.value for lv in LEVELS}
+            assert k["presets"]["high"] == k["default"]
+
+
+def test_a_menu_built_from_the_schema_round_trips():
+    """What a game does without naming any knob: walk the schema, set every
+    knob to its LOW value as the schema gives it, save, load."""
+    settings = WorldSettings()
+    for section in WorldSettings.schema()["sections"]:
+        for k in section["knobs"]:
+            settings = settings.with_value(section["id"], k["id"], k["presets"]["low"])
+    assert WorldSettings.from_dict(settings.to_dict()) == settings
+    low = WorldSettings.preset("low")
+    for name in SECTIONS:
+        assert getattr(settings, name) == getattr(low, name)
+
+
+def test_a_renamed_knob_reads_its_old_id(monkeypatch):
+    monkeypatch.setattr(AtmosphereSettings, "RENAMED", {"samples": "steps"})
+    loaded = AtmosphereSettings.from_overrides(AtmosphereSettings(), {"samples": 6})
+    assert loaded.steps == 6
+
+
+def test_data_without_a_version_still_loads():
+    data = {"preset": "low", "overrides": {"terrain": {"detail_far": 2000.0}}}
+    assert WorldSettings.from_dict(data).terrain.detail_far == 2000.0
+
+
+class _Part:
+    def __init__(self, kind):
+        self.SETTINGS_TYPE = kind
+        self.got = None
+
+    def set_settings(self, settings):
+        self.got = settings
+
+
+def test_apply_finds_each_objects_section_by_its_type():
+    world = WorldSettings.preset("mid")
+    parts = [_Part(kind) for kind in SECTIONS.values()]
+    world.apply(*parts)
+    for part, name in zip(parts, SECTIONS):
+        assert part.got == getattr(world, name)
+    assert world.settings_for(parts[0]) == world.terrain
+    with pytest.raises(TypeError):
+        world.apply(object())
+
+
+def test_every_world_builder_object_declares_its_settings():
+    from world_builder.atmosphere import Atmospheres
+    from world_builder.clouds import CloudField, Clouds
+    from world_builder.clouds.sphere import SphericalClouds
+    from world_builder.ocean import Ocean
+    from world_builder.sky import Sky
+    from world_builder.terrain.terrain import Terrain
+
+    world = WorldSettings.preset("low")
+    for kind, section in (
+        (Terrain, "terrain"),
+        (Atmospheres, "atmosphere"),
+        (Sky, "sky"),
+        (SphericalClouds, "clouds"),
+        (CloudField, "clouds"),
+        (Clouds, "clouds"),
+        (Ocean, "ocean"),
+    ):
+        assert world.settings_for(kind) == getattr(world, section)

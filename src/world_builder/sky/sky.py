@@ -73,9 +73,11 @@ class SkySettings(QualitySettings):
         help="The diffuse light's resolution, per cube face.",
     )
 
+    LABEL: ClassVar = "Sky"
     PRESETS: ClassVar = {
         QualityLevel.LOW: {"star_fraction": 0.4, "glow_size": 128},
         QualityLevel.MID: {"star_fraction": 0.7},
+        QualityLevel.ULTRA: {"glow_size": 512},
     }
 
 
@@ -96,6 +98,9 @@ class Sky:
     :ivar stars: the point stars' node; None with a painted cube map
     :ivar nebula: the current :class:`starfield.NebulaStyle`
     """
+
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = SkySettings
 
     def __init__(
         self,

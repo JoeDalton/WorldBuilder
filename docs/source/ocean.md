@@ -15,8 +15,7 @@ docstring has the overview):
   under the camera every frame. All wave detail is computed in the fragment
   shader from world position, so sliding the quad causes no motion.
   `compute_wave_dirs` precomputes the per-iteration wave directions once on the
-  CPU as a uniform array; `set_wave_iterations()` changes wave detail at
-  runtime.
+  CPU as a uniform array; `OceanSettings.wave_iterations` sets how many.
 - **Quality.** Every cost/quality trade is a field of `OceanSettings`, with
   LOW / MID / HIGH / ULTRA presets (`OceanSettings.preset(level)`; see
   [Quality settings](quality.md)). Pass one to `Ocean(settings=...)`, or
@@ -31,10 +30,9 @@ docstring has the overview):
 
   The reflection's resolution (`reflection_scale`) remakes its buffer on the
   same camera, so the lens and far plane taken at construction are kept.
-  The swell grid's tessellation remakes the mesh. `set_foam()` turns the
-  foam alone. The switches are uniforms tested in branches that are the same
+  The swell grid's tessellation remakes the mesh. The switches are uniforms tested in branches that are the same
   across the screen, so a feature that is off costs almost nothing and needs
-  no recompile. The terrain demo cycles the presets with F11;
+  no recompile. The terrain demo cycles the presets with F5;
   `terrain_shots.py` and `flight_bench.py` take `--ocean-quality`.
 - **Seabed** (`ocean/seabed.py`). The ocean knows nothing of the terrain:
   `set_seabed(sampler)` gives it a function from points of its plane (in the
@@ -112,11 +110,10 @@ docstring has the overview):
   `world_builder.depth`), that hide does not exclude the ocean: what keeps
   the surface out of its own mirror is that the camera below sees only its
   back faces, which are culled. The terrain is reflected or not with
-  `Terrain.set_reflected` (all of bits 0–19). The
-  buffer is sized from the app's `graphics_manager.get_render_size()` when
+  `TerrainSettings.reflected` (all of bits 0–19). The
+  buffer is sized from the main camera's display region (`app.cam`) when
   it has one (the window size otherwise) times `OceanSettings.reflection_scale`
-  (0.5 at HIGH; with no explicit settings, the app's
-  `graphics_settings.config["render"]["reflection_scale"]` when it has one),
+  (0.5 at HIGH),
   so it tracks the internal render resolution rather than
   the window. `uReflUVScale` corrects for power-of-two texture padding and is
   refreshed from the real texture size once the buffer is realized: the default
@@ -205,7 +202,7 @@ Driven by [`ocean/ocean.py`](../../src/world_builder/ocean/ocean.py) (above):
     scrolling) tilts the normal, and also shifts the small-wave phase
     (`fmPhase`) so the dominant octave's tiling drifts. Its tilt follows
     the geometry's height: `swell_amplitude / 20` and the depth factor.
-    `set_swell_amplitude()` changes the height live (F12 in the demo). The
+    `set_swell_amplitude()` changes the height live. The
     field mostly spans 0.1 to 0.5, so 20 m of amplitude stands crests about
     7 m above the troughs, over a swell some 250 m across (`swell_scale`).
   - **Colour by depth.** Over shallow seabed the water's own colour goes
