@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Terrain collision for a game's own Panda3D `CollisionTraverser`
+  (`Terrain.enable_collision`): a native collision solid over the drawn
+  chunks answers ship, sensor and laser colliders with ordinary collision
+  entries, one per collider, plus `material_at` for the ground at a hit. Built
+  per Panda3D series with `scripts/build_native.sh`. (#16)
 - Terrain on a true spherical planet: a cube-sphere with quadtree LOD,
   float64 positions re-based around the camera, and collision queries on the
   sphere. (#1)

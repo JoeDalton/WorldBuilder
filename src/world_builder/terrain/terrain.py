@@ -44,6 +44,7 @@ from typing import ClassVar
 import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import (
+    BitMask32,
     LVecBase3f,
     LVecBase4f,
     NodePath,
@@ -59,6 +60,7 @@ from world_builder.depth import REFLECTION_CAMERA_MASK
 from world_builder.quality import RESTART, QualityLevel, QualitySettings, knob
 from world_builder.terrain.biomes import BIOME_COLORS
 from world_builder.terrain.chunkgen import ChunkData
+from world_builder.terrain.collision import TerrainCollision
 from world_builder.terrain.materials import (
     MaterialSet,
     load_materials,
@@ -259,6 +261,8 @@ class Terrain:
     :ivar planet: the :class:`Planet` evaluating it
     :ivar grid: its chunk grid
     :ivar query: collision and height queries on the drawn triangles
+    :ivar collision: the collision node for a game's traverser, once
+        :meth:`enable_collision` is called (else None)
     :ivar materials: the biome textures (share them with other terrains)
     :ivar executor: the generation pool
     :ivar stats: counters and timings for an on-screen readout
@@ -358,6 +362,7 @@ class Terrain:
         self._last_select_frame = 0
         self._frame = 0
         self._wanted: list[tuple] = []
+        self.collision: TerrainCollision | None = None
         self.stats = {
             "shown": 0,
             "stored": 0,
@@ -443,8 +448,52 @@ class Terrain:
         self.query = TerrainQuery(
             self.planet, self.store, version=version, level=self.min_level
         )
+        if self.collision is not None:
+            self.collision.reset()
         self._last_select_pos = None
         self.stats["finest"] = self.grid.max_level
+
+    def enable_collision(
+        self,
+        into_mask: BitMask32,
+        name: str = "terrain",
+        owner_tag: str = "owner",
+        max_distance: float = 100_000.0,
+    ) -> TerrainCollision:
+        """Make the drawn terrain solid to a game's ``CollisionTraverser``.
+
+        Adds one ``CollisionNode`` (into-only) beside :attr:`root`, holding a
+        native solid that answers sphere and segment tests against the drawn
+        triangles of every chunk within *max_distance* of the camera (sea
+        surface included if the planet has an ocean). Each collider gets at
+        most one entry per frame, with the surface point and normal. The
+        node's *owner_tag* python tag is a
+        :class:`~world_builder.terrain.collision.TerrainSurface`: its
+        ``material_at(point)`` names the ground at a hit.
+
+        :param into_mask: the node's into collide mask
+        :param name: the node's name (the ``%in`` of event patterns)
+        :param owner_tag: the python tag the owner is stored under
+        :param max_distance: chunks farther from the camera are not solid,
+            metres
+        :returns: the collision (also :attr:`collision`)
+        :raises NativeCollisionError: the native library is not built for
+            the running Panda3D (``scripts/build_native.sh``)
+        """
+        self.disable_collision()
+        self.collision = TerrainCollision(
+            self, into_mask, name, owner_tag, max_distance
+        )
+        if self._origin is not None:
+            self.collision.follow(self.root, self._origin, rebased=True)
+            self.collision.update(self.shown, self.store, self._camera)
+        return self.collision
+
+    def disable_collision(self) -> None:
+        """Remove the collision node, if any."""
+        if self.collision is not None:
+            self.collision.destroy()
+            self.collision = None
 
     def update(
         self, camera_world: ArrayLike, camera_render: ArrayLike = (0.0, 0.0, 0.0)
@@ -607,6 +656,7 @@ class Terrain:
     def destroy(self) -> None:
         """Remove the geometry, and stop the workers if they are this
         terrain's own."""
+        self.disable_collision()
         if self._owns_executor:
             self.executor.shutdown()
         self.root.remove_node()
@@ -668,11 +718,14 @@ class Terrain:
             snap *= 2.0
         self._snap = snap
         origin = np.round(cam / snap) * snap
-        if self._origin is None or np.any(origin != self._origin):
+        rebased = self._origin is None or bool(np.any(origin != self._origin))
+        if rebased:
             self._origin = origin
             for key, node in self.nodes.items():
                 self._place(key, node)
         self.root.set_pos(*(render_cam - (cam - origin)))
+        if self.collision is not None:
+            self.collision.follow(self.root, origin, rebased)
 
     def _place(self, key, node: NodePath) -> None:
         node.set_pos(*(node.get_python_tag("centre") - self._origin))
@@ -780,6 +833,8 @@ class Terrain:
                 self.store.move_to_end(key)
         self._keep = keep
         self.shown = draw
+        if self.collision is not None:
+            self.collision.update(draw, self.store, cam)
         self._wanted = selection.wanted + selection.prefetch
         self.executor.request(
             [k for k in self._wanted if k not in self.store], self._channel
