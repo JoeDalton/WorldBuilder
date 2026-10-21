@@ -31,6 +31,7 @@ out vec3 vAtmoT;
 out vec3 vAtmoS;
 out vec3 vSunTint;
 out float vSkyTint;
+out vec3 vTwilight;
 
 // Samples of the air per vertex (8 per pixel elsewhere): it barely changes
 // across a billboard.
@@ -92,6 +93,7 @@ void main() {
         vAtmoS = vec3(0.0);
         vSunTint = vec3(1.0);
         vSkyTint = 1.0;
+        vTwilight = vec3(0.0);
         return;
     }
 
@@ -113,13 +115,12 @@ void main() {
     }
     vSunTint = vec3(1.0);
     vSkyTint = 1.0;
+    vTwilight = vec3(0.0);
     if (uOwnAtmosphere >= 0) {
-        // Relative to the noon sun, half the reddening: see cloud.frag.
+        // See cloud.frag.
         vec3 p = centre - uPlanetCentre;
-        vec3 vertical = normalize(p);
-        vec3 through = atmoSunlight(uOwnAtmosphere, p, sunDir)
-                     / max(atmoSunlight(uOwnAtmosphere, p, vertical), vec3(1e-3));
-        vSunTint = sqrt(min(through, vec3(1.0)));
-        vSkyTint = smoothstep(-0.3, 0.1, dot(vertical, sunDir));  // see cloud.frag
+        vSunTint = cloudSunTint(uOwnAtmosphere, p, sunDir);
+        vTwilight = cloudTwilight(uOwnAtmosphere, p, sunDir, vSunTint);
+        vSkyTint = smoothstep(-0.3, 0.1, dot(normalize(p), sunDir));
     }
 }

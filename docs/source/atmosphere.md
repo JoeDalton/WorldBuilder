@@ -313,6 +313,33 @@ incidence. That removed the direct sunlight from about 20° of sun down,
 before the air reddens it, so the clouds along the terminator were lit by the
 blue sky alone: grey-blue from orbit, turning orange about 200 km closer.
 
+### The terminator on the clouds
+
+A cloud stays sunlit after sunset below it: at 2.7 km over a 600 km planet,
+until the sun is 5.4° below its horizon. The air alone dimmed its light only
+to about 15 % of red by then, and the planet's shadow then cut it to black,
+which drew a hard line across the clouds, close up and from orbit. Two terms
+in `cloud_field.glsl` (billboards per vertex, the deck per pixel) spread it:
+
+- **The grazing edge** (`grazingLight`): sunlight whose path dips below the
+  cloud's own altitude crosses the haze, the terrain and the cloud deck
+  around, more the lower it passes, and none gets through along the ground.
+  It is scaled by a smoothstep of the square root of the path's lowest
+  altitude over the cloud's, so the light fades to nothing at the planet's
+  shadow over its last ~1.5°, not in a step. A sun above the cloud's horizon
+  is untouched.
+- **Twilight** (`cloudTwilight`, weighted by `TWILIGHT_GLOW` in cloud.frag):
+  once a cloud is in the shadow, the air above it is still sunlit for a few
+  degrees more and lights it, warm, fading as that air darkens in turn. It
+  is taken as the sunlight the air `TWILIGHT_AIR_HEIGHT` (6 km) above
+  receives and the cloud does not, which makes it nothing by day. It is
+  light from the sky: not phase-weighted, not self-shadowed, and reaching
+  undersides as the sky's light does. It carries the clouds from lit to dark
+  over about 4° past the line (about 40 km on this planet).
+
+The terrain and Panda3D's lights still use the plain shadow: on the ground
+the sun has set long before, so there is no line to see there.
+
 ### Not yet
 
 - **Wind:** the clouds are static.

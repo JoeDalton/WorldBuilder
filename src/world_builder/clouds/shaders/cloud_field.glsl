@@ -225,3 +225,47 @@ float sunOpticalDepth(Field f, vec3 p) {
     }
     return density * f.sunStepLength * f.fieldExtinction * f.shadowStrength;
 }
+
+// ── Sunlight on a planet's clouds (planet mode, through its own air) ──────────
+// For the shaders that also include atmosphere.glsl (atmoSunlight).
+
+// Height above a cloud of the air whose light still reaches it once it is in
+// the planet's shadow (cloudTwilight), metres.
+const float TWILIGHT_AIR_HEIGHT = 6000.0;
+
+// The share of the sunlight toward dir that gets through where its path dips
+// below the altitude of p: there it crosses the haze, the terrain and the
+// clouds around, more the lower it passes, and nothing gets through along
+// the ground. 1 with the sun above p's horizon, 0 at the planet's shadow,
+// smooth between. Without it a cloud's light fell only to some 15 % of red
+// before the planet's shadow cut it to black: a hard line on the clouds.
+float grazingLight(vec3 p, vec3 dir) {
+    float r = length(p);
+    float cosChi = dot(p, dir) / r;
+    if (cosChi >= 0.0) {
+        return 1.0;
+    }
+    float lowest = r * sqrt(max(0.0, 1.0 - cosChi * cosChi)) - planetRadius;
+    return smoothstep(0.0, 1.0, sqrt(max(lowest, 0.0) / max(r - planetRadius, 1.0)));
+}
+
+// The sunlight on a cloud at p (planet frame) through the planet's air
+// (atmosphere atmo), as a tint of the sun's colour: relative to the noon
+// sun, so a cloud lit from high up stays white, and only half the reddening
+// (a square root): what multiple scattering in and around the cloud,
+// missing here, gives back. A sunset still turns it orange.
+vec3 cloudSunTint(int atmo, vec3 p, vec3 sunDir) {
+    vec3 through = atmoSunlight(atmo, p, sunDir)
+                 / max(atmoSunlight(atmo, p, normalize(p)), vec3(1e-3));
+    return sqrt(min(through, vec3(1.0))) * grazingLight(p, sunDir);
+}
+
+// Twilight on a cloud: once it is in the planet's shadow, the air above it is
+// still sunlit for a few degrees more and lights it, warm, fading as that air
+// darkens in turn. Taken as the sunlight the air TWILIGHT_AIR_HEIGHT above
+// receives and the cloud does not (tint: cloudSunTint at p), so by day it is
+// nothing. A tint of the sun's colour, like cloudSunTint's.
+vec3 cloudTwilight(int atmo, vec3 p, vec3 sunDir, vec3 tint) {
+    vec3 above = p + normalize(p) * TWILIGHT_AIR_HEIGHT;
+    return max(cloudSunTint(atmo, above, sunDir) - tint, vec3(0.0));
+}

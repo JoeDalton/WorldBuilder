@@ -46,7 +46,12 @@ in vec3 vAtmoT;      // planet-mode billboards: the air in front, per vertex
 in vec3 vAtmoS;
 in vec3 vSunTint;
 in float vSkyTint;
+in vec3 vTwilight;
 out vec4 fragColor;
+
+// The lit air's light on a cloud in the planet's shadow, as a share of the
+// sunlight it would take (cloudTwilight).
+const float TWILIGHT_GLOW = 0.25;
 
 float hgPhase(float x, float g) {
     float g2 = g * g;
@@ -193,26 +198,29 @@ void main() {
     float phase = phaseFunction(f, dot(sunDir, -V));
     vec3 sunlight = sunColor;
     vec3 skylight = skyColor;
+    vec3 twilight = vec3(0.0);
     if (uSpherical == 1 && uDeck == 0) {
         sunlight *= vSunTint;  // per vertex (cloud_sphere.vert)
         skylight *= vSkyTint;
+        twilight = sunColor * vTwilight;
     } else if (uSpherical == 1 && uOwnAtmosphere >= 0) {
-        // Through the planet's air: reddened low, gone in its shadow (the sky
-        // light fades with it). Relative to the noon sun, so a cloud lit from
-        // high up stays white, and only half the reddening (a square root):
-        // what multiple scattering in and around the cloud, missing here,
-        // gives back. A sunset still turns it orange.
-        vec3 up = normalize(samplePos);
-        vec3 through = atmoSunlight(uOwnAtmosphere, samplePos, sunDir)
-                     / max(atmoSunlight(uOwnAtmosphere, samplePos, up), vec3(1e-3));
-        sunlight *= sqrt(min(through, vec3(1.0)));
+        // Through the planet's air: reddened low, fading out toward its
+        // shadow (cloud_field.glsl's cloudSunTint).
+        vec3 tint = cloudSunTint(uOwnAtmosphere, samplePos, sunDir);
+        sunlight *= tint;
+        twilight = sunColor * cloudTwilight(uOwnAtmosphere, samplePos, sunDir, tint);
         // The sky's light fades through twilight as the air's own fill
         // does (atmosphere.glsl), so clouds in the planet's shadow stay as
         // bright as the air around them.
-        skylight *= smoothstep(-0.3, 0.1, dot(up, sunDir));
+        skylight *= smoothstep(-0.3, 0.1, dot(normalize(samplePos), sunDir));
     }
+    // The lit air above a cloud in the planet's shadow (cloudTwilight): light
+    // from the sky, so neither phase-weighted nor self-shadowed, and reaching
+    // the underside as the sky's does. This is what spreads the terminator
+    // over the clouds instead of a line from lit to dark.
     vec3 colour = sunlight * (sunBrightness * sunShadowing * phase)
-                + skylight * ambient;
+                + skylight * ambient
+                + twilight * (sunBrightness * TWILIGHT_GLOW * skyReach);
     if (uSpherical == 1) {
         // The air between the camera and the cloud, in linear light. Its
         // in-scattered light is in front of the cloud, so it is weighted by

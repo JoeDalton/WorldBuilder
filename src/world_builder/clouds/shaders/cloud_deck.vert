@@ -16,6 +16,7 @@ out vec3 vAtmoT;
 out vec3 vAtmoS;
 out vec3 vSunTint;
 out float vSkyTint;
+out vec3 vTwilight;
 
 void main() {
     gl_Position = p3d_ModelViewProjectionMatrix * p3d_Vertex;
@@ -29,4 +30,5 @@ void main() {
     vAtmoS = vec3(0.0);
     vSunTint = vec3(1.0);
     vSkyTint = 1.0;
+    vTwilight = vec3(0.0);
 }
