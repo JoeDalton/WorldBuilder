@@ -48,15 +48,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Terrain.set_shallow_water`), shoreline foam (`Ocean.set_foam`), and a
   swell that dies out over the shallows. The terrain demo feeds it from the
   terrain and keeps the game's 20 m swell. (#12)
-- `OceanQuality` and the `OCEAN_QUALITY` presets: every ocean cost/quality
-  trade in one place, changed live (`Ocean.set_quality`, F11 in the demo,
-  `--ocean-quality` in the scripts). `Ocean.set_debug_mode`, with views of
-  the wave filtering and the depth. `Ocean.set_swell_amplitude`, the
-  swell's height live (F12 in the demo). (#12)
+- Every ocean cost/quality trade in one place (now `OceanSettings`, #18),
+  changed live (F11 in the demo, `--ocean-quality` in the scripts).
+  `Ocean.set_debug_mode`, with views of the wave filtering and the depth.
+  `Ocean.set_swell_amplitude`, the swell's height live (F12 in the demo).
+  (#12)
 - A `beach` pose in `terrain_shots.py`: the shore nearest the reference
   point, up close. (#12)
+- Quality settings for every part of a world, for a game's settings menu
+  ([Quality settings](docs/source/quality.md)) (#18):
+  - one frozen dataclass of knobs per part: `TerrainSettings`,
+    `AtmosphereSettings`, `SkySettings`, `CloudSettings`, `OceanSettings`;
+  - each with LOW / MID / HIGH / ULTRA presets (the shared `QualityLevel`);
+  - each field described for a menu (label, range or choices, unit,
+    live / rebuild / restart);
+  - `settings=` and `set_settings()` on `Terrain`, `Atmospheres`, `Sky`,
+    `SphericalClouds`, `CloudField` / `Clouds` and `Ocean`;
+  - `world_builder.settings.WorldSettings` bundles them, with lenient
+    `to_dict()` / `from_dict()` for a settings file.
+
+  New knobs:
+  - **Terrain:** the finest detail (`min_level`, now in presets), the LOD
+    distance, texture distance and filtering, its caches and upload budget,
+    texture size, workers.
+  - **Atmosphere:** the march's steps per pixel and per vertex (a uniform
+    now, not a `#define`).
+  - **Sky:** the share of stars drawn, the glow's size.
+  - **Clouds:** each of the old level's parts on its own, their
+    reflection, their tile budgets.
+  - **Ocean:** its reflection's resolution and margin, and the swell mesh,
+    which it remakes.
+
+  The demo cycles the world's preset with H and takes `--quality`, as do
+  `terrain_shots.py` and `flight_bench.py`.
 
 ### Changed
+
+- The atmosphere's step count is a uniform: HIGH frames ~2 ms faster at sea
+  level (the loop is no longer unrolled), with the same image. The terrain
+  and the clouds read their budgets and caches from their settings, not
+  module constants (still the HIGH values). `CloudQuality` is an alias of
+  `world_builder.quality.QualityLevel`; the clouds' `VOLUME_FRACTIONS` and
+  `SHELL_OCTAVES` moved to `clouds/cloud.py` (still importable from
+  `clouds.sphere`). The reflection camera's mask is
+  `world_builder.depth.REFLECTION_CAMERA_MASK`. (#18)
 
 - Faster frames: worker processes at lower priority, one per physical core
   but one; a cheaper LOD pass, run less often; per-frame shader inputs

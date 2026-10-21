@@ -7,7 +7,8 @@ reporting frame times and where the main thread spends them::
 
     python scripts/flight_bench.py [--flight low cruise descent] [--seconds S]
         [--profile] [--size "1600 900"] [--workers N] [--offscreen]
-        [--cloud-quality high|mid|low|off] [--cloud-debug BITS]
+        [--quality high|ultra|low|mid] [--cloud-quality high|mid|low|ultra|off]
+        [--cloud-debug BITS]
         [--ocean-quality high|mid|low|ultra]
 
     --flight         the flights to run, in order (default: all three)
@@ -18,8 +19,9 @@ reporting frame times and where the main thread spends them::
     --workers        generation processes (default: physical cores - 1)
     --offscreen      render to an offscreen buffer: no display refresh cap
                      or throttling
-    --cloud-quality  default high
-    --ocean-quality  default high
+    --quality        the whole world's preset (WorldSettings), default high
+    --cloud-quality  the clouds' preset, over --quality (default: --quality)
+    --ocean-quality  the ocean's preset, over --quality (default: --quality)
     --cloud-debug    SphericalClouds.set_debug bits (default 0)
 
 Flights (boosted, along the coast of the demo level from its reference
@@ -52,6 +54,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from demo_terrain import (  # noqa: E402
     CLOUD_QUALITIES,
     OCEAN_QUALITIES,
+    QUALITIES,
     TerrainDemo,
     describe_window,
     window_config,
@@ -190,8 +193,9 @@ def main() -> None:
         action="store_true",
         help="render to an offscreen buffer: no display refresh cap or throttling",
     )
-    parser.add_argument("--cloud-quality", default="high", choices=CLOUD_QUALITIES)
-    parser.add_argument("--ocean-quality", default="high", choices=OCEAN_QUALITIES)
+    parser.add_argument("--quality", default="high", choices=QUALITIES)
+    parser.add_argument("--cloud-quality", default=None, choices=CLOUD_QUALITIES)
+    parser.add_argument("--ocean-quality", default=None, choices=OCEAN_QUALITIES)
     parser.add_argument(
         "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"
     )
@@ -204,12 +208,14 @@ def main() -> None:
         workers=args.workers,
         cloud_quality=args.cloud_quality,
         ocean_quality=args.ocean_quality,
+        quality=args.quality,
         cloud_debug=args.cloud_debug,
     )
     demo.setFrameRateMeter(False)
     print(
         describe_window(demo),
-        f"clouds {args.cloud_quality}, ocean {args.ocean_quality}",
+        f"quality {args.quality}, clouds {args.cloud_quality or args.quality}, "
+        f"ocean {args.ocean_quality or args.quality}",
     )
     try:
         for flight in args.flight:

@@ -21,7 +21,9 @@ Each atmosphere is an exponential medium around a sphere: Rayleigh scattering
 Earth's air (Bruneton 2017's constants) over a 60 km shell; every value is in
 `AtmosphereParams`.
 
-For a view ray, `atmosphere.glsl` marches 8 samples (`ATMO_STEPS`) through
+For a view ray, `atmosphere.glsl` marches `uAtmoSteps` samples (8 at HIGH:
+`AtmosphereSettings.steps`, live through `Atmospheres.set_settings`; the
+stars and the cloud billboards march `vertex_steps`, 4, per vertex) through
 each atmosphere the ray crosses (a ray that meets the ground stops there).
 At each sample:
 
@@ -236,10 +238,12 @@ first) and billboards twice the size of shell *k − 1*; adjacent shells
 crossfade by distance on optical depth (the flat field's `lod_shells`
 layout). Each shell costs about half the previous.
 
-Per pixel, the cost depends on the quality (`CloudQuality`: HIGH, MID,
-LOW; the demo's F5 cycles them and off; ULTRA, above HIGH, keeps all four
-octaves on every shell), which sets the billboard sizes, the sun march's
-steps, and:
+Per pixel, the cost depends on the settings (`CloudSettings`, its presets
+by `CloudQuality`: LOW, MID, HIGH, ULTRA; the demo's F5 cycles them and
+off; ULTRA, above HIGH, keeps all four octaves on every shell;
+`SphericalClouds.set_settings` re-plans the shells and regenerates the
+tiles on the same worker channel), which sets the billboard sizes, the sun
+march's steps, and:
 
 - **Octaves per shell** (`sphere.SHELL_OCTAVES`): HIGH evaluates all 4 up to
   shell 2 and drops the finest from shell 3 on; MID and LOW drop more,

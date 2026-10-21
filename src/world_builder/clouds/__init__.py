@@ -23,10 +23,16 @@ open alternative: view_aligned_slicing.md.
 from world_builder.clouds.cloud import (
     PRESETS,
     QUALITY_SCALES,
+    SHELL_OCTAVES,
+    VOLUME_FRACTIONS,
     CloudQuality,
+    CloudSettings,
     CloudSpec,
     CloudType,
     at_quality,
+    scale_count,
+    scale_march,
+    with_settings,
 )
 from world_builder.clouds.field import CloudField, CloudLayer, Clouds
 from world_builder.clouds.noise import (
@@ -45,10 +51,16 @@ __all__ = [
     "CloudSpec",
     "CloudOptics",
     "CloudQuality",
+    "CloudSettings",
     "DensityField",
     "PRESETS",
     "QUALITY_SCALES",
+    "SHELL_OCTAVES",
+    "VOLUME_FRACTIONS",
     "at_quality",
+    "scale_count",
+    "scale_march",
+    "with_settings",
     "build_noise_texture",
     "measure_coverage",
     "resolve_field",

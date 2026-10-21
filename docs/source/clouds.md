@@ -76,9 +76,16 @@ shadow each other, and why their silhouettes are exactly as crisp as the field.
     the field's noise periods. A cell teleporting by that width lands where the
     field is bit-identical, so the recycle is invisible and needs no fade —
     `wrapFadeBand` is zero for an isotropic layer.
-  - **Quality** (`CloudQuality`, `at_quality`) scales a type's cost across
-    LOW/MID/HIGH/ULTRA, read from `clouds.quality` in the game's graphics settings
+  - **Quality** (`CloudSettings`, [Quality settings](quality.md); the levels
+    are `CloudQuality`, the shared `QualityLevel`) scales a type's cost: by
+    preset across LOW/MID/HIGH/ULTRA, or knob by knob (`count_scale`,
+    `march_scale`, through `scale_count` and `scale_march`; `at_quality`
+    applies a level). With no settings given, the preset is read from
+    `clouds.quality` in the game's graphics settings
     (`game.app.graphics_settings.config`) when it has them.
+    `CloudField.set_settings` changes the march live, and re-places the
+    billboards for a new count. The re-placement keeps the wind's drift and
+    the live `set_optics` / `set_coverage` edits.
     HIGH is the identity — what the presets ship — so a caller with no settings
     (the demo) gets the authored look rather than a silent downgrade. Two knobs,
     scaled differently on purpose:

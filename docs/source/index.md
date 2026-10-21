@@ -17,6 +17,8 @@ it works.
   the star field and the clouds over a whole planet, with their weather.
 - [Ocean](ocean.md): the reflective ocean and its swell.
 - [Clouds](clouds.md): billboard clouds, their density fields and shading.
+- [Quality settings](quality.md): every cost/quality knob, the LOW to ULTRA
+  presets, and how a game's settings menu reads and saves them.
 - [Performance](performance.md): where the time goes, measured, and what was
   done about it; the [performance backlog](performance_backlog.md) lists the
   savings found but not yet made.
@@ -31,6 +33,7 @@ terrain
 atmosphere
 ocean
 clouds
+quality
 performance
 performance_backlog
 object_lighting

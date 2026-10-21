@@ -46,9 +46,11 @@ The radius is the one knob (`PlanetSpec.radius`, `planet.radius` in a level,
   for the finest spacing to stay near 2 m. That is 14 levels at 600 km, 17 at 6371 km.
 - **The finest tile** is `QUADS` (64) quads of that spacing: 1.8 m spacing and
   115 m tiles at 600 km. The knob is `cubesphere.TARGET_SPACING` (2 m; the grid
-  rounds to the nearest power of two). At runtime, `Terrain(min_level=...)`
-  and `set_min_level` (P in the demo) stop refining at a coarser level, and
-  collision follows.
+  rounds to the nearest power of two). At runtime, `TerrainSettings.min_level`
+  (`Terrain(settings=)`, `set_settings`, or `set_min_level`; P in the demo)
+  stops refining at a coarser level, and collision follows. That and the
+  terrain's other cost knobs (LOD distance, texture distance and filtering,
+  caches, upload budget) are listed in [Quality settings](quality.md).
 - Below a 150 km radius, features stop shrinking.
 
 ### Elevation
@@ -214,8 +216,9 @@ atmospheres.update(camera_world)
   channel has its own spec, version, wanted list and results. Each free
   slot goes to the channel with the fewest tasks in flight, so a distant
   moon's handful of coarse tiles is not stuck behind the planet's thousands.
-- **Memory follows the view.** A terrain keeps at most `STORE_SIZE` /
-  `NODE_CACHE_SIZE` tiles, and below that, 3× what its current selection
+- **Memory follows the view.** A terrain keeps at most
+  `TerrainSettings.store_size` / `node_cache_size` tiles (2,000 / 1,200 at
+  HIGH), and below that, 3× what its current selection
   needs (at least 256). A planet you fly away from releases its ground; a
   moon seen from the planet costs about 6–15 tiles.
 - **Depth.** `SplitDepthCameras.system_ranges` takes the split from the

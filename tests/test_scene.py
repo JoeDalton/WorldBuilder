@@ -212,14 +212,17 @@ def test_ocean_light_and_settings(ocean):
     assert _input(made.ocean_node, "iIterationsNormal")[0] == 64
 
 
-def test_ocean_quality_sets_its_uniforms(ocean):
-    from world_builder.ocean import OCEAN_QUALITY
+def test_ocean_settings_set_its_uniforms(ocean):
+    from dataclasses import replace
+
+    from world_builder.ocean import OceanSettings
     from world_builder.ocean.ocean import wave_weight_sum
 
     made, _ = ocean
     node = made.ocean_node
+    kept = made.settings
     try:
-        made.set_quality(OCEAN_QUALITY["low"])
+        made.set_settings(replace(OceanSettings.preset("low"), reflection_scale=0.25))
         assert _input(node, "iIterationsNormal")[0] == 16
         assert _input(node, "uWaveWeightSum")[0] == pytest.approx(wave_weight_sum(16))
         assert _input(node, "uAAEnd")[0] == pytest.approx(2.0 * math.pi / 6.0)
@@ -228,21 +231,85 @@ def test_ocean_quality_sets_its_uniforms(ocean):
         assert not made.refl_tex.uses_mipmaps()  # nothing reads them
         assert _input(node, "uFoamNoiseOn")[0] == 0
         assert len(made.seabed.cascades) == 2
-        made.set_quality(OCEAN_QUALITY["high"])
+        made.set_settings(replace(OceanSettings.preset("high"), reflection_scale=0.25))
         assert _input(node, "uRoughFresnel")[0] == 1
         assert made.refl_tex.uses_mipmaps()
         assert len(made.seabed.cascades) == 3
         made.set_foam(False)
-        assert _input(node, "uFoamOn")[0] == 0 and not made.quality.foam
+        assert _input(node, "uFoamOn")[0] == 0 and not made.settings.foam
         made.set_foam(True)
         assert _input(node, "uFoamOn")[0] == 1
         made.set_debug_mode(10)
         assert _input(node, "uDebugMode")[0] == 10
         made.set_swell_amplitude(45.0)
         assert _input(node, "uSwellAmplitude")[0] == 45.0
+        # A cut-off sharper than full strength is held at it.
+        made.set_settings(replace(made.settings, aa_full_px=5.0, aa_gone_px=9.0))
+        assert _input(node, "uAAEnd")[0] == pytest.approx(2.0 * math.pi / 5.0)
     finally:
-        made.set_quality(OCEAN_QUALITY["high"])
+        made.set_settings(kept)
         made.set_debug_mode(0)
+
+
+def test_ocean_reflection_and_swell_mesh_rebuild(window, ocean):
+    """A new reflection scale makes the buffer again on the same camera (its
+    lens, far plane and active flag kept); a new swell mesh replaces the
+    surface's geoms."""
+    from dataclasses import replace
+
+    made, _ = ocean
+    kept = made.settings
+    old_buffer, camera = made.refl_buffer, made.refl_cam
+    far = made.refl_cam_node.get_lens().get_far()
+    width = old_buffer.get_x_size()
+    vertices = made.ocean_node.node().get_geom(0).get_vertex_data().get_num_rows()
+    old_buffer.set_active(False)
+    try:
+        made.set_settings(
+            replace(
+                kept, reflection_scale=kept.reflection_scale * 2, swell_grid_subdivs=128
+            )
+        )
+        assert made.refl_buffer is not old_buffer
+        assert made.refl_buffer.get_x_size() == pytest.approx(2 * width, abs=1)
+        assert not made.refl_buffer.is_active()
+        assert made.refl_cam == camera
+        assert made.refl_cam_node.get_lens().get_far() == far
+        engine = window.graphicsEngine
+        assert old_buffer not in [
+            engine.get_window(i) for i in range(engine.get_num_windows())
+        ]
+        assert _input(made.ocean_node, "uReflUVScale")  # rebound
+        rows = made.ocean_node.node().get_geom(0).get_vertex_data().get_num_rows()
+        assert rows < vertices
+    finally:
+        made.set_settings(kept)
+        made.refl_buffer.set_active(True)
+
+
+def test_ocean_reads_the_games_reflection_scale(window):
+    from world_builder.ocean import Ocean
+
+    root = window.render.attach_new_node("sea2")
+    game = SimpleNamespace(
+        app=SimpleNamespace(
+            camera=window.camera,
+            camLens=window.camLens,
+            win=window.win,
+            graphicsEngine=window.graphicsEngine,
+            graphics_settings=SimpleNamespace(
+                config={"render": {"reflection_scale": 0.3}}
+            ),
+        ),
+        root_node=root,
+        method_lists={},
+        game_time=SimpleNamespace(get_current_time=lambda: 0.0),
+    )
+    made = Ocean(game=game, planet_radius=R)
+    try:
+        assert made.settings.reflection_scale == pytest.approx(0.3)
+    finally:
+        made.clean()
 
 
 def test_ocean_seabed_bakes_from_its_update(ocean):
@@ -403,11 +470,15 @@ def test_cloud_settings(clouds):
     assert _input(made.root, "uCloudDebug")[0] == 5
 
 
-def test_clouds_forget_tiles_far_out_of_use(clouds, monkeypatch):
-    """Flying away, the cache keeps at most TILE_CACHE tiles nobody wants;
-    tiles for an older spec version are dropped on arrival."""
+def test_clouds_forget_tiles_far_out_of_use(clouds):
+    """Flying away, the cache keeps at most ``tile_cache`` tiles nobody
+    wants; tiles for an older spec version are dropped on arrival."""
+    from dataclasses import replace
+
     made, _ = clouds
-    monkeypatch.setattr(sphere, "TILE_CACHE", 0)
+    kept = made.settings
+    made.set_settings(replace(kept, tile_cache=0))  # live: no rebuild
+    assert made.settings.tile_cache == 0
     first = TangentFrame.at(20.0, 40.0).up * (R + 1000.0)
     for _ in range(10):
         made.update(first)
@@ -424,6 +495,37 @@ def test_clouds_forget_tiles_far_out_of_use(clouds, monkeypatch):
     made._ready[key] = stale
     made._upload()
     assert key not in made._tiles
+    made.set_settings(kept)
+
+
+def test_clouds_settings_live_and_rebuilt(clouds):
+    """The sun march changes live (same tiles, same worker spec); the
+    billboard count re-plans the shells and regenerates every tile."""
+    from dataclasses import replace
+
+    from world_builder.depth import REFLECTION_CAMERA_MASK
+
+    made, _ = clouds
+    kept = made.settings
+    camera = TangentFrame.at(20.0, 40.0).up * (R + 1000.0)
+    try:
+        for _ in range(10):
+            made.update(camera)
+        tiles, version, spec = set(made._tiles), made._version, made.spec
+        assert tiles
+        made.set_settings(replace(kept, march_scale=0.5, reflected=False))
+        assert made._version == version and made.spec == spec
+        assert set(made._tiles) == tiles
+        assert made.root.is_hidden(REFLECTION_CAMERA_MASK)
+        made.set_settings(replace(made.settings, count_scale=0.5))
+        assert made._version == version + 1 and not made._tiles
+        # Fewer billboards, larger: as count^(-1/3).
+        assert made.spec.shells[0].radius[0] > spec.shells[0].radius[0]
+        made.set_settings(made.settings)  # nothing changes: no rebuild
+        assert made._version == version + 1
+    finally:
+        made.set_settings(kept)
+    assert not made.root.is_hidden(REFLECTION_CAMERA_MASK)
 
 
 def test_clouds_rebase_with_altitude(clouds):
@@ -449,3 +551,108 @@ def test_cloud_tile_node_bounds_hold_the_billboards(clouds):
     p = tile.data.particles
     assert bounds.contains(LVecBase3f(*p[0, 0:3]))
     assert tile.reach >= float(np.linalg.norm(p[:, 0:3], axis=1).max())
+
+
+def test_terrain_settings_apply_live(terrain):
+    """Every live terrain knob reaches what it drives; the LOD factor survives
+    a new planet; the texture size waits for the next terrain."""
+    from dataclasses import replace
+
+    from world_builder.terrain.terrain import TerrainSettings
+
+    kept = terrain.settings
+    try:
+        new = replace(
+            TerrainSettings.preset("low"),
+            min_level=2,
+            split_factor=1.6,
+            textured=False,
+            reflected=False,
+        )
+        terrain.set_settings(new)
+        assert terrain.settings == new
+        assert terrain.selector.split_factor == 1.6
+        assert terrain.min_level == terrain.query.level == 2
+        assert _input(terrain.root, "uDetailFar")[0] == pytest.approx(1500.0)
+        assert _input(terrain.root, "uTextured")[0] == 0
+        assert all(t.get_anisotropic_degree() == 2 for t in terrain._textures)
+        assert terrain.root.is_hidden(REFLECTION_CAMERA_BITS)
+        terrain.set_spec(terrain.spec)
+        assert terrain.selector.split_factor == 1.6
+        # The one-purpose setters keep the settings true.
+        terrain.set_textured(True)
+        assert terrain.settings.textured
+    finally:
+        terrain.set_settings(kept)
+    assert terrain.selector.split_factor == kept.split_factor
+
+
+def test_terrain_caches_follow_their_settings(terrain):
+    """A lower RAM cap evicts on the next store, never a chunk the drawn
+    selection needs."""
+    from dataclasses import replace
+
+    kept = terrain.settings
+    camera = np.array([0.0, 0.0, terrain.radius + 2000.0])
+    for _ in range(40):
+        terrain.update(camera)
+    try:
+        terrain.set_settings(replace(kept, store_size=500, node_cache_size=300))
+        stored = set(terrain.store)
+        for _ in range(5):
+            terrain.update(camera)
+        protected = terrain._keep | set(terrain._wanted)
+        assert len(terrain.store) <= max(500, len(protected & set(terrain.store)))
+        assert len(terrain.nodes) <= max(300, len(protected & set(terrain.nodes)))
+        # What the drawn selection needs and was in memory stays there.
+        assert (terrain._keep & stored) <= set(terrain.store)
+    finally:
+        terrain.set_settings(kept)
+
+
+def test_atmosphere_steps_are_shared_live():
+    """The march's steps are arrays bound once: a change reaches every node
+    already bound, without touching them."""
+    from world_builder.atmosphere import AtmosphereSettings, bind_defaults
+
+    air = Atmospheres(AtmosphereSettings.preset("low"))
+    air.add(R, AtmosphereParams())
+    node = NodePath("bound")
+    air.bind(node)
+    assert air._steps[0] == 4
+    bound = node.get_shader_input("uAtmoSteps")
+    air.set_settings(AtmosphereSettings.preset("ultra"))
+    # The same array, rewritten: the node's input is unchanged.
+    assert node.get_shader_input("uAtmoSteps") == bound
+    assert (air._steps[0], air._vertex_steps[0]) == (12, 8)
+    bare = NodePath("bare")
+    bind_defaults(bare)
+    assert bare.get_shader_input("uAtmoSteps").get_name().get_name() == "uAtmoSteps"
+
+
+def test_sky_settings_thin_the_stars(showbase):
+    from world_builder.sky import SkySettings, Starfield
+
+    starfield = Starfield(stars=400, glow_size=16)
+    sky = Sky(showbase.render, starfield)
+    try:
+        # No settings: the starfield's own glow, not a new one.
+        assert sky.node.get_shader_input("uStars").get_texture() == starfield.glow
+        points = lambda: sky.stars.node().get_geom(0).get_primitive(0)  # noqa: E731
+        assert points().get_num_vertices() == 400
+        sky.set_settings(SkySettings(star_fraction=0.25, glow_size=64))
+        assert points().get_num_vertices() == 100
+        assert sky.node.get_shader_input("uStars").get_texture().get_x_size() == 64
+        # Brightest first: the stars kept are the brightest.
+        flux = np.frombuffer(
+            sky.stars.node()
+            .get_geom(0)
+            .get_vertex_data()
+            .get_array(0)
+            .get_handle()
+            .get_data(),
+            dtype=np.float32,
+        ).reshape(-1, 7)[:, 6]
+        assert np.all(np.diff(flux) <= 0)
+    finally:
+        sky.remove()

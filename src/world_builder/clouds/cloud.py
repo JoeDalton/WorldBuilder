@@ -11,8 +11,10 @@ Particles are grouped into spatial CELLS, the units of draw-order sorting and
 toroidal recycling (field.py), stored ragged with an offsets table. (A planet's
 billboards are placed the same way, per cube-sphere tile: sphere.py.)
 
-Also here: the per-type presets (:data:`PRESETS`), the quality ladder
-(:class:`CloudQuality`, :func:`at_quality`) and the sprite atlas.
+Also here: the per-type presets (:data:`PRESETS`), what the clouds cost
+(:class:`CloudSettings`, its presets built from :data:`QUALITY_SCALES`,
+:data:`VOLUME_FRACTIONS` and :data:`SHELL_OCTAVES`; :func:`at_quality`) and
+the sprite atlas.
 """
 
 from __future__ import annotations
@@ -22,12 +24,13 @@ import json
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from panda3d.core import Filename, PNMImage, Texture, TexturePool
 
 from world_builder.clouds.noise import (
+    MAX_LAYERS,
     MIE_ASYMMETRY_ICE,
     MIE_ASYMMETRY_WATER,
     NOISE_SIZE,
@@ -37,6 +40,7 @@ from world_builder.clouds.noise import (
     density,
     field_offset,
 )
+from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 
 
 class CloudType(Enum):
@@ -186,19 +190,9 @@ PRESETS = {
 # ── Quality ────────────────────────────────────────────────────────────────────
 
 
-class CloudQuality(Enum):
-    """How much the clouds are allowed to cost. HIGH is what the presets ship.
-
-    Scales each type's billboard count and sun march (:func:`at_quality`); a
-    planet's clouds also set their octaves and overlap per shell by it
-    (:data:`sphere.SHELL_OCTAVES`, :data:`sphere.VOLUME_FRACTIONS`).
-    """
-
-    LOW = "low"
-    MID = "mid"
-    HIGH = "high"
-    ULTRA = "ultra"
-
+#: The quality levels (an alias of :class:`world_builder.quality.QualityLevel`,
+#: the name the clouds had it under first).
+CloudQuality = QualityLevel
 
 #: (billboard-count scale, sun-march-step scale) relative to HIGH. The count is
 #: where the frame time is and costs no opacity; the march carries the clouds'
@@ -209,26 +203,164 @@ QUALITY_SCALES = {
     CloudQuality.HIGH: (1.0, 1.0),
     CloudQuality.ULTRA: (2.0, 1.5),
 }
+#: A planet's billboard volume per unit of cloud volume, per shell (the last
+#: repeats), by quality: how many billboards overlap. Opacity does not depend
+#: on it (the extinction is divided by it), the cost does; the near shell
+#: keeps the most, where overlap shows as smoothness.
+VOLUME_FRACTIONS = {
+    CloudQuality.ULTRA: (2.5, 2.5),
+    CloudQuality.HIGH: (2.5, 2.5),
+    CloudQuality.MID: (2.0, 1.5),
+    CloudQuality.LOW: (1.5, 1.0),
+}
+#: A planet's noise octaves per shell (the last repeats, and goes to the
+#: deck), by quality. The finest octave (~125 m features for cumulus) is
+#: still ~6 px at shell 1's far edge (27 km) at 1600x900, ~3 px at shell 2's
+#: (54 km), so dropping it is only invisible from shell 3 on.
+SHELL_OCTAVES = {
+    CloudQuality.ULTRA: (4,),
+    CloudQuality.HIGH: (4, 4, 4, 3),
+    CloudQuality.MID: (4, 4, 3, 3),
+    CloudQuality.LOW: (4, 3, 3, 2),
+}
 
 
-def at_quality(spec: CloudSpec, quality: CloudQuality) -> CloudSpec:
-    """Rescale one cloud type's COST, leaving its look as nearly alone as possible.
+def _octave_choices() -> dict[str, tuple[int, ...]]:
+    """The octave schedules by name ("4-4-3-3"), cheapest first."""
+    schedules = (SHELL_OCTAVES[level] for level in CloudQuality)
+    return {"-".join(map(str, v)): v for v in schedules}
 
-    * The march's REACH (steps x length) is held constant; only its resolution
-      changes. A coarser sampling of the same path approximates Beer-Lambert well;
-      a shorter path does not.
-    * The count changes through the RADIUS, not volume_fraction: at fixed
-      volume_fraction the count falls as radius⁻³ (the lod_shells trade). Cutting
-      volume_fraction instead strips billboards from cloud fringes and loses
-      silhouette (measured -18% vs -8.8% at LOW).
 
-    :param spec: the type as authored (at HIGH)
-    :param quality: the level to scale it to
-    :returns: a scaled copy (*spec* itself at HIGH)
-    :raises KeyError: for an unknown level
+@dataclass(frozen=True)
+class CloudSettings(QualitySettings):
+    """What the clouds cost (:mod:`world_builder.quality`), for a planet's
+    (:class:`sphere.SphericalClouds`) and the flat field
+    (:class:`field.CloudField`); the fields marked "planet clouds" do nothing
+    on the flat field.
+
+    :ivar count_scale: billboards relative to the types as authored: their
+        sizes go as count^(-1/3), so coverage and opacity hold
+        (:func:`scale_count`). Rebuild
+    :ivar march_scale: sun-march steps relative to the types', over the same
+        reach (:func:`scale_march`). Live
+    :ivar overlap_near: planet clouds: billboard overlap in the nearest shell
+        (volume per unit of cloud volume; the cost, not the opacity). Rebuild
+    :ivar overlap_far: in the shells past it. Rebuild
+    :ivar shell_octaves: planet clouds: noise octaves per shell, the last
+        repeating (and going to the deck). Rebuild
+    :ivar shells: planet clouds: billboard shells before the deck takes
+        over, each twice as far as the last. Rebuild
+    :ivar reflected: drawn in the ocean's reflection. Live
+    :ivar uploads_per_frame: planet clouds: tiles uploaded per frame. Live
+    :ivar resorts_per_frame: planet clouds: tiles re-sorted per frame. Live
+    :ivar tile_cache: planet clouds: tiles kept beyond those wanted. Live
+    :ivar resort_frames: the flat field: frames over which its cells are
+        re-sorted. Live
     """
-    count, march = QUALITY_SCALES[quality]
-    if count == 1.0 and march == 1.0:
+
+    count_scale: float = knob(
+        1.0,
+        "Cloud billboards",
+        REBUILD,
+        unit="x",
+        range=(0.1, 4.0),
+        help="How many billboards draw the clouds (smaller as there are more): "
+        "the clouds' main cost, and their smoothness.",
+    )
+    march_scale: float = knob(
+        1.0,
+        "Cloud lighting",
+        unit="x",
+        range=(0.25, 2.0),
+        help="Steps of each billboard's march toward the sun: the clouds' "
+        "self-shadowing.",
+    )
+    overlap_near: float = knob(
+        2.5,
+        "Cloud overlap, near",
+        REBUILD,
+        range=(0.5, 4.0),
+        advanced=True,
+        help="How much the nearest billboards overlap: smoothness up close.",
+    )
+    overlap_far: float = knob(
+        2.5,
+        "Cloud overlap, far",
+        REBUILD,
+        range=(0.5, 4.0),
+        advanced=True,
+        help="The same, farther out.",
+    )
+    shell_octaves: tuple[int, ...] = knob(
+        SHELL_OCTAVES[CloudQuality.HIGH],
+        "Cloud detail",
+        REBUILD,
+        choices=_octave_choices(),
+        help="Noise octaves near to far: the clouds' fine detail in the distance.",
+    )
+    shells: int = knob(
+        4,
+        "Cloud billboard distance",
+        REBUILD,
+        unit="shells",
+        range=(1, MAX_LAYERS - 1),
+        advanced=True,
+        help="Billboard shells, each twice as far as the last, before the flat "
+        "deck takes over.",
+    )
+    reflected: bool = knob(
+        True,
+        "Clouds in reflections",
+        help="Draw the clouds in the sea's reflection (about 1-1.7 ms).",
+    )
+    uploads_per_frame: int = knob(
+        3, "Cloud tile uploads per frame", range=(1, 32), advanced=True
+    )
+    resorts_per_frame: int = knob(
+        4, "Cloud tile re-sorts per frame", range=(1, 32), advanced=True
+    )
+    tile_cache: int = knob(
+        160, "Cloud tiles kept", unit="tiles", range=(0, 2000), advanced=True
+    )
+    resort_frames: int = knob(
+        8, "Flat clouds' re-sort period", unit="frames", range=(1, 60), advanced=True
+    )
+
+    PRESETS: ClassVar = {
+        level: {
+            "count_scale": QUALITY_SCALES[level][0],
+            "march_scale": QUALITY_SCALES[level][1],
+            "overlap_near": VOLUME_FRACTIONS[level][0],
+            "overlap_far": VOLUME_FRACTIONS[level][-1],
+            "shell_octaves": SHELL_OCTAVES[level],
+            "reflected": level is not CloudQuality.LOW,
+        }
+        for level in CloudQuality
+    }
+
+
+def scale_count(spec: CloudSpec, count: float) -> CloudSpec:
+    """A cloud type with *count* times its billboards, as large in all: their
+    radii go as count^(-1/3), not the volume fraction (at a fixed fraction
+    the count falls as radius⁻³, the lod_shells trade; cutting the fraction
+    instead strips billboards from the fringes and loses silhouette:
+    measured -18% vs -8.8% at LOW).
+
+    :returns: a scaled copy (*spec* itself at 1)
+    """
+    if count == 1.0:
+        return spec
+    return replace(spec, radius=tuple(r * count ** (-1.0 / 3.0) for r in spec.radius))
+
+
+def scale_march(spec: CloudSpec, march: float) -> CloudSpec:
+    """A cloud type with *march* times its sun-march steps over the same
+    REACH (steps x length): a coarser sampling of the same path approximates
+    Beer-Lambert well; a shorter path does not.
+
+    :returns: a scaled copy (*spec* itself at 1)
+    """
+    if march == 1.0:
         return spec
     optics = spec.optics
     # int(x + 0.5), not round(): half-to-even would make a 3-step type lose a step
@@ -236,10 +368,28 @@ def at_quality(spec: CloudSpec, quality: CloudQuality) -> CloudSpec:
     steps = max(1, int(optics.sun_steps * march + 0.5))
     reach = optics.sun_steps * optics.sun_step_length
     return replace(
-        spec,
-        radius=tuple(r * count ** (-1.0 / 3.0) for r in spec.radius),
-        optics=replace(optics, sun_steps=steps, sun_step_length=reach / steps),
+        spec, optics=replace(optics, sun_steps=steps, sun_step_length=reach / steps)
     )
+
+
+def with_settings(spec: CloudSpec, settings: CloudSettings) -> CloudSpec:
+    """A cloud type at the settings' cost (:func:`scale_count`,
+    :func:`scale_march`)."""
+    return scale_march(scale_count(spec, settings.count_scale), settings.march_scale)
+
+
+def at_quality(spec: CloudSpec, quality: CloudQuality) -> CloudSpec:
+    """Rescale one cloud type's COST to a quality level, leaving its look as
+    nearly alone as possible (:data:`QUALITY_SCALES`, through
+    :func:`scale_count` and :func:`scale_march`).
+
+    :param spec: the type as authored (at HIGH)
+    :param quality: the level to scale it to
+    :returns: a scaled copy (*spec* itself at HIGH)
+    :raises KeyError: for an unknown level
+    """
+    count, march = QUALITY_SCALES[quality]
+    return scale_march(scale_count(spec, count), march)
 
 
 # ── Optical calibration ───────────────────────────────────────────────────────

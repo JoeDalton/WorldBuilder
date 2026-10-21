@@ -15,8 +15,7 @@ from panda3d.core import GeomVertexReader
 
 from world_builder import PLANET_RADIUS_M
 from world_builder.ocean import (
-    OCEAN_QUALITY,
-    OceanQuality,
+    OceanSettings,
     aces_tonemap,
     border_coords,
     make_swell_grid_mesh,
@@ -29,6 +28,7 @@ from world_builder.ocean.ocean import (
     wave_tail_variance,
     wave_weight_sum,
 )
+from world_builder.quality import QualityLevel
 
 CURVATURE = 1.0 / (2.0 * PLANET_RADIUS_M)
 
@@ -297,12 +297,15 @@ def test_rough_fresnel_softens_the_grazing_mirror():
 
 
 def test_quality_presets_order_their_cost():
-    names = ("low", "mid", "high", "ultra")
-    assert OCEAN_QUALITY["high"] == OceanQuality()
-    for cheaper, dearer in zip(names, names[1:]):
-        a, b = OCEAN_QUALITY[cheaper], OCEAN_QUALITY[dearer]
+    levels = list(QualityLevel)
+    assert OceanSettings.preset(QualityLevel.HIGH) == OceanSettings()
+    for cheaper, dearer in zip(levels, levels[1:]):
+        a, b = OceanSettings.preset(cheaper), OceanSettings.preset(dearer)
         assert a.wave_iterations <= b.wave_iterations
         # A cheaper preset drops octaves sooner (more pixels per wavelength).
         assert a.aa_gone_px >= b.aa_gone_px and a.aa_full_px >= b.aa_full_px
-    for quality in OCEAN_QUALITY.values():
-        assert quality.aa_full_px > quality.aa_gone_px >= 2.0  # Nyquist
+        assert a.reflection_scale <= b.reflection_scale
+        assert a.swell_grid_subdivs <= b.swell_grid_subdivs
+    for level in levels:
+        settings = OceanSettings.preset(level)
+        assert settings.aa_full_px > settings.aa_gone_px >= 2.0  # Nyquist

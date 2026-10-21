@@ -7,9 +7,10 @@ colour; :class:`Atmospheres` feeds it the uniforms of every atmosphere in the
 world, once per frame, through arrays shared by all those shaders. A body seen
 through another's air (a moon from the ground) is dimmed and tinted by it.
 
-The model, per view ray: march ``ATMO_STEPS`` samples through each atmosphere
-crossed; at each, the optical depth toward the sun is analytic (Chapman
-function, erfcx form, ~1.5 % from a numerical integral), and only the lit
+The model, per view ray: march ``AtmosphereSettings.steps`` samples (the
+shaders' ``ATMO_STEPS``) through each atmosphere crossed; at each, the
+optical depth toward the sun is analytic (Chapman function, erfcx form,
+~1.5 % from a numerical integral), and only the lit
 share of the sample's stretch gets sun (the planet's shadow is found
 analytically along the ray, so its edge moves smoothly). That gives the sky
 colour, sunsets, the limb seen from space, aerial perspective and the
@@ -32,6 +33,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -42,9 +44,45 @@ from panda3d.core import (
     PTA_LVecBase4f,
 )
 
+from world_builder.quality import QualityLevel, QualitySettings, knob
+
 SHADER_PATH = Path(__file__).parent / "shaders"
 #: Atmospheres one shader can take (must match MAX_ATMOSPHERES in the GLSL).
 MAX_ATMOSPHERES = 2
+
+
+@dataclass(frozen=True)
+class AtmosphereSettings(QualitySettings):
+    """What the air costs (:mod:`world_builder.quality`): every shader that
+    sees through it marches its view rays, so these weigh on every pixel of
+    terrain, sky, sea and cloud deck. Both live.
+
+    :ivar steps: samples per atmosphere along a pixel's view ray
+    :ivar vertex_steps: along a vertex's (stars, cloud billboards)
+    """
+
+    steps: int = knob(
+        8,
+        "Air quality",
+        unit="samples",
+        range=(2, 16),
+        help="Samples along each pixel's view ray through the air: fewer band "
+        "the dusk sky and the haze; the cost is per pixel, everywhere.",
+    )
+    vertex_steps: int = knob(
+        4,
+        "Air quality on stars and clouds",
+        unit="samples",
+        range=(1, 8),
+        advanced=True,
+        help="The same, per vertex, for the stars and the cloud billboards.",
+    )
+
+    PRESETS: ClassVar = {
+        QualityLevel.LOW: {"steps": 4, "vertex_steps": 2},
+        QualityLevel.MID: {"steps": 6, "vertex_steps": 3},
+        QualityLevel.ULTRA: {"steps": 12, "vertex_steps": 8},
+    }
 
 
 @dataclass(frozen=True)
@@ -101,12 +139,30 @@ class Atmospheres:
         atmospheres.update(camera_world)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, settings: AtmosphereSettings | None = None) -> None:
+        """
+        :param settings: what the air costs; None = the HIGH preset
+        """
         self._bodies: list[list] = []  # [radius, params, position]
         self._count = PTA_int.empty_array(1)
+        self._steps = PTA_int.empty_array(1)
+        self._vertex_steps = PTA_int.empty_array(1)
         self._arrays = {
             name: PTA_LVecBase4f.empty_array(MAX_ATMOSPHERES) for name in _ARRAYS
         }
+        self.set_settings(settings or AtmosphereSettings())
+
+    @property
+    def settings(self) -> AtmosphereSettings:
+        """What the air costs (:meth:`set_settings`)."""
+        return self._settings
+
+    def set_settings(self, settings: AtmosphereSettings) -> None:
+        """Change what the air costs, live on every bound node (the step
+        counts are arrays written in place)."""
+        self._settings = settings
+        self._steps[0] = settings.steps
+        self._vertex_steps[0] = settings.vertex_steps
 
     def add(
         self, radius: float, params: AtmosphereParams, position: ArrayLike = (0, 0, 0)
@@ -148,6 +204,8 @@ class Atmospheres:
     def bind(self, node: NodePath) -> None:
         """Give a node (and its subtree) the atmosphere uniforms."""
         node.set_shader_input("uAtmoCount", self._count)
+        node.set_shader_input("uAtmoSteps", self._steps)
+        node.set_shader_input("uAtmoVertexSteps", self._vertex_steps)
         for name, array in self._arrays.items():
             node.set_shader_input(name, array)
 
@@ -299,7 +357,15 @@ def bind_defaults(node: NodePath) -> None:
     if _DEFAULTS is None:
         count = PTA_int.empty_array(1)
         count[0] = 0
-        _DEFAULTS = {"uAtmoCount": count}
+        steps = PTA_int.empty_array(1)
+        steps[0] = AtmosphereSettings.steps
+        vertex_steps = PTA_int.empty_array(1)
+        vertex_steps[0] = AtmosphereSettings.vertex_steps
+        _DEFAULTS = {
+            "uAtmoCount": count,
+            "uAtmoSteps": steps,
+            "uAtmoVertexSteps": vertex_steps,
+        }
         for name in _ARRAYS:
             array = PTA_LVecBase4f.empty_array(MAX_ATMOSPHERES)
             for i in range(MAX_ATMOSPHERES):

@@ -1239,3 +1239,38 @@ def test_an_empty_field_is_refused(volume, atlas_rects, resolved):
         sample_field_particles(
             empty, volume, domain=2000.0, cell_size=1000.0, atlas_rects=atlas_rects
         )
+
+
+# ── Settings (world_builder.quality) ───────────────────────────────────────────
+
+
+def test_a_field_changes_its_settings_live_and_by_rebuild(game):
+    """The march and the reflection change live; the billboard count places
+    the field again, under the same parent, keeping the wind's drift and the
+    live edits."""
+    from dataclasses import replace
+
+    from world_builder.clouds.cloud import CloudSettings
+    from world_builder.depth import REFLECTION_CAMERA_MASK
+
+    field = _make_field(game, CUMULUS)
+    parent = field.node.get_parent()
+    field.update(Vec3(0, 0, 0), dt=10.0)  # the wind has moved the field
+    drift = field._noise_offset.copy()
+    field.set_coverage(coverage=0.2)
+    steps = field._layer_specs[0].optics.sun_steps
+    n = field._n
+
+    field.set_settings(replace(field.settings, march_scale=0.5, reflected=False))
+    assert field._n == n  # not rebuilt
+    assert field._layer_specs[0].optics.sun_steps < steps
+    assert field.node.is_hidden(REFLECTION_CAMERA_MASK)
+    assert field._quality is None  # custom settings
+
+    field.set_settings(CloudSettings.preset(CloudQuality.LOW))
+    assert field._n / n == pytest.approx(0.25, rel=0.1)
+    assert field.node.get_parent() == parent
+    assert parent.find_all_matches("cloud_field").get_num_paths() == 1  # old gone
+    np.testing.assert_allclose(field._noise_offset, drift)
+    assert field._layer_specs[0].field.coverage == pytest.approx(0.2)
+    assert field._quality is CloudQuality.LOW

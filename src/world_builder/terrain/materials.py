@@ -119,17 +119,22 @@ class MaterialSet:
     sources: dict[str, str]
 
 
-def load_materials(root: Path = TEXTURES_PATH) -> MaterialSet:
+def load_materials(
+    root: Path = TEXTURES_PATH, max_size: int | None = None
+) -> MaterialSet:
     """Load every biome's textures, filling gaps with placeholders.
 
     :param root: folder holding one sub-folder per biome
+    :param max_size: the largest texture size, texels (a quality setting:
+        ``TerrainSettings.texture_size``); None = ``textures.yaml``'s
+        ``max_size``, which also caps it
     :returns: the packed set
     :raises ValueError: if a ``tile_m`` does not divide the UV period
     """
     config = {}
     if (root / "textures.yaml").exists():
         config = yaml.safe_load((root / "textures.yaml").read_text()) or {}
-    max_size = int(config.get("max_size", 2048))
+    max_size = min(int(config.get("max_size", 2048)), max_size or 1 << 30)
 
     found = {biome: _find_maps(root / biome) for biome in BIOMES}
     real_sizes = [
@@ -138,7 +143,7 @@ def load_materials(root: Path = TEXTURES_PATH) -> MaterialSet:
     size = (
         _pow2_floor(min([max_size, *[min(s) for s in real_sizes]]))
         if real_sizes
-        else PLACEHOLDER_SIZE
+        else _pow2_floor(min(max_size, PLACEHOLDER_SIZE))
     )
 
     albedo_height = np.zeros((len(BIOMES), size, size, 4), dtype=np.uint8)

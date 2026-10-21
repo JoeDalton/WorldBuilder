@@ -59,13 +59,15 @@ Controls (AZERTY):
                     rebuild its clouds for the new weather)
     O               toggle the ocean
     C               toggle the clouds
-    F5              cycle the cloud quality: high / mid / low / off
-                    (rebuilds the clouds; their tiles take a few seconds)
+    F5              cycle the cloud quality: high / mid / low / ultra / off
+                    (re-plans the clouds; their tiles take a few seconds)
     F6              cycle the nebula's palette
     F7 / F8         dimmer / brighter nebula
     F9 / F10        dimmer / brighter ambient (sky) light
     M               toggle the terrain in the ocean's reflection
     F11             cycle the ocean quality: high / mid / low / ultra
+    H               cycle the whole world's quality preset: high / ultra /
+                    low / mid (world_builder.settings.WorldSettings)
     F12             cycle the swell's deep-water height: 20 / 40 / 60 / 10 m
     , / ;           sharper / softer biome transitions
     T               toggle textures (off: flat biome colours)
@@ -73,7 +75,8 @@ Controls (AZERTY):
     V               cycle the debug view: shaded / LOD / biomes / slope /
                     normals / skirts
     P               cycle the detail: full, then dropping the finest LOD levels
-                    one at a time (vertex spacing doubling each time)
+                    one at a time (vertex spacing doubling each time; the
+                    terrain's min_level setting)
     G               toggle the collision probe: a 20 m sphere ahead of the
                     camera showing its contact point and normal
     SPACE           fire a probe laser along the view; marks the hit
@@ -128,9 +131,11 @@ from panda3d.core import (
 )
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
-from world_builder.clouds.cloud import CloudQuality
+from world_builder.clouds.cloud import CloudSettings
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.ocean import OceanSettings
+from world_builder.settings import WorldSettings
 from world_builder.sky import NEBULA_PALETTES, Sky, Starfield
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import (
@@ -142,6 +147,7 @@ from world_builder.terrain.cubesphere import FACE_NAMES, dirs_to_face
 from world_builder.terrain.level import DEMO_LEVEL, load_level
 from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
+from world_builder.terrain.terrain import TerrainSettings
 
 INITIAL_FAR_M = 600000.0  # the lens the ocean's reflection camera copies
 # The ocean's own haze (it blends to this by distance where no atmosphere
@@ -152,7 +158,6 @@ SPEED = 300.0  # metres/second at low altitude
 BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground
 ORBIT_RADII = 3.0  # HOME and TAB jump this high
-MAX_DROPPED_LEVELS = 5  # P cycles the finest drawn level from 0 to this
 # The moon: centre-to-centre distance, and where it hangs in the start view
 # (this far from the start point's vertical, toward its north).
 MOON_DISTANCE_M = 10_000e3
@@ -202,9 +207,11 @@ _CONTROLS = (
     *(key for row in (*_ROTATIONS, *_TRANSLATIONS, *_SUN_KEYS) for key in row[:2]),
 )
 #: F5 cycles the clouds through these.
-CLOUD_QUALITIES = ("high", "mid", "low", "off")
-#: F11 cycles the ocean through these (world_builder.ocean.OCEAN_QUALITY).
+CLOUD_QUALITIES = ("high", "mid", "low", "ultra", "off")
+#: F11 cycles the ocean through these (OceanSettings presets), H the whole
+#: world (WorldSettings presets).
 OCEAN_QUALITIES = ("high", "mid", "low", "ultra")
+QUALITIES = ("high", "ultra", "low", "mid")
 #: F12 cycles the swell's deep-water height through these, metres.
 SWELL_HEIGHTS = (20.0, 40.0, 60.0, 10.0)
 _DEBUG_VIEWS = ("shaded", "LOD", "biomes", "slope", "normals", "skirts")
@@ -309,6 +316,12 @@ class Body:
         return self.terrain.radius
 
 
+def _level_name(kind, settings) -> str:
+    """:returns: the preset *settings* is, or 'custom'"""
+    level = kind.level_of(settings)
+    return "custom" if level is None else level.value
+
+
 class TerrainDemo(ShowBase):
     """A free-flying camera around and onto a planet and its moon."""
 
@@ -319,22 +332,25 @@ class TerrainDemo(ShowBase):
         radius: float | None,
         moon_distance: float | None = MOON_DISTANCE_M,
         workers: int | None = None,
-        cloud_quality: str = "high",
+        cloud_quality: str | None = None,
         cloud_debug: int = 0,
-        ocean_quality: str = "high",
+        ocean_quality: str | None = None,
         ocean_debug: int = 0,
+        quality: str = "high",
     ) -> None:
         """
         :param level_path: the planet's level file
         :param backend: chunk generation backend, see ChunkExecutor
         :param radius: overrides the level's planet radius, metres
         :param moon_distance: centre-to-centre, metres; None = no moon
-        :param workers: generation processes; None = the machine's default
-        :param cloud_quality: one of :data:`CLOUD_QUALITIES`
+        :param workers: generation processes; None = the quality's (the
+            machine's default)
+        :param cloud_quality: one of :data:`CLOUD_QUALITIES`; None = *quality*
         :param cloud_debug: the clouds' profiling switches
             (:meth:`SphericalClouds.set_debug`)
-        :param ocean_quality: one of :data:`OCEAN_QUALITIES`
+        :param ocean_quality: one of :data:`OCEAN_QUALITIES`; None = *quality*
         :param ocean_debug: the ocean's debug view (:meth:`Ocean.set_debug_mode`)
+        :param quality: the whole world's preset (:class:`WorldSettings`)
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -360,10 +376,19 @@ class TerrainDemo(ShowBase):
         from world_builder.terrain.terrain import Terrain
         from world_builder.terrain.workers import ChunkExecutor
 
+        world = WorldSettings.preset(quality)
+        if ocean_quality is not None:
+            world = replace(world, ocean=OceanSettings.preset(ocean_quality))
+        self._clouds_on = cloud_quality != "off"
+        if cloud_quality not in (None, "off"):
+            world = replace(world, clouds=CloudSettings.preset(cloud_quality))
+        self.world = world
         print("starting terrain workers ...")
+        if workers is None:
+            workers = world.terrain.workers or None
         self.executor = ChunkExecutor(backend=backend, workers=workers)
         # The planet's air: everything is seen through it, the moon included.
-        self.atmospheres = Atmospheres()
+        self.atmospheres = Atmospheres(world.atmosphere)
         self.atmospheres.add(spec.radius, AtmosphereParams())
         self.terrain = Terrain(
             parent=self.render,
@@ -373,6 +398,7 @@ class TerrainDemo(ShowBase):
             atmosphere=0,
             sun_color=SUN_COLOR,
             ambient=SKY_AMBIENT,
+            settings=world.terrain,
         )
         self.home = Body("planet", self.terrain, atmosphere=True)
         self.bodies = [self.home]
@@ -386,23 +412,23 @@ class TerrainDemo(ShowBase):
                 ambient=SPACE_AMBIENT,
                 position=self._moon_position(spec, moon_distance),
                 materials=self.terrain.materials,
+                settings=world.terrain,
             )
             self.bodies.append(Body("moon", moon, atmosphere=False))
         self.max_range = MAX_RANGE_FACTOR * (moon_distance or 10.0 * spec.radius)
         self.body = self.home  # the nearest body, updated every frame
 
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
-        self.sky = Sky(self.render, Starfield(), self.atmospheres)
+        self.sky = Sky(self.render, Starfield(), self.atmospheres, settings=world.sky)
         self._palette = 0
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.clouds = None
         self._clouds_shown = True
         self._cloud_debug = cloud_debug
-        self.set_cloud_quality(cloud_quality)
+        self._rebuild_clouds()
         # Built before the depth split changes the lens: the ocean's
         # reflection camera copies it once.
         self.ocean = self._make_ocean()
-        self.set_ocean_quality(ocean_quality)
         self.ocean.set_debug_mode(ocean_debug)
         self.depth = SplitDepthCameras(self, near=1.0)
         self._ocean_wanted = True
@@ -445,6 +471,7 @@ class TerrainDemo(ShowBase):
             ("f10", self._scale_ambient, [1.25]),
             ("m", self._toggle_reflection, []),
             ("f11", self._cycle_ocean_quality, []),
+            ("h", self._cycle_quality, []),
             ("f12", self._cycle_swell, []),
             ("t", self._toggle_textures, []),
             ("b", self._toggle_wireframe, []),
@@ -553,6 +580,7 @@ class TerrainDemo(ShowBase):
         )
         ocean = Ocean(
             game=self._game,
+            settings=self.world.ocean,
             geometric_swell=True,
             # The game's 20 m swell, in deep water: the seabed (set_seabed,
             # below) makes it die out over the shallows, so it does not drown
@@ -866,13 +894,17 @@ class TerrainDemo(ShowBase):
         speed = self.speed / SPEED
         split_km, far_km = self.depth.split / 1e3, self.depth.far / 1e3
         cs = self.clouds.stats if self.clouds is not None else None
+        cloud_level = _level_name(CloudSettings, self.world.clouds)
         clouds = (
-            f"clouds {self._cloud_quality}: {cs['tiles']} tiles, "
+            f"clouds {cloud_level}: {cs['tiles']} tiles, "
             f"{cs['billboards']:,} billboards, {cs['pending']} generating "
             f"({cs['gen_ms']:.0f} ms/tile)"
             if cs is not None
             else "clouds off"
-        ) + f"   ocean {self._ocean_quality}"
+        ) + (
+            f"   ocean {_level_name(OceanSettings, self.ocean.settings)}"
+            f"   quality {self._quality_text()}"
+        )
         others = "   ".join(
             f"{b.name} {np.linalg.norm(self._relative(b)) / 1e3:,.0f} km "
             f"({b.terrain.stats['shown']} chunks)"
@@ -925,7 +957,7 @@ class TerrainDemo(ShowBase):
         """Replace the planet (the moon stays) and its weather."""
         self.terrain.set_spec(spec)
         self.ocean.set_seabed(self._seabed_heights)  # drops the old planet's
-        self.set_cloud_quality(self._cloud_quality)
+        self._rebuild_clouds()
         for mark, body, _ in list(self._laser_marks):
             if body is self.home:
                 mark.remove_node()
@@ -978,28 +1010,44 @@ class TerrainDemo(ShowBase):
             self.clouds.root.hide()
 
     def set_cloud_quality(self, name: str) -> None:
-        """Rebuild the planet's clouds at a quality level (or none: "off").
-        The new clouds take over the old ones' worker channel, which drops
-        their tiles; the new tiles arrive in a few seconds."""
+        """The planet's clouds at a preset (or none: "off"). Changing preset
+        re-plans them in place (:meth:`SphericalClouds.set_settings`): the new
+        tiles arrive in a few seconds."""
+        if name == "off":
+            self._clouds_on = False
+            if self.clouds is not None:
+                self.clouds.remove()
+                self.clouds = None
+            return
+        self.world = replace(self.world, clouds=CloudSettings.preset(name))
+        self._clouds_on = True
+        if self.clouds is None:
+            self._rebuild_clouds()
+        else:
+            self.clouds.set_settings(self.world.clouds)
+
+    def _rebuild_clouds(self) -> None:
+        """New clouds for the planet (its weather changes with it). They take
+        over the old ones' worker channel, which drops their tiles."""
         if self.clouds is not None:
             self.clouds.remove()
             self.clouds = None
-        self._cloud_quality = name
-        if name != "off":
-            self.clouds = SphericalClouds(
-                self.render,
-                self.radius,
-                self.executor,
-                atmospheres=self.atmospheres,
-                atmosphere=0,
-                altitude=CLOUD_BASE,
-                planet=self.terrain.spec,
-                quality=CloudQuality(name),
-                channel="clouds",
-            )
-            self.clouds.set_debug(self._cloud_debug)
-            self.clouds.set_sun(self._sun)
-            self._apply_clouds()
+        if not self._clouds_on:
+            return
+        self.clouds = SphericalClouds(
+            self.render,
+            self.radius,
+            self.executor,
+            atmospheres=self.atmospheres,
+            atmosphere=0,
+            altitude=CLOUD_BASE,
+            planet=self.terrain.spec,
+            settings=self.world.clouds,
+            channel="clouds",
+        )
+        self.clouds.set_debug(self._cloud_debug)
+        self.clouds.set_sun(self._sun)
+        self._apply_clouds()
 
     def _cycle_nebula_palette(self) -> None:
         self._palette = (self._palette + 1) % len(NEBULA_PALETTES)
@@ -1013,20 +1061,62 @@ class TerrainDemo(ShowBase):
         print(f"nebula intensity {intensity:.3g}")
 
     def _cycle_cloud_quality(self) -> None:
-        index = CLOUD_QUALITIES.index(self._cloud_quality)
-        self.set_cloud_quality(CLOUD_QUALITIES[(index + 1) % len(CLOUD_QUALITIES)])
+        name = (
+            _level_name(CloudSettings, self.world.clouds) if self._clouds_on else "off"
+        )
+        index = CLOUD_QUALITIES.index(name) if name in CLOUD_QUALITIES else -1
+        name = CLOUD_QUALITIES[(index + 1) % len(CLOUD_QUALITIES)]
+        self.set_cloud_quality(name)
+        print(f"cloud quality: {name}")
 
     def set_ocean_quality(self, name: str) -> None:
-        """The ocean's cost/quality preset (live, no rebuild)."""
-        from world_builder.ocean import OCEAN_QUALITY
-
-        self._ocean_quality = name
-        self.ocean.set_quality(OCEAN_QUALITY[name])
+        """The ocean's preset (live but the reflection buffer and the swell
+        mesh, which it remakes)."""
+        self.world = replace(self.world, ocean=OceanSettings.preset(name))
+        self.ocean.set_settings(self.world.ocean)
 
     def _cycle_ocean_quality(self) -> None:
-        index = OCEAN_QUALITIES.index(self._ocean_quality)
-        self.set_ocean_quality(OCEAN_QUALITIES[(index + 1) % len(OCEAN_QUALITIES)])
-        print(f"ocean quality: {self._ocean_quality}")
+        name = _level_name(OceanSettings, self.ocean.settings)
+        index = OCEAN_QUALITIES.index(name) if name in OCEAN_QUALITIES else -1
+        name = OCEAN_QUALITIES[(index + 1) % len(OCEAN_QUALITIES)]
+        self.set_ocean_quality(name)
+        print(f"ocean quality: {name}")
+
+    def set_quality(self, name: str) -> None:
+        """The whole world at a preset (:class:`WorldSettings`), each part
+        through its own ``set_settings``. What only a restart changes (the
+        terrain's texture size and workers) is logged and left as it is."""
+        self.world = WorldSettings.preset(name)
+        for terrain in self._terrains():
+            terrain.set_settings(self.world.terrain)
+        self.atmospheres.set_settings(self.world.atmosphere)
+        self.sky.set_settings(self.world.sky)
+        self.ocean.set_settings(self.world.ocean)
+        if self.clouds is not None:
+            self.clouds.set_settings(self.world.clouds)
+        self._textured = self.world.terrain.textured
+        self._reflected = self.world.terrain.reflected
+
+    def _cycle_quality(self) -> None:
+        name = self.world.level.value
+        index = QUALITIES.index(name) if name in QUALITIES else -1
+        name = QUALITIES[(index + 1) % len(QUALITIES)]
+        self.set_quality(name)
+        print(f"world quality: {name}")
+
+    def _quality_text(self) -> str:
+        """:returns: the world's preset, or "custom" once a part differs"""
+        current = replace(
+            self.world,
+            terrain=self.terrain.settings,
+            atmosphere=self.atmospheres.settings,
+            sky=self.sky.settings,
+            ocean=self.ocean.settings,
+            clouds=self.clouds.settings
+            if self.clouds is not None
+            else self.world.clouds,
+        )
+        return "custom" if current.is_custom() else self.world.level.value
 
     def _cycle_swell(self) -> None:
         heights = SWELL_HEIGHTS
@@ -1060,7 +1150,8 @@ class TerrainDemo(ShowBase):
             terrain.set_debug_mode(view)
 
     def _cycle_detail(self) -> None:
-        level = (self.terrain.min_level + 1) % (MAX_DROPPED_LEVELS + 1)
+        dropped = dict(TerrainSettings.knobs())["min_level"].range[1]
+        level = (self.terrain.min_level + 1) % (int(dropped) + 1)
         for terrain in self._terrains():
             terrain.set_min_level(level)
 
@@ -1236,16 +1327,22 @@ def main() -> None:
         help="where chunks and cloud tiles are generated",
     )
     parser.add_argument(
-        "--cloud-quality",
+        "--quality",
         default="high",
+        choices=QUALITIES,
+        help="the whole world's quality preset at start (H cycles it)",
+    )
+    parser.add_argument(
+        "--cloud-quality",
+        default=None,
         choices=CLOUD_QUALITIES,
-        help="the clouds' quality at start (F5 cycles it)",
+        help="the clouds' preset at start, over --quality (F5 cycles it)",
     )
     parser.add_argument(
         "--ocean-quality",
-        default="high",
+        default=None,
         choices=OCEAN_QUALITIES,
-        help="the ocean's quality at start (F11 cycles it)",
+        help="the ocean's preset at start, over --quality (F11 cycles it)",
     )
     args = parser.parse_args()
     # No vsync: the frame rate shows what a frame costs, not the display.
@@ -1259,6 +1356,7 @@ def main() -> None:
         args.workers,
         cloud_quality=args.cloud_quality,
         ocean_quality=args.ocean_quality,
+        quality=args.quality,
     ).run()
 
 

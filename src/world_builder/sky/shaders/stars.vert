@@ -16,7 +16,6 @@ in vec4 star;         // rgb: tint, a: flux
 out vec3 vBase;       // the sky behind, exposed
 out vec3 vStar;       // the star's radiance on a pixel it covers whole, exposed
 
-const int AIR_STEPS = 4;
 
 void main() {
     // The map's rotation is orthonormal: its transpose maps it back.
@@ -26,7 +25,7 @@ void main() {
     gl_ClipDistance[0] = 1.0;
     gl_PointSize = 3.0;
     vec3 transmittance, inscatter;
-    atmosphereAlong(dir, 1e30, uSunDir, AIR_STEPS, transmittance, inscatter);
+    atmosphereAlong(dir, 1e30, uSunDir, uAtmoVertexSteps, transmittance, inscatter);
     float adapt = atmoHitsGround(dir) ? 0.0 : starAdaptation(inscatter);
     vec3 glow = skyBackground(textureLod(uStars, p3d_Vertex.xyz, 0.0).rgb);
     vBase = (glow * adapt * transmittance + inscatter) * uExposure;

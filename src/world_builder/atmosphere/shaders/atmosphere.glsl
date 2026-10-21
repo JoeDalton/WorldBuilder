@@ -15,9 +15,14 @@
 // each planet's centre.
 
 #define MAX_ATMOSPHERES 2
-#define ATMO_STEPS 8
 
 uniform int  uAtmoCount;
+// Samples per atmosphere along a view ray: per pixel, and in the per-vertex
+// marches (stars, cloud billboards). Quality knobs
+// (world_builder.atmosphere.AtmosphereSettings).
+uniform int  uAtmoSteps;
+uniform int  uAtmoVertexSteps;
+#define ATMO_STEPS uAtmoSteps
 // xyz: camera relative to the planet centre; w: |cam|^2 - top^2 (float64 on
 // the CPU: as a float32 difference of squares it would be noise).
 uniform vec4 uAtmoCam[MAX_ATMOSPHERES];
@@ -153,6 +158,7 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
     float betaM = uAtmoScatter[i].a;
     float betaMExt = uAtmoMie[i].x;
 
+    steps = max(steps, 1);
     float ds = (t1 - t0) / float(steps);
     vec2 shadow = atmoShadow(o, dir, sunDir, R);
     float multiple = uAtmoExtra[i].x;
@@ -226,7 +232,7 @@ bool atmoHitsGround(vec3 dir) {
 // dist in direction dir: seen = background * transmittance + inscatter.
 // Atmospheres are composed far to near (they normally do not overlap).
 // steps: samples per atmosphere (ATMO_STEPS per pixel, the overload below;
-// fewer per vertex).
+// uAtmoVertexSteps per vertex).
 void atmosphereAlong(vec3 dir, float dist, vec3 sunDir, int steps,
                      out vec3 transmittance, out vec3 inscatter) {
     transmittance = vec3(1.0);

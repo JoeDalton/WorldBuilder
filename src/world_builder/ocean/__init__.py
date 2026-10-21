@@ -3,7 +3,7 @@ A camera-locked reflective ocean, curved with the planet.
 
     ocean.py   the surface mesh (a flat quad, or a dense swell grid ringed by
                geometric border cells), its planar reflection, the per-frame
-               re-centring under the camera, and its quality presets
+               re-centring under the camera, and what it costs (OceanSettings)
     seabed.py  the sea floor under it, baked around the camera from an app's
                sampler: colour by depth, shoreline foam, swell over shallows
 
@@ -14,9 +14,8 @@ terrain's sea surface). Known open issue with the geometric swell:
 """
 
 from world_builder.ocean.ocean import (
-    OCEAN_QUALITY,
     Ocean,
-    OceanQuality,
+    OceanSettings,
     aces_tonemap,
     border_coords,
     compute_wave_dirs,
@@ -27,9 +26,8 @@ from world_builder.ocean.seabed import Cascade, SeabedMap
 
 __all__ = [
     "Cascade",
-    "OCEAN_QUALITY",
     "Ocean",
-    "OceanQuality",
+    "OceanSettings",
     "SeabedMap",
     "aces_tonemap",
     "border_coords",

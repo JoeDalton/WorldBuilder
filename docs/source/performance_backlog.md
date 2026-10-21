@@ -88,8 +88,10 @@ far cloud deck, so this saving applies to all four.
 
 ### 4. Fewer samples on short sight lines: ~1 ms at ground level (estimated)
 
-Every sight line takes `ATMO_STEPS` (8) samples, even across a few hundred
-metres of air to nearby ground, where the integrand barely changes.
+Every sight line takes `AtmosphereSettings.steps` (8 at HIGH) samples, even
+across a few hundred metres of air to nearby ground, where the integrand
+barely changes. (The count is now a uniform, so the loop is no longer
+unrolled; that alone made HIGH frames ~2 ms faster at sea level.)
 
 - Choose the step count from the segment's length and vertical extent
   relative to the scale heights: Mie's 1.2 km is the tight one. For example,

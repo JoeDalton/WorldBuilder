@@ -17,17 +17,25 @@ docstring has the overview):
   `compute_wave_dirs` precomputes the per-iteration wave directions once on the
   CPU as a uniform array; `set_wave_iterations()` changes wave detail at
   runtime.
-- **Quality.** Every cost/quality trade is a field of `OceanQuality`, with
-  presets in `OCEAN_QUALITY` (`low`, `mid`, `high` the default, `ultra`,
-  named like the clouds'). Pass one to `Ocean(quality=...)`, or change it live
-  with `set_quality()`: the octave count, how many pixels a wavelength needs
-  before it fades (`aa_full_px`, `aa_gone_px`), the rough fresnel, the
-  reflection's blur, the seabed's cascades and the depth colour, foam and
-  depth-scaled swell switches. `set_foam()` turns the foam alone. The
-  switches are uniforms tested in branches that are the same across the
-  screen, so a feature that is off costs almost nothing and needs no
-  recompile. The terrain demo cycles the presets with F11; `terrain_shots.py`
-  and `flight_bench.py` take `--ocean-quality`.
+- **Quality.** Every cost/quality trade is a field of `OceanSettings`, with
+  LOW / MID / HIGH / ULTRA presets (`OceanSettings.preset(level)`; see
+  [Quality settings](quality.md)). Pass one to `Ocean(settings=...)`, or
+  change it with `set_settings()`. Most knobs are live:
+  - the octave count;
+  - how many pixels a wavelength needs before it fades (`aa_full_px`,
+    `aa_gone_px`);
+  - the rough fresnel and the reflection's blur;
+  - the seabed's cascades;
+  - the depth colour, foam and depth-scaled swell switches;
+  - the reflection camera's field-of-view margin.
+
+  The reflection's resolution (`reflection_scale`) remakes its buffer on the
+  same camera, so the lens and far plane taken at construction are kept.
+  The swell grid's tessellation remakes the mesh. `set_foam()` turns the
+  foam alone. The switches are uniforms tested in branches that are the same
+  across the screen, so a feature that is off costs almost nothing and needs
+  no recompile. The terrain demo cycles the presets with F11;
+  `terrain_shots.py` and `flight_bench.py` take `--ocean-quality`.
 - **Seabed** (`ocean/seabed.py`). The ocean knows nothing of the terrain:
   `set_seabed(sampler)` gives it a function from points of its plane (in the
   app's world) and a texel size to the sea floor's height there.
@@ -106,8 +114,10 @@ docstring has the overview):
   back faces, which are culled. The terrain is reflected or not with
   `Terrain.set_reflected` (all of bits 0–19). The
   buffer is sized from the app's `graphics_manager.get_render_size()` when
-  it has one (the window size otherwise) times `reflection_scale` (the `Ocean` argument,
-  else `app.graphics_settings`, else 0.5), so it tracks the internal render resolution rather than
+  it has one (the window size otherwise) times `OceanSettings.reflection_scale`
+  (0.5 at HIGH; with no explicit settings, the app's
+  `graphics_settings.config["render"]["reflection_scale"]` when it has one),
+  so it tracks the internal render resolution rather than
   the window. `uReflUVScale` corrects for power-of-two texture padding and is
   refreshed from the real texture size once the buffer is realized: the default
   pipeline pads, simplepbr (not used) does not.
