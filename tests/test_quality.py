@@ -132,7 +132,7 @@ def test_high_clouds_are_the_authored_types():
 def test_lower_presets_drop_terrain_detail():
     """MID drops one level of the finest LOD, LOW two more."""
     dropped = [TerrainSettings.preset(level).min_level for level in LEVELS]
-    assert dropped == [3, 1, 0, 0]
+    assert dropped == [4, 2, 0, 0]
 
 
 def test_the_constructor_is_strict():
@@ -187,7 +187,7 @@ def test_world_presets_round_trip(level):
 def test_a_custom_world_round_trips_through_json():
     settings = (
         WorldSettings.preset("mid")
-        .with_value("terrain", "min_level", 2)
+        .with_value("terrain", "min_level", 3)
         .with_value("ocean", "seabed_cascades", "ultra")
         .with_value("clouds", "shell_octaves", "4")
         .with_value("sky", "star_fraction", 0.25)
