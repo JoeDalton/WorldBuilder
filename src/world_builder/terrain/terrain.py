@@ -362,6 +362,7 @@ class Terrain:
         self._last_select_frame = 0
         self._frame = 0
         self._wanted: list[tuple] = []
+        self._loading = True  # the last LOD pass still wanted chunks
         self.collision: TerrainCollision | None = None
         self.stats = {
             "shown": 0,
@@ -457,6 +458,7 @@ class Terrain:
         if self.collision is not None:
             self.collision.reset()
         self._last_select_pos = None
+        self._loading = True
         self.stats["finest"] = self.grid.max_level
 
     def enable_collision(
@@ -570,6 +572,19 @@ class Terrain:
             pending=self.executor.pending_for(self._channel),
             wanted=len(self._wanted),
         )
+
+    @property
+    def loading(self) -> bool:
+        """Whether the view still waits for ground: the last LOD pass found
+        chunks it needs that are not drawn yet (prefetch does not count).
+        True until the first pass and after :meth:`set_spec`.
+
+        The signal for a level's loading phase: ground that is not drawn is
+        not solid either (:meth:`enable_collision` answers for drawn chunks
+        only). In flight it turns on briefly whenever detail refines, so wait
+        for it to stay False for a moment rather than for one frame.
+        """
+        return self._loading
 
     @property
     def radius(self) -> float:
@@ -846,6 +861,7 @@ class Terrain:
         if self.collision is not None:
             self.collision.update(draw, self.store, cam)
         self._wanted = selection.wanted + selection.prefetch
+        self._loading = bool(selection.wanted)
         self.executor.request(
             [k for k in self._wanted if k not in self.store], self._channel
         )

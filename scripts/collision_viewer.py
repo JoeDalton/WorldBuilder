@@ -118,6 +118,18 @@ class Viewer:
         self.frame = 0
         self.times: list[float] = []
 
+        # Window set up first: the terrain takes seconds to load, shown live.
+        lens = base.cam.node().get_lens()
+        lens.set_near_far(1.0, 300_000.0)
+        lens.set_fov(60.0)
+        base.disableMouse()
+        base.set_background_color(0.55, 0.7, 0.9, 1.0)
+        self.text = base.aspect2d.attach_new_node(TextNode("readout"))
+        self.text.node().set_text_color(1, 1, 1, 1)
+        self.text.node().set_shadow(0.05, 0.05)
+        self.text.set_scale(0.045)
+        self.text.set_pos(-1.3 * base.getAspectRatio() / 1.333, 0, 0.9)
+
         self.terrain = Terrain(self.render, PRESETS["earthlike"])
         self.anchor = mountain_camera(self.terrain, self.rng)
         self.up = self.anchor / np.linalg.norm(self.anchor)
@@ -137,16 +149,6 @@ class Viewer:
         self.target = np.array(self.terrain.to_render(ground))
         self.heading, self.pitch, self.distance = 30.0, 40.0, args.distance
         self.last_mouse = None
-        lens = base.cam.node().get_lens()
-        lens.set_near_far(1.0, 300_000.0)
-        lens.set_fov(60.0)
-        base.disableMouse()
-        base.set_background_color(0.55, 0.7, 0.9, 1.0)
-        self.text = base.aspect2d.attach_new_node(TextNode("readout"))
-        self.text.node().set_text_color(1, 1, 1, 1)
-        self.text.node().set_shadow(0.05, 0.05)
-        self.text.set_scale(0.045)
-        self.text.set_pos(-1.3 * base.getAspectRatio() / 1.333, 0, 0.9)
         self._keys()
         base.taskMgr.add(self._update, "collision-viewer")
 
@@ -154,16 +156,21 @@ class Viewer:
 
     def _settle(self) -> None:
         """Let the ground around the start load before placing anything:
-        until no chunk has been wanted or pending for half a second."""
+        until the terrain has not been loading for half a second."""
         clock = self.base.clock
         quiet_since = None
-        deadline = clock.get_real_time() + 120.0
+        start = clock.get_real_time()
+        deadline = start + 120.0
         while clock.get_real_time() < deadline:
             self.terrain.update(self.anchor)
-            self.base.graphicsEngine.render_frame()
             stats = self.terrain.stats
+            self.text.node().set_text(
+                f"loading terrain... {clock.get_real_time() - start:.0f} s"
+                f"   {stats['shown']} chunks drawn, {stats['wanted']} wanted"
+            )
+            self.base.graphicsEngine.render_frame()
             now = clock.get_real_time()
-            if stats["pending"] or stats["wanted"]:
+            if self.terrain.loading:
                 quiet_since = None
             elif quiet_since is None:
                 quiet_since = now

@@ -289,11 +289,14 @@ The library is built per Panda3D series with `scripts/build_native.sh` (see `NAT
 
 `include_ocean=False` makes the seabed solid instead of the sea surface. The drawn chunk meshes themselves are never collision targets: their into-mask is off.
 
+**Loading:** only drawn ground is solid, and the ground around a new camera position takes seconds to load (about 10 s from nothing on the earthlike preset). `Terrain.loading` is True while the last LOD pass still wanted chunks it needs. A game's loading phase should wait for it to stay False for a moment: in flight it turns on briefly whenever detail refines.
+
 `TerrainQuery` stays the pure-numpy path for one-off queries (`altitude`, `height_at`, and so on).
 
 ## Paths to SpaceFlight
 
 - **Collision:** `terrain.enable_collision(into_mask)` with SpaceFlight's terrain into-mask. The existing `ship-into-terrain`, `laser-into-terrain` and sensor handlers then see the planet. `munition_into_terrain` picks its sparks with `owner.material_at(hit_point, root_node)`. The flat ocean `CollisionPlane` goes away where there is a terrain. Gravity and a radial "up" for flight are a separate matter, not needed for collision.
+- **Loading phase:** a level should wait for `not terrain.loading` (held for a moment) before ships fly near the ground, since ground that is not drawn yet is not solid.
 - **Camera:** SpaceFlight already keeps the player at the render origin
   (`recenter_render_origin`). The terrain's root must hang under `render`,
   not the game root, and be updated after that recentring with the camera's

@@ -241,6 +241,34 @@ def test_chunks_a_query_generates_join_the_terrain_store(
         executor.shutdown()
 
 
+def test_terrain_reports_loading(showbase, moon_spec):
+    """loading holds while the view still wants ground, for a game's loading
+    phase: undrawn ground is not solid either."""
+    from world_builder.terrain.terrain import Terrain, TerrainSettings
+
+    executor = ChunkExecutor(backend="inline", inline_budget=64)
+    terrain = Terrain(
+        showbase.render,
+        moon_spec,
+        executor=executor,
+        settings=TerrainSettings(min_level=7),
+    )
+    try:
+        assert terrain.loading
+        camera = TangentFrame.at(30.0, 20.0).up * (terrain.radius + 2000.0)
+        _settle((terrain,), camera, frames=40)
+        assert not terrain.loading
+        # Unseen ground: loading again until it is drawn.
+        elsewhere = TangentFrame.at(-30.0, -100.0).up * (terrain.radius + 2000.0)
+        terrain.update(elsewhere)
+        assert terrain.loading
+        _settle((terrain,), elsewhere, frames=40)
+        assert not terrain.loading
+    finally:
+        terrain.destroy()
+        executor.shutdown()
+
+
 # ── pool size ──────────────────────────────────────────────────────────────────
 
 
