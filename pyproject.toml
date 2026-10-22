@@ -7,7 +7,10 @@ license = ""
 readme = "README.md"
 homepage = "https://github.com/JoeDalton/WorldBuilder"
 repository = "https://github.com/JoeDalton/WorldBuilder"
-include = ["src/world_builder/_version.py", "scripts"]
+include = [
+  { path = "src/world_builder/_version.py", format = ["sdist", "wheel"] },
+  "scripts",
+]
 
 
 [tool.poetry.dependencies]

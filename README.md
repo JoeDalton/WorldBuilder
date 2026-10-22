@@ -42,15 +42,18 @@ invoke develop      # poetry install + pre-commit hooks
 invoke test
 ```
 
-From another project, depend on a tagged release's zip; the install then needs
-no git (Poetry):
+From another project, depend on the wheel attached to a tagged release; the
+install then needs no git (Poetry):
 
 ```toml
-world_builder = { url = "https://github.com/JoeDalton/WorldBuilder/archive/refs/tags/0.1.0.zip" }
+world_builder = { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/0.1.0/world_builder-0.1.0-py3-none-any.whl" }
 ```
 
-The version is read from git tags; a tag's zip carries it in
-`.git_archival.json`, which GitHub fills in when it builds the archive.
+Not the tag's source zip (`archive/refs/tags/...zip`): GitHub regenerates those,
+and a lock file's hash of one can stop matching.
+
+The version is read from git tags. Pushing a tag `X.Y.Z` runs CI, which builds
+the wheel, checks it imports, and attaches it to the `X.Y.Z` release.
 
 ## Documentation
 
