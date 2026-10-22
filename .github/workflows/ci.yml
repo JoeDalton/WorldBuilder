@@ -45,9 +45,11 @@ jobs:
       - run: pip install poetry invoke poetry-dynamic-versioning
       - run: invoke develop quality
 
+  # On a version tag:
   # Build the wheel and import it from a clean venv: it must carry everything
   # the package needs, generated files (_version.py) included.
   package:
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
