@@ -150,6 +150,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An ocean drawn before its first update (e.g. behind a game's loading
+  screen) failed on a missing `uSeabedCount` shader input: the seabed's
+  count is now set when it is built. (#16)
 - `SplitDepthCameras` drew its far camera into the window even when the
   scene renders into an offscreen buffer (a game's render-scale or
   anti-aliasing pipeline, e.g. `FilterManager`): it now draws into the near

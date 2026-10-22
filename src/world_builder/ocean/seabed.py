@@ -116,7 +116,10 @@ class SeabedMap:
         self._v = PTA_LVecBase3f.empty_array(MAX_CASCADES)
         node.set_shader_input("uSeabedU", self._u)
         node.set_shader_input("uSeabedV", self._v)
-        self._count = -1
+        # No cascade until a bake lands; set now, so the ocean can be drawn
+        # before its first update (a shader input it reads must exist)
+        self._count = 0
+        node.set_shader_input("uSeabedCount", 0)
         self._textures = [Texture(f"seabed{k}") for k in range(MAX_CASCADES)]
         for tex in self._textures:
             tex.set_wrap_u(SamplerState.WM_clamp)

@@ -132,6 +132,15 @@ def ocean(window):
     root.remove_node()
 
 
+def test_ocean_draws_before_its_first_update(window, ocean):
+    """A game may render frames between building the ocean and its first
+    update (a loading screen): every shader input it reads is already set."""
+    made, _game = ocean
+    name = made.ocean_node.get_shader_input("uSeabedCount").get_name()
+    assert str(name) == "uSeabedCount"
+    window.graphicsEngine.render_frame()  # raises on a missing input
+
+
 def test_ocean_updates_and_mirrors_the_camera(window, ocean):
     made, game = ocean
     assert made.id in game.method_lists
