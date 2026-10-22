@@ -79,6 +79,53 @@ def test_split_cameras_draw_into_the_window(window):
     assert cameras.far_region not in list(window.win.get_display_regions())
 
 
+def test_split_cameras_keep_the_split_off_translucent_volumes(window):
+    """A translucent volume the wanted split would cut moves it in front:
+    blended twice where the cameras overlap, it would show a ring there."""
+    from panda3d.core import CardMaker
+
+    maker = CardMaker("bubble")
+    maker.set_frame(-30.0, 30.0, -40.0, 40.0)  # bounding radius 50 m
+    bubble = window.render.attach_new_node(maker.generate())
+    camera = window.cam.get_pos(window.render)
+    bubble.set_pos(camera + (0.0, 2000.0, 0.0))  # 2 km ahead
+    cameras = SplitDepthCameras(window, near=1.0)
+    try:
+        cameras.update(2000.0, 12e6, translucent=[bubble])
+        assert cameras.split == pytest.approx(1950.0 / cameras.overlap, abs=1.0)
+        cameras.update(2000.0, 12e6)  # none: as wanted
+        assert cameras.split == 2000.0
+    finally:
+        cameras.destroy()
+        bubble.remove_node()
+
+
+def test_split_cameras_follow_the_scene_into_a_post_process_buffer(window):
+    """With the scene rendered into a texture (a game's render scale or
+    anti-aliasing pipeline), the far camera draws into that buffer, before
+    the near one, not into the window under the composited quad."""
+    from direct.filter.FilterManager import FilterManager
+
+    manager = FilterManager(window.win, window.cam)
+    assert manager.renderSceneInto(colortex=Texture("scene")) is not None
+    try:
+        buffer = window.cam.node().get_display_region(0).get_window()
+        assert buffer != window.win
+        cameras = SplitDepthCameras(window, near=1.0)
+        try:
+            assert cameras.output == buffer
+            assert cameras.far_region in list(buffer.get_display_regions())
+            assert cameras.far_region not in list(window.win.get_display_regions())
+            assert cameras.far_region.get_sort() < cameras.near_region.get_sort()
+            cameras.update(5000.0, 12e6)
+            window.graphicsEngine.render_frame()
+        finally:
+            cameras.destroy()
+        assert cameras.far_region not in list(buffer.get_display_regions())
+    finally:
+        manager.cleanup()
+
+
 # ── ocean ──────────────────────────────────────────────────────────────────────
 
 
@@ -104,6 +151,15 @@ def ocean(window):
     if made.game is not None:
         made.clean()
     root.remove_node()
+
+
+def test_ocean_draws_before_its_first_update(window, ocean):
+    """A game may render frames between building the ocean and its first
+    update (a loading screen): every shader input it reads is already set."""
+    made, _game = ocean
+    name = made.ocean_node.get_shader_input("uSeabedCount").get_name()
+    assert str(name) == "uSeabedCount"
+    window.graphicsEngine.render_frame()  # raises on a missing input
 
 
 def test_ocean_updates_and_mirrors_the_camera(window, ocean):

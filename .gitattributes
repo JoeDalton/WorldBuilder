@@ -25,5 +25,7 @@
 *.ogg binary
 *.mp3 binary
 
-# GitHub tag archives fill this in, so a zip install knows its version
+# GitHub tag archives fill this in, so a zip install knows its version. Keep
+# %D (ref names) out of it: they change as branches move, and the zip's hash
+# with them, which breaks any lock file that pinned it.
 .git_archival.json export-subst

@@ -11,6 +11,9 @@ ocean and clouds.
 These pages are developer documentation: how each system is organised and how
 it works.
 
+- [A whole world](world.md): `World` builds every part a game draws around
+  its camera (bodies, air, clouds, ocean, sky, sun, lights) from the game's
+  looks, and updates them all every frame.
 - [Terrain](terrain.md): the planet's layers, the cube-sphere and its LOD,
   precision and depth, several bodies, and the demo.
 - [Atmosphere, sky and planet clouds](atmosphere.md): the scattering model,
@@ -29,6 +32,7 @@ The per-class API is in the auto-generated [code reference](apidocs/index.rst).
 :maxdepth: 2
 :caption: Contents
 
+world
 terrain
 atmosphere
 ocean

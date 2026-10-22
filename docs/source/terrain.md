@@ -27,6 +27,7 @@ The demo, the shots, the preview and the bench take `--radius` (metres).
 | Chunks | `cubesphere`, `chunkgen`, `quadtree`, `workers` | The six faces of a cube pushed onto the sphere, each a quadtree of tiles with 65×65 vertices plus skirts. Generated coarse-first in spawned worker processes. |
 | Rendering | `mesh`, `materials`, `terrain`, `shaders/`, `world_builder.depth` | Panda3D. True geometry, camera-relative placement, depth split between two cameras, biome texture arrays, sunlight through the planet's own air, the ocean's tonemap, and every atmosphere along the sight line (`world_builder.atmosphere`). |
 | Queries | `query` | `height_at`, `altitude`, `normal_at`, `sphere_contact`, `segment_intersect`, `material_at` on planet-frame positions, all on the same triangles that are drawn. |
+| Collision | `collision`, `native` | `Terrain.enable_collision`: a native Panda collision solid over the drawn chunks, for a game's `CollisionTraverser`. |
 
 ### Planet scale
 
@@ -267,19 +268,35 @@ Put PBR sets in `src/world_builder/terrain/textures/<biome>/` for the six biomes
 
 The ambientCG and Poly Haven naming schemes both work, and a DirectX normal map is detected from `dx` in its name. Any biome or map that is missing falls back to a procedural placeholder. `textures/textures.yaml` sets each biome's tile size (`tile_m`, a power of two up to 512 m), normal convention (`normal: gl | dx`) and albedo `tint`, and the layer size cap (`max_size`).
 
+## Collision
+
+`Terrain.enable_collision(into_mask, name="terrain", owner_tag="owner", max_distance=100_000)` makes the drawn terrain solid to a game's own `CollisionTraverser` (traversing `render`). It adds one into-only `CollisionNode` holding a native `CollisionTerrain` solid (`terrain/native/terrain_collision.cpp`).
+
+The solid answers for every drawn chunk within `max_distance` of the camera. Chunks are registered as the LOD selection shows them and dropped as it hides them.
+
+**What the game gets:**
+
+- **Spheres** (ships, ordnance, sensors) and **segments** (lasers) get ordinary `CollisionEntry` objects, so event and queue handlers work unchanged.
+- **At most one entry per collider per frame**, with the surface point and the normal of the very triangle drawn there. With the sea, the sea surface is solid and its normal is the local vertical.
+- **No holes at LOD seams.** Each direction is answered by exactly one drawn chunk.
+- **Material:** the node's owner tag is a `TerrainSurface`. Its `material_at(point, relative_to=None)` names the ground at a hit point: `"water"`, or the dominant biome's name.
+
+**Where the node goes:** it hangs beside `Terrain.root`, not under it, and copies the root's transform each frame. Under the root, its collide mask would send the traverser through every chunk node for every collider.
+
+**Cost:** on the earthlike preset, with 64 ships, 33 active sensors and 300 lasers within 5 km of the camera, the terrain adds about 0.6 ms to a traverse, and 1.1 ms with every ship and laser hugging the ground (`scripts/collision_bench.py`). `scripts/collision_viewer.py` shows the same load live in a window: contacts, normals and the traverse time.
+
+The library is built per Panda3D series with `scripts/build_native.sh` (see `NATIVE_COLLISION_BUILD.md`). `enable_collision` raises `NativeCollisionError` when it is missing or built for another series.
+
+`include_ocean=False` makes the seabed solid instead of the sea surface. The drawn chunk meshes themselves are never collision targets: their into-mask is off.
+
+**Loading:** only drawn ground is solid, and the ground around a new camera position takes seconds to load (about 10 s from nothing on the earthlike preset). `Terrain.loading` is True while the last LOD pass still wanted chunks it needs. A game's loading phase should wait for it to stay False for a moment: in flight it turns on briefly whenever detail refines.
+
+`TerrainQuery` stays the pure-numpy path for one-off queries (`altitude`, `height_at`, and so on).
+
 ## Paths to SpaceFlight
 
-- **Physics must go spherical.** SpaceFlight's world is flat (Z up, a
-  collision plane at z = 0). The terrain is now a sphere, so gravity, "up"
-  and the ground under a ship all become radial. `TerrainQuery` already
-  answers in the planet frame, ready for that:
-  - ships: `sphere_contact` at the hitbox radius
-  - bot sensors: `sphere_contact` at 30/50/100 m, served from coarse levels
-  - lasers: `segment_intersect`
-  - altimeters: `altitude`
-
-  The hit point and normal are what `sensor_into_obstacle` and
-  `ship_into_terrain_pushback` read today.
+- **Collision:** `terrain.enable_collision(into_mask)` with SpaceFlight's terrain into-mask. The existing `ship-into-terrain`, `laser-into-terrain` and sensor handlers then see the planet. `munition_into_terrain` picks its sparks with `owner.material_at(hit_point, root_node)`. The flat ocean `CollisionPlane` goes away where there is a terrain. Gravity and a radial "up" for flight are a separate matter, not needed for collision.
+- **Loading phase:** a level should wait for `not terrain.loading` (held for a moment) before ships fly near the ground, since ground that is not drawn yet is not solid.
 - **Camera:** SpaceFlight already keeps the player at the render origin
   (`recenter_render_origin`). The terrain's root must hang under `render`,
   not the game root, and be updated after that recentring with the camera's

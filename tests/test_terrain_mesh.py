@@ -46,6 +46,8 @@ def test_chunk_node_holds_the_bytes_and_shared_indices():
     np.testing.assert_allclose(bounds.get_max(), chunk.aabb_max)
     local = chunk.vertices()["vertex"]
     assert np.all(local >= chunk.aabb_min) and np.all(local <= chunk.aabb_max)
+    # Never a collision target (Terrain.enable_collision is the solid ground).
+    assert node.get_into_collide_mask().is_zero()
 
 
 def test_vertex_format_carries_the_height_column():

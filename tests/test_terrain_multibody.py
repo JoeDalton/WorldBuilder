@@ -201,6 +201,74 @@ def test_a_planet_seen_from_afar_releases_its_ground(showbase, two_bodies, monke
     assert len(planet.nodes) <= limit
 
 
+def test_chunks_a_query_generates_join_the_terrain_store(
+    showbase, moon_spec, monkeypatch
+):
+    """A chunk generated on the query path (generate=True) is stored like one
+    from the workers: with its bounds, so the selector knows its heights and
+    a later eviction finds them."""
+    from world_builder.terrain import terrain as terrain_module
+    from world_builder.terrain.terrain import Terrain, TerrainSettings
+
+    # Keep no more than the selection needs, so flying on evicts.
+    monkeypatch.setattr(terrain_module, "MIN_RESIDENT", 16)
+    monkeypatch.setattr(terrain_module, "RESIDENT_FACTOR", 1)
+    executor = ChunkExecutor(backend="inline", inline_budget=64)
+    terrain = Terrain(
+        showbase.render,
+        moon_spec,
+        executor=executor,
+        settings=TerrainSettings(min_level=7),
+    )
+    try:
+        camera = TangentFrame.at(30.0, 20.0).up * (terrain.radius + 2000.0)
+        _settle((terrain,), camera, frames=40)
+        # The far side: nothing there is generated yet.
+        far = -camera / np.linalg.norm(camera)
+        key = terrain.query._key_of(far[None, :], terrain.query.level)
+        assert key not in terrain.store
+        terrain.query.sphere_contact(far * terrain.radius, 5.0)  # generate=True
+        chunk = terrain.store[key]
+        assert terrain._bounds[key] == (chunk.h_min, chunk.h_max)
+        # Fly around the moon, away from it, until the store evicts it.
+        for lon in range(20, -110, -15):
+            ground = TangentFrame.at(-30.0, float(lon)).up
+            _settle((terrain,), ground * (terrain.radius + 2000.0), frames=15)
+        assert key not in terrain.store
+        assert set(terrain.store) == set(terrain._bounds)
+    finally:
+        terrain.destroy()
+        executor.shutdown()
+
+
+def test_terrain_reports_loading(showbase, moon_spec):
+    """loading holds while the view still wants ground, for a game's loading
+    phase: undrawn ground is not solid either."""
+    from world_builder.terrain.terrain import Terrain, TerrainSettings
+
+    executor = ChunkExecutor(backend="inline", inline_budget=64)
+    terrain = Terrain(
+        showbase.render,
+        moon_spec,
+        executor=executor,
+        settings=TerrainSettings(min_level=7),
+    )
+    try:
+        assert terrain.loading
+        camera = TangentFrame.at(30.0, 20.0).up * (terrain.radius + 2000.0)
+        _settle((terrain,), camera, frames=40)
+        assert not terrain.loading
+        # Unseen ground: loading again until it is drawn.
+        elsewhere = TangentFrame.at(-30.0, -100.0).up * (terrain.radius + 2000.0)
+        terrain.update(elsewhere)
+        assert terrain.loading
+        _settle((terrain,), elsewhere, frames=40)
+        assert not terrain.loading
+    finally:
+        terrain.destroy()
+        executor.shutdown()
+
+
 # ── pool size ──────────────────────────────────────────────────────────────────
 
 

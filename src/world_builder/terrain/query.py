@@ -26,7 +26,7 @@ triangles: the radial direction stands in for the normal).
 from __future__ import annotations
 
 import math
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -56,6 +56,7 @@ class TerrainQuery:
         version: int = 0,
         include_ocean: bool | None = None,
         level: int = 0,
+        store_chunk: Callable[[ChunkData], None] | None = None,
     ):
         """
         :param planet: the planet
@@ -65,12 +66,16 @@ class TerrainQuery:
             defaults to whether the planet has an ocean
         :param level: grid level queries read by default; keep it equal to
             the finest level drawn, so the physical ground is the visible one
+        :param store_chunk: called with each chunk generated here, to put it
+            in *store*; the store's owner passes its own (the renderer keeps
+            bookkeeping per chunk). None puts it in *store* directly.
         """
         self.level = level
         self.planet = planet
         self.grid: CubeGrid = planet.grid
         self.radius = planet.spec.radius
         self.store = store if store is not None else {}
+        self._store_chunk = store_chunk or self._put
         self.version = version
         self.include_ocean = (
             planet.spec.has_ocean if include_ocean is None else include_ocean
@@ -280,6 +285,8 @@ class TerrainQuery:
         """Height and triangle normal at (N, 3) directions."""
         heights = np.zeros(len(dirs))
         normals = np.zeros((len(dirs), 3))
+        if len(dirs) == 0:
+            return heights, normals
         face, i, j, _, _ = self.grid.locate(dirs, level)
         if len(dirs) == 1:  # the common case (an altimeter): no grouping
             groups = [((int(face[0]), int(i[0]), int(j[0])), np.zeros(1, np.intp))]
@@ -318,9 +325,12 @@ class TerrainQuery:
                 return chunk
             if generate and up == 0:
                 chunk = generate_chunk(self.planet.spec, key, self.version)
-                self.store[key] = chunk
+                self._store_chunk(chunk)
                 return chunk
         return None
+
+    def _put(self, chunk: ChunkData) -> None:
+        self.store[chunk.key] = chunk
 
     def _in_chunk(self, chunk: ChunkData, dirs: np.ndarray):
         """:returns: fu, fv, position of *dirs* inside *chunk* in quads, on the

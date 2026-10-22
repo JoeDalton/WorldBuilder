@@ -220,6 +220,15 @@ def test_queries_without_chunks_fall_back_to_the_planet(planet):
     assert not query.store
 
 
+def test_queries_on_no_points(query):
+    empty = np.zeros((0, 3))
+    assert query.height_at(empty, generate=False).shape == (0,)
+    assert query.ground_height_at(empty, generate=False).shape == (0,)
+    assert query.normal_at(empty, generate=False).shape == (0, 3)
+    assert query.altitude(empty, generate=False).shape == (0,)
+    assert query.surface_point(empty, generate=False).shape == (0, 3)
+
+
 # ── stamps ─────────────────────────────────────────────────────────────────────
 
 

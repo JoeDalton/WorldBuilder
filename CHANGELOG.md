@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `SplitDepthCameras.update(split, far, translucent=...)` keeps the split off
+  big translucent volumes (a game's shield bubbles), which the two cameras'
+  overlap band would otherwise blend twice into a ring (`split_clear_of`,
+  `camera_span`). (#16)
+- `world_builder.world.World`: every part a game draws around its camera
+  (each body's terrain, air, planet clouds and swell ocean, the sky, the sun
+  and Panda3D lights), built from the game's looks (`BodyLook`, `CloudLook`,
+  `OceanLook`, `SunLook`, `SkyLook`) and updated with one
+  `World.update(origin_world, far)` a frame; `scripts/demo_world.py` is the
+  terrain demo built on it. (#16)
+- Terrain collision for a game's own Panda3D `CollisionTraverser`
+  (`Terrain.enable_collision`): a native collision solid over the drawn
+  chunks answers ship, sensor and laser colliders with ordinary collision
+  entries, one per collider, plus `material_at` for the ground at a hit. Built
+  per Panda3D series with `scripts/build_native.sh`. (#16)
+- `Terrain.loading`: whether the view still waits for ground, for a game's
+  loading phase (undrawn ground is not solid either). (#16)
 - Terrain on a true spherical planet: a cube-sphere with quadtree LOD,
   float64 positions re-based around the camera, and collision queries on the
   sphere. (#1)
@@ -137,6 +154,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An ocean drawn before its first update (e.g. behind a game's loading
+  screen) failed on a missing `uSeabedCount` shader input: the seabed's
+  count is now set when it is built. (#16)
+- `SplitDepthCameras` drew its far camera into the window even when the
+  scene renders into an offscreen buffer (a game's render-scale or
+  anti-aliasing pipeline, e.g. `FilterManager`): it now draws into the near
+  camera's own output. (#16)
+- A chunk generated on the query path (`TerrainQuery` with `generate=True`,
+  the default of `sphere_contact` and the point queries) went into the
+  terrain's store without its height bounds: the LOD selector saw it as
+  unknown, and evicting it later raised `KeyError` in `Terrain.update`. The
+  query now hands such chunks to the terrain's own store. (#16)
+- `TerrainQuery` point queries (`height_at`, `altitude`, ...) failed on an
+  empty array of points. (#16)
 - A planet seen from beyond 10,000 km was culled whole (Panda's
   `lens-far-limit`): the far camera gets explicit cull bounds. (#1)
 - `hide(HIDE_FROM_NEAR)` did nothing: each split-depth camera now has a

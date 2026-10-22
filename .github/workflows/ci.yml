@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "*.*.*"
   pull_request:
 
 jobs:
@@ -42,3 +44,49 @@ jobs:
           python-version: "3.x"
       - run: pip install poetry invoke poetry-dynamic-versioning
       - run: invoke develop quality
+
+  # On a version tag:
+  # Build the wheel and import it from a clean venv: it must carry everything
+  # the package needs, generated files (_version.py) included.
+  package:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the version comes from git tags
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"  # newest the package supports
+      - run: pip install build
+      - run: python -m build
+      - run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+          cd /tmp && /tmp/smoke/bin/python -c "import world_builder; print(world_builder.__version__)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # On a version tag, attach the tested wheel and sdist to its GitHub release
+  # (created if missing). Depend on the wheel's URL, not the tag's source zip:
+  # an uploaded asset never changes, so its locked hash holds.
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [test_linux, test_windows, quality, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: test -f "dist/world_builder-$TAG-py3-none-any.whl"  # version == tag
+      - run: gh release view "$TAG" > /dev/null || gh release create "$TAG" --verify-tag --generate-notes
+      - run: gh release upload "$TAG" dist/* --clobber

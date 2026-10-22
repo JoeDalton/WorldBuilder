@@ -11,6 +11,9 @@ WorldBuilder: procedural worlds for Panda3D.
              applied by every shader; CPU copies to light anything else
     sky      star field (procedural or painted) and the sun, through the air
     depth    near/far camera split, for views from the ground to orbit
+    world    every part a game draws around its camera (bodies, air,
+             clouds, ocean, sky, sun, lights), built from the game's looks
+             and updated as one
     utils    small numeric helpers
 
 The ocean and the flat cloud field (clouds.field) are flat-world objects that
@@ -20,7 +23,7 @@ terrain is real geometry around the planet centre, of its own
 ``PlanetSpec.radius``, and so are the planet clouds (clouds.sphere); next to
 them, build the ocean with that radius, on the exact sphere
 (``exact_sphere=True``), in a frame that follows the camera's nadir (as
-scripts/demo_terrain.py does).
+:class:`world.World` does).
 
 The ocean and clouds take a ``game`` object by duck typing: ``game.app`` (the
 ShowBase), ``game.root_node`` (the world's parent node), and, for the classes

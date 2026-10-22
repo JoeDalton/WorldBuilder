@@ -5,11 +5,14 @@ Runs the real demo (window, workers, both cameras, atmosphere, clouds,
 ocean, sky) with no multisampling and vsync off, and flies fixed paths,
 reporting frame times and where the main thread spends them::
 
-    python scripts/flight_bench.py [--flight low cruise descent] [--seconds S]
+    python scripts/flight_bench.py [--demo terrain|world]
+        [--flight low cruise descent] [--seconds S]
         [--profile] [--size "1600 900"] [--workers N] [--offscreen]
         [--quality low|mid|high|ultra] [--<part>-quality LEVEL] [--no-clouds]
         [--cloud-debug BITS]
 
+    --demo           which demo flies: demo_terrain.py's hand-built world
+                     (default) or demo_world.py's, built by World
     --flight         the flights to run, in order (default: all three)
     --seconds        each flight's length, at most (default 15)
     --profile        cProfile the main thread; prints the top 28 by
@@ -59,8 +62,11 @@ from demo_terrain import (  # noqa: E402
     settings_from_args,
     window_config,
 )
+from demo_world import WorldDemo  # noqa: E402
 
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
+
+DEMOS = {"terrain": TerrainDemo, "world": WorldDemo}
 
 FLIGHTS = ("low", "cruise", "descent")
 
@@ -176,6 +182,9 @@ def run(demo: TerrainDemo, flight: str, seconds: float, profile: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
+        "--demo", default="terrain", choices=tuple(DEMOS), help="which demo flies"
+    )
+    parser.add_argument(
         "--flight", nargs="*", default=list(FLIGHTS), help="low, cruise, descent"
     )
     parser.add_argument(
@@ -197,7 +206,7 @@ def main() -> None:
     args = parser.parse_args()
     window_config("Flight benchmark", args.size, args.offscreen, vsync=False)
     settings = settings_from_args(args)
-    demo = TerrainDemo(
+    demo = DEMOS[args.demo](
         str(DEMO_LEVEL),
         "process",
         None,
@@ -206,7 +215,7 @@ def main() -> None:
         cloud_debug=args.cloud_debug,
     )
     demo.setFrameRateMeter(False)
-    print(describe_window(demo), f"settings {settings.to_dict()}")
+    print(f"{args.demo} demo,", describe_window(demo), f"settings {settings.to_dict()}")
     try:
         for flight in args.flight:
             run(demo, flight, args.seconds, args.profile)
