@@ -187,6 +187,23 @@ def test_light_through_the_air():
     np.testing.assert_allclose(direct, np.ones(3))
 
 
+def test_panda_lights_are_the_light_at_the_camera_scaled():
+    """Panda3D's lights take the world's light at the camera, times the
+    world's light scale (for models with no tone map)."""
+    planet = _body(atmosphere=AtmosphereParams())
+    planet.atmosphere = 0
+    world = _world(planet)
+    world.light_scale = 0.5
+    world.sun_light, world.ambient_light = MagicMock(), MagicMock()
+
+    world._light(np.array([0.0, 0.0, R + 10.0]))
+
+    world.sun_light.node().set_color.assert_called_once_with((0.5, 0.5, 0.5, 1.0))
+    world.ambient_light.node().set_color.assert_called_once_with(
+        (0.25, 0.25, 0.25, 1.0)
+    )
+
+
 def test_airless_light_is_the_sun_or_the_shadow():
     moon = _body("moon", MOON, ambient=(0.01, 0.01, 0.01))
     world = _world(moon)
@@ -331,8 +348,11 @@ def test_a_whole_world(window, monkeypatch):
             window.graphicsEngine.render_frame()
 
         assert planet.ocean.swell
+        # The sea's plane is the tangent plane at the camera's nadir (the
+        # camera is wherever earlier tests left it, near render's origin)
+        nadir = world.camera_world / np.linalg.norm(world.camera_world)
         up = planet.ocean.frame.get_quat(window.render).get_up()
-        np.testing.assert_allclose(np.array(up), frame.up, atol=1e-5)
+        np.testing.assert_allclose(np.array(up), nadir, atol=1e-5)
         assert window.render.has_light(world.sun_light)
         assert world.sun_light.node().get_color()[0] > 0.0
     finally:

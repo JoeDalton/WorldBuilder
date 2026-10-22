@@ -101,7 +101,10 @@ In order, it updates:
    camera's own output (a window, or a game's offscreen buffer);
 5. Panda3D's sun and ambient lights, set to the light at the camera
    (`World.light_at`): the air reddens the sun, and an airless body's
-   shadow hides it;
+   shadow hides it. Their colours are multiplied by `light_scale`. A game
+   whose models use Panda3D's fixed-function lighting scales them down, since
+   that lighting has no tone map and clips the physical noon sun (about 2.5)
+   to white (see [Lighting on objects](object_lighting.md));
 6. each body's ocean:
    - hand-over between swell and flat water, by altitude, with hysteresis;
    - its light, relative to the daylight its colour was tuned in;

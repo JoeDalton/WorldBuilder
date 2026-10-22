@@ -447,6 +447,7 @@ class World:
         sky: SkyLook | None = None,
         settings: WorldSettings | None = None,
         lights: bool = True,
+        light_scale: float = 1.0,
         clock: Callable[[], float] | None = None,
         backend: str = "process",
     ) -> None:
@@ -458,6 +459,11 @@ class World:
         :param settings: what every part costs; None = HIGH
         :param lights: put Panda3D's sun and ambient lights on render, as the
             world's light at the camera, for the game's own models
+        :param light_scale: multiplies those lights' colours. The world's
+            light is physical (noon sun about 2.5), and models lit by
+            Panda3D's fixed-function lighting, with no tone map, clip every
+            channel at 1 (see docs/source/object_lighting.md): a game whose
+            models are lit that way scales it down. 1 = as the world is lit
         :param clock: game time in seconds, for the swell; None = Panda's
             frame time
         :param backend: where chunks and cloud tiles are generated
@@ -551,6 +557,7 @@ class World:
             self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
             self.sky.set_sun(self._sun)
 
+        self.light_scale = float(light_scale)
         self.sun_light = self.ambient_light = None
         if lights:
             self.sun_light = render.attach_new_node(DirectionalLight("world_sun"))
@@ -776,6 +783,7 @@ class World:
         if self.sun_light is None:
             return
         direct, ambient = self.light_at(camera)
+        direct, ambient = direct * self.light_scale, ambient * self.light_scale
         self.sun_light.node().set_color((*direct, 1.0))
         self.sun_light.node().set_direction(Vec3(*(-self._sun)))
         self.ambient_light.node().set_color((*ambient, 1.0))

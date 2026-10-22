@@ -356,3 +356,18 @@ the sun has set long before, so there is no line to see there.
   then say which).
 - **Weather that moves:** the map is fixed; the cyclones could drift with the
   zonal wind and the map be rebuilt (a few seconds) or advected.
+
+### Known issues
+
+- **Clouds too red on the horizon at noon** (reported 2026-10-22, not yet
+  investigated).
+  - **What is seen:** flying low with the sun at its zenith, the clouds
+    toward the horizon look too red. At noon they should look nearly white,
+    with only some haze.
+  - **Leads, unchecked:**
+    - the long, low path to the horizon clouds through the air, reddened as
+      for a sunset;
+    - `AtmosphereParams.sunset_radius`, which reddens sunsets on small
+      planets as on a 6371 km one;
+    - the deck's own sun and twilight terms (`grazingLight`,
+      `cloudTwilight`).
