@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `world_builder.world.World`: every part a game draws around its camera
+  (each body's terrain, air, planet clouds and swell ocean, the sky, the sun
+  and Panda3D lights), built from the game's looks (`BodyLook`, `CloudLook`,
+  `OceanLook`, `SunLook`, `SkyLook`) and updated with one
+  `World.update(origin_world, far)` a frame; `scripts/demo_world.py` is the
+  terrain demo built on it. (#16)
 - Terrain collision for a game's own Panda3D `CollisionTraverser`
   (`Terrain.enable_collision`): a native collision solid over the drawn
   chunks answers ship, sensor and laser colliders with ordinary collision
@@ -144,6 +150,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `SplitDepthCameras` drew its far camera into the window even when the
+  scene renders into an offscreen buffer (a game's render-scale or
+  anti-aliasing pipeline, e.g. `FilterManager`): it now draws into the near
+  camera's own output. (#16)
 - A chunk generated on the query path (`TerrainQuery` with `generate=True`,
   the default of `sphere_contact` and the point queries) went into the
   terrain's store without its height bounds: the LOD selector saw it as

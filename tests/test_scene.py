@@ -79,6 +79,32 @@ def test_split_cameras_draw_into_the_window(window):
     assert cameras.far_region not in list(window.win.get_display_regions())
 
 
+def test_split_cameras_follow_the_scene_into_a_post_process_buffer(window):
+    """With the scene rendered into a texture (a game's render scale or
+    anti-aliasing pipeline), the far camera draws into that buffer, before
+    the near one, not into the window under the composited quad."""
+    from direct.filter.FilterManager import FilterManager
+
+    manager = FilterManager(window.win, window.cam)
+    assert manager.renderSceneInto(colortex=Texture("scene")) is not None
+    try:
+        buffer = window.cam.node().get_display_region(0).get_window()
+        assert buffer != window.win
+        cameras = SplitDepthCameras(window, near=1.0)
+        try:
+            assert cameras.output == buffer
+            assert cameras.far_region in list(buffer.get_display_regions())
+            assert cameras.far_region not in list(window.win.get_display_regions())
+            assert cameras.far_region.get_sort() < cameras.near_region.get_sort()
+            cameras.update(5000.0, 12e6)
+            window.graphicsEngine.render_frame()
+        finally:
+            cameras.destroy()
+        assert cameras.far_region not in list(buffer.get_display_regions())
+    finally:
+        manager.cleanup()
+
+
 # ── ocean ──────────────────────────────────────────────────────────────────────
 
 

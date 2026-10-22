@@ -107,10 +107,18 @@ class SplitDepthCameras:
     :meth:`destroy` restores its mask and depth clearing (the lens keeps the
     last near/far).
 
+    The far camera draws into the same output as the app's camera, whatever
+    it is: the window, or an offscreen buffer when the game renders the scene
+    into a texture (a post-process pipeline, e.g. ``FilterManager``). Build
+    this after such a pipeline, and destroy it before the pipeline is torn
+    down.
+
     :ivar far_camera: the far camera's NodePath (a child of ``app.camera``)
     :ivar far_lens: its lens, a copy of ``app.camLens`` kept in step with it
     :ivar near_region: the app camera's display region (clears depth)
-    :ivar far_region: the far camera's, sorted just before it
+    :ivar far_region: the far camera's, on the same output, sorted just
+        before it
+    :ivar output: the window or buffer both cameras draw into
     :ivar split: the current split distance, metres (0 before :meth:`update`)
     :ivar far: the current far distance, metres
     """
@@ -133,7 +141,10 @@ class SplitDepthCameras:
 
         self.near_region = app.cam.node().get_display_region(0)
         left, right, bottom, top = self.near_region.get_dimensions()
-        self.far_region = app.win.make_display_region(left, right, bottom, top)
+        # The near camera's own output: the window, or the offscreen buffer a
+        # post-process pipeline moved it into
+        self.output = self.near_region.get_window()
+        self.far_region = self.output.make_display_region(left, right, bottom, top)
         self.far_region.set_sort(self.near_region.get_sort() - 1)
         self.far_region.set_camera(self.far_camera)
         self.near_region.set_clear_depth_active(True)
@@ -217,7 +228,7 @@ class SplitDepthCameras:
 
     def destroy(self) -> None:
         """Remove the far camera and its display region."""
-        self.app.win.remove_display_region(self.far_region)
+        self.output.remove_display_region(self.far_region)
         self.far_camera.remove_node()
         self.app.cam.node().set_camera_mask(PandaNode.get_all_camera_mask())
         self.near_region.set_clear_depth_active(False)
