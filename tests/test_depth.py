@@ -12,6 +12,7 @@ from panda3d.core import (
     BitMask32,
     BoundingBox,
     BoundingVolume,
+    CardMaker,
     NodePath,
     PerspectiveLens,
     Point3,
@@ -21,9 +22,12 @@ from world_builder.depth import (
     FAR_CAMERA_MASK,
     HIDE_FROM_FAR,
     HIDE_FROM_NEAR,
+    MIN_SPLIT_M,
     NEAR_CAMERA_MASK,
     SplitDepthCameras,
+    camera_span,
     frustum_bounds,
+    split_clear_of,
 )
 
 R = 600e3
@@ -108,3 +112,96 @@ def test_hiding_from_one_camera_leaves_the_others():
     near_only.hide(HIDE_FROM_FAR)
     assert not _drawn(near_only, FAR_CAMERA_MASK)
     assert _drawn(near_only, NEAR_CAMERA_MASK)
+
+
+# ── translucent volumes ────────────────────────────────────────────────────────
+
+OVERLAP = 1.02
+
+
+def _crosses(split: float, span: tuple[float, float]) -> bool:
+    """Whether a span crosses the band both cameras draw."""
+    near, far = span
+    return near / OVERLAP < split and far > split
+
+
+@pytest.mark.parametrize("span", [(100.0, 1500.0), (2100.0, 4000.0)])
+def test_a_span_clear_of_the_band_leaves_the_split(span):
+    assert split_clear_of(2000.0, [span], OVERLAP) == 2000.0
+
+
+def test_without_spans_the_split_stays():
+    assert split_clear_of(2000.0, [], OVERLAP) == 2000.0
+
+
+def test_the_split_moves_in_front_of_a_span_it_cuts():
+    split = split_clear_of(2000.0, [(1900.0, 2300.0)], OVERLAP)
+    assert split == pytest.approx(1900.0 / OVERLAP)
+    assert not _crosses(split, (1900.0, 2300.0))
+
+
+def test_inside_a_volume_the_split_moves_past_it():
+    """The camera is inside: nothing is in front of the volume."""
+    assert split_clear_of(2000.0, [(0.0, 2500.0)], OVERLAP) == 2500.0
+
+
+def test_too_close_to_move_in_front_the_split_moves_past():
+    span = (MIN_SPLIT_M / 2, 2200.0)
+    assert split_clear_of(2000.0, [span], OVERLAP) == 2200.0
+
+
+def test_moving_in_front_keeps_clear_of_the_next_span():
+    spans = [(1900.0, 2300.0), (1700.0, 1880.0)]
+    split = split_clear_of(2000.0, spans, OVERLAP)
+    assert split == pytest.approx(1700.0 / OVERLAP)
+
+
+def test_moving_past_keeps_clear_of_the_next_span():
+    spans = [(0.0, 2100.0), (2050.0, 2600.0)]
+    assert split_clear_of(2000.0, spans, OVERLAP) == 2600.0
+
+
+def test_no_span_ever_crosses_the_band():
+    rng = np.random.default_rng(5)
+    for _ in range(200):
+        centres = rng.uniform(0.0, 6000.0, 6)
+        radii = rng.uniform(20.0, 1500.0, 6)
+        spans = [(max(0.0, c - r), c + r) for c, r in zip(centres, radii)]
+        split = split_clear_of(2000.0, spans, OVERLAP)
+        assert split >= MIN_SPLIT_M
+        assert not any(_crosses(split, span) for span in spans)
+
+
+def _volume():
+    """:returns: (a camera, a 100 m card 1 km ahead of it)"""
+    render = NodePath("render")
+    camera = render.attach_new_node("cam")
+    maker = CardMaker("bubble")
+    maker.set_frame(-30.0, 30.0, -40.0, 40.0)  # bounding radius 50 m
+    holder = render.attach_new_node("ship")
+    holder.set_pos(0.0, 1000.0, 0.0)
+    bubble = holder.attach_new_node(maker.generate())
+    return camera, bubble
+
+
+def test_a_volume_spans_its_bounding_sphere_from_the_camera():
+    camera, bubble = _volume()
+    near, far = camera_span(bubble, camera)
+    assert near == pytest.approx(950.0, abs=1.0)
+    assert far == pytest.approx(1050.0, abs=1.0)
+
+
+def test_the_span_follows_the_camera():
+    camera, bubble = _volume()
+    camera.set_pos(0.0, 1000.0, 0.0)  # inside it
+    near, far = camera_span(bubble, camera)
+    assert near == 0.0 and far == pytest.approx(50.0, abs=1.0)
+
+
+def test_a_hidden_or_removed_volume_has_no_span():
+    camera, bubble = _volume()
+    bubble.hide()
+    assert camera_span(bubble, camera) is None
+    bubble.show()
+    bubble.remove_node()
+    assert camera_span(bubble, camera) is None

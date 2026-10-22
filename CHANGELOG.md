@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `SplitDepthCameras.update(split, far, translucent=...)` keeps the split off
+  big translucent volumes (a game's shield bubbles), which the two cameras'
+  overlap band would otherwise blend twice into a ring (`split_clear_of`,
+  `camera_span`). (#16)
 - `world_builder.world.World`: every part a game draws around its camera
   (each body's terrain, air, planet clouds and swell ocean, the sky, the sun
   and Panda3D lights), built from the game's looks (`BodyLook`, `CloudLook`,

@@ -33,6 +33,16 @@ covered it (a planet seen from beyond its moon, 10,000 km away, vanished; its
 clouds' deck and the sky's atmosphere, which are never culled, stayed). The
 far camera gets explicit cull bounds to its true far plane instead
 (:func:`frustum_bounds`).
+
+Translucent volumes: the near camera reaches ``overlap`` times the split, so
+the two ranges never leave a gap. An opaque surface drawn twice in that band
+looks the same, but a big translucent one without depth write (a game's
+shield bubble) is blended twice there, which shows as a ring around the
+camera at the split distance. :meth:`SplitDepthCameras.update` takes such
+volumes and moves the split off every one it would cut
+(:func:`split_clear_of`): nearer the camera, in front of the volume (finer
+depth steps), or past its far side when it is too close for that (the camera
+inside or right next to it).
 """
 
 from __future__ import annotations
@@ -45,8 +55,10 @@ import numpy as np
 from panda3d.core import (
     BitMask32,
     BoundingHexahedron,
+    BoundingSphere,
     Camera,
     Lens,
+    NodePath,
     PandaNode,
     Point3,
 )
@@ -72,6 +84,74 @@ NEAR_CAMERA_MASK = BitMask32.bit(NEAR_BIT)
 #: The far camera's mask: its bit alone, so :data:`HIDE_FROM_FAR` hides
 #: from it.
 FAR_CAMERA_MASK = BitMask32.bit(FAR_BIT)
+
+
+#: The split is never moved nearer than this off a translucent volume, metres:
+#: the near camera keeps a useful range
+MIN_SPLIT_M = 50.0
+
+
+def camera_span(node: NodePath, camera: NodePath) -> tuple[float, float] | None:
+    """How far a drawn volume reaches from the camera.
+
+    :param node: the volume
+    :param camera: the camera
+    :returns: the nearest and farthest distances of its bounding sphere from
+        the camera, metres (the nearest 0 with the camera inside); None when
+        it is not drawn (removed, hidden, off the scene graph or empty)
+    """
+    if node.is_empty() or node.is_hidden() or node.get_parent().is_empty():
+        return None
+    # A copy, in the parent's frame: the node's own transform is applied
+    bounds = node.get_bounds()
+    if bounds.is_empty() or bounds.is_infinite():
+        return None
+    sphere = BoundingSphere()
+    sphere.extend_by(bounds)
+    sphere.xform(node.get_parent().get_mat(camera))
+    distance = float(np.linalg.norm(np.array(sphere.get_center())))
+    radius = sphere.get_radius()
+    return max(0.0, distance - radius), distance + radius
+
+
+def split_clear_of(
+    split: float,
+    spans: Iterable[tuple[float, float]],
+    overlap: float,
+    min_split: float = MIN_SPLIT_M,
+) -> float:
+    """A split moved so that no span crosses the band both cameras draw,
+    [split, split * overlap].
+
+    It moves nearer the camera, to just in front of the span it would cut,
+    for as long as that stays at or past *min_split*; past that it moves
+    beyond the far side of the spans instead, and keeps going out.
+
+    :param split: the wanted split, metres
+    :param spans: (nearest, farthest) distances of each translucent volume
+        from the camera, metres (:func:`camera_span`)
+    :param overlap: how far past the split the near camera reaches (a factor)
+    :param min_split: the nearest the split may move, metres
+    :returns: the split, metres
+    """
+    spans = sorted(spans)
+    nearer = True
+    moved = True
+    while moved:
+        moved = False
+        for near, far in spans:
+            in_front = near / overlap
+            # Crosses the band; tested in the very arithmetic of the moves
+            # below, so a split just moved off a span never finds it crossing
+            # again by a rounding error
+            if in_front < split and far > split:
+                if nearer and in_front >= min_split:
+                    split = in_front
+                else:
+                    nearer = False
+                    split = far
+                moved = True
+    return split
 
 
 def frustum_bounds(lens: Lens) -> BoundingHexahedron:
@@ -152,7 +232,9 @@ class SplitDepthCameras:
         self.split = 0.0
         self.far = 0.0
 
-    def update(self, split: float, far: float) -> None:
+    def update(
+        self, split: float, far: float, translucent: Iterable[NodePath] = ()
+    ) -> None:
         """Set the ranges for this frame: near camera [near, split], far
         camera [split, far].
 
@@ -160,10 +242,19 @@ class SplitDepthCameras:
         *split* near the nearest thing the far camera must draw finely and
         *far* just past the farthest thing visible.
 
-        :param split: metres
+        :param split: metres; moved off *translucent* (see the module)
         :param far: metres; raised to 2 * split if smaller
+        :param translucent: big translucent volumes (no depth write) the
+            split must not cut, or they show a ring at the split
         """
         split = max(split, 2.0 * self.near)
+        spans = (camera_span(volume, self.app.cam) for volume in translucent)
+        split = split_clear_of(
+            split,
+            [span for span in spans if span is not None],
+            self.overlap,
+            min_split=max(MIN_SPLIT_M, 2.0 * self.near),
+        )
         far = max(far, 2.0 * split)
         self.split, self.far = split, far
         lens = self.app.camLens

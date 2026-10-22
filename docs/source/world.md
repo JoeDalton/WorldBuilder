@@ -117,6 +117,11 @@ Build the world before `SplitDepthCameras`. The ocean's reflection camera
 copies the app's lens once when it is built, and the split cameras then
 shorten that lens to the near range every frame.
 
+A game's own translucent volumes, such as shield bubbles, go to
+`depth.update(split, far, translucent=...)`. The split then never cuts one:
+the two cameras overlap by 2%, and they would blend a volume twice in that
+band (see `world_builder.depth`).
+
 ## Other members
 
 - **`depth_ranges(origin_world)`**: split and far distances over every body
