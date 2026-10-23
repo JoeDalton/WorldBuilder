@@ -23,11 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`Terrain.enable_collision`): a native collision solid over the drawn
   chunks answers ship, sensor and laser colliders with ordinary collision
   entries, one per collider, plus `material_at` for the ground at a hit. The
-  Linux x86_64 and aarch64 (`py3-none-manylinux2014_x86_64`,
-  `py3-none-manylinux2014_aarch64`), Windows x64 (`py3-none-win_amd64`) and
-  macOS (`py3-none-macosx_11_0_universal2`) wheels ship it built; from a
-  source checkout, `invoke native` builds it, and `invoke develop` does so
-  on Linux and macOS. (#16)
+  Linux x86_64 and aarch64 (manylinux2014), Windows x64 and macOS
+  (universal2) wheels ship it built; from a source checkout,
+  `invoke native` builds it, and `invoke develop` does so too. (#16)
 - `Terrain.loading`: whether the view still waits for ground, for a game's
   loading phase (undrawn ground is not solid either). (#16)
 - Terrain on a true spherical planet: a cube-sphere with quadtree LOD,
@@ -109,8 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Releases carry the Linux x86_64 and aarch64, Windows x64 and macOS wheels
-  (`world_builder-<v>-py3-none-manylinux2014_x86_64.whl`,
-  `world_builder-<v>-py3-none-manylinux2014_aarch64.whl`,
+  (`world_builder-<v>-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`,
+  `world_builder-<v>-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl`,
   `world_builder-<v>-py3-none-win_amd64.whl`,
   `world_builder-<v>-py3-none-macosx_11_0_universal2.whl`) and the sdist,
   no longer a `py3-none-any` wheel: a game depending on a wheel's URL
