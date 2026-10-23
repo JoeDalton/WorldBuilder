@@ -32,7 +32,7 @@ The controls are listed at the top of each demo.
 
 ## Install
 
-Python 3.12 to 3.14; depends on Panda3D 1.10, numpy, scipy and PyYAML.
+Python 3.12 to 3.14; depends on Panda3D 1.10.16, numpy, scipy and PyYAML.
 
 For development, as for SpaceFlight:
 
@@ -43,23 +43,36 @@ invoke test
 ```
 
 From another project, depend on the wheel attached to a tagged release; the
-install then needs no git (Poetry):
+install then needs no git. There is one wheel per platform, each carrying the
+compiled [collision library](docs/source/native_build.md), so pick it with
+markers (Poetry):
 
 ```toml
-world_builder = { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/0.1.0/world_builder-0.1.0-py3-none-any.whl" }
+world_builder = [
+  { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/X.Y.Z/world_builder-X.Y.Z-py3-none-manylinux2014_x86_64.whl", markers = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/X.Y.Z/world_builder-X.Y.Z-py3-none-manylinux2014_aarch64.whl", markers = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+  { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/X.Y.Z/world_builder-X.Y.Z-py3-none-win_amd64.whl", markers = "sys_platform == 'win32'" },
+  { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/X.Y.Z/world_builder-X.Y.Z-py3-none-macosx_11_0_universal2.whl", markers = "sys_platform == 'darwin'" },
+]
 ```
 
 Not the tag's source zip (`archive/refs/tags/...zip`): GitHub regenerates those,
-and a lock file's hash of one can stop matching.
+and a lock file's hash of one can stop matching. The release's sdist has no
+compiled library: without it, `Terrain.enable_collision` raises (everything
+else works). The wheels pin Panda3D to 1.10.16, the version the library is
+built against.
 
 The version is read from git tags. Pushing a tag `X.Y.Z` runs CI, which builds
-the wheel, checks it imports, and attaches it to the `X.Y.Z` release.
+the wheel of each platform, installs it in a clean venv on Python 3.12 to 3.14
+and runs the tests against it, then attaches the wheels and the sdist to the
+`X.Y.Z` release.
 
 ## Documentation
 
 `docs/source/`: [terrain](docs/source/terrain.md),
 [atmosphere, sky and planet clouds](docs/source/atmosphere.md),
 [ocean](docs/source/ocean.md), [clouds](docs/source/clouds.md),
+[the native collision library](docs/source/native_build.md),
 [performance](docs/source/performance.md) and its
 [backlog](docs/source/performance_backlog.md),
 [lighting on objects](docs/source/object_lighting.md). Build the HTML, with

@@ -490,7 +490,7 @@ class Terrain:
             :class:`TerrainQuery` does
         :returns: the collision (also :attr:`collision`)
         :raises NativeCollisionError: the native library is not built for
-            the running Panda3D (``scripts/build_native.sh``)
+            the running Panda3D (``invoke native``)
         """
         self.disable_collision()
         self.collision = TerrainCollision(

@@ -88,11 +88,14 @@ def test_round_robin_serves_every_channel(counted, planet_spec, moon_spec):
     executor.set_spec(moon_spec, "moon")
     executor.request([(9, 0, i, 0) for i in range(6)], "planet")
     executor.request([(9, 1, 0, 0)], "moon")
-    # The planet filled the queue first; the moon gets the next free slot,
-    # not the end of the planet's list.
-    done = _drain(executor, ("planet", "moon"), 3)
+    # The planet filled the queue first; the moon gets a slot in the first
+    # refill, not the end of the planet's list. One worker runs tasks in
+    # submission order, so `counted` is that order whatever the timing: the
+    # moon runs third (one slot freed) or fourth (both freed by one collect).
+    _drain(executor, ("planet", "moon"), 7)
     executor.shutdown()
-    assert done["moon"], "the moon waited behind the whole planet"
+    order = [name for name, _ in counted]
+    assert order.index("moon") <= 3, "the moon waited behind the whole planet"
 
 
 def test_a_spec_change_on_one_channel_keeps_the_other(planet_spec, moon_spec):

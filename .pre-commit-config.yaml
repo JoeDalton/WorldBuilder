@@ -10,6 +10,7 @@ repos:
     hooks:
       - id: mixed-line-ending
         args: [--fix=lf]
+        exclude: '\.(bat|cmd|ps1)$'  # CRLF on checkout (.gitattributes)
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-ast

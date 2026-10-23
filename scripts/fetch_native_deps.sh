@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Download the headers the native terrain collision solid compiles against:
+# the Panda3D SDK's (same version as the pinned wheel) and Eigen's, on Linux
+# and macOS (Windows: fetch_native_deps.ps1). Used by scripts/build_native.sh
+# and CI. See docs/source/native_build.md.
+#
+#   scripts/fetch_native_deps.sh [dest]
+#
+# dest: where to put them (default: .cache/native in the repository). Already
+# fetched parts are kept. Prints the two include directories, one per line:
+# the Panda3D headers, then Eigen.
+set -euo pipefail
+
+EIGEN_VERSION=3.3.7
+
+HERE=$(cd "$(dirname "$0")/.." && pwd)
+PANDA_VERSION=$("$HERE/scripts/panda_version.sh")  # the pinned wheel's
+DEST=$(mkdir -p "${1:-$HERE/.cache/native}" && cd "${1:-$HERE/.cache/native}" && pwd)
+
+# The macOS SDK's headers, Eigen's included, from the headers package of its
+# disk image.
+if [ "$(uname -s)" = Darwin ]; then
+    SDK=$DEST/panda3d-sdk-$PANDA_VERSION-macos
+    if [ ! -f "$SDK/include/pandaVersion.h" ]; then
+        rm -rf "$SDK" && mkdir -p "$SDK"
+        WORK=$(mktemp -d)
+        curl -fsSL -o "$WORK/sdk.dmg" \
+            "https://www.panda3d.org/download/panda3d-$PANDA_VERSION/Panda3D-SDK-$PANDA_VERSION-MacOSX10.9.dmg"
+        hdiutil attach -quiet -nobrowse -readonly -mountpoint "$WORK/mnt" "$WORK/sdk.dmg"
+        pkgutil --expand-full "$(find "$WORK/mnt" -maxdepth 5 -name headers.pkg)" "$WORK/headers"
+        hdiutil detach -quiet "$WORK/mnt"
+        mv "$WORK/headers/Payload/Library/Developer/Panda3D/include" "$SDK/include"
+        rm -rf "$WORK"
+    fi >&2
+    echo "$SDK/include"
+    echo "$SDK/include"  # Eigen is in there
+    exit
+fi
+
+SDK=$DEST/panda3d-sdk-$PANDA_VERSION
+EIGEN=$DEST/eigen-$EIGEN_VERSION
+
+# The Ubuntu SDK package: only its headers are used. Unpacked with ar and tar
+# so this works off Debian too. The amd64 package serves aarch64 as well: its
+# dtool_config.h holds both, the differences under #ifdef __aarch64__.
+if [ ! -f "$SDK/usr/include/panda3d/pandaVersion.h" ]; then
+    rm -rf "$SDK" && mkdir -p "$SDK"
+    curl -fsSL -o "$SDK/sdk.deb" \
+        "https://www.panda3d.org/download/panda3d-$PANDA_VERSION/panda3d1.10_$PANDA_VERSION~noble_amd64.deb"
+    (cd "$SDK" && ar x sdk.deb && tar xf data.tar.* ./usr/include/panda3d)
+    rm -f "$SDK"/sdk.deb "$SDK"/*.tar.* "$SDK"/debian-binary
+fi >&2
+
+if [ ! -f "$EIGEN/Eigen/Core" ]; then
+    rm -rf "$EIGEN"
+    curl -fsSL "https://gitlab.com/libeigen/eigen/-/archive/$EIGEN_VERSION/eigen-$EIGEN_VERSION.tar.gz" \
+        | tar xz -C "$DEST"
+fi >&2
+
+echo "$SDK/usr/include/panda3d"
+echo "$EIGEN"
