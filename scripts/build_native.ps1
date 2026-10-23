@@ -1,5 +1,5 @@
 # Build the native terrain collision solid (Windows x64) for the installed
-# panda3d wheel, with MSVC. See NATIVE_COLLISION_BUILD.md.
+# panda3d wheel, with MSVC. See docs/source/native_build.md.
 #
 #   scripts/build_native.ps1 [-Python <python>] [-Sdk <panda3d sdk>]
 #

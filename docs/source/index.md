@@ -19,6 +19,9 @@ it works.
 - [Atmosphere, sky and planet clouds](atmosphere.md): the scattering model,
   the star field and the clouds over a whole planet, with their weather.
 - [Ocean](ocean.md): the reflective ocean and its swell.
+- [The native collision library](native_build.md): the C++ collision solid
+  behind terrain collision, how it is built and shipped in a wheel for each
+  platform, and what it depends on.
 - [Clouds](clouds.md): billboard clouds, their density fields and shading.
 - [Quality settings](quality.md): every cost/quality knob, the LOW to ULTRA
   presets, and how a game's settings menu reads and saves them.
@@ -36,6 +39,7 @@ world
 terrain
 atmosphere
 ocean
+native_build
 clouds
 quality
 performance

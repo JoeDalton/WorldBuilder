@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build the native terrain collision solid (Linux, macOS) against the installed
-# panda3d wheel. See NATIVE_COLLISION_BUILD.md. Windows: build_native.ps1.
+# panda3d wheel. See docs/source/native_build.md. Windows: build_native.ps1.
 #
-#   [PANDA_SDK_INCLUDE=<sdk>/usr/include/panda3d] [EIGEN_INCLUDE=<eigen-3.3.x>] \
+#   [PANDA_SDK_INCLUDE=<Panda3D SDK headers>] [EIGEN_INCLUDE=<Eigen 3.3 headers>] \
 #       scripts/build_native.sh [python]
 #
 # python: the interpreter whose panda3d wheel to link against (default: python3).

@@ -1,7 +1,7 @@
 """
 Add the native terrain collision library to the pure world_builder wheel and
-tag it for one platform. Used by scripts/build_manylinux_wheel.sh and CI; see
-NATIVE_COLLISION_BUILD.md.
+tag it for one platform. Used by scripts/build_manylinux_wheel.sh,
+scripts/build_macos_wheel.sh and CI; see docs/source/native_build.md.
 
     python scripts/platform_wheel.py <pure wheel> <library> <platform tag> <out dir>
 

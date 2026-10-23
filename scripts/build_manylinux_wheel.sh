@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Turn the pure world_builder wheel into a manylinux wheel carrying the native
 # terrain collision library. Runs inside a pypa manylinux image, whose
-# toolchain matches Panda3D's own wheels. See NATIVE_COLLISION_BUILD.md.
+# toolchain matches Panda3D's own wheels. See docs/source/native_build.md.
 #
 #   docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_<arch> \
 #       /io/scripts/build_manylinux_wheel.sh /io/dist/world_builder-<v>-py3-none-any.whl /io/wheelhouse
@@ -18,9 +18,9 @@ OUT=$2
 # Any CPython of the image: only its panda3d wheel's libraries are linked.
 PYTHON=${PYTHON:-/opt/python/cp312-cp312/bin/python}
 PLAT=${AUDITWHEEL_PLAT:?run in a manylinux image, or set AUDITWHEEL_PLAT}
-PANDA_VERSION=1.10.16  # the pin in pyproject.toml
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
+PANDA_VERSION=$("$HERE/scripts/panda_version.sh")
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 

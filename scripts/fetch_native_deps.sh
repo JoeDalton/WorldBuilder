@@ -2,7 +2,7 @@
 # Download the headers the native terrain collision solid compiles against:
 # the Panda3D SDK's (same version as the pinned wheel) and Eigen's, on Linux
 # and macOS (Windows: fetch_native_deps.ps1). Used by scripts/build_native.sh
-# and CI. See NATIVE_COLLISION_BUILD.md.
+# and CI. See docs/source/native_build.md.
 #
 #   scripts/fetch_native_deps.sh [dest]
 #
@@ -11,10 +11,10 @@
 # the Panda3D headers, then Eigen.
 set -euo pipefail
 
-PANDA_VERSION=1.10.16
 EIGEN_VERSION=3.3.7
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
+PANDA_VERSION=$("$HERE/scripts/panda_version.sh")  # the pinned wheel's
 DEST=$(mkdir -p "${1:-$HERE/.cache/native}" && cd "${1:-$HERE/.cache/native}" && pwd)
 
 # The macOS SDK's headers, Eigen's included, from the headers package of its
@@ -33,7 +33,7 @@ if [ "$(uname -s)" = Darwin ]; then
         rm -rf "$WORK"
     fi >&2
     echo "$SDK/include"
-    echo "$SDK/include"
+    echo "$SDK/include"  # Eigen is in there
     exit
 fi
 

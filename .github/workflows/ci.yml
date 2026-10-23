@@ -79,7 +79,7 @@ jobs:
           path: dist/*.whl
 
   # One wheel per platform carrying the native terrain collision library
-  # (NATIVE_COLLISION_BUILD.md). The library doesn't use Python.h, so a single
+  # (docs/source/native_build.md). The library doesn't use Python.h, so a single
   # py3-none-<platform> wheel serves every Python.
   build_wheels:
     if: github.event_name == 'push'
@@ -130,14 +130,14 @@ jobs:
 
       # Windows: MSVC, against the Panda3D SDK's headers and import libraries.
       - if: runner.os == 'Windows'
-        run: pip install panda3d==1.10.16 wheel  # the pin in pyproject.toml
+        run: pip install "panda3d==$(scripts/panda_version.sh)" wheel
       - if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/build_native.ps1
       - if: runner.os == 'Windows'
         run: |
           python scripts/platform_wheel.py dist/*.whl \
-            src/world_builder/terrain/native/libterrain_collision-panda1.10.dll win_amd64 wheelhouse
+            src/world_builder/terrain/native/libterrain_collision-panda*.dll win_amd64 wheelhouse
 
       # macOS: clang, both architectures in one library, against the panda3d
       # wheel's universal2 libraries.

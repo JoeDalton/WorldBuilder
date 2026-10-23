@@ -67,7 +67,7 @@ def _library() -> ctypes.CDLL:
             f"terrain collision is not built for Panda3D {panda3d.__version__}: "
             f"{path.name} is missing (found: {', '.join(built) or 'none'}). Build it "
             "with `invoke native` from a source checkout, see "
-            "NATIVE_COLLISION_BUILD.md."
+            "docs/source/native_build.md."
         )
     try:
         lib = ctypes.CDLL(str(path))

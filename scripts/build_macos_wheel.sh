@@ -2,7 +2,7 @@
 # Turn the pure world_builder wheel into a macOS wheel carrying the native
 # terrain collision library: universal2 (x86_64 and arm64), like Panda3D's own
 # wheels from Python 3.12, whose libraries it links against. See
-# NATIVE_COLLISION_BUILD.md.
+# docs/source/native_build.md.
 #
 #   scripts/build_macos_wheel.sh <pure wheel> <out dir>
 #
@@ -13,10 +13,10 @@ set -euo pipefail
 PURE=$1
 OUT=$2
 PYTHON=${PYTHON:-python3}
-PANDA_VERSION=1.10.16  # the pin in pyproject.toml
 export MACOSX_DEPLOYMENT_TARGET=11.0  # that of Panda's universal2 wheels
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
+PANDA_VERSION=$("$HERE/scripts/panda_version.sh")
 
 "$PYTHON" -m pip install -q "panda3d==$PANDA_VERSION" wheel
 "$HERE/scripts/build_native.sh" "$PYTHON"

@@ -1,7 +1,7 @@
 # Download the Panda3D SDK (same version as the pinned wheel) that the native
 # terrain collision solid compiles and links against on Windows: its headers,
 # Eigen's included, and the import libraries the wheel lacks. Used by
-# scripts/build_native.ps1 and CI. See NATIVE_COLLISION_BUILD.md.
+# scripts/build_native.ps1 and CI. See docs/source/native_build.md.
 #
 #   scripts/fetch_native_deps.ps1 [-Dest <dir>]
 #
@@ -12,7 +12,9 @@ param([string]$Dest = "$PSScriptRoot/../.cache/native")
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"  # Invoke-WebRequest crawls otherwise
 
-$PandaVersion = "1.10.16"
+# The version pyproject.toml pins (scripts/panda_version.sh).
+$PandaVersion = (Select-String -Path "$PSScriptRoot/../pyproject.toml" `
+    -Pattern '^Panda3D = "==(.*)"').Matches[0].Groups[1].Value
 New-Item -ItemType Directory -Force $Dest | Out-Null
 $Sdk = Join-Path (Resolve-Path $Dest) "panda3d-sdk-$PandaVersion-x64"
 

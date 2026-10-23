@@ -16,22 +16,24 @@ def check_dynamic_versioning(c):
 
 @task
 def native(c):
-    """Build the native terrain collision library (NATIVE_COLLISION_BUILD.md)."""
-    c.run("poetry run scripts/build_native.sh")
+    """Build the native terrain collision library (docs/source/native_build.md)."""
+    if platform.system() == "Windows":
+        c.run("poetry run powershell -NoProfile -File scripts/build_native.ps1")
+    else:
+        c.run("poetry run scripts/build_native.sh")
 
 
 @task(pre=[check_dynamic_versioning])
 def develop(c):
     c.run("poetry install")
     c.run("poetry run pre-commit install")
-    # Linux and macOS have a build script (Windows: build_native.ps1); without
-    # the library, terrain collision raises.
-    if platform.system() in ("Linux", "Darwin"):
-        if not c.run("poetry run scripts/build_native.sh", warn=True).ok:
-            print(
-                "warning: the native terrain collision library did not build, "
-                "Terrain.enable_collision will raise. Retry with `invoke native`."
-            )
+    # Without the library, terrain collision raises: only warn, as the build
+    # needs a C++ compiler a developer may not have.
+    if not c.run("invoke native", warn=True).ok:
+        print(
+            "warning: the native terrain collision library did not build, "
+            "Terrain.enable_collision will raise. Retry with `invoke native`."
+        )
 
 
 @task
