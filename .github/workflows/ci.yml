@@ -9,7 +9,7 @@ on:
   pull_request:
 
 jobs:
-  test_linux:
+  test_linux_with_coverage:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,23 +24,13 @@ jobs:
           name: coverage-report
           path: coverage.xml
 
-  test_windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-      - run: pip install poetry invoke poetry-dynamic-versioning
-      - run: poetry install
-      - run: invoke test
-
-  test_mac_os:
+  test_other_os:
     strategy:
     # Prevent the entire job from failing as soon as one of the runners fails
       fail-fast: false
       matrix:
         include:
+          - runner: windows-latest
           - runner: macos-latest  # arm64
           - runner: macos-15-intel  # x86_64
     runs-on: ${{ matrix.runner }}
