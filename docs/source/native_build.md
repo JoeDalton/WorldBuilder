@@ -35,8 +35,8 @@ Releases carry one wheel per platform, plus the sdist, which has no library:
 
 | Platform | Wheel tag | Built on |
 |---|---|---|
-| Linux x86_64 | `py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64` | `quay.io/pypa/manylinux2014_x86_64` |
-| Linux aarch64 | `py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64` | `quay.io/pypa/manylinux2014_aarch64`, on a native ARM runner |
+| Linux x86_64 | `py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64` | `quay.io/pypa/manylinux2014_x86_64` |
+| Linux aarch64 | `py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64` | `quay.io/pypa/manylinux2014_aarch64`, on a native ARM runner |
 | Windows x64 | `py3-none-win_amd64` | `windows-latest`, MSVC |
 | macOS, Intel and Apple silicon | `py3-none-macosx_11_0_universal2` | `macos-latest`, clang |
 

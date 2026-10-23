@@ -107,8 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Releases carry the Linux x86_64 and aarch64, Windows x64 and macOS wheels
-  (`world_builder-<v>-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl`,
-  `world_builder-<v>-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl`,
+  (`world_builder-<v>-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl`,
+  `world_builder-<v>-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl`,
   `world_builder-<v>-py3-none-win_amd64.whl`,
   `world_builder-<v>-py3-none-macosx_11_0_universal2.whl`) and the sdist,
   no longer a `py3-none-any` wheel: a game depending on a wheel's URL
