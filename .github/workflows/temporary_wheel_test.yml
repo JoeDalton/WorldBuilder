@@ -41,6 +41,8 @@ jobs:
             runner: ubuntu-latest
           - platform: windows-x86_64
             runner: windows-latest
+          - platform: macos-universal2  # Intel and Apple silicon
+            runner: macos-latest
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -66,11 +68,12 @@ jobs:
           docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_x86_64 \
             /io/scripts/build_manylinux_wheel.sh "/io/$(ls dist/*.whl)" /io/wheelhouse
 
-      # Windows: MSVC, against the Panda3D SDK's headers and import libraries.
-      - if: runner.os == 'Windows'
+      - if: runner.os != 'Linux'
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+
+      # Windows: MSVC, against the Panda3D SDK's headers and import libraries.
       - if: runner.os == 'Windows'
         run: pip install panda3d==1.10.16 wheel  # the pin in pyproject.toml
       - if: runner.os == 'Windows'
@@ -80,6 +83,11 @@ jobs:
         run: |
           python scripts/platform_wheel.py dist/*.whl \
             src/world_builder/terrain/native/libterrain_collision-panda1.10.dll win_amd64 wheelhouse
+
+      # macOS: clang, both architectures in one library, against the panda3d
+      # wheel's universal2 libraries.
+      - if: runner.os == 'macOS'
+        run: scripts/build_macos_wheel.sh dist/*.whl wheelhouse
 
       - uses: actions/upload-artifact@v4
         with:
@@ -94,15 +102,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux-x86_64, windows-x86_64]
+        target: [linux-x86_64, windows-x86_64, macos-arm64, macos-x86_64]
         python: ["3.12", "3.13", "3.14"]
         include:
-          - platform: linux-x86_64
+          - target: linux-x86_64
             runner: ubuntu-latest
+            wheel: linux-x86_64
             bin: bin
-          - platform: windows-x86_64
+          - target: windows-x86_64
             runner: windows-latest
+            wheel: windows-x86_64
             bin: Scripts
+          - target: macos-arm64
+            runner: macos-latest
+            wheel: macos-universal2
+            bin: bin
+          - target: macos-x86_64
+            runner: macos-15-intel
+            wheel: macos-universal2
+            bin: bin
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -114,7 +132,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: actions/download-artifact@v4
         with:
-          name: wheel-${{ matrix.platform }}
+          name: wheel-${{ matrix.wheel }}
           path: wheelhouse/
       - run: python -m venv "$RUNNER_TEMP/venv"
       - run: '"$RUNNER_TEMP/venv/${{ matrix.bin }}/python" -m pip install wheelhouse/*.whl pytest pytest-xdist typing-extensions'
@@ -127,6 +145,14 @@ jobs:
           grep -E 'NEEDED|PATH' dynamic.txt
           # The manylinux2014 linker writes RPATH, newer ones RUNPATH.
           grep -qE 'R(UN)?PATH.*\$ORIGIN/\.\./\.\./\.\./panda3d' dynamic.txt
+      - name: The library finds Panda's next to it
+        if: runner.os == 'macOS'
+        run: |
+          LIB=$(echo "$RUNNER_TEMP"/venv/lib/python*/site-packages/world_builder/terrain/native/*.dylib)
+          lipo -archs "$LIB"
+          otool -L "$LIB"
+          otool -l "$LIB" | grep -A2 LC_RPATH | tee rpaths.txt
+          grep -q '@loader_path/../../../panda3d' rpaths.txt
       - run: '"$RUNNER_TEMP/venv/${{ matrix.bin }}/python" -m pytest tests -n auto'
         env:
           WORLD_BUILDER_REQUIRE_NATIVE: "1"

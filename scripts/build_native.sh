@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build the native terrain collision solid (Linux) against the installed
-# panda3d wheel. See NATIVE_COLLISION_BUILD.md.
+# Build the native terrain collision solid (Linux, macOS) against the installed
+# panda3d wheel. See NATIVE_COLLISION_BUILD.md. Windows: build_native.ps1.
 #
 #   [PANDA_SDK_INCLUDE=<sdk>/usr/include/panda3d] [EIGEN_INCLUDE=<eigen-3.3.x>] \
 #       scripts/build_native.sh [python]
@@ -8,6 +8,7 @@
 # python: the interpreter whose panda3d wheel to link against (default: python3).
 # Headers not given are fetched by scripts/fetch_native_deps.sh into .cache/native.
 # Writes src/world_builder/terrain/native/libterrain_collision-panda<major>.<minor>.so
+# (.dylib on macOS, for the wheel's architectures: universal2 from Python 3.12).
 set -euo pipefail
 
 PYTHON=${1:-python3}
@@ -28,6 +29,30 @@ if [ "$HEADERS" != "$WHEEL_VERSION" ]; then
 fi
 
 SRC=$HERE/src/world_builder/terrain/native
+
+if [ "$(uname -s)" = Darwin ]; then
+    OUT=$SRC/libterrain_collision-panda$SERIES.dylib
+    # The first rpath finds the wheel's libraries from an installed
+    # world_builder (as on Linux), the second from the source tree.
+    clang++ -std=c++14 -O3 -dynamiclib -DNDEBUG \
+        $(printf -- '-arch %s ' $(lipo -archs "$PANDA_LIB/libpanda.$SERIES.dylib")) \
+        -mmacosx-version-min="${MACOSX_DEPLOYMENT_TARGET:-11.0}" \
+        -I"$PANDA_SDK_INCLUDE" -I"$EIGEN_INCLUDE" \
+        "$SRC/terrain_collision.cpp" -o "$OUT" -install_name "@rpath/$(basename "$OUT")" \
+        -L"$PANDA_LIB" -lpanda."$SERIES" -lpandaexpress."$SERIES" \
+        -lp3dtool."$SERIES" -lp3dtoolconfig."$SERIES" \
+        -Wl,-rpath,@loader_path/../../../panda3d -Wl,-rpath,"$PANDA_LIB"
+    # The wheel's libraries are named @loader_path/../lib/<name>, which would
+    # resolve next to this library: refer to them through the rpaths instead.
+    for NAME in panda pandaexpress p3dtool p3dtoolconfig; do
+        NAME=lib$NAME.$SERIES.dylib
+        install_name_tool -change "$(otool -D "$PANDA_LIB/$NAME" | tail -1)" "@rpath/$NAME" "$OUT"
+    done
+    codesign --force --sign - "$OUT"  # arm64 runs signed code only
+    echo "built $OUT"
+    exit
+fi
+
 OUT=$SRC/libterrain_collision-panda$SERIES.so
 
 # The rpath finds the wheel's libraries from an installed world_builder

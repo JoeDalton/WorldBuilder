@@ -24,8 +24,10 @@ def native(c):
 def develop(c):
     c.run("poetry install")
     c.run("poetry run pre-commit install")
-    # Only Linux x86_64 has a build so far; without it, terrain collision raises.
-    if (platform.system(), platform.machine()) == ("Linux", "x86_64"):
+    # Linux x86_64 and macOS have a build script (Windows: build_native.ps1);
+    # without the library, terrain collision raises.
+    system = platform.system()
+    if (system, platform.machine()) == ("Linux", "x86_64") or system == "Darwin":
         if not c.run("poetry run scripts/build_native.sh", warn=True).ok:
             print(
                 "warning: the native terrain collision library did not build, "

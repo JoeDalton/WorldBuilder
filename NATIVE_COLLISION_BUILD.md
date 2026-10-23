@@ -1,6 +1,6 @@
 # Building a C++ collision solid against the Panda3D pip wheel
 
-**Status (issue #16):** implemented, and shipped in the Linux x86_64 (`py3-none-manylinux2014_x86_64`) and Windows x64 (`py3-none-win_amd64`) wheels, built against Panda3D 1.10.16, the version `pyproject.toml` pins.
+**Status (issue #16):** implemented, and shipped in the Linux x86_64 (`py3-none-manylinux2014_x86_64`), Windows x64 (`py3-none-win_amd64`) and macOS (`py3-none-macosx_11_0_universal2`, Intel and Apple silicon) wheels, built against Panda3D 1.10.16, the version `pyproject.toml` pins.
 
 | Piece | Where |
 |---|---|
@@ -9,20 +9,20 @@
 | Terrain integration | `Terrain.enable_collision`, `src/world_builder/terrain/collision.py` |
 | Headers | `scripts/fetch_native_deps.sh`; Windows: `scripts/fetch_native_deps.ps1` |
 | Build | `scripts/build_native.sh` (`invoke native`); Windows: `scripts/build_native.ps1` |
-| Wheel | `scripts/platform_wheel.py`, `scripts/build_manylinux_wheel.sh`, CI jobs `package`, `build_wheels` and `test_wheels` |
+| Wheel | `scripts/platform_wheel.py`, `scripts/build_manylinux_wheel.sh`, `scripts/build_macos_wheel.sh`, CI jobs `package`, `build_wheels` and `test_wheels` |
 | Tests | `tests/test_terrain_collision.py`, skipped when the library isn't built, failed instead when `WORLD_BUILDER_REQUIRE_NATIVE` is set |
 
-Linux aarch64 and macOS are listed below with what is still unverified.
+Linux aarch64 is listed below with what is still unverified.
 
-## Building from a source checkout (Linux)
+## Building from a source checkout (Linux, macOS)
 
 ```sh
-invoke native      # also run by `invoke develop` on Linux x86_64
+invoke native      # also run by `invoke develop` on Linux x86_64 and macOS
 ```
 
 It runs `scripts/build_native.sh` with the Poetry venv's Python, so against its panda3d wheel. The headers (the Panda3D SDK's and Eigen's) are fetched by `scripts/fetch_native_deps.sh` into `.cache/native/` on first use. Other headers can be given with `PANDA_SDK_INCLUDE` and `EIGEN_INCLUDE`, and another Python as the script's argument.
 
-This writes `src/world_builder/terrain/native/libterrain_collision-panda<major>.<minor>.so`. The name carries the Panda3D series. It is git-ignored (`*.so`).
+This writes `src/world_builder/terrain/native/libterrain_collision-panda<major>.<minor>.so` (`.dylib` on macOS, `.dll` on Windows). The name carries the Panda3D series. It is git-ignored.
 
 The script refuses headers of another version than the wheel's.
 
@@ -36,7 +36,7 @@ In CI, on every push to `main` and every version tag:
 
 - `package` builds the sdist and the pure wheel;
 - `build_wheels` builds one wheel per platform;
-- `test_wheels` installs each in a clean venv for each of Python 3.12, 3.13 and 3.14, and runs the whole suite against it with `WORLD_BUILDER_REQUIRE_NATIVE=1`.
+- `test_wheels` installs each in a clean venv for each of Python 3.12, 3.13 and 3.14, and runs the whole suite against it with `WORLD_BUILDER_REQUIRE_NATIVE=1`. The macOS wheel is tested on both an Apple silicon and an Intel runner.
 
 On a tag, the release carries the platform wheels and the sdist (which has no library).
 
@@ -72,6 +72,19 @@ pip install panda3d==1.10.16 wheel
 ./scripts/build_native.ps1
 python scripts/platform_wheel.py (Get-Item dist/*-py3-none-any.whl) `
     src/world_builder/terrain/native/libterrain_collision-panda1.10.dll win_amd64 wheelhouse
+```
+
+### macOS (universal2)
+
+`scripts/build_macos_wheel.sh` builds with clang (libc++, like Panda's wheels) on an Apple silicon runner, for both architectures at once (`-arch x86_64 -arch arm64`), with a minimum macOS of 11.0. Panda's universal2 wheels (every Python from 3.12; 3.12 and 3.13 also have x86_64-only ones) hold both architectures, so the library links against them directly.
+
+- **Headers:** `scripts/fetch_native_deps.sh` mounts the SDK image `Panda3D-SDK-1.10.16-MacOSX10.9.dmg` and unpacks its `headers.pkg` into `.cache/native/`. Its `dtool_config.h` sets `HAVE_EIGEN` and `LINMATH_ALIGN`, like the others, and it bundles Eigen 3.3.9, used instead of the Eigen download.
+- **Install names:** the wheel's libraries call themselves `@loader_path/../lib/libpanda.1.10.dylib` and so on, which, recorded as is, would resolve next to this library. `scripts/build_native.sh` rewrites them to `@rpath/<name>`, with the rpath `@loader_path/../../../panda3d` (`site-packages/panda3d`, as on Linux) and, for builds in the source tree, the venv's panda3d directory. The wheel build drops the latter.
+- **Signing:** rewriting install names breaks the linker's ad-hoc signature, and arm64 runs only signed code, so the library is signed again (`codesign --sign -`).
+
+```sh
+python -m build
+scripts/build_macos_wheel.sh dist/*-py3-none-any.whl wheelhouse
 ```
 
 ## Loading
@@ -165,17 +178,6 @@ For comparison, Panda's collision against visible geometry (the Geom tiles of op
 
 - **Image:** `quay.io/pypa/manylinux2014_aarch64` on an `ubuntu-24.04-arm` runner; `scripts/build_manylinux_wheel.sh` already tags with the machine it runs on.
 - **Headers:** `fetch_native_deps.sh` takes the amd64 SDK package. Check whether panda3d.org has an arm64 one, or that the amd64 `dtool_config.h` matches the aarch64 wheel's build.
-
-### macOS (x86_64 and arm64)
-
-- **Headers:** from the Panda3D SDK `.dmg` for the same version, or from a source build of the same tag.
-- **Compiler:** clang with libc++, the default, which matches the wheels.
-- **Architectures:** build both x86_64 and arm64 (or universal2), matching the wheels a user installs.
-- **Linking:** link against `libpanda.1.10.dylib` and the others in the wheel, using `@loader_path`/`@rpath` install names.
-- **Unverified:**
-  - the wheels' install names;
-  - `HAVE_EIGEN`/`LINMATH_ALIGN` settings;
-  - whether the minimum macOS deployment target must match.
 
 ### For every platform
 
