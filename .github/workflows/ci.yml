@@ -240,10 +240,17 @@ jobs:
         with:
           name: sdist
           path: dist/
-      - run: |  # version == tag
-          test -f "dist/world_builder-$TAG-py3-none-manylinux2014_x86_64.whl"
-          test -f "dist/world_builder-$TAG-py3-none-manylinux2014_aarch64.whl"
-          test -f "dist/world_builder-$TAG-py3-none-win_amd64.whl"
-          test -f "dist/world_builder-$TAG-py3-none-macosx_11_0_universal2.whl"
+      # Every platform wheel, named after the tag. auditwheel writes both the
+      # PEP 600 tag and its manylinux2014 alias into the Linux names.
+      - run: |
+          ls dist/
+          for PLATFORM in \
+              manylinux_2_17_x86_64.manylinux2014_x86_64 \
+              manylinux_2_17_aarch64.manylinux2014_aarch64 \
+              win_amd64 \
+              macosx_11_0_universal2; do
+            WHEEL=world_builder-$TAG-py3-none-$PLATFORM.whl
+            test -f "dist/$WHEEL" || { echo "missing: $WHEEL"; exit 1; }
+          done
       - run: gh release view "$TAG" > /dev/null || gh release create "$TAG" --verify-tag --generate-notes
       - run: gh release upload "$TAG" dist/* --clobber
