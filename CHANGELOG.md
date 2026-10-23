@@ -23,9 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`Terrain.enable_collision`): a native collision solid over the drawn
   chunks answers ship, sensor and laser colliders with ordinary collision
   entries, one per collider, plus `material_at` for the ground at a hit. The
-  Linux x86_64 wheel (`py3-none-manylinux2014_x86_64`) ships it built; from a
-  source checkout, `invoke native` builds it, and `invoke develop` does so on
-  Linux x86_64. (#16)
+  Linux x86_64 (`py3-none-manylinux2014_x86_64`) and Windows x64
+  (`py3-none-win_amd64`) wheels ship it built; from a source checkout,
+  `invoke native` builds it, and `invoke develop` does so on Linux x86_64.
+  (#16)
 - `Terrain.loading`: whether the view still waits for ground, for a game's
   loading phase (undrawn ground is not solid either). (#16)
 - Terrain on a true spherical planet: a cube-sphere with quadtree LOD,
@@ -106,10 +107,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Releases carry the Linux x86_64 wheel
-  (`world_builder-<v>-py3-none-manylinux2014_x86_64.whl`) and the sdist,
-  no longer a `py3-none-any` wheel: a game depending on the wheel's URL
-  points at the new name. Panda3D is pinned to 1.10.16, the version the
+- Releases carry the Linux x86_64 and Windows x64 wheels
+  (`world_builder-<v>-py3-none-manylinux2014_x86_64.whl`,
+  `world_builder-<v>-py3-none-win_amd64.whl`) and the sdist, no longer a
+  `py3-none-any` wheel: a game depending on a wheel's URL points at the
+  new names, one per platform with markers. Panda3D is pinned to 1.10.16, the version the
   native library is built against. (#16)
 - The atmosphere's step count is a uniform: HIGH frames ~2 ms faster at sea
   level (the loop is no longer unrolled), with the same image. The

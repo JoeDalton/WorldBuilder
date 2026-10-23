@@ -3,15 +3,16 @@ ctypes binding of the native terrain collision library.
 
 The only module that knows how the library is called: a CPython extension can
 replace it behind the same :class:`NativeTerrain` class. The library sits next
-to this file as ``libterrain_collision-panda<major>.<minor>.so``: shipped in the
-Linux x86_64 wheel, built by ``invoke native`` (``scripts/build_native.sh``) from
-a source checkout.
+to this file as ``libterrain_collision-panda<major>.<minor>.so`` (``.dll`` on
+Windows): shipped in the Linux x86_64 and Windows x64 wheels, built by
+``invoke native`` (``scripts/build_native.sh``) from a source checkout.
 """
 
 from __future__ import annotations
 
 import ctypes
 import functools
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,7 @@ from numpy.typing import ArrayLike
 from world_builder.terrain.chunkgen import VERTEX_DTYPE, ChunkData
 
 HERE = Path(__file__).parent
+_SUFFIX = ".dll" if sys.platform == "win32" else ".so"
 #: Floats per vertex record; the position is the first three.
 _STRIDE = VERTEX_DTYPE.itemsize // 4
 # Panda's Python wrapper (Dtool_PyInstDef, py_panda.h) on 64-bit CPython:
@@ -47,7 +49,7 @@ def library_path(series: tuple[int, int] | None = None) -> Path:
     """:returns: where the library for a Panda3D series (default: the
     running one) is expected"""
     major, minor = series or panda_series()
-    return HERE / f"libterrain_collision-panda{major}.{minor}.so"
+    return HERE / f"libterrain_collision-panda{major}.{minor}{_SUFFIX}"
 
 
 @functools.cache
@@ -58,7 +60,8 @@ def _library() -> ctypes.CDLL:
     series = panda_series()
     path = library_path(series)
     if not path.exists():
-        built = sorted(p.name for p in HERE.glob("libterrain_collision-panda*.so"))
+        pattern = f"libterrain_collision-panda*{_SUFFIX}"
+        built = sorted(p.name for p in HERE.glob(pattern))
         raise NativeCollisionError(
             f"terrain collision is not built for Panda3D {panda3d.__version__}: "
             f"{path.name} is missing (found: {', '.join(built) or 'none'}). Build it "

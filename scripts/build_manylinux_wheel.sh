@@ -25,14 +25,7 @@ trap 'rm -rf "$WORK"' EXIT
 "$PYTHON" -m pip install -q "panda3d==$PANDA_VERSION" wheel
 "$HERE/scripts/build_native.sh" "$PYTHON"
 LIB=$(echo "$HERE"/src/world_builder/terrain/native/libterrain_collision-panda*.so)
-
-"$PYTHON" -m wheel unpack "$PURE" -d "$WORK"
-UNPACKED=$(echo "$WORK"/world_builder-*)
-cp "$LIB" "$UNPACKED/world_builder/terrain/native/"
-sed -i -e 's/^Root-Is-Purelib: true$/Root-Is-Purelib: false/' \
-    -e "s/^Tag: .*/Tag: py3-none-linux_$(uname -m)/" "$UNPACKED"/*.dist-info/WHEEL
-mkdir "$WORK/linux"
-"$PYTHON" -m wheel pack "$UNPACKED" -d "$WORK/linux"
+"$PYTHON" "$HERE/scripts/platform_wheel.py" "$PURE" "$LIB" "linux_$(uname -m)" "$WORK"
 
 # Checks the library's glibc and libstdc++ symbol versions against the policy
 # and applies its tag. Panda's libraries come with the panda3d wheel: not
@@ -40,4 +33,4 @@ mkdir "$WORK/linux"
 auditwheel repair --plat "$PLAT" -w "$OUT" \
     --exclude "libpanda.so.*" --exclude "libpandaexpress.so.*" \
     --exclude "libp3dtool.so.*" --exclude "libp3dtoolconfig.so.*" \
-    "$WORK"/linux/*.whl
+    "$WORK"/*.whl

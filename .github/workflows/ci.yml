@@ -55,18 +55,11 @@ jobs:
       - run: invoke develop quality
 
   # On every push (main and version tags, pull requests excluded):
-  # the sdist, and one wheel per platform carrying the native terrain collision
-  # library (NATIVE_COLLISION_BUILD.md). The library doesn't use Python.h, so a
-  # single py3-none-<platform> wheel serves every Python.
-  build_wheels:
+  # the sdist, and the pure wheel the platform wheels start from. Built once, on
+  # Linux, so every platform wheel carries the same files.
+  package:
     if: github.event_name == 'push'
-    strategy:
-      matrix:
-        include:
-          - platform: linux-x86_64
-            runner: ubuntu-latest
-            image: quay.io/pypa/manylinux2014_x86_64  # Panda3D's own toolchain
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,26 +68,74 @@ jobs:
         with:
           python-version: "3.14"  # newest the package supports
       - run: pip install build
-      - run: python -m build  # the sdist, and the pure wheel the platform one starts from
+      - run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pure-wheel
+          path: dist/*.whl
+
+  # One wheel per platform carrying the native terrain collision library
+  # (NATIVE_COLLISION_BUILD.md). The library doesn't use Python.h, so a single
+  # py3-none-<platform> wheel serves every Python.
+  build_wheels:
+    if: github.event_name == 'push'
+    needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-latest
+          - platform: windows-x86_64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: pure-wheel
+          path: dist/
       - uses: actions/cache@v4
         with:
           path: .cache/native
-          key: native-deps-${{ hashFiles('scripts/fetch_native_deps.sh') }}
-      - run: scripts/fetch_native_deps.sh
-      # docker run, not a job container: the actions above don't run on the
-      # image's old glibc.
-      - run: |
-          docker run --rm -v "$PWD":/io ${{ matrix.image }} \
-            /io/scripts/build_manylinux_wheel.sh "/io/$(ls dist/*-py3-none-any.whl)" /io/wheelhouse
+          key: native-deps-${{ matrix.platform }}-${{ hashFiles('scripts/fetch_native_deps.*') }}
+
+      # Linux: in the manylinux2014 image, Panda3D's own toolchain. docker run,
+      # not a job container: the actions above don't run on the image's old
+      # glibc.
+      - if: runner.os == 'Linux'
+        run: scripts/fetch_native_deps.sh
+      - if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_x86_64 \
+            /io/scripts/build_manylinux_wheel.sh "/io/$(ls dist/*.whl)" /io/wheelhouse
+
+      # Windows: MSVC, against the Panda3D SDK's headers and import libraries.
+      - if: runner.os == 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - if: runner.os == 'Windows'
+        run: pip install panda3d==1.10.16 wheel  # the pin in pyproject.toml
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build_native.ps1
+      - if: runner.os == 'Windows'
+        run: |
+          python scripts/platform_wheel.py dist/*.whl \
+            src/world_builder/terrain/native/libterrain_collision-panda1.10.dll win_amd64 wheelhouse
+
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-${{ matrix.platform }}
           path: wheelhouse/*.whl
-      - uses: actions/upload-artifact@v4
-        if: matrix.platform == 'linux-x86_64'
-        with:
-          name: sdist
-          path: dist/*.tar.gz
 
   # Install each platform wheel in a clean venv and run the whole suite against
   # it: the wheel must carry everything the package needs, generated files
@@ -105,12 +146,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux-x86_64]
+        platform: [linux-x86_64, windows-x86_64]
         python: ["3.12", "3.13", "3.14"]
         include:
           - platform: linux-x86_64
             runner: ubuntu-latest
+            bin: bin
+          - platform: windows-x86_64
+            runner: windows-latest
+            bin: Scripts
     runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4  # for the tests only
       - uses: actions/setup-python@v5
@@ -121,15 +169,17 @@ jobs:
           name: wheel-${{ matrix.platform }}
           path: wheelhouse/
       - run: python -m venv "$RUNNER_TEMP/venv"
-      - run: '"$RUNNER_TEMP/venv/bin/pip" install wheelhouse/*.whl pytest pytest-xdist typing-extensions'
-      - name: The package and its library come from the wheel
+      - run: '"$RUNNER_TEMP/venv/${{ matrix.bin }}/python" -m pip install wheelhouse/*.whl pytest pytest-xdist typing-extensions'
+      - name: The package comes from the wheel
+        run: '"$RUNNER_TEMP/venv/${{ matrix.bin }}/python" -c "import world_builder; assert ''site-packages'' in world_builder.__file__, world_builder.__file__"'
+      - name: The library finds Panda's next to it
+        if: runner.os == 'Linux'
         run: |
-          "$RUNNER_TEMP/venv/bin/python" -c "import world_builder; assert 'site-packages' in world_builder.__file__, world_builder.__file__"
           readelf -d "$RUNNER_TEMP"/venv/lib/python*/site-packages/world_builder/terrain/native/*.so > dynamic.txt
           grep -E 'NEEDED|PATH' dynamic.txt
           # The manylinux2014 linker writes RPATH, newer ones RUNPATH.
           grep -qE 'R(UN)?PATH.*\$ORIGIN/\.\./\.\./\.\./panda3d' dynamic.txt
-      - run: '"$RUNNER_TEMP/venv/bin/python" -m pytest tests -n auto'
+      - run: '"$RUNNER_TEMP/venv/${{ matrix.bin }}/python" -m pytest tests -n auto'
         env:
           WORLD_BUILDER_REQUIRE_NATIVE: "1"
 
@@ -138,7 +188,7 @@ jobs:
   # source zip: an uploaded asset never changes, so its locked hash holds.
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [test_linux_with_coverage, test_other_os, quality, build_wheels, test_wheels]
+    needs: [test_linux_with_coverage, test_other_os, quality, package, build_wheels, test_wheels]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -156,6 +206,8 @@ jobs:
         with:
           name: sdist
           path: dist/
-      - run: test -f "dist/world_builder-$TAG-py3-none-manylinux2014_x86_64.whl"  # version == tag
+      - run: |  # version == tag
+          test -f "dist/world_builder-$TAG-py3-none-manylinux2014_x86_64.whl"
+          test -f "dist/world_builder-$TAG-py3-none-win_amd64.whl"
       - run: gh release view "$TAG" > /dev/null || gh release create "$TAG" --verify-tag --generate-notes
       - run: gh release upload "$TAG" dist/* --clobber

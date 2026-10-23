@@ -9,6 +9,7 @@
 // Frames: the solid lives in the terrain root's frame, which is the planet
 // frame shifted by the root's snapped origin (Terrain._rebase); set_origin
 // keeps it in sync. All maths run in float64 in the planet frame.
+#define _USE_MATH_DEFINES  // M_PI with MSVC
 #include "pandabase.h"
 #include "collisionSolid.h"
 #include "collisionEntry.h"
@@ -466,38 +467,44 @@ TypeHandle CollisionTerrain::_type_handle;
 
 // ── C API (ctypes) ─────────────────────────────────────────────────────────────
 
+#ifdef _WIN32
+#define WB_API __declspec(dllexport)
+#else
+#define WB_API
+#endif
+
 extern "C" {
 
-int wb_init() {
+WB_API int wb_init() {
   CollisionTerrain::init_type();
   return (int)CollisionTerrain::get_class_type().get_index();
 }
 
 // The Panda3D series the library was built against, major * 100 + minor.
-int wb_panda_version() {
+WB_API int wb_panda_version() {
   return PANDA_MAJOR_VERSION * 100 + PANDA_MINOR_VERSION;
 }
 
-void *wb_terrain_new(double radius, int max_level, long long n0, int ocean) {
+WB_API void *wb_terrain_new(double radius, int max_level, long long n0, int ocean) {
   TerrainData *data = new TerrainData(radius, max_level, (int64_t)n0, ocean != 0);
   data->ref();
   return data;
 }
 
-void wb_terrain_free(void *handle) {
+WB_API void wb_terrain_free(void *handle) {
   unref_delete((TerrainData *)handle);
 }
 
-void wb_terrain_set_origin(void *handle, double x, double y, double z) {
+WB_API void wb_terrain_set_origin(void *handle, double x, double y, double z) {
   ((TerrainData *)handle)->origin = V3(x, y, z);
 }
 
 // vertices: GRID records of `stride` floats each, xyz first (centre-relative);
 // weights: GRID * 6 bytes.
-void wb_terrain_add_chunk(void *handle, int level, int face, long long i, long long j,
-                          const double *centre, const float *vertices, int stride,
-                          const float *elevation, float h_min, float h_max,
-                          const unsigned char *weights) {
+WB_API void wb_terrain_add_chunk(void *handle, int level, int face, long long i, long long j,
+                                 const double *centre, const float *vertices, int stride,
+                                 const float *elevation, float h_min, float h_max,
+                                 const unsigned char *weights) {
   Chunk *c = new Chunk;
   c->level = level;
   c->face = face;
@@ -545,20 +552,20 @@ void wb_terrain_add_chunk(void *handle, int level, int face, long long i, long l
   ((TerrainData *)handle)->add(c);
 }
 
-void wb_terrain_remove_chunk(void *handle, int level, int face, long long i, long long j) {
+WB_API void wb_terrain_remove_chunk(void *handle, int level, int face, long long i, long long j) {
   ((TerrainData *)handle)->remove(level, face, i, j);
 }
 
-void wb_terrain_clear(void *handle) {
+WB_API void wb_terrain_clear(void *handle) {
   ((TerrainData *)handle)->clear();
 }
 
-int wb_terrain_num_chunks(void *handle) {
+WB_API int wb_terrain_num_chunks(void *handle) {
   return (int)((TerrainData *)handle)->chunks.size();
 }
 
 // node: the C++ CollisionNode behind a Python panda3d.core.CollisionNode.
-int wb_terrain_attach(void *handle, void *node, int samples) {
+WB_API int wb_terrain_attach(void *handle, void *node, int samples) {
   CollisionTerrain *solid = new CollisionTerrain((TerrainData *)handle);
   solid->set_samples(samples);
   CollisionNode *collision_node = (CollisionNode *)node;
@@ -567,7 +574,7 @@ int wb_terrain_attach(void *handle, void *node, int samples) {
 }
 
 // Direct planet-frame queries (tests, game helpers). out: t, point xyz, normal xyz.
-int wb_terrain_segment(void *handle, const double *a, const double *b, double *out) {
+WB_API int wb_terrain_segment(void *handle, const double *a, const double *b, double *out) {
   double t;
   V3 point, normal;
   if (!((TerrainData *)handle)->segment(V3(a[0], a[1], a[2]), V3(b[0], b[1], b[2]), t, point, normal)) {
@@ -580,7 +587,7 @@ int wb_terrain_segment(void *handle, const double *a, const double *b, double *o
 }
 
 // out: point xyz, normal xyz.
-int wb_terrain_sphere(void *handle, const double *c, double r, int samples, double *out) {
+WB_API int wb_terrain_sphere(void *handle, const double *c, double r, int samples, double *out) {
   V3 point, normal;
   double distance;
   if (!((TerrainData *)handle)->sphere(V3(c[0], c[1], c[2]), r, samples, point, normal, distance)) {
@@ -591,7 +598,7 @@ int wb_terrain_sphere(void *handle, const double *c, double r, int samples, doub
   return 1;
 }
 
-int wb_terrain_material(void *handle, const double *p) {
+WB_API int wb_terrain_material(void *handle, const double *p) {
   return ((TerrainData *)handle)->material(V3(p[0], p[1], p[2]));
 }
 
