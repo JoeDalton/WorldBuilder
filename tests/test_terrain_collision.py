@@ -3,9 +3,10 @@ Native terrain collision (issue #16): the CollisionTerrain solid against
 TerrainQuery, and Terrain.enable_collision with Panda's traverser.
 
 Skipped when the native library is not built for the running Panda3D
-(scripts/build_native.sh).
+(invoke native), failed instead when WORLD_BUILDER_REQUIRE_NATIVE is set (CI).
 """
 
+import os
 from dataclasses import replace
 
 import numpy as np
@@ -32,12 +33,18 @@ REFERENCE = (38.85, -125.72)
 MASK = BitMask32.bit(5)
 
 
+def _skip_without_native(error):
+    if os.environ.get("WORLD_BUILDER_REQUIRE_NATIVE"):
+        pytest.fail(f"native library required: {error}")
+    pytest.skip(str(error))
+
+
 def _native_or_skip(planet, ocean):
     grid = planet.grid
     try:
         return NativeTerrain(planet.spec.radius, grid.max_level, grid.n0, ocean)
     except NativeCollisionError as error:
-        pytest.skip(str(error))
+        _skip_without_native(error)
 
 
 @pytest.fixture(scope="module")
@@ -247,7 +254,7 @@ def moon(showbase):
     except NativeCollisionError as error:
         terrain.destroy()
         executor.shutdown()
-        pytest.skip(str(error))
+        _skip_without_native(error)
     terrain.disable_collision()
     yield terrain, camera
     terrain.destroy()
@@ -461,7 +468,7 @@ def ocean_terrain(showbase):
     except NativeCollisionError as error:
         terrain.destroy()
         executor.shutdown()
-        pytest.skip(str(error))
+        _skip_without_native(error)
     terrain.disable_collision()
     yield terrain, camera
     terrain.destroy()

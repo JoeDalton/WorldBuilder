@@ -17,7 +17,7 @@ include = [
 python = ">=3.12,<3.15"
 numpy = "^2.3.5"
 scipy = "^1.13.1"
-Panda3D = "^1.10.15"
+Panda3D = "==1.10.16"
 pyyaml = "^6.0.3"
 
 [tool.poetry.group.dev.dependencies]

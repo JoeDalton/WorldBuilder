@@ -1,3 +1,4 @@
+import platform
 import shutil
 
 from invoke import task
@@ -13,10 +14,23 @@ def check_dynamic_versioning(c):
         c.run("poetry self add poetry-dynamic-versioning[plugin]")
 
 
+@task
+def native(c):
+    """Build the native terrain collision library (NATIVE_COLLISION_BUILD.md)."""
+    c.run("poetry run scripts/build_native.sh")
+
+
 @task(pre=[check_dynamic_versioning])
 def develop(c):
     c.run("poetry install")
     c.run("poetry run pre-commit install")
+    # Only Linux x86_64 has a build so far; without it, terrain collision raises.
+    if (platform.system(), platform.machine()) == ("Linux", "x86_64"):
+        if not c.run("poetry run scripts/build_native.sh", warn=True).ok:
+            print(
+                "warning: the native terrain collision library did not build, "
+                "Terrain.enable_collision will raise. Retry with `invoke native`."
+            )
 
 
 @task

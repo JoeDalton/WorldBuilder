@@ -285,7 +285,7 @@ The solid answers for every drawn chunk within `max_distance` of the camera. Chu
 
 **Cost:** on the earthlike preset, with 64 ships, 33 active sensors and 300 lasers within 5 km of the camera, the terrain adds about 0.6 ms to a traverse, and 1.1 ms with every ship and laser hugging the ground (`scripts/collision_bench.py`). `scripts/collision_viewer.py` shows the same load live in a window: contacts, normals and the traverse time.
 
-The library is built per Panda3D series with `scripts/build_native.sh` (see `NATIVE_COLLISION_BUILD.md`). `enable_collision` raises `NativeCollisionError` when it is missing or built for another series.
+The library ships in the Linux x86_64 wheel, built against Panda3D 1.10.16 (the version world_builder pins). From a source checkout, `invoke native` builds it, and `invoke develop` does so on Linux x86_64 (see `NATIVE_COLLISION_BUILD.md`). `enable_collision` raises `NativeCollisionError` when it is missing or built for another Panda3D series.
 
 `include_ocean=False` makes the seabed solid instead of the sea surface. The drawn chunk meshes themselves are never collision targets: their into-mask is off.
 

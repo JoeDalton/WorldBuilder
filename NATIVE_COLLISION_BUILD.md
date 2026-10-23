@@ -1,27 +1,51 @@
 # Building a C++ collision solid against the Panda3D pip wheel
 
-**Status (issue #16):** implemented and tested on Linux.
+**Status (issue #16):** implemented, and shipped in the Linux x86_64 wheel (`py3-none-manylinux2014_x86_64`), built against Panda3D 1.10.16, the version `pyproject.toml` pins.
 
 | Piece | Where |
 |---|---|
 | Solid | `src/world_builder/terrain/native/terrain_collision.cpp` |
 | Binding | `ctypes`, all in `src/world_builder/terrain/native/_binding.py` |
 | Terrain integration | `Terrain.enable_collision`, `src/world_builder/terrain/collision.py` |
-| Build | `scripts/build_native.sh` |
-| Tests | `tests/test_terrain_collision.py`, skipped when the library isn't built |
+| Headers | `scripts/fetch_native_deps.sh` |
+| Build | `scripts/build_native.sh` (`invoke native`) |
+| Wheel | `scripts/build_manylinux_wheel.sh`, CI jobs `build_wheels` and `test_wheels` |
+| Tests | `tests/test_terrain_collision.py`, skipped when the library isn't built, failed instead when `WORLD_BUILDER_REQUIRE_NATIVE` is set |
 
-Windows and macOS are listed below with what is still unverified.
+Linux aarch64, Windows and macOS are listed below with what is still unverified.
 
-## Building on Linux
+## Building from a source checkout (Linux)
 
 ```sh
-PANDA_SDK_INCLUDE=<sdk>/usr/include/panda3d EIGEN_INCLUDE=<eigen-3.3.x> \
-    scripts/build_native.sh <python with the panda3d wheel>
+invoke native      # also run by `invoke develop` on Linux x86_64
 ```
 
-This writes `src/world_builder/terrain/native/libterrain_collision-panda<major>.<minor>.so`. The name carries the Panda3D series, so builds for several series can sit side by side. It is git-ignored (`*.so`).
+It runs `scripts/build_native.sh` with the Poetry venv's Python, so against its panda3d wheel. The headers (the Panda3D SDK's and Eigen's) are fetched by `scripts/fetch_native_deps.sh` into `.cache/native/` on first use. Other headers can be given with `PANDA_SDK_INCLUDE` and `EIGEN_INCLUDE`, and another Python as the script's argument.
 
-The script refuses headers from another series than the wheel's.
+This writes `src/world_builder/terrain/native/libterrain_collision-panda<major>.<minor>.so`. The name carries the Panda3D series. It is git-ignored (`*.so`).
+
+The script refuses headers of another version than the wheel's.
+
+## The Linux x86_64 wheel
+
+The library includes no `Python.h` (see the binding below), so it doesn't depend on the Python version: one `py3-none-<platform>` wheel serves 3.12 to 3.14. It is built once per platform, and Python versions are only a test matrix.
+
+`scripts/build_manylinux_wheel.sh` runs in the `quay.io/pypa/manylinux2014_x86_64` image, whose GCC 10 and glibc 2.17 are the toolchain of Panda3D's own manylinux2014 wheels. It:
+
+1. installs `panda3d==1.10.16` and builds the library with `scripts/build_native.sh`;
+2. adds it to the pure wheel and retags it `py3-none-linux_x86_64` (`Root-Is-Purelib: false`);
+3. runs `auditwheel repair`, which checks the glibc and libstdc++ symbol versions against the manylinux2014 policy and applies its tag. Panda's libraries are excluded: they come with the panda3d wheel.
+
+```sh
+python -m build
+scripts/fetch_native_deps.sh
+docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_x86_64 \
+    /io/scripts/build_manylinux_wheel.sh "/io/$(ls dist/*-py3-none-any.whl)" /io/wheelhouse
+```
+
+In CI, `build_wheels` does this on every push and pull request, and `test_wheels` installs the wheel in a clean venv for each of Python 3.12, 3.13 and 3.14 and runs the whole suite against it with `WORLD_BUILDER_REQUIRE_NATIVE=1`. On a tag, the release carries this wheel and the sdist (which has no library).
+
+The library finds Panda's libraries through a relative runpath, `$ORIGIN/../../../panda3d` (from `site-packages/world_builder/terrain/native/`). Built in the source tree, that path leads nowhere, but `libpanda` is already loaded by then: the binding imports `panda3d.core` first, and the loader matches it by soname.
 
 At load, `_binding.py` checks two things:
 
@@ -87,8 +111,8 @@ For comparison, Panda's collision against visible geometry (the Geom tiles of op
 
 ### Requirements
 
-1. **Panda3D C++ headers matching the wheel's version.** The pip wheel ships none. The spike took them from the SDK package `panda3d1.10_1.10.16~noble_amd64.deb` (panda3d.org downloads), extracted with `dpkg-deb -x`, using `usr/include/panda3d`. Only the headers are used; linking is against the wheel's own libraries.
-2. **Eigen 3.3.x headers.** The SDK's `dtool_config.h` sets `HAVE_EIGEN` and `LINMATH_ALIGN`, so Panda's math headers include Eigen. The spike used Eigen 3.3.7. Eigen is header-only.
+1. **Panda3D C++ headers matching the wheel's version.** The pip wheel ships none. They come from the SDK package `panda3d1.10_1.10.16~noble_amd64.deb` (panda3d.org downloads), using `usr/include/panda3d` (`scripts/fetch_native_deps.sh`). Only the headers are used; linking is against the wheel's own libraries.
+2. **Eigen 3.3.x headers.** The SDK's `dtool_config.h` sets `HAVE_EIGEN` and `LINMATH_ALIGN`, so Panda's math headers include Eigen. Eigen 3.3.7 is used. Eigen is header-only.
 3. **The wheel's C++ ABI.** The manylinux wheel is built with GCC 10 on CentOS 7 (devtoolset), so it uses the old libstdc++ string ABI. Compile with `-D_GLIBCXX_USE_CXX11_ABI=0`, or any `std::string` crossing into libpanda (for example `register_type`) will mismatch.
 4. **Link against the wheel's libraries** by exact soname, with an rpath to the wheel directory:
 
@@ -97,16 +121,21 @@ For comparison, Panda's collision against visible geometry (the Geom tiles of op
    g++ -std=c++14 -O2 -fPIC -shared -D_GLIBCXX_USE_CXX11_ABI=0 -DNDEBUG \
        -I<sdk>/usr/include/panda3d -I<eigen-3.3.7> solid.cpp -o libsolid.so \
        -L$P -l:libpanda.so.1.10 -l:libpandaexpress.so.1.10 \
-       -l:libp3dtool.so.1.10 -l:libp3dtoolconfig.so.1.10 -Wl,-rpath,$P
+       -l:libp3dtool.so.1.10 -l:libp3dtoolconfig.so.1.10 -Wl,-rpath,'$ORIGIN/../../../panda3d'
    ```
 
-   For a distributable wheel, the rpath should be relative (`$ORIGIN/../panda3d`), or the library should be loaded after `import panda3d.core` so libpanda is already mapped.
+   The rpath is relative, for an installed wheel; see the Linux x86_64 wheel above.
 5. **Python binding.** The binding uses `ctypes` with a C API (`extern "C"`), so it needs no `Python.h`; `python3.12-dev` isn't installed on this machine. All of it is in `native/_binding.py`, behind the `NativeTerrain` class, so a CPython extension can replace it without touching the rest.
    - To hand a `CollisionNode` to C++, it reads the wrapper's C++ pointer from Panda's `Dtool_PyInstDef` (`py_panda.h`): `_ptr_to_object` is at offset 24, and `_signature == 0xBEAF` is at offset 32 on 64-bit CPython.
    - That layout is Panda-internal. A proper CPython extension built with `py_panda.h` (`DtoolInstance_VOID_PTR`, type checks) is the cleaner long-term binding, and it needs the Python dev headers. `interrogate` (in the SDK) is the full-integration option if the solid's own methods must be callable from Python.
 6. **Type registration.** Call `init_type()` once after loading, which registers the class with Panda's `TypeRegistry`.
 
 ## Other platforms (not yet verified)
+
+### Linux (aarch64)
+
+- **Image:** `quay.io/pypa/manylinux2014_aarch64` on an `ubuntu-24.04-arm` runner; `scripts/build_manylinux_wheel.sh` already tags with the machine it runs on.
+- **Headers:** `fetch_native_deps.sh` takes the amd64 SDK package. Check whether panda3d.org has an arm64 one, or that the amd64 `dtool_config.h` matches the aarch64 wheel's build.
 
 ### Windows (x64)
 
@@ -131,9 +160,9 @@ For comparison, Panda's collision against visible geometry (the Geom tiles of op
 
 ### For every platform
 
-- **One build per Panda series.** Every 1.10.x wheel ships `libpanda.so.1.10`, and that shared name signals intended binary compatibility within the series. So a build against 1.10.16 headers should load on any 1.10.x. This is unverified: test it by loading the library under another 1.10.x wheel.
+- **One build per Panda series.** Every 1.10.x wheel ships `libpanda.so.1.10`, and that shared name signals intended binary compatibility within the series. So a build against 1.10.16 headers should load on any 1.10.x. This is unverified, and for now moot: `pyproject.toml` pins Panda3D to 1.10.16. Test it by loading the library under another 1.10.x wheel before loosening the pin.
   - A new series (1.11) has different library names and needs a rebuild against its headers.
   - The loader should check `panda3d.__version__` on major.minor only, and raise a clear "rebuild" message instead of the bare `OSError` from the missing `libpanda.so.1.10`.
   - The class layouts it depends on (`CollisionSolid`, `CollisionEntry`) are Panda's internal C++ API, so the build should be retested on each new Panda release.
-- **CI:** one job per platform downloads the matching SDK headers and Eigen, builds the library and packages it in the `world_builder` wheel (platform-specific wheels).
+- **CI:** add the platform to the `build_wheels` and `test_wheels` matrices, with its own way of fetching the matching SDK headers (`dtool_config.h` differs per platform) and of building the library. Running the collision tests against the installed wheel is what checks that the headers match how Panda's wheel was built there: a mismatch in `HAVE_EIGEN` or `LINMATH_ALIGN` changes class layouts and corrupts memory instead of failing to link.
 - **Fallback:** without the compiled library, the terrain should still load, either with collision disabled and a logged warning, or with the slower numpy `TerrainQuery` path.
