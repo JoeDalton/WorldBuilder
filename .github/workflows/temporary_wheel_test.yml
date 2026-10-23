@@ -39,6 +39,10 @@ jobs:
         include:
           - platform: linux-x86_64
             runner: ubuntu-latest
+            image: quay.io/pypa/manylinux2014_x86_64  # Panda3D's own toolchain
+          - platform: linux-aarch64
+            runner: ubuntu-26.04-arm
+            image: quay.io/pypa/manylinux2014_aarch64
           - platform: windows-x86_64
             runner: windows-latest
           - platform: macos-universal2  # Intel and Apple silicon
@@ -58,14 +62,14 @@ jobs:
           path: .cache/native
           key: native-deps-${{ matrix.platform }}-${{ hashFiles('scripts/fetch_native_deps.*') }}
 
-      # Linux: in the manylinux2014 image, Panda3D's own toolchain. docker run,
-      # not a job container: the actions above don't run on the image's old
-      # glibc.
+      # Linux: in the platform's manylinux2014 image, Panda3D's own toolchain.
+      # docker run, not a job container: the actions above don't run on the
+      # image's old glibc.
       - if: runner.os == 'Linux'
         run: scripts/fetch_native_deps.sh
       - if: runner.os == 'Linux'
         run: |
-          docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_x86_64 \
+          docker run --rm -v "$PWD":/io ${{ matrix.image }} \
             /io/scripts/build_manylinux_wheel.sh "/io/$(ls dist/*.whl)" /io/wheelhouse
 
       - if: runner.os != 'Linux'
@@ -102,12 +106,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [linux-x86_64, windows-x86_64, macos-arm64, macos-x86_64]
+        target: [linux-x86_64, linux-aarch64, windows-x86_64, macos-arm64, macos-x86_64]
         python: ["3.12", "3.13", "3.14"]
         include:
           - target: linux-x86_64
             runner: ubuntu-latest
             wheel: linux-x86_64
+            bin: bin
+          - target: linux-aarch64
+            runner: ubuntu-26.04-arm
+            wheel: linux-aarch64
             bin: bin
           - target: windows-x86_64
             runner: windows-latest

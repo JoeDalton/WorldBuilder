@@ -4,9 +4,9 @@ ctypes binding of the native terrain collision library.
 The only module that knows how the library is called: a CPython extension can
 replace it behind the same :class:`NativeTerrain` class. The library sits next
 to this file as ``libterrain_collision-panda<major>.<minor>.so`` (``.dll`` on
-Windows, ``.dylib`` on macOS): shipped in the Linux x86_64, Windows x64 and
-macOS universal2 wheels, built by ``invoke native`` (``scripts/build_native.sh``)
-from a source checkout.
+Windows, ``.dylib`` on macOS): shipped in the Linux (x86_64, aarch64), Windows
+x64 and macOS universal2 wheels, built by ``invoke native``
+(``scripts/build_native.sh``) from a source checkout.
 """
 
 from __future__ import annotations

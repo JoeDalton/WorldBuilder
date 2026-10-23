@@ -41,7 +41,8 @@ SDK=$DEST/panda3d-sdk-$PANDA_VERSION
 EIGEN=$DEST/eigen-$EIGEN_VERSION
 
 # The Ubuntu SDK package: only its headers are used. Unpacked with ar and tar
-# so this works off Debian too.
+# so this works off Debian too. The amd64 package serves aarch64 as well: its
+# dtool_config.h holds both, the differences under #ifdef __aarch64__.
 if [ ! -f "$SDK/usr/include/panda3d/pandaVersion.h" ]; then
     rm -rf "$SDK" && mkdir -p "$SDK"
     curl -fsSL -o "$SDK/sdk.deb" \

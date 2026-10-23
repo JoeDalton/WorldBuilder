@@ -1,6 +1,6 @@
 # Building a C++ collision solid against the Panda3D pip wheel
 
-**Status (issue #16):** implemented, and shipped in the Linux x86_64 (`py3-none-manylinux2014_x86_64`), Windows x64 (`py3-none-win_amd64`) and macOS (`py3-none-macosx_11_0_universal2`, Intel and Apple silicon) wheels, built against Panda3D 1.10.16, the version `pyproject.toml` pins.
+**Status (issue #16):** implemented, and shipped in the Linux x86_64 and aarch64 (`py3-none-manylinux2014_x86_64`, `py3-none-manylinux2014_aarch64`), Windows x64 (`py3-none-win_amd64`) and macOS (`py3-none-macosx_11_0_universal2`, Intel and Apple silicon) wheels, built against Panda3D 1.10.16, the version `pyproject.toml` pins.
 
 | Piece | Where |
 |---|---|
@@ -12,12 +12,10 @@
 | Wheel | `scripts/platform_wheel.py`, `scripts/build_manylinux_wheel.sh`, `scripts/build_macos_wheel.sh`, CI jobs `package`, `build_wheels` and `test_wheels` |
 | Tests | `tests/test_terrain_collision.py`, skipped when the library isn't built, failed instead when `WORLD_BUILDER_REQUIRE_NATIVE` is set |
 
-Linux aarch64 is listed below with what is still unverified.
-
 ## Building from a source checkout (Linux, macOS)
 
 ```sh
-invoke native      # also run by `invoke develop` on Linux x86_64 and macOS
+invoke native      # also run by `invoke develop` on Linux and macOS
 ```
 
 It runs `scripts/build_native.sh` with the Poetry venv's Python, so against its panda3d wheel. The headers (the Panda3D SDK's and Eigen's) are fetched by `scripts/fetch_native_deps.sh` into `.cache/native/` on first use. Other headers can be given with `PANDA_SDK_INCLUDE` and `EIGEN_INCLUDE`, and another Python as the script's argument.
@@ -40,20 +38,22 @@ In CI, on every push to `main` and every version tag:
 
 On a tag, the release carries the platform wheels and the sdist (which has no library).
 
-### Linux x86_64
+### Linux (x86_64, aarch64)
 
-`scripts/build_manylinux_wheel.sh` runs in the `quay.io/pypa/manylinux2014_x86_64` image, whose GCC 10 and glibc 2.17 are the toolchain of Panda3D's own manylinux2014 wheels. It:
+`scripts/build_manylinux_wheel.sh` runs in the `quay.io/pypa/manylinux2014_<arch>` image of the machine (aarch64 on a native ARM runner, no emulation), whose GCC 10 and glibc 2.17 are the toolchain of Panda3D's own manylinux2014 wheels: their libraries report `GCC 10.2.1 (Red Hat 10.2.1-11)` on both architectures. It:
 
 1. installs `panda3d==1.10.16` and builds the library with `scripts/build_native.sh`;
-2. adds it to the pure wheel as `py3-none-linux_x86_64` (`scripts/platform_wheel.py`);
+2. adds it to the pure wheel as `py3-none-linux_<arch>` (`scripts/platform_wheel.py`);
 3. runs `auditwheel repair`, which checks the glibc and libstdc++ symbol versions against the manylinux2014 policy and applies its tag. Panda's libraries are excluded: they come with the panda3d wheel.
 
 ```sh
 python -m build
 scripts/fetch_native_deps.sh
-docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_x86_64 \
+docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_$(uname -m) \
     /io/scripts/build_manylinux_wheel.sh "/io/$(ls dist/*-py3-none-any.whl)" /io/wheelhouse
 ```
+
+Both architectures use the headers of the amd64 SDK package: panda3d.org publishes no arm64 one, and none is needed. Its `dtool_config.h` covers both, with the differences under `#ifdef __aarch64__` (only Cg, unused here); `HAVE_EIGEN` and `LINMATH_ALIGN` are set on both.
 
 The library finds Panda's libraries through a relative rpath, `$ORIGIN/../../../panda3d` (from `site-packages/world_builder/terrain/native/`). Built in the source tree, that path leads nowhere, but `libpanda` is already loaded by then: the binding imports `panda3d.core` first, and the loader matches it by soname.
 
@@ -172,14 +172,7 @@ For comparison, Panda's collision against visible geometry (the Geom tiles of op
    - That layout is Panda-internal. A proper CPython extension built with `py_panda.h` (`DtoolInstance_VOID_PTR`, type checks) is the cleaner long-term binding, and it needs the Python dev headers. `interrogate` (in the SDK) is the full-integration option if the solid's own methods must be callable from Python.
 6. **Type registration.** Call `init_type()` once after loading, which registers the class with Panda's `TypeRegistry`.
 
-## Other platforms (not yet verified)
-
-### Linux (aarch64)
-
-- **Image:** `quay.io/pypa/manylinux2014_aarch64` on an `ubuntu-24.04-arm` runner; `scripts/build_manylinux_wheel.sh` already tags with the machine it runs on.
-- **Headers:** `fetch_native_deps.sh` takes the amd64 SDK package. Check whether panda3d.org has an arm64 one, or that the amd64 `dtool_config.h` matches the aarch64 wheel's build.
-
-### For every platform
+## For every platform
 
 - **One build per Panda series.** Every 1.10.x wheel ships `libpanda.so.1.10`, and that shared name signals intended binary compatibility within the series. So a build against 1.10.16 headers should load on any 1.10.x. This is unverified, and for now moot: `pyproject.toml` pins Panda3D to 1.10.16. Test it by loading the library under another 1.10.x wheel before loosening the pin.
   - A new series (1.11) has different library names and needs a rebuild against its headers.

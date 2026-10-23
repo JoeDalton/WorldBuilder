@@ -3,8 +3,10 @@
 # terrain collision library. Runs inside a pypa manylinux image, whose
 # toolchain matches Panda3D's own wheels. See NATIVE_COLLISION_BUILD.md.
 #
-#   docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_x86_64 \
+#   docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_<arch> \
 #       /io/scripts/build_manylinux_wheel.sh /io/dist/world_builder-<v>-py3-none-any.whl /io/wheelhouse
+#
+# arch: x86_64 or aarch64, the machine's (the wheel is tagged with it).
 #
 # The headers come from .cache/native (scripts/fetch_native_deps.sh, run on the
 # host beforehand, or fetched here). The library is Python-independent (ctypes,
