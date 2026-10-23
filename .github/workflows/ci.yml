@@ -82,7 +82,7 @@ jobs:
   # an uploaded asset never changes, so its locked hash holds.
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [test_linux, test_windows, quality, package]
+    needs: [test_linux_with_coverage, test_other_os, quality, package]
     runs-on: ubuntu-latest
     permissions:
       contents: write
