@@ -1,0 +1,24 @@
+# Temporary: build the wheels on every push and pull request, to test packaging
+# options. Separate from ci.yml, which keeps its own triggers. Remove when done.
+name: Wheel test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the version comes from git tags
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install build
+      - run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-test-${{ github.sha }}
+          path: dist/
