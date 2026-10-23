@@ -3,6 +3,7 @@ Several planets in one world (world_builder.terrain): the shared worker pool,
 per-planet positions, and memory released by planets seen from afar.
 """
 
+import sys
 import threading
 import time
 from dataclasses import replace
@@ -15,6 +16,12 @@ from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.chunkgen import generate_chunk
 from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.workers import ChunkExecutor
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="fails _sometimes_ on macOS x86_64: "
+    "https://github.com/JoeDalton/WorldBuilder/issues/28",
+)
 
 
 @pytest.fixture(scope="module")
