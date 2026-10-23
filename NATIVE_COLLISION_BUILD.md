@@ -45,7 +45,7 @@ docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_x86_64 \
 
 In CI, `build_wheels` does this on every push and pull request, and `test_wheels` installs the wheel in a clean venv for each of Python 3.12, 3.13 and 3.14 and runs the whole suite against it with `WORLD_BUILDER_REQUIRE_NATIVE=1`. On a tag, the release carries this wheel and the sdist (which has no library).
 
-The library finds Panda's libraries through a relative runpath, `$ORIGIN/../../../panda3d` (from `site-packages/world_builder/terrain/native/`). Built in the source tree, that path leads nowhere, but `libpanda` is already loaded by then: the binding imports `panda3d.core` first, and the loader matches it by soname.
+The library finds Panda's libraries through a relative rpath, `$ORIGIN/../../../panda3d` (from `site-packages/world_builder/terrain/native/`). Built in the source tree, that path leads nowhere, but `libpanda` is already loaded by then: the binding imports `panda3d.core` first, and the loader matches it by soname.
 
 At load, `_binding.py` checks two things:
 

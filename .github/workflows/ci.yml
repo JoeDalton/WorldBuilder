@@ -117,13 +117,16 @@ jobs:
         with:
           name: wheel-${{ matrix.platform }}
           path: wheelhouse/
-      - run: python -m venv ../venv
-      - run: ../venv/bin/pip install wheelhouse/*.whl pytest pytest-xdist typing-extensions
+      - run: python -m venv "$RUNNER_TEMP/venv"
+      - run: '"$RUNNER_TEMP/venv/bin/pip" install wheelhouse/*.whl pytest pytest-xdist typing-extensions'
       - name: The package and its library come from the wheel
         run: |
-          ../venv/bin/python -c "import world_builder; assert 'site-packages' in world_builder.__file__, world_builder.__file__"
-          readelf -d ../venv/lib/python*/site-packages/world_builder/terrain/native/*.so | grep -F 'RUNPATH' | grep -F '$ORIGIN'
-      - run: ../venv/bin/python -m pytest tests -n auto
+          "$RUNNER_TEMP/venv/bin/python" -c "import world_builder; assert 'site-packages' in world_builder.__file__, world_builder.__file__"
+          readelf -d "$RUNNER_TEMP"/venv/lib/python*/site-packages/world_builder/terrain/native/*.so > dynamic.txt
+          grep -E 'NEEDED|PATH' dynamic.txt
+          # The manylinux2014 linker writes RPATH, newer ones RUNPATH.
+          grep -qE 'R(UN)?PATH.*\$ORIGIN/\.\./\.\./\.\./panda3d' dynamic.txt
+      - run: '"$RUNNER_TEMP/venv/bin/python" -m pytest tests -n auto'
         env:
           WORLD_BUILDER_REQUIRE_NATIVE: "1"
 
