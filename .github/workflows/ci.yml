@@ -35,6 +35,24 @@ jobs:
       - run: poetry install
       - run: invoke test
 
+  test_mac_os:
+    strategy:
+    # Prevent the entire job from failing as soon as one of the runners fails
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest  # arm64
+          - runner: macos-15-intel  # x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: pip install poetry invoke poetry-dynamic-versioning
+      - run: poetry install
+      - run: invoke test
+
   quality:
     runs-on: ubuntu-latest
     steps:
