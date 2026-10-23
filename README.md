@@ -49,8 +49,9 @@ markers (Poetry):
 
 ```toml
 world_builder = [
-  { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/X.Y.Z/world_builder-X.Y.Z-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", markers = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
-  { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/X.Y.Z/world_builder-X.Y.Z-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", markers = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+  { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/X.Y.Z/world_builder-X.Y.Z-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", markers = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/X.Y.Z/world_builder-X.Y.Z-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", markers = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+
   { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/X.Y.Z/world_builder-X.Y.Z-py3-none-win_amd64.whl", markers = "sys_platform == 'win32'" },
   { url = "https://github.com/JoeDalton/WorldBuilder/releases/download/X.Y.Z/world_builder-X.Y.Z-py3-none-macosx_11_0_universal2.whl", markers = "sys_platform == 'darwin'" },
 ]

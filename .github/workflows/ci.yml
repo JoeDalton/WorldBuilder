@@ -241,12 +241,13 @@ jobs:
           name: sdist
           path: dist/
       # Every platform wheel, named after the tag. auditwheel writes both the
-      # PEP 600 tag and its manylinux2014 alias into the Linux names.
+      # manylinux2014 tag and its PEP 600 equivalent into the Linux names.
       - run: |
           ls dist/
           for PLATFORM in \
-              manylinux_2_17_x86_64.manylinux2014_x86_64 \
-              manylinux_2_17_aarch64.manylinux2014_aarch64 \
+              manylinux2014_x86_64.manylinux_2_17_x86_64 \
+              manylinux2014_aarch64.manylinux_2_17_aarch64 \
+
               win_amd64 \
               macosx_11_0_universal2; do
             WHEEL=world_builder-$TAG-py3-none-$PLATFORM.whl
