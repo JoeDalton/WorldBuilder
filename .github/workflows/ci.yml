@@ -247,6 +247,7 @@ jobs:
           for PLATFORM in \
               manylinux2014_x86_64.manylinux_2_17_x86_64 \
               manylinux2014_aarch64.manylinux_2_17_aarch64 \
+
               win_amd64 \
               macosx_11_0_universal2; do
             WHEEL=world_builder-$TAG-py3-none-$PLATFORM.whl
