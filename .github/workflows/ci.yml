@@ -54,10 +54,12 @@ jobs:
       - run: pip install poetry invoke poetry-dynamic-versioning
       - run: invoke develop quality
 
-  # The sdist, and one wheel per platform carrying the native terrain collision
+  # On every push (main and version tags, pull requests excluded):
+  # the sdist, and one wheel per platform carrying the native terrain collision
   # library (NATIVE_COLLISION_BUILD.md). The library doesn't use Python.h, so a
   # single py3-none-<platform> wheel serves every Python.
   build_wheels:
+    if: github.event_name == 'push'
     strategy:
       matrix:
         include:
@@ -98,6 +100,7 @@ jobs:
   # it: the wheel must carry everything the package needs, generated files
   # (_version.py) and the native library included (no collision test skipped).
   test_wheels:
+    if: github.event_name == 'push'
     needs: build_wheels
     strategy:
       fail-fast: false
