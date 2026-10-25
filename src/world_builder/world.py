@@ -492,6 +492,12 @@ class World:
         self.executor = ChunkExecutor(
             backend=backend, workers=self.settings.terrain.workers or None
         )
+        # The sky's glow is made in the pool while the bodies are built.
+        stars = None
+        if sky is not None:
+            stars = sky.stars if sky.stars is not None else Starfield()
+            if isinstance(stars, Starfield):
+                stars.prefetch_glow(self.executor, self.settings.sky.glow_size)
 
         # Every body's air first: the terrains and clouds bind them all.
         self.atmospheres = Atmospheres(self.settings.atmosphere)
@@ -543,7 +549,7 @@ class World:
         if sky is not None:
             self.sky = Sky(
                 render,
-                sky.stars if sky.stars is not None else Starfield(),
+                stars,
                 self.atmospheres,
                 star_intensity=sky.star_intensity,
                 star_brightness=sky.star_brightness,

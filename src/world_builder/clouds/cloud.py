@@ -576,6 +576,12 @@ def atlas_mean_alpha() -> float:
     if not image.has_alpha():
         return 1.0
     width, height = image.get_x_size(), image.get_y_size()
+    # The alpha as an array (a loop of get_alpha calls took ~80 ms): a texture
+    # holds it bottom-up, PNMImage rows are top-down.
+    texture = Texture()
+    texture.load(image)
+    alpha = np.frombuffer(texture.get_ram_image_as("A").get_data(), dtype=np.uint8)
+    alpha = alpha.reshape(height, width)[::-1] / float(image.get_maxval())
     totals = []
     for u_min, v_min, u_size, v_size in atlas_rects():
         # UVs are bottom-left origin; PNMImage rows are top-down.
@@ -585,7 +591,6 @@ def atlas_mean_alpha() -> float:
         y1 = max(y0 + 1, int(round((1.0 - v_min) * height)))
         x0, x1 = max(0, x0), min(width, x1)
         y0, y1 = max(0, y0), min(height, y1)
-        alphas = [image.get_alpha(x, y) for y in range(y0, y1) for x in range(x0, x1)]
-        if alphas:
-            totals.append(sum(alphas) / len(alphas))
+        if x1 > x0 and y1 > y0:
+            totals.append(float(alpha[y0:y1, x0:x1].mean()))
     return float(np.mean(totals)) if totals else 1.0

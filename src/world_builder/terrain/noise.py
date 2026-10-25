@@ -316,7 +316,7 @@ def _ridged_plan(
 # ── native library ────────────────────────────────────────────────────────────
 
 #: Interface version of the native library (``WB_NOISE_ABI`` in noise.c).
-_NATIVE_ABI = 1
+_NATIVE_ABI = 2
 _SUFFIX = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
 #: Where the native noise library is built and shipped. Found by path: the
 #: ``native`` package's own imports lead back here.
@@ -336,7 +336,20 @@ class _NativeNoise:
         lib.wb_simplex3.argtypes = [ptr, i64, ctypes.c_uint64, ptr]
         lib.wb_fbm.argtypes = [ptr, i64, i32, ptr, ptr, ptr, ptr]
         lib.wb_ridged.argtypes = [ptr, i64, i32, ptr, ptr, ptr, f64, f64, ptr]
-        for function in (lib.wb_simplex3, lib.wb_fbm, lib.wb_ridged):
+        lib.wb_volume_fbm.argtypes = [
+            ptr,
+            i64,
+            ptr,
+            i64,
+            i32,
+            i32,
+            ptr,
+            ptr,
+            ptr,
+            f64,
+            ptr,
+        ]
+        for function in (lib.wb_simplex3, lib.wb_fbm, lib.wb_ridged, lib.wb_volume_fbm):
             function.restype = None
         self._lib = lib
 
@@ -381,6 +394,51 @@ class _NativeNoise:
             out.ctypes.data,
         )
         return out
+
+    def volume_fbm(
+        self,
+        volume: np.ndarray,
+        coords: np.ndarray,
+        scales: np.ndarray,
+        weights: np.ndarray,
+        offsets: np.ndarray,
+        evaluated: int,
+        octave_mean: float,
+    ) -> np.ndarray:
+        """``clouds.noise.fbm``: see ``wb_volume_fbm`` in noise.c.
+
+        :param volume: (n, n, n) float32, indexed [z, y, x]
+        :param coords: (..., 3) noise coords
+        :returns: (...) float64
+        """
+        volume = np.ascontiguousarray(volume, dtype=np.float32)
+        coords = np.asarray(coords, dtype=np.float64)
+        shape = coords.shape[:-1]
+        flat = np.ascontiguousarray(coords.reshape(-1, 3))
+        scales = np.ascontiguousarray(scales, dtype=np.float64)
+        weights = np.ascontiguousarray(weights, dtype=np.float64)
+        offsets = np.ascontiguousarray(offsets, dtype=np.float64)
+        out = np.empty(len(flat))
+        self._lib.wb_volume_fbm(
+            volume.ctypes.data,
+            volume.shape[0],
+            flat.ctypes.data,
+            len(flat),
+            len(weights),
+            evaluated,
+            scales.ctypes.data,
+            weights.ctypes.data,
+            offsets.ctypes.data,
+            octave_mean,
+            out.ctypes.data,
+        )
+        return out.reshape(shape)
+
+
+def native_library() -> _NativeNoise | None:
+    """:returns: the native noise library's binding, or None (numpy runs);
+    for the other noise modules (``clouds.noise``)"""
+    return _native()
 
 
 @functools.cache

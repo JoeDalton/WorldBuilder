@@ -51,11 +51,7 @@ breakdown above predates them: frames are 1–3 ms shorter now.
   the planet's composition in two languages (stamps and paints still need a
   bridge). Generation no longer limits refinement at 60 Hz, so only worth it
   for slower machines or faster flight.
-- **Cloud tiles are still numpy** (~40 ms a tile, `clouds/noise.py`'s value
-  noise): the clouds' fill and their share of the pool. The same treatment as
-  the terrain noise would apply.
-- **The weather map in every worker** (0.6 s each, once, on its first cloud
-  tile): could be handed over (3 MB) instead of rebuilt.
+- Cloud tiles and the weather map: done (performance.md §15).
 - **The LOD cadence at low frame rates.** A level waits for a pass 3 frames
   after its upload (`select_every_on_upload`): 100 ms a level at 30 fps.
   Time-based instead of frame-based would help slow machines; a pass every

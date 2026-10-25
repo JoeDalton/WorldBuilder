@@ -360,6 +360,9 @@ class TerrainDemo(ShowBase):
         self.executor = ChunkExecutor(
             backend=backend, workers=world.terrain.workers or None
         )
+        # The sky's glow is made in the pool while the terrains are built.
+        stars = Starfield()
+        stars.prefetch_glow(self.executor, world.sky.glow_size)
         # The planet's air: everything is seen through it, the moon included.
         self.atmospheres = Atmospheres(world.atmosphere)
         self.atmospheres.add(spec.radius, AtmosphereParams())
@@ -392,7 +395,7 @@ class TerrainDemo(ShowBase):
         self.body = self.home  # the nearest body, updated every frame
 
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
-        self.sky = Sky(self.render, Starfield(), self.atmospheres, settings=world.sky)
+        self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.clouds = None
         self._cloud_debug = cloud_debug

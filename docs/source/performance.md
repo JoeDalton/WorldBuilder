@@ -572,6 +572,35 @@ Tried and left out:
   frame while uploading**: within noise either way.
 - **`-march=native`** for the noise: ~15 % more, not worth per-CPU builds.
 
+## 15. Clouds and loading, second round
+
+The clouds were then most of what was left of the loading time: with them the
+demo's first frame came 1.4 s later and its ground 3.6 s later.
+
+- **Cloud noise in C.** `wb_volume_fbm` (`native/noise.c`) samples the 64³
+  volume as `sample_volume` does (float32 corner differences, float64 blends,
+  the GPU's half-texel offset), bit for bit, 7x faster. Tiles, the column
+  peaks, the deck light, the sun march and the flat field all use it.
+- **Tile batches sized to the tile.** A tile needs about its slab volume over
+  a billboard's candidates whatever the accept rate, so it draws that many
+  (at least 2,048) instead of 20,000. Tiles per shell: 20 / 17 / 18 / 15 ms
+  before, 7.7 / 4.1 / 2.4 / 1.4 ms after. Their billboards differ (other
+  random draws), their statistics do not.
+- **The weather map made once.** It is made in the pool while the caller goes
+  on, then shared with the workers (`workers.SharedArray`, shared memory)
+  instead of rebuilt by each one (0.7 s each). Its absence had stalled the
+  start of the fill: 27 chunks in the first 2.5 s, now ~110.
+- **The deck light in the pool too**; the clouds finish their set-up in
+  `update()` once both are in (`SphericalClouds._finish`).
+- **The glow in the pool** (`Starfield.prefetch_glow`) while the terrains are
+  built; the placeholder textures' noise on half spectra with cached filters
+  (817 → 596 ms, the same bytes); the atlas's mean alpha with numpy.
+
+Demo start-up (clouds on): first frame 3.7 s → 2.1 s, everything loaded
+12.0 s → 9.2 s. Without clouds: 1.7 s and 8.2 s. What remains of the fill is
+generation in a busy machine: ~900 chunks at ~150 a second with 3 workers
+beside the renderer (chunks take ~13 ms there against 8 idle).
+
 ## Not covered
 
 The ocean was not profiled on its own: its main cost is its reflection

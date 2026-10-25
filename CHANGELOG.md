@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chunks and billboards in the reflection, no clamped edges measured. (#20)
 - Short sight lines through the air take fewer atmosphere samples (from 2,
   for nearby ground), within one 8-bit level of colour. (#20)
+- Cloud tiles generate 2-10x faster: the clouds' volume noise runs in the
+  native library too (bit for bit), and each tile draws as many candidate
+  points as it needs. The clouds' set-up (weather map, deck light) runs in
+  the worker pool, and the workers share the weather map instead of each
+  building it. The demo's first frame comes in ~2.1 s, its world is loaded
+  in ~9 s. (#20)
 - Per-frame shader inputs of the ocean are bound once and written in place;
   the clouds' pixel angle and sky light are set only when they change. (#20)
 

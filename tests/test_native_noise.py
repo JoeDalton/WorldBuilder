@@ -107,3 +107,39 @@ def test_numpy_can_be_forced(monkeypatch):
     finally:
         monkeypatch.delenv("WORLD_BUILDER_NO_NATIVE_NOISE")
         noise._native.cache_clear()
+
+
+# ── the clouds' volume noise ───────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def volume():
+    from world_builder.clouds.noise import quantise, value_noise_volume
+
+    return quantise(value_noise_volume(seed=7))
+
+
+def test_cloud_volume_fbm_is_bit_identical(native, volume, monkeypatch):
+    """Billboards are placed where the CPU fbm says there is cloud: native and
+    numpy must agree exactly, or a test of the placement could disagree."""
+    from world_builder.clouds import noise as clouds_noise
+
+    coords = np.random.default_rng(1).uniform(-300.0, 300.0, size=(20000, 3))
+    field = clouds_noise.DensityField()
+    expected = {}
+    with monkeypatch.context() as m:
+        m.setattr(clouds_noise, "native_library", lambda: None)
+        expected["sample"] = clouds_noise.sample_volume(volume, coords)
+        for octaves in (2, 3, 4):
+            expected[octaves] = clouds_noise.fbm(volume, coords, field, octaves)
+        expected["mean0"] = clouds_noise.fbm(volume, coords, field, 2, 0.0)
+    np.testing.assert_array_equal(
+        clouds_noise.sample_volume(volume, coords), expected["sample"]
+    )
+    for octaves in (2, 3, 4):
+        np.testing.assert_array_equal(
+            clouds_noise.fbm(volume, coords, field, octaves), expected[octaves]
+        )
+    np.testing.assert_array_equal(
+        clouds_noise.fbm(volume, coords, field, 2, 0.0), expected["mean0"]
+    )

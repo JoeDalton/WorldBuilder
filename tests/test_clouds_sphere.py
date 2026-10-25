@@ -45,7 +45,7 @@ from world_builder.terrain.chart import TangentFrame, dirs_from_latlon
 from world_builder.terrain.cubesphere import face_dirs, grid_for
 from world_builder.terrain.planet import PRESETS as PLANETS
 from world_builder.terrain.planet import Planet, PlanetSpec
-from world_builder.terrain.workers import ChunkExecutor
+from world_builder.terrain.workers import ChunkExecutor, SharedArray
 
 R = 600e3
 
@@ -402,6 +402,32 @@ def test_tiles_place_billboards_on_cloud(spec, cube):
     # Deterministic.
     again = generate_cloud_tile(spec, tile.key)
     np.testing.assert_array_equal(again.particles, tile.particles)
+
+
+def test_tiles_read_the_shared_weather(spec, cube):
+    """Workers read the weather's shift from shared memory instead of each
+    building the map (~0.6 s): the same tiles, in this process and in a
+    worker process."""
+    grid = grid_for(R)
+    level = spec.shells[0].level
+    face, i, j, _, _ = grid.locate(_cloudy_dir(cube), level)
+    key = (level, int(face[0]), int(i[0]), int(j[0]))
+    built = generate_cloud_tile(spec, key)
+    shared = SharedArray(cube[..., 1])
+    try:
+        with_shared = replace(spec, shift=shared.handle)
+        here = generate_cloud_tile(with_shared, key)
+        np.testing.assert_array_equal(here.particles, built.particles)
+        executor = ChunkExecutor(backend="process", workers=1)
+        try:
+            there = executor.submit_once(generate_cloud_tile, with_shared, key)
+            np.testing.assert_array_equal(
+                there.result(timeout=120).particles, built.particles
+            )
+        finally:
+            executor.shutdown()
+    finally:
+        shared.release()
 
 
 def test_coarser_shells_use_bigger_billboards(spec, cube):

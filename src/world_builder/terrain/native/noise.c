@@ -1,4 +1,4 @@
-/* Native simplex noise for world_builder.terrain.noise (issue #20).
+/* Native noise for world_builder.terrain.noise and clouds.noise (issue #20).
  *
  * The same 3D simplex noise as noise.py (hash, gradients, kernel, scale),
  * summed over octaves per point, so a chunk's noise is one call per field
@@ -21,7 +21,7 @@
 #endif
 
 /* Bumped when a signature or a result changes; noise.py checks it. */
-#define WB_NOISE_ABI 1
+#define WB_NOISE_ABI 2
 
 static const double F3 = 1.0 / 3.0;
 static const double G3 = 1.0 / 6.0;
@@ -149,3 +149,68 @@ WB_API void wb_ridged(const double *points, int64_t n, int32_t octaves,
     out[a] = total;
   }
 }
+
+/* The clouds' noise (clouds/noise.py): one tileable octave stored as a
+ * (size, size, size) float32 volume indexed [z][y][x], sampled as the GPU
+ * samples a repeat-wrapped linear 3D texture (sample_volume), summed over
+ * octaves as fbm does. The same operations in the same order as numpy:
+ * corner differences in float32, the blends in float64. */
+static double sample_volume(const float *v, int64_t size, double x, double y,
+                            double z) {
+  double bx = floor(x - 0.5), by = floor(y - 0.5), bz = floor(z - 0.5);
+  double tx = (x - 0.5) - bx, ty = (y - 0.5) - by, tz = (z - 0.5) - bz;
+  /* Python's modulo, never negative: a mask for a power-of-two size (two's
+   * complement), which spares six divisions a sample. */
+  int64_t x0, y0, z0, x1, y1, z1;
+  if ((size & (size - 1)) == 0) {
+    int64_t mask = size - 1;
+    x0 = (int64_t)bx & mask, y0 = (int64_t)by & mask, z0 = (int64_t)bz & mask;
+    x1 = (x0 + 1) & mask, y1 = (y0 + 1) & mask, z1 = (z0 + 1) & mask;
+  } else {
+    x0 = ((int64_t)bx % size + size) % size;
+    y0 = ((int64_t)by % size + size) % size;
+    z0 = ((int64_t)bz % size + size) % size;
+    x1 = (x0 + 1) % size, y1 = (y0 + 1) % size, z1 = (z0 + 1) % size;
+  }
+  int64_t row = size, page = size * size;
+  float c000 = v[z0 * page + y0 * row + x0], c100 = v[z0 * page + y0 * row + x1];
+  float c010 = v[z0 * page + y1 * row + x0], c110 = v[z0 * page + y1 * row + x1];
+  float c001 = v[z1 * page + y0 * row + x0], c101 = v[z1 * page + y0 * row + x1];
+  float c011 = v[z1 * page + y1 * row + x0], c111 = v[z1 * page + y1 * row + x1];
+  double c00 = (double)c000 + (double)(float)(c100 - c000) * tx;
+  double c01 = (double)c010 + (double)(float)(c110 - c010) * tx;
+  double c10 = (double)c001 + (double)(float)(c101 - c001) * tx;
+  double c11 = (double)c011 + (double)(float)(c111 - c011) * tx;
+  double c0 = c00 + (c01 - c00) * ty;
+  double c1 = c10 + (c11 - c10) * ty;
+  return c0 + (c1 - c0) * tz;
+}
+
+/* clouds.noise.fbm: octave k samples the volume at coords * scales[k] +
+ * offsets[k] and adds weights[k] times it; octaves from `evaluated` on add
+ * weights[k] * octave_mean instead. coords: (n, 3). */
+WB_API void wb_volume_fbm(const float *volume, int64_t size,
+                          const double *coords, int64_t n, int32_t octaves,
+                          int32_t evaluated, const double *scales,
+                          const double *weights, const double *offsets,
+                          double octave_mean, double *out) {
+  int64_t a;
+  int32_t k;
+  for (a = 0; a < n; a++) {
+    const double *c = coords + 3 * a;
+    double total = 0.0;
+    for (k = 0; k < octaves; k++) {
+      if (k < evaluated) {
+        const double *o = offsets + 3 * k;
+        double s = scales[k];
+        total += sample_volume(volume, size, c[0] * s + o[0], c[1] * s + o[1],
+                               c[2] * s + o[2]) *
+                 weights[k];
+      } else {
+        total += octave_mean * weights[k];
+      }
+    }
+    out[a] = total;
+  }
+}
+

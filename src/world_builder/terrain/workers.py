@@ -28,9 +28,13 @@ from __future__ import annotations
 import multiprocessing
 import os
 import sys
+import weakref
 from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
+from multiprocessing import shared_memory
+
+import numpy as np
 
 from world_builder.terrain.chunkgen import ChunkData, generate_chunk
 from world_builder.terrain.cubesphere import Key
@@ -262,6 +266,23 @@ class ChunkExecutor:
             self._fill()
         return done
 
+    def submit_once(self, fn: Callable, *args) -> Future:
+        """Run ``fn(*args)`` once in the pool, outside the channels (one-off
+        work such as the clouds' set-up; not counted in flight). The inline
+        backend runs it now.
+
+        :param fn: a top-level (picklable) function
+        :returns: its future
+        """
+        if self._pool is None:
+            future: Future = Future()
+            try:
+                future.set_result(fn(*args))
+            except BaseException as error:  # delivered by result(), as a pool's
+                future.set_exception(error)
+            return future
+        return self._pool.submit(fn, *args)
+
     def shutdown(self) -> None:
         """Stop the workers, dropping queued work."""
         if self._pool is not None:
@@ -314,3 +335,69 @@ def _lower_priority(niceness: int) -> None:
             os.nice(niceness)
         except OSError:  # not permitted here: run at normal priority
             pass
+
+
+class SharedArray:
+    """A read-only array the worker processes see without copying it into
+    every task: shared memory, owned by the process that made it.
+
+    Pass :attr:`handle` in a task's arguments; the worker reads the array with
+    :func:`shared_array`. The memory is freed by :meth:`release`, or when the
+    owner is collected or exits.
+    """
+
+    def __init__(self, array: np.ndarray):
+        array = np.ascontiguousarray(array)
+        memory = shared_memory.SharedMemory(create=True, size=max(array.nbytes, 1))
+        view = np.ndarray(array.shape, dtype=array.dtype, buffer=memory.buf)
+        view[...] = array
+        view.flags.writeable = False
+        #: (name, shape, dtype): picklable, what a worker needs to attach
+        self.handle = (memory.name, array.shape, array.dtype.str)
+        self.array = view
+        _OWNED[memory.name] = view
+        self._release = weakref.finalize(self, _free, memory, memory.name)
+
+    def release(self) -> None:
+        """Free the memory (workers must not read it any more)."""
+        self.array = None
+        self._release()
+
+
+#: Arrays this process shares, by name: read in place, not attached again.
+_OWNED: dict[str, np.ndarray] = {}
+
+
+def _free(memory: shared_memory.SharedMemory, name: str) -> None:
+    _OWNED.pop(name, None)
+    try:
+        memory.close()
+    except BufferError:  # a view is still in use: the mapping goes with it
+        pass
+    try:
+        memory.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def shared_array(handle: tuple) -> np.ndarray:
+    """:returns: the array a :class:`SharedArray` shares (read-only), from its
+    :attr:`~SharedArray.handle`; attached once per process"""
+    name, shape, dtype = handle
+    if name in _OWNED:
+        return _OWNED[name]
+    if name not in _ATTACHED:
+        # Spawned workers share their parent's resource tracker, so attaching
+        # registers nothing new (track=False says so from Python 3.13).
+        if sys.version_info >= (3, 13):
+            memory = shared_memory.SharedMemory(name=name, track=False)
+        else:
+            memory = shared_memory.SharedMemory(name=name)
+        view = np.ndarray(tuple(shape), dtype=np.dtype(dtype), buffer=memory.buf)
+        view.flags.writeable = False
+        _ATTACHED[name] = (memory, view)
+    return _ATTACHED[name][1]
+
+
+#: Arrays attached in this process: (memory, view) by name, kept open.
+_ATTACHED: dict[str, tuple] = {}

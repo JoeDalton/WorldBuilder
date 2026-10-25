@@ -256,8 +256,22 @@ class Starfield:
         self.catalogue = make_stars(seed, stars, galactic_pole, red, blue)
         self._glow_args = (seed, galactic_pole, nebula_scale, nebula_coverage)
         self.glow_size = int(glow_size)
-        # Made when first asked for (seconds at 256), at the size the sky uses.
+        # Made when first asked for (~0.4 s at 256), at the size the sky uses.
         self._glows: dict[int, Texture] = {}
+        self._glow_jobs: dict[int, Any] = {}
+
+    def prefetch_glow(self, executor: Any, size: int | None = None) -> None:
+        """Start making the glow at *size* in a worker pool, so it is ready
+        when the sky asks for it (:meth:`glow_at` takes it from there).
+
+        :param executor: a :class:`world_builder.terrain.workers.ChunkExecutor`
+        :param size: texels per face; None = ``glow_size``
+        """
+        size = int(size or self.glow_size)
+        if size not in self._glows and size not in self._glow_jobs:
+            self._glow_jobs[size] = executor.submit_once(
+                make_glow, size, *self._glow_args
+            )
 
     @property
     def glow(self) -> Texture:
@@ -270,7 +284,11 @@ class Starfield:
         sky; made once per size)"""
         size = int(size)
         if size not in self._glows:
-            self._glows[size] = glow_texture(make_glow(size, *self._glow_args))
+            job = self._glow_jobs.pop(size, None)
+            data = (
+                job.result() if job is not None else make_glow(size, *self._glow_args)
+            )
+            self._glows[size] = glow_texture(data)
         return self._glows[size]
 
 

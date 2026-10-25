@@ -119,6 +119,7 @@ from world_builder.quality import REBUILD
 from world_builder.terrain.cubesphere import QUADS, CubeGrid, face_dirs, grid_for
 from world_builder.terrain.planet import PlanetSpec
 from world_builder.terrain.quadtree import LodSelector
+from world_builder.terrain.workers import SharedArray, shared_array
 
 if TYPE_CHECKING:
     from world_builder.terrain.workers import ChunkExecutor
@@ -137,6 +138,9 @@ _SHELL_BIN_SORTS = (29, 28, 27, 26, 24, 23)
 #: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box),
 #: rounded to the nearest level of the planet's grid.
 BASE_TILE_SIZE = 8000.0
+#: Fewest candidate points per rejection-sampling batch of a tile: enough to
+#: measure the accept rate its billboard count follows.
+MIN_TILE_BATCH = 2048
 #: Quads per face edge of the deck sphere.
 DECK_QUADS = 48
 #: The deck's optical depth cap (the billboards' is ~1.5 per quad).
@@ -181,9 +185,12 @@ class SphereCloudSpec:
     :ivar radius: the planet's sea-level radius, metres
     :ivar field: the cloud type's density field, threshold resolved
     :ivar noise_seed: seed of the shared noise volume
-    :ivar weather: the planet's weather (each worker builds its map once)
+    :ivar weather: the planet's weather
     :ivar shift_table: the fbm shift per coverage (:func:`weather.shift_table`)
     :ivar shells: the billboard shells, innermost first
+    :ivar shift: the weather map's fbm shift plane, shared with the workers
+        (a :attr:`terrain.workers.SharedArray.handle`); None = each worker
+        builds the map from *weather* (~0.6 s)
     """
 
     radius: float
@@ -192,6 +199,7 @@ class SphereCloudSpec:
     weather: WeatherSpec
     shift_table: tuple
     shells: tuple
+    shift: tuple | None = None
 
     def shell_of(self, level: int) -> int:
         """:returns: the index of the shell whose tiles are at *level*"""
@@ -225,6 +233,13 @@ def _noise(seed: int) -> np.ndarray:
 @functools.cache
 def _weather(weather: WeatherSpec, table: tuple) -> np.ndarray:
     return weather_cube(weather, np.asarray(table))
+
+
+def _shift_plane(spec: SphereCloudSpec) -> np.ndarray:
+    """:returns: (6, n, n) the weather's fbm shift, shared or built here"""
+    if spec.shift is not None:
+        return shared_array(spec.shift)
+    return _weather(spec.weather, spec.shift_table)[..., 1]
 
 
 def _peaks(seed: int, field: DensityField, radius: float, octaves: int) -> np.ndarray:
@@ -305,7 +320,7 @@ def generate_cloud_tile(
     :param spec: the clouds
     :param key: the tile, (level, face, i, j); its level picks the shell
     :param version: carried through to the result
-    :param batch: candidate points per rejection-sampling batch
+    :param batch: candidate points per rejection-sampling batch, at most
     :returns: the tile's billboards, deterministic for *spec*'s seed and *key*
     """
     start = time.perf_counter()
@@ -313,7 +328,7 @@ def generate_cloud_tile(
     shell = spec.shells[spec.shell_of(level)]
     grid = grid_for(spec.radius)
     volume = _noise(spec.noise_seed)
-    weather = _weather(spec.weather, spec.shift_table)
+    weather = _shift_plane(spec)
     field = shell.field_of(spec.field)
     base, thickness = field.slab
     span = 2.0 * (QUADS << level) / grid.n0
@@ -325,12 +340,17 @@ def generate_cloud_tile(
     mean_r3 = (r_hi**4 - r_lo**4) / (4.0 * (r_hi - r_lo)) if r_hi > r_lo else r_lo**3
     sphere = 4.0 / 3.0 * math.pi * mean_r3
     rng = np.random.default_rng(np.random.SeedSequence([spec.noise_seed, *key]))
+    # The target is proportional to the accept rate, so reaching it takes
+    # about this many candidates whatever the rate: batches of that (a coarse
+    # shell keeps ~700 billboards, it used to try 20,000 points for them).
+    step = int(slab_volume * shell.volume_fraction / sphere * 1.1)
+    step = min(batch, max(MIN_TILE_BATCH, step))
 
     kept, tried, accepted, target = [], 0, 0, None
     while target is None or accepted < target:
-        a = a0 + span * rng.uniform(size=batch)
-        b = b0 + span * rng.uniform(size=batch)
-        height = base + thickness * rng.uniform(size=batch)
+        a = a0 + span * rng.uniform(size=step)
+        b = b0 + span * rng.uniform(size=step)
+        height = base + thickness * rng.uniform(size=step)
         points = face_dirs(face, a, b) * (spec.radius + height)[:, None]
         inside = points[
             density_on_sphere(
@@ -338,7 +358,7 @@ def generate_cloud_tile(
             )
             > 0.0
         ]
-        tried += batch
+        tried += step
         accepted += len(inside)
         kept.append(inside)
         if target is None:
@@ -599,8 +619,13 @@ class SphericalClouds:
             planet = planet or PlanetSpec(name="clouds", radius=self.radius)
             weather = WeatherSpec(planet, seed=weather_seed)
         table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
-        #: (6, n, n, 2): coverage and fbm shift (the workers rebuild it)
-        self.weather = _weather(weather, table)
+        # The weather map and the deck's light (~1 s together) are made in the
+        # pool while the caller goes on; update() finishes the set-up when
+        # they are in (see _finish).
+        self._weather_job = executor.submit_once(_weather, weather, table)
+        #: (6, n, n, 2): coverage and fbm shift; None until the set-up is done
+        self.weather: np.ndarray | None = None
+        self._shared_shift: SharedArray | None = None
         self._preset = preset
         self._seed = seed
         self._peaks = peaks
@@ -610,14 +635,12 @@ class SphericalClouds:
         base_level = max(0, round(math.log2(BASE_TILE_SIZE / self.grid.chunk_size(0))))
         self._base_level = base_level
         self._settings = settings
-        params, deck_light = self._configure(settings)
-        self._version = executor.set_spec(
-            self.spec, self._channel, generator=generate_cloud_tile
-        )
+        params, self._deck_job = self._configure(settings)
 
         # ── Nodes and shared inputs ──
         tile_shader, deck_shader = _shaders()
         self.root = parent.attach_new_node("spherical_clouds")
+        self.root.stash()  # out of every camera until the set-up is done
         self.tiles_root = self.root.attach_new_node("cloud_tiles")
         self.tiles_root.set_shader(tile_shader)
         self.deck = self.root.attach_new_node(
@@ -660,8 +683,6 @@ class SphericalClouds:
             cloudNoise=build_noise_texture(volume),
             noiseSize=float(NOISE_SIZE),
             noiseOffset=Vec3(0, 0, 0),
-            weatherMap=build_weather_texture(self.weather),
-            deckLight=build_deck_light_texture(deck_light),
             deckLightCosMin=DECK_LIGHT_COS_MIN,
             uSpherical=1,
             planetRadius=self.radius,
@@ -718,8 +739,10 @@ class SphericalClouds:
         changes = self._settings.changes(settings)
         if not changes:
             return
+        self._finish()
         self._settings = settings
-        params, deck_light = self._configure(settings)
+        params, deck_job = self._configure(settings)
+        deck_light = deck_job.result()
         if REBUILD in changes.values():
             self._version = self.executor.set_spec(
                 self.spec, self._channel, generator=generate_cloud_tile
@@ -749,7 +772,8 @@ class SphericalClouds:
         """Plan the shells and the deck for some settings: sets the bands,
         the deck's layer and :attr:`spec` (what the workers get).
 
-        :returns: the packed layer parameters and the deck's light table
+        :returns: the packed layer parameters, and the deck's light table
+            being made in the pool (a future)
         """
         preset, field, peaks, seed = self._preset, self.field, self._peaks, self._seed
         shells = settings.shells
@@ -824,10 +848,17 @@ class SphericalClouds:
             fade_in=bands[-1],
             octaves=schedule[-1],
         )
-        deck_light = _deck_light(
-            seed, deck.field_of(field), deck_optics, self.radius, table, schedule[-1]
+        deck_job = self.executor.submit_once(
+            _deck_light,
+            seed,
+            deck.field_of(field),
+            deck_optics,
+            self.radius,
+            table,
+            schedule[-1],
         )
         self._bands = bands
+        shared = self._shared_shift
         self.spec = SphereCloudSpec(
             radius=self.radius,
             field=field,
@@ -835,8 +866,9 @@ class SphericalClouds:
             weather=self._weather_spec,
             shift_table=table,
             shells=tuple(shell_specs),
+            shift=None if shared is None else shared.handle,
         )
-        return params, deck_light
+        return params, deck_job
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -894,6 +926,11 @@ class SphericalClouds:
         :param camera_render: camera in the render frame (the origin when
             the scene is drawn camera-relative)
         """
+        if self._weather_job is not None:
+            if not (self._weather_job.done() and self._deck_job.done()):
+                self.stats["pending"] = 1  # the set-up: World.waiting() counts it
+                return
+            self._finish()
         self._frame += 1
         cam = np.asarray(camera_world, dtype=np.float64) - self.position
         render_cam = np.asarray(camera_render, dtype=np.float64)
@@ -933,6 +970,30 @@ class SphericalClouds:
         """Take the clouds off the scene and drop their queued tiles."""
         self.executor.request([], self._channel)
         self.root.remove_node()
+        if self._shared_shift is not None:
+            self._shared_shift.release()
+            self._shared_shift = None
+
+    def _finish(self) -> None:
+        """Finish the set-up begun in the pool (waiting for it if need be):
+        the weather map and the deck's light become textures, the weather's
+        shift is shared with the workers, and the tiles can be asked for."""
+        if self._weather_job is None:
+            return
+        self.weather = self._weather_job.result()
+        deck_light = self._deck_job.result()
+        self._weather_job = self._deck_job = None
+        if self.executor.backend == "process":
+            self._shared_shift = SharedArray(self.weather[..., 1])
+            self.spec = replace(self.spec, shift=self._shared_shift.handle)
+        self._version = self.executor.set_spec(
+            self.spec, self._channel, generator=generate_cloud_tile
+        )
+        self.root.set_shader_inputs(
+            weatherMap=build_weather_texture(self.weather),
+            deckLight=build_deck_light_texture(deck_light),
+        )
+        self.root.unstash()
 
     # ── internals ─────────────────────────────────────────────────────────────
 
