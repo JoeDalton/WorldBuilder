@@ -1,5 +1,6 @@
-# Build the native terrain collision solid (Windows x64) for the installed
-# panda3d wheel, with MSVC. See docs/source/native_build.md.
+# Build the native libraries (Windows x64) with MSVC: the noise library, and
+# the terrain collision solid for the installed panda3d wheel. See
+# docs/source/native_build.md.
 #
 #   scripts/build_native.ps1 [-Python <python>] [-Sdk <panda3d sdk>]
 #
@@ -7,7 +8,8 @@
 # Sdk: a Panda3D SDK of the same version, holding include/ and lib/ (default:
 # fetched by scripts/fetch_native_deps.ps1 into .cache/native). MSVC is found
 # with vswhere when cl isn't on PATH.
-# Writes src/world_builder/terrain/native/libterrain_collision-panda<major>.<minor>.dll
+# Writes src/world_builder/terrain/native/libwb_noise.dll and
+# libterrain_collision-panda<major>.<minor>.dll
 param([string]$Python = "python", [string]$Sdk)
 $ErrorActionPreference = "Stop"
 
@@ -37,6 +39,19 @@ if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
 $Src = (Resolve-Path "$PSScriptRoot/../src/world_builder/terrain/native").Path
 $Out = Join-Path $Src "libterrain_collision-panda$Series.dll"
 $Work = (New-Item -ItemType Directory -Force (Join-Path $env:TEMP "wb_native")).FullName
+
+# The noise library: plain C. /fp:precise without /fp:contract: no FMA, so
+# every platform computes the same terrain.
+Push-Location $Work
+try {
+    & cl.exe /nologo /O2 /fp:precise /MD /utf-8 /DNDEBUG /LD `
+        "$Src\noise.c" "/Fe$Src\libwb_noise.dll" `
+        /link "/IMPLIB:$Work\wb_noise.lib"
+    if ($LASTEXITCODE) { throw "cl failed (noise)" }
+} finally {
+    Pop-Location
+}
+"built $Src\libwb_noise.dll"
 
 # /MD: the C++ runtime of Panda's DLLs and Python. Run from a temporary
 # directory, which gets the object file; the import library goes there too.

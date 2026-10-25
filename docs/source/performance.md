@@ -20,8 +20,8 @@ figures in §3–5 and §10 are re-measured; §1, §2 and §6–9 still hold as 
 | # | Concern | Where | Impact today | Status |
 |---|---|---|---|---|
 | 1 | Worker pool throughput vs the render loop | `workers.py` | Too many workers slowed the frame | Default: physical cores − 1, lower priority |
-| 2 | glibc returns numpy temporaries to the OS | worker processes | Workers ~40 ms/chunk instead of ~24 | Fix found, **not applied** |
-| 3 | numpy per-octave cost | `noise.py`, `planet.py` | ~25 ms per chunk | Accepted (numba not wanted) |
+| 2 | glibc returns numpy temporaries to the OS | worker processes | Workers ~40 ms/chunk instead of ~24 | Applied (§14) |
+| 3 | numpy per-octave cost | `noise.py`, `planet.py` | was ~25 ms per chunk | Native noise: ~8 ms (§14) |
 | 4 | LOD pass in Python | `quadtree.py` | ~1 ms per pass, not every frame | Optimised |
 | 5 | Chunk and triangle counts | `quadtree.py` (K=2) | ~600 draws, ~5 M triangles, twice with the reflection | Fine on desktop GPUs |
 | 6 | Memory held by the caches | `terrain.py` | ~410 MB RAM, ~190 MB GPU per planet you are near | Fine on desktop |
@@ -30,6 +30,7 @@ figures in §3–5 and §10 are re-measured; §1, §2 and §6–9 still hold as 
 | 9 | Initial fill and spec changes | `terrain.py`, `planet.py` | Several seconds of blur; 0.3 s main-thread hitch | Accepted |
 | 10 | Descent from orbit | `workers.py`, `depth.py` | Demand above the pool's ceiling when boosting; split-depth draws twice | Accepted (coarse, never holes) |
 | 12 | Frame time in fast flight | demo main thread | was ~30 fps flying low, boosted | Fixed: 89 fps offscreen (§12) |
+| 14 | New chunks visibly late (#20) | generation, LOD pass, start-up | ground sharp ~3.8 s after a jump | ~1.0 s (§14) |
 
 ## 1. Worker pool throughput
 
@@ -109,9 +110,10 @@ the workers takes a chunk from ~40 ms to ~24 ms:
 MALLOC_MMAP_THRESHOLD_=4194304 MALLOC_TRIM_THRESHOLD_=67108864
 ```
 
-**Not applied in the code.** To apply it, set these in `os.environ` before
-the pool spawns its workers (spawned processes inherit the environment at
-spawn time). Linux/glibc only; harmless elsewhere.
+**Applied** (§14): `ChunkExecutor` sets them in `os.environ` before the pool
+spawns its workers (`workers.WORKER_MALLOC_ENV`, unless already set; Linux
+only). With the native noise there are far fewer temporaries, so it matters
+less: 342 against 358 chunks/s (with numpy: 74 against 152).
 
 Single-threaded BLAS (`OPENBLAS_NUM_THREADS=1`) was also tried: marginal
 (62 → 68 chunks/s in that run).
@@ -153,6 +155,10 @@ Further options, from cheapest:
   lattice offsets).
 - numba: would remove most of the overhead, but adds a dependency (declined
   so far).
+
+**Done since** (§14): the octave sums are a small C library (`native/noise.c`),
+so a chunk is ~8 ms; what is left is ~5 ms of noise and ~3 ms of numpy
+(biomes, normals, interpolation, packing).
 
 ## 4. LOD selection in Python
 
@@ -481,6 +487,90 @@ own copy once.
 
 Savings found but not yet made are listed in the
 [performance backlog](performance_backlog.md).
+
+## 14. Chunks sooner, faster loading (#20)
+
+New chunks showed up visibly late at good frame rates. Three causes, measured
+on the same machine (3 workers, offscreen 1600×900, demo level):
+
+- **Generation:** 85 % of a chunk's ~24 ms was numpy simplex noise (90k-160k
+  evaluations a chunk, numpy's per-operation overhead). The octave sums are
+  now a C library (`native/noise.c`, see [the native libraries](native_build.md)):
+  the same noise (bit-identical per octave, sums within ~1e-12), ~8 ms a
+  chunk. Pool throughput, all workers warm: 74 chunks/s before, 152 with the
+  malloc fix (§2), 358 with the native noise too.
+- **Showing what arrived:** a pass ran 3 frames after an upload only if
+  another upload landed in that very frame; otherwise the chunk waited for the
+  camera to move or the 15-frame fallback (up to 250 ms). Uploads now count
+  until a pass shows them.
+- **Order:** wanted chunks were sorted coarse first over the whole view, so
+  horizon chunks went before the ground under the camera. Now ground nothing
+  covers comes first (coarse first), then the chunks largest on screen
+  (distance over size), those behind the view (`camera_forward`) as if 3x
+  farther. Sorting costs ~0.1 ms a pass.
+
+CPU-only refinement bench (the real pool, 60 Hz frames, no rendering):
+
+| | Before | After |
+|---|---|---|
+| Initial fill | 11.1 s | 5.6 s |
+| Jump to unseen ground: ground under the camera sharp | 3.8 s | 1.0 s |
+| Same, everything loaded | 4.5 s | 2.4 s |
+| Flight at 1,500 m/s, 300 m up: mean level under the camera | 0.77 | 0.00 |
+
+With numpy noise and the rest of the changes: 2.1 s to sharp, 4.9 s loaded.
+
+Start-up of the demo (clouds on), `TerrainDemo` built offscreen:
+
+| | Before | After |
+|---|---|---|
+| First frame | 6.9 s | 3.8 s |
+| Ground and clouds loaded | 22.5 s | 12.0 s |
+
+What changed there: the workers start with the pool (their imports overlap
+the caller's set-up; they used to spawn at the first request), the Milky Way
+glow is built once at the size the sky uses (2.6 s at 256, before the noise
+made it 0.4 s), the sea level evaluates only the continental field (and the
+noise), empty paint channels are not blurred, placeholder textures are made
+only for missing maps, and `scipy.interpolate` (0.11 s a process) is
+replaced by a numpy PCHIP. The weather map still takes 0.6 s in each worker
+(1.3 s before), once.
+
+Frames (`flight_bench.py --offscreen`, `terrain_shots.py`, waiting for the
+GPU each frame):
+
+| | Before | After |
+|---|---|---|
+| Low flight, boosted: fps / frame p95 | 50 / 30 ms | 62 / 23 ms |
+| Low flight: chunks generated per second | 102 | 191 |
+| Start pose (ground) | 14.0 ms | 11.8 ms |
+| Coast (2 km up) | 13.8 ms | 12.3 ms |
+| Inside the clouds | 12.5 ms | 11.4 ms |
+| Sunset (600 m up) | 15.1 ms | 12.1 ms |
+| 20 km up | 7.5 ms | 6.5 ms |
+| Beach | 17.3 ms | 14.9 ms |
+| Orbit | 2.8 ms | 2.3 ms |
+
+From the backlog's free savings, all four made: the sky after the terrain
+(its own bin, depth-tested), the reflection camera at 1.1x the main
+field of view (no clamped texels measured with `uDebugMode == 5`; 1.0 clamps
+2 % of the beach's water), the sun's depth for Rayleigh and Mie in one call,
+and fewer atmosphere samples on short sight lines (full count from 2 Mie
+scale heights of climb or 32 of length; at least 2): within one 8-bit level
+of the 8-sample image, 125 → 145 fps at the coast without clouds. On the CPU,
+the ocean's per-frame inputs are bound arrays, the clouds' pixel angle and
+sky light are set only when they change, their re-sort scores tiles without
+numpy, and the store is trimmed once a frame instead of once per chunk
+(~1 ms a frame in fast flight).
+
+Tried and left out:
+
+- **Look-ahead** (generating a level or two below the chunks being waited
+  for): no measurable gain at 60 or 30 Hz once a chunk takes 8 ms; a level
+  now waits on the pass and upload cadence, not on generation.
+- **A deeper queue** (4 tasks a worker instead of 2) and **a pass every
+  frame while uploading**: within noise either way.
+- **`-march=native`** for the noise: ~15 % more, not worth per-CPU builds.
 
 ## Not covered
 

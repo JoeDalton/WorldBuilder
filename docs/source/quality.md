@@ -170,7 +170,7 @@ labels and ranges below are what the schema gives.
 | `overlap_near` (advanced) | Overlap, near | rebuild | 0.5 to 4 | 1.5 | 2 | 2.5 | 2.5 |
 | `overlap_far` (advanced) | Overlap, far | rebuild | 0.5 to 4 | 1 | 1.5 | 2.5 | 2.5 |
 | `shell_octaves` | Detail | rebuild | 4-3-3-2, 4-4-3-3, 4-4-4-3, 4 | 4-3-3-2 | 4-4-3-3 | 4-4-4-3 | 4 |
-| `shells` (advanced) | Billboard distance | rebuild | 1 to 7 shells | 4 | 4 | 4 | 4 |
+| `shells` (advanced) | Billboard distance | rebuild | 1 to 6 shells | 4 | 4 | 4 | 4 |
 | `reflected` | In reflections | live | on / off | off | on | on | on |
 | `uploads_per_frame` (advanced) | Tile uploads per frame | live | 1 to 32 | 3 | 3 | 3 | 3 |
 | `resorts_per_frame` (advanced) | Tile re-sorts per frame | live | 1 to 32 | 4 | 4 | 4 | 4 |
@@ -192,7 +192,7 @@ labels and ranges below are what the schema gives.
 | `foam_noise` (advanced) | Foam detail | live | on / off | off | on | on | on |
 | `swell_by_depth` | Swell calms in shallows | live | on / off | on | on | on | on |
 | `reflection_scale` | Reflection quality | rebuild | 0.1 to 1 x | 0.25 | 0.35 | 0.5 | 0.75 |
-| `reflection_fov_scale` (advanced) | Reflection margin | live | 1 to 2 x | 1.4 | 1.4 | 1.4 | 1.4 |
+| `reflection_fov_scale` (advanced) | Reflection margin | live | 1 to 2 x | 1.1 | 1.1 | 1.1 | 1.1 |
 | `swell_grid_subdivs` (advanced) | Swell mesh detail | rebuild | 64 to 1024 quads | 256 | 384 | 512 | 512 |
 
 ## Notes

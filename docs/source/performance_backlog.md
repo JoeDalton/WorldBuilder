@@ -38,69 +38,28 @@ Within those:
 
 ## Free savings (no visible change)
 
-### 1. Draw the sky after the terrain: 0.4–0.8 ms (measured)
+All four found here (the sky after the terrain, a narrower reflection field
+of view, the fused sun-depth evaluations, fewer samples on short sight
+lines) are made: see [performance](performance.md), §14. The frame
+breakdown above predates them: frames are 1–3 ms shorter now.
 
-The sky dome is drawn first, in the `background` bin, so its per-pixel
-atmosphere is computed over the whole screen, most of which the terrain then
-covers. Its vertices already sit on the far plane (`sky.vert`), so it can be
-drawn after the opaque bin with a depth test and only the visible sky gets
-shaded.
+## Generation and loading (after #20)
 
-- A fixed bin between `opaque` (20) and the clouds, for the dome (draw order
-  0) and the stars (1), at sort 21. The clouds must stay after it: the deck
-  moves to 22 (`_CLOUD_BIN_SORT` in `clouds/sphere.py`), and the shells keep
-  `_SHELL_BIN_SORTS` minus 22, which leaves 6 bins between 23 and 29 (25 is
-  the flat field's, kept free so the two never tie). The planet uses 4
-  shells, so 6 is enough; `SphericalClouds` would need its shell limit
-  lowered from `MAX_LAYERS - 1` to 6.
-- On the sky node: depth test on with `DepthTestAttrib.M_less_equal`, depth
-  write off.
-- Measured with a temporary rebinding: start 14.8 → 14.4 ms, dusk
-  19.4 → 18.6 ms, 20 km 7.1 → 6.6 ms.
-- To check: the near pass still never draws the sky (it is hidden from the
-  near camera: `HIDE_FROM_NEAR`); the stars still add over the dome.
-
-### 2. Narrow the reflection's field of view: 0.4–0.6 ms (measured)
-
-`ocean.py` gives the reflection camera 1.4× the main camera's field of view
-(`refl_lens.setFov(fov.x * 1.4, fov.y * 1.4)`), against culling artefacts when
-turning. The reflection camera is mirrored in the same frame as the main
-camera (`mirror_camera`, from `update`), and a visible water point's mirror
-image is inside the mirrored camera's frustum at the same field of view. So
-only the ripples' small UV offset needs a margin.
-
-- 1.1× saved 0.4 ms (start) and 0.6 ms (dusk): fewer billboards and chunks in
-  the reflection's frustum.
-- The buffer's pixel count is unchanged, so reflections also get sharper.
-- To check: no clamped, stretched texels at the screen's edges with strong
-  ripples (`uDebugMode == 5` in `ocean.frag` shows the clamped area in red).
-
-### 3. Fuse the sun-depth evaluations: ~0.5–1 ms (estimated)
-
-Each atmosphere sample (`atmoSegment` in `atmosphere.glsl`) calls
-`atmoDepthToward` twice, for Rayleigh and Mie. Both share `r`, `cosChi`,
-`sinChi` and the tangent test, and differ only in the scale height. One
-function returning a `vec2` computes the shared parts once: the same result,
-fewer `sqrt`/`exp`.
-
-Per-pixel atmosphere runs on the terrain (2 ms), the sky, the ocean and the
-far cloud deck, so this saving applies to all four.
-
-### 4. Fewer samples on short sight lines: ~1 ms at ground level (estimated)
-
-Every sight line takes `AtmosphereSettings.steps` (8 at HIGH) samples, even
-across a few hundred metres of air to nearby ground, where the integrand
-barely changes. (The count is now a uniform, so the loop is no longer
-unrolled; that alone made HIGH frames ~2 ms faster at sea level.)
-
-- Choose the step count from the segment's length and vertical extent
-  relative to the scale heights: Mie's 1.2 km is the tight one. For example,
-  2 to 8 steps.
-- The planet's shadow is already found analytically along the ray (each
-  sample counts its lit share), so fewer samples do not bring the dusk
-  banding back.
-- Accept only if the colour error stays under 1/255 against 8 steps. Check
-  with images of the start, dusk and sunset poses.
+- **The whole chunk in C.** A chunk is ~8 ms: ~5 ms of native noise, ~3 ms
+  of numpy (low-band interpolation, normals, biome weights, vertex packing).
+  Porting `Planet.evaluate` and the rest would make it ~5 ms, at the price of
+  the planet's composition in two languages (stamps and paints still need a
+  bridge). Generation no longer limits refinement at 60 Hz, so only worth it
+  for slower machines or faster flight.
+- **Cloud tiles are still numpy** (~40 ms a tile, `clouds/noise.py`'s value
+  noise): the clouds' fill and their share of the pool. The same treatment as
+  the terrain noise would apply.
+- **The weather map in every worker** (0.6 s each, once, on its first cloud
+  tile): could be handed over (3 MB) instead of rebuilt.
+- **The LOD cadence at low frame rates.** A level waits for a pass 3 frames
+  after its upload (`select_every_on_upload`): 100 ms a level at 30 fps.
+  Time-based instead of frame-based would help slow machines; a pass every
+  frame and a deeper queue were within noise at 30 Hz.
 
 ## Savings with a cost
 

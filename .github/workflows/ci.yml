@@ -78,8 +78,8 @@ jobs:
           name: pure-wheel
           path: dist/*.whl
 
-  # One wheel per platform carrying the native terrain collision library
-  # (docs/source/native_build.md). The library doesn't use Python.h, so a single
+  # One wheel per platform carrying the native libraries, noise and terrain
+  # collision (docs/source/native_build.md). They don't use Python.h, so a single
   # py3-none-<platform> wheel serves every Python.
   build_wheels:
     if: github.event_name == 'push'
@@ -136,8 +136,9 @@ jobs:
         run: ./scripts/build_native.ps1
       - if: runner.os == 'Windows'
         run: |
-          python scripts/platform_wheel.py dist/*.whl \
-            src/world_builder/terrain/native/libterrain_collision-panda*.dll win_amd64 wheelhouse
+          python scripts/platform_wheel.py dist/*.whl win_amd64 wheelhouse \
+            src/world_builder/terrain/native/libwb_noise.dll \
+            src/world_builder/terrain/native/libterrain_collision-panda*.dll
 
       # macOS: clang, both architectures in one library, against the panda3d
       # wheel's universal2 libraries.
@@ -151,7 +152,7 @@ jobs:
 
   # Install each platform wheel in a clean venv and run the whole suite against
   # it: the wheel must carry everything the package needs, generated files
-  # (_version.py) and the native library included (no collision test skipped).
+  # (_version.py) and the native libraries included (no native test skipped).
   test_wheels:
     if: github.event_name == 'push'
     needs: build_wheels
@@ -201,14 +202,14 @@ jobs:
       - name: The library finds Panda's next to it
         if: runner.os == 'Linux'
         run: |
-          readelf -d "$RUNNER_TEMP"/venv/lib/python*/site-packages/world_builder/terrain/native/*.so > dynamic.txt
+          readelf -d "$RUNNER_TEMP"/venv/lib/python*/site-packages/world_builder/terrain/native/libterrain_collision-*.so > dynamic.txt
           grep -E 'NEEDED|PATH' dynamic.txt
           # The manylinux2014 linker writes RPATH, newer ones RUNPATH.
           grep -qE 'R(UN)?PATH.*\$ORIGIN/\.\./\.\./\.\./panda3d' dynamic.txt
       - name: The library finds Panda's next to it
         if: runner.os == 'macOS'
         run: |
-          LIB=$(echo "$RUNNER_TEMP"/venv/lib/python*/site-packages/world_builder/terrain/native/*.dylib)
+          LIB=$(echo "$RUNNER_TEMP"/venv/lib/python*/site-packages/world_builder/terrain/native/libterrain_collision-*.dylib)
           lipo -archs "$LIB"
           otool -L "$LIB"
           otool -l "$LIB" | grep -A2 LC_RPATH | tee rpaths.txt

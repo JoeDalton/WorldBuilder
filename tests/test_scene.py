@@ -26,6 +26,7 @@ from world_builder.depth import (
 )
 from world_builder.ocean import OceanSettings, aces_tonemap
 from world_builder.sky import Sky
+from world_builder.sky import sky as sky_module
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.workers import ChunkExecutor
@@ -171,7 +172,7 @@ def test_ocean_updates_and_mirrors_the_camera(window, ocean):
         method()
     mirrored = made.refl_cam.get_pos(made.base_node)
     np.testing.assert_allclose(tuple(mirrored), (10.0, 20.0, -30.0), atol=1e-4)
-    assert _input(made.ocean_node, "iTime")[0] == 1.5
+    assert made._frame_inputs["iTime"][0] == 1.5
     window.graphicsEngine.render_frame()
     made.update()  # the reflection texture is realized: the UV scale is set
     assert getattr(made, "_uv_scale_set", False)
@@ -241,12 +242,15 @@ def test_cloud_bins_never_tie(showbase):
         return manager.get_bin_sort(manager.find_bin(name))
 
     deck = sort(sphere.CLOUD_BIN)
-    shells = [sort(sphere._shell_bin(k)) for k in range(sphere.MAX_LAYERS - 1)]
+    shells = [sort(sphere._shell_bin(k)) for k in range(sphere.MAX_SHELLS)]
     flat = sort(field._CLOUD_BIN)
     assert all(20 < s < 30 for s in [deck, *shells])
     assert shells == sorted(shells, reverse=True) and len(set(shells)) == len(shells)
     assert deck < min(shells)
     assert flat not in [deck, *shells]
+    # The sky is drawn after the opaque ground and before every cloud.
+    sky_module._ensure_sky_bin()
+    assert 20 < sort(sky_module.SKY_BIN) < min(deck, flat)
 
 
 def test_ocean_light_and_settings(ocean):
@@ -609,7 +613,7 @@ def test_terrain_settings_apply_live(terrain):
 
 
 def test_terrain_caches_follow_their_settings(terrain):
-    """A lower RAM cap evicts on the next store, never a chunk the drawn
+    """A lower RAM cap evicts on the next update, never a chunk the drawn
     selection needs."""
     from dataclasses import replace
 

@@ -39,37 +39,44 @@ uniform vec4 uAtmoMie[MAX_ATMOSPHERES];
 uniform vec4 uAtmoExtra[MAX_ATMOSPHERES];
 
 const float ATMO_PI = 3.14159265;
+// A sight line takes every sample once it climbs this many Mie scale heights,
+// or is this many long (atmoSegment); fewer below. Measured against always
+// taking them all: within one 8-bit level of colour.
+const float ATMO_FULL_CLIMB = 2.0;
+const float ATMO_FULL_LENGTH = 32.0;
 
 // exp(y^2) erfc(y) for y >= 0, within 0.33 %.
-float atmoErfcx(float y) {
+vec2 atmoErfcx(vec2 y) {
     return 1.0 / (1.1635781 * y + sqrt(0.3707296 * y * y + 1.0));
 }
 
 // Chapman function for a ray leaving radius x (in scale heights) at an angle
 // whose cosine is >= 0: optical depth / (scale height * local density).
-float atmoChapman(float x, float cosChi) {
+vec2 atmoChapman(vec2 x, float cosChi) {
     return sqrt(1.5707963 * x) * atmoErfcx(sqrt(0.5 * x) * cosChi);
 }
 
 // Optical depth (density-weighted metres) from radius r toward a direction
-// at cosine cosChi from the vertical, through a layer of scale height H over
-// a ground of radius R. Huge if the planet is in the way. curve >= 1 takes
-// the slant through the air as over a planet that many times larger: the
-// same overhead, longer near the horizon (redder sunsets on a small planet;
+// at cosine cosChi from the vertical, through layers of scale heights H (x:
+// Rayleigh, y: Mie, which share everything but the scale height) over a
+// ground of radius R. Huge if the planet is in the way. curve >= 1 takes the
+// slant through the air as over a planet that many times larger: the same
+// overhead, longer near the horizon (redder sunsets on a small planet;
 // atmosphere.AtmosphereParams.sunset_radius).
-float atmoDepthToward(float r, float cosChi, float R, float H, float curve) {
-    float density = exp(-(r - R) / H);
-    float k = curve / H;
+vec2 atmoDepthToward(float r, float cosChi, float R, vec2 H, float curve) {
+    vec2 density = exp(-(r - R) / H);
+    vec2 k = curve / H;
     if (cosChi >= 0.0) {
         return H * density * atmoChapman(r * k, cosChi);
     }
     float sinChi = sqrt(max(0.0, 1.0 - cosChi * cosChi));
     float tangent = r * sinChi;  // closest approach to the centre
     if (tangent < R) {
-        return 1e9;
+        return vec2(1e9);
     }
-    // Both sides of the tangent point, minus the side behind the start.
-    return H * (2.0 * exp(-(tangent - R) / H) * atmoChapman(tangent * k, 0.0)
+    // Both sides of the tangent point, minus the side behind the start. At
+    // the tangent the ray is horizontal: Chapman is sqrt(pi x / 2) there.
+    return H * (2.0 * exp(-(tangent - R) / H) * sqrt(1.5707963 * (tangent * k))
                 - density * atmoChapman(r * k, -cosChi));
 }
 
@@ -158,7 +165,14 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
     float betaM = uAtmoScatter[i].a;
     float betaMExt = uAtmoMie[i].x;
 
-    steps = max(steps, 1);
+    // Fewer samples where the integrand barely changes: a sight line that
+    // climbs little and is short against the Mie scale height (the tighter
+    // one), such as to nearby ground.
+    float tLow = clamp(-dot(o, dir), t0, t1);  // closest to the centre
+    float climb = max(length(o + dir * t0), length(o + dir * t1))
+                - length(o + dir * tLow);
+    float span = max(climb / ATMO_FULL_CLIMB, (t1 - t0) / ATMO_FULL_LENGTH) / Hm;
+    steps = clamp(int(ceil(float(steps) * span)), min(2, steps), max(steps, 1));
     float ds = (t1 - t0) / float(steps);
     vec2 shadow = atmoShadow(o, dir, sunDir, R);
     float multiple = uAtmoExtra[i].x;
@@ -190,9 +204,8 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
         vec3 direct = vec3(0.0);
         if (lit > 0.0) {
             float curve = max(uAtmoExtra[i].y, 1.0);
-            float sunR = atmoDepthToward(rs, cosSun, R, Hr, curve);
-            float sunM = atmoDepthToward(rs, cosSun, R, Hm, curve);
-            direct = exp(-(betaR * (depthR + sunR) + betaMExt * (depthM + sunM))) * lit;
+            vec2 sun = atmoDepthToward(rs, cosSun, R, vec2(Hr, Hm), curve);
+            direct = exp(-(betaR * (depthR + sun.x) + betaMExt * (depthM + sun.y))) * lit;
         }
         // Light scattered more than once: a share of the sunlight, wherever
         // the sky above is lit (fading through twilight), seen through the
@@ -301,7 +314,6 @@ vec3 atmoSunlight(int i, vec3 p, vec3 sunDir) {
     float r = max(length(p), shape.x);
     float cosSun = dot(p, sunDir) / r;
     float curve = max(uAtmoExtra[i].y, 1.0);
-    float depthR = atmoDepthToward(r, cosSun, shape.x, shape.z, curve);
-    float depthM = atmoDepthToward(r, cosSun, shape.x, shape.w, curve);
-    return exp(-(uAtmoScatter[i].rgb * depthR + uAtmoMie[i].x * depthM));
+    vec2 depth = atmoDepthToward(r, cosSun, shape.x, shape.zw, curve);
+    return exp(-(uAtmoScatter[i].rgb * depth.x + uAtmoMie[i].x * depth.y));
 }

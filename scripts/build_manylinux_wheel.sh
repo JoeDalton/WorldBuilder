@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Turn the pure world_builder wheel into a manylinux wheel carrying the native
-# terrain collision library. Runs inside a pypa manylinux image, whose
+# libraries (noise, terrain collision). Runs inside a pypa manylinux image, whose
 # toolchain matches Panda3D's own wheels. See docs/source/native_build.md.
 #
 #   docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_<arch> \
@@ -9,7 +9,7 @@
 # arch: x86_64 or aarch64, the machine's (the wheel is tagged with it).
 #
 # The headers come from .cache/native (scripts/fetch_native_deps.sh, run on the
-# host beforehand, or fetched here). The library is Python-independent (ctypes,
+# host beforehand, or fetched here). The libraries are Python-independent (ctypes,
 # no Python.h), so the wheel is tagged py3-none-<platform>.
 set -euo pipefail
 
@@ -26,10 +26,11 @@ trap 'rm -rf "$WORK"' EXIT
 
 "$PYTHON" -m pip install -q "panda3d==$PANDA_VERSION" wheel
 "$HERE/scripts/build_native.sh" "$PYTHON"
-LIB=$(echo "$HERE"/src/world_builder/terrain/native/libterrain_collision-panda*.so)
-"$PYTHON" "$HERE/scripts/platform_wheel.py" "$PURE" "$LIB" "linux_$(uname -m)" "$WORK"
+NATIVE=$HERE/src/world_builder/terrain/native
+"$PYTHON" "$HERE/scripts/platform_wheel.py" "$PURE" "linux_$(uname -m)" "$WORK" \
+    "$NATIVE/libwb_noise.so" "$NATIVE"/libterrain_collision-panda*.so
 
-# Checks the library's glibc and libstdc++ symbol versions against the policy
+# Checks the libraries' glibc and libstdc++ symbol versions against the policy
 # and applies its tag. Panda's libraries come with the panda3d wheel: not
 # copied in.
 auditwheel repair --plat "$PLAT" -w "$OUT" \

@@ -11,6 +11,8 @@ import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import (
     ColorBlendAttrib,
+    CullBinManager,
+    DepthTestAttrib,
     Geom,
     GeomEnums,
     GeomNode,
@@ -39,6 +41,11 @@ from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 from world_builder.sky.starfield import NebulaStyle, StarCatalogue, Starfield
 
 SHADER_PATH = Path(__file__).parent / "shaders"
+#: The sky's cull bin: after the opaque bin (20), so its per-pixel atmosphere
+#: is computed only where no terrain was drawn (its vertices sit on the far
+#: plane, depth-tested), and before the clouds (``clouds.sphere``, 22-29).
+SKY_BIN = "sky"
+SKY_BIN_SORT = 21
 #: The sun's angular radius as drawn (about twice the real one: a disc that
 #: reads at any resolution), radians.
 SUN_ANGULAR_RADIUS = math.radians(0.55)
@@ -158,9 +165,10 @@ class Sky:
                 fragment=SHADER_PATH / "sky.frag",
             )
         )
-        self.node.set_bin("background", 0)
+        _ensure_sky_bin()
+        self.node.set_bin(SKY_BIN, 0)
         self.node.set_depth_write(False)
-        self.node.set_depth_test(False)
+        self.node.set_attrib(DepthTestAttrib.make(DepthTestAttrib.M_less_equal))
         self.node.set_light_off()
         self.node.set_two_sided(True)
         bind_defaults(self.node)
@@ -202,7 +210,7 @@ class Sky:
                 TextureStage.get_default(), TexGenAttrib.M_point_sprite
             )
             # Just after the sphere, added to it.
-            self.stars.set_bin("background", 1)
+            self.stars.set_bin(SKY_BIN, 1)
             self.stars.set_attrib(
                 ColorBlendAttrib.make(
                     ColorBlendAttrib.M_add,
@@ -353,3 +361,9 @@ def _sphere(segments: int, rings: int) -> GeomNode:
     node = GeomNode("sky")
     node.add_geom(geom)
     return node
+
+
+def _ensure_sky_bin() -> None:
+    manager = CullBinManager.get_global_ptr()
+    if manager.find_bin(SKY_BIN) == -1:
+        manager.add_bin(SKY_BIN, CullBinManager.BT_fixed, SKY_BIN_SORT)

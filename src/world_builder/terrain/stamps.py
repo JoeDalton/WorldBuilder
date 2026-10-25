@@ -296,7 +296,11 @@ def _paint_channels(path, _mtime_key, colors, tolerance, falloff, width) -> np.n
         channels[BIOMES.index(biome)] = np.maximum(channels[BIOMES.index(biome)], match)
     if falloff > 0.0:
         sigma = falloff / (width / rgb.shape[1])
+        # A paint fills one or two biomes: the others stay zero, blurred or not.
         channels = np.stack(
-            [ndimage.gaussian_filter(ch, sigma, mode="constant") for ch in channels]
+            [
+                ndimage.gaussian_filter(ch, sigma, mode="constant") if ch.any() else ch
+                for ch in channels
+            ]
         )
     return channels

@@ -8,7 +8,9 @@ graphics state). The ``thread`` and ``inline`` backends are kept for debugging
 and tests. The pool defaults to one worker per physical core but one
 (:func:`default_workers`), and its processes run at a lower priority
 (:data:`WORKER_NICENESS`), so generation takes only the CPU time the renderer
-leaves.
+leaves. They start with the pool, so their start-up (imports, the native
+noise library) overlaps the caller's own, rather than waiting for the first
+request.
 
 The executor keeps only a short queue (``max_inflight``), so it can follow a
 moving camera: each :meth:`ChunkExecutor.request` cancels queued work that is
@@ -25,6 +27,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import sys
 from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -42,6 +45,15 @@ MIN_WORKERS = 1
 #: Niceness added to worker processes: background generation yields the CPU
 #: to the render loop whenever both want it.
 WORKER_NICENESS = 10
+#: glibc's malloc settings for the worker processes (Linux). By default it maps
+#: and unmaps numpy's ~128 KB temporaries for every operation, so each one
+#: page-faults; kept, a numpy chunk took ~24 ms instead of ~40 (see
+#: docs/source/performance.md, §2). Set in the environment before the workers
+#: spawn (they read it at start), unless already set.
+WORKER_MALLOC_ENV = {
+    "MALLOC_MMAP_THRESHOLD_": "4194304",
+    "MALLOC_TRIM_THRESHOLD_": "67108864",
+}
 
 
 def usable_cpus() -> int:
@@ -137,12 +149,19 @@ class ChunkExecutor:
         self.max_inflight = max(1, max_inflight or 2 * self.workers)
         self.inline_budget = inline_budget
         if backend == "process":
+            if sys.platform.startswith("linux"):
+                for name, value in WORKER_MALLOC_ENV.items():
+                    os.environ.setdefault(name, value)
             self._pool = ProcessPoolExecutor(
                 max_workers=self.workers,
                 mp_context=multiprocessing.get_context("spawn"),
                 initializer=_lower_priority,
                 initargs=(niceness,),
             )
+            # Processes start on demand, one per submission: start them all
+            # now. Not counted as in flight.
+            for _ in range(self.workers):
+                self._pool.submit(_warm_up)
         elif backend == "thread":
             self._pool = ThreadPoolExecutor(max_workers=self.workers)
         elif backend == "inline":
@@ -279,6 +298,13 @@ def _unsent(ch: _Channel):
     queue would check that channel's pending set (resubmitting duplicates
     without end)."""
     return (key for key in ch.wanted if key not in ch.pending)
+
+
+def _warm_up() -> None:
+    """Worker-process start-up task: load what every chunk needs."""
+    from world_builder.terrain import noise
+
+    noise.native_noise()
 
 
 def _lower_priority(niceness: int) -> None:

@@ -20,6 +20,10 @@ once all of them (the ones not culled) are ready to draw, and until then the
 missing children are reported as wanted. Cracks between neighbours of
 different levels are left to the chunk skirts, so no 2:1 balancing is needed.
 
+What is wanted is ordered by benefit: ground with nothing drawn over it
+first (coarse first), then the chunks largest on screen (distance over size),
+those behind the view after the others when the view direction is given.
+
 The traversal runs on Python floats (numpy per node would be slower); the
 per-key geometry is memoised by :meth:`CubeGrid.box`.
 """
@@ -38,6 +42,12 @@ from world_builder.terrain.cubesphere import CubeGrid, Key
 UNKNOWN_BOUNDS = (-7000.0, 9000.0)
 #: Cached per-node geometry entries before the cache is reset.
 _GEOMETRY_CACHE_LIMIT = 200_000
+#: A wanted chunk behind the view counts as this many times farther. Only the
+#: order changes: turning still finds the ground, a little coarser for longer.
+BEHIND_PENALTY = 3.0
+#: Cosine of the angle off the view direction past which a chunk is behind it
+#: (about 107 degrees: the screen's corners and some margin are in view).
+_BEHIND_COS = -0.3
 
 
 @dataclass
@@ -104,6 +114,7 @@ class LodSelector:
         camera: ArrayLike,
         ready: Callable[[Key], bool],
         bounds: Callable[[Key], tuple[float, float] | None],
+        forward: ArrayLike | None = None,
     ) -> Selection:
         """One LOD pass.
 
@@ -114,6 +125,8 @@ class LodSelector:
             the same tuple object for a key while its bounds do not change
             (a dict's ``get`` does): the per-key geometry cache then
             recognises it by identity
+        :param forward: (3,) view direction in the planet frame, to want the
+            chunks in view first; None = no preference
         :returns: what to draw and what to generate
         """
         self._begin(camera)
@@ -128,14 +141,49 @@ class LodSelector:
             if not culled:
                 self._visit(root, box, distance, ready, bounds, selection, split_now)
         self._split = split_now
-        # Coarse first, so the world is covered before it is refined; nearer
-        # first within a level. Distances as measured in the traversal (with
-        # each key's own bounds): re-measuring with other bounds would evict
-        # the geometry cache entries the next pass needs.
-        distances = self._distances
-        selection.wanted.sort(key=lambda k: (-k[0], distances[k]))
-        selection.prefetch.sort(key=distances.__getitem__)
+        priority = self._priority(ready, forward)
+        selection.wanted.sort(key=priority)
+        selection.prefetch.sort(key=self._distances.__getitem__)
         return selection
+
+    def _priority(
+        self, ready: Callable[[Key], bool], forward: ArrayLike | None
+    ) -> Callable[[Key], tuple]:
+        """:returns: the sort key of wanted chunks, most urgent first.
+
+        Ground nothing covers yet (a root, or the child of a root not ready)
+        comes first, coarse first, so the world is covered before it is
+        refined. Every other wanted chunk refines one already drawn: the
+        largest on screen first (distance over size), those behind the view
+        as if farther. Distances as measured in the traversal (with each
+        key's own bounds): re-measuring with other bounds would evict the
+        geometry cache entries the next pass needs.
+        """
+        distances = self._distances
+        top = self.grid.max_level
+        size = self.grid.chunk_size
+        x, y, z = self._camera
+        if forward is not None:
+            fx, fy, fz = (float(c) for c in forward)
+            norm = math.sqrt(fx * fx + fy * fy + fz * fz) or 1.0
+            fx, fy, fz = fx / norm, fy / norm, fz / norm
+        radius = self.radius
+        box = self.grid.box
+
+        def key(k: Key) -> tuple:
+            level = k[0]
+            if level == top or not ready(CubeGrid.parent(k)):
+                return (0, -level, distances[k])
+            score = distances[k] / size(level)
+            if forward is not None and score > 1.0:
+                ux, uy, uz = box(k).up
+                dx, dy, dz = ux * radius - x, uy * radius - y, uz * radius - z
+                along = dx * fx + dy * fy + dz * fz
+                if along < _BEHIND_COS * math.sqrt(dx * dx + dy * dy + dz * dz):
+                    score *= BEHIND_PENALTY
+            return (1, score, 0.0)
+
+        return key
 
     def distance(self, key: Key, box: tuple[float, float]) -> float:
         """:returns: 3D distance from the camera of the last pass to the node's

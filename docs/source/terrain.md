@@ -24,7 +24,7 @@ The demo, the shots, the preview and the bench take `--radius` (metres).
 | Layer | Modules | Notes |
 |---|---|---|
 | Planet definition | `noise`, `chart`, `planet`, `biomes`, `stamps`, `level` | Pure functions of a **direction on the unit sphere**, in float64 numpy. The renderer and the collision queries read the same planet. |
-| Chunks | `cubesphere`, `chunkgen`, `quadtree`, `workers` | The six faces of a cube pushed onto the sphere, each a quadtree of tiles with 65×65 vertices plus skirts. Generated coarse-first in spawned worker processes. |
+| Chunks | `cubesphere`, `chunkgen`, `quadtree`, `workers` | The six faces of a cube pushed onto the sphere, each a quadtree of tiles with 65×65 vertices plus skirts. Generated in spawned worker processes: uncovered ground first (coarse first), then the tiles largest on screen, in view before behind. |
 | Rendering | `mesh`, `materials`, `terrain`, `shaders/`, `world_builder.depth` | Panda3D. True geometry, camera-relative placement, depth split between two cameras, biome texture arrays, sunlight through the planet's own air, the ocean's tonemap, and every atmosphere along the sight line (`world_builder.atmosphere`). |
 | Queries | `query` | `height_at`, `altitude`, `normal_at`, `sphere_contact`, `segment_intersect`, `material_at` on planet-frame positions, all on the same triangles that are drawn. |
 | Collision | `collision`, `native` | `Terrain.enable_collision`: a native Panda collision solid over the drawn chunks, for a game's `CollisionTraverser`. |

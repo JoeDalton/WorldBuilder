@@ -41,6 +41,12 @@ from world_builder.clouds.noise import (
 )
 from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 
+#: Most billboard shells a planet's clouds take: one cull bin each between
+#: the opaque and transparent bins (``sphere._SHELL_BIN_SORTS``), which the
+#: sky, the deck and the flat field share. Their layers fit ``MAX_LAYERS``.
+MAX_SHELLS = 6
+assert MAX_SHELLS < MAX_LAYERS
+
 
 class CloudType(Enum):
     """The preset cloud types: the keys of :data:`PRESETS`."""
@@ -269,7 +275,7 @@ class CloudSettings(QualitySettings):
         "Billboard distance",
         REBUILD,
         unit="shells",
-        range=(1, MAX_LAYERS - 1),
+        range=(1, MAX_SHELLS),
         advanced=True,
         help="Billboard shells, each twice as far as the last, before the flat "
         "deck takes over.",

@@ -28,7 +28,7 @@ from world_builder.terrain.planet import (
     Planet,
     scaled_params,
 )
-from world_builder.terrain.quadtree import LodSelector
+from world_builder.terrain.quadtree import UNKNOWN_BOUNDS, LodSelector
 from world_builder.terrain.workers import ChunkExecutor
 
 R = 600e3
@@ -288,6 +288,25 @@ def test_parent_interpolation_keeps_even_samples():
     np.testing.assert_allclose(parent_interpolation(plane), plane)
 
 
+def test_pchip_matches_scipy():
+    """The continent curve's interpolation, as scipy's PchipInterpolator."""
+    from scipy.interpolate import PchipInterpolator
+
+    from world_builder.terrain.planet import ElevationParams, Pchip
+
+    rng = np.random.default_rng(0)
+    curves = [np.array(ElevationParams().continent_curve), np.array([[0, 1], [1, 3]])]
+    for _ in range(50):
+        x = np.unique(rng.uniform(-1.0, 1.0, rng.integers(3, 10)))
+        curves.append(np.column_stack([x, 1000.0 * rng.normal(size=len(x))]))
+    for curve in curves:
+        x, y = curve[:, 0], curve[:, 1]
+        q = np.linspace(x[0], x[-1], 501)
+        np.testing.assert_allclose(
+            Pchip(x, y)(q), PchipInterpolator(x, y)(q), rtol=1e-12, atol=1e-9
+        )
+
+
 # ── LOD selection ──────────────────────────────────────────────────────────────
 
 GRID = grid_for(R)
@@ -427,6 +446,65 @@ def test_selection_keeps_and_prefetches_every_child_of_split_nodes():
     )
     assert set(partial.prefetch) == culled_children - drawable
     assert partial.draw == everything.draw
+
+
+def test_selection_wants_uncovered_ground_first_then_the_nearest_by_size():
+    camera = camera_at(40.0, 20.0, 100.0)
+    under = _root_under(camera)
+    # Every root ready but the one under the camera; the others' children too.
+    ready = set(_every_key_down_to(GRID.max_level - 1)) - {under}
+    ready -= set(CubeGrid.children(under))
+    selector = LodSelector(GRID)
+    wanted = selector.select(
+        camera, ready=ready.__contains__, bounds=lambda k: None
+    ).wanted
+    uncovered = [k[0] == GRID.max_level or CubeGrid.parent(k) == under for k in wanted]
+    assert uncovered[0] and not uncovered[-1]
+    assert uncovered == sorted(uncovered, reverse=True)  # all uncovered first
+    covered = [k for k, u in zip(wanted, uncovered) if not u]
+    ratios = [
+        selector.distance(k, UNKNOWN_BOUNDS) / GRID.chunk_size(k[0]) for k in covered
+    ]
+    assert ratios == sorted(ratios)
+
+
+def test_selection_wants_ground_in_view_first():
+    camera = camera_at(40.0, 20.0, 300.0)
+    ready = set(_every_key_down_to(4))
+    east = TangentFrame.at(40.0, 20.0).east
+    for forward in (east, -east):
+        wanted = (
+            LodSelector(GRID)
+            .select(
+                camera,
+                ready=ready.__contains__,
+                bounds=lambda k: None,
+                forward=forward,
+            )
+            .wanted
+        )
+        ahead = [
+            float((np.array(GRID.box(k).up) * R - camera) @ forward) > 0.0
+            for k in wanted
+        ]
+        # More of the first third is in view than of the last third.
+        third = len(ahead) // 3
+        assert np.mean(ahead[:third]) > np.mean(ahead[-third:])
+
+
+def _every_key_down_to(level):
+    keys = list(GRID.roots())
+    out = set(keys)
+    while keys and keys[0][0] > level:
+        keys = [c for k in keys for c in CubeGrid.children(k)]
+        out.update(keys)
+    return out
+
+
+def _root_under(camera):
+    up = np.asarray(camera) / np.linalg.norm(camera)
+    face, i, j, _, _ = GRID.locate(up[None, :], GRID.max_level)
+    return (GRID.max_level, int(face[0]), int(i[0]), int(j[0]))
 
 
 def test_min_level_drops_the_finest_levels():

@@ -59,7 +59,9 @@ from panda3d.core import (
     LVecBase4f,
     PlaneNode,
     PTA_float,
+    PTA_LMatrix4f,
     PTA_LVecBase2f,
+    PTA_LVecBase3f,
     SamplerState,
     Shader,
     Texture,
@@ -202,7 +204,7 @@ class OceanSettings(QualitySettings):
         help="The sea reflection's resolution, as a fraction of the view's.",
     )
     reflection_fov_scale: float = knob(
-        1.4,
+        1.1,
         "Reflection margin",
         unit="x",
         range=(1.0, 2.0),
@@ -645,11 +647,24 @@ class Ocean:
             self._make_mesh(settings.swell_grid_subdivs)
         )
         self.ocean_node.setShader(shader)
-        self.ocean_node.setShaderInput("iTime", 0.0)
-        self.ocean_node.setShaderInput("iCameraPos", LVecBase3f(0, 0, 20))
-        self.ocean_node.setShaderInput("uCamForward", LVecBase3f(0, 1, 0))
-        self.ocean_node.setShaderInput("uPixelAngle", 0.001)
-        self.ocean_node.setShaderInput("uModelMatrix", LMatrix4f.identMat())
+        # Rewritten every frame (update): arrays bound once and written in
+        # place, so the node's render state is not rebuilt each frame.
+        frame = {
+            "iTime": PTA_float.empty_array(1),
+            "iCameraPos": PTA_LVecBase3f.empty_array(1),
+            "uCamForward": PTA_LVecBase3f.empty_array(1),
+            "uPixelAngle": PTA_float.empty_array(1),
+            "uModelMatrix": PTA_LMatrix4f.empty_array(1),
+            "uReflMVP": PTA_LMatrix4f.empty_array(1),
+        }
+        frame["iCameraPos"][0] = LVecBase3f(0, 0, 20)
+        frame["uCamForward"][0] = LVecBase3f(0, 1, 0)
+        frame["uPixelAngle"][0] = 0.001
+        frame["uModelMatrix"][0] = LMatrix4f.identMat()
+        frame["uReflMVP"][0] = LMatrix4f.identMat()
+        for name, array in frame.items():
+            self.ocean_node.setShaderInput(name, array)
+        self._frame_inputs = frame
         self.ocean_node.setShaderInput("iWaterColor", water_color)
         self.ocean_node.setShaderInput("iWaterLight", LVecBase3f(1.0, 1.0, 1.0))
         self._water_color = LVecBase3f(water_color)
@@ -673,7 +688,6 @@ class Ocean:
         self.ocean_node.setShaderInput("uSwellShallow", float(swell_shallow))
         self.ocean_node.setShaderInput("uSwellDeep", float(swell_deep))
         self._apply_live(settings)
-        self.ocean_node.setShaderInput("uReflMVP", LMatrix4f.identMat())
         self.ocean_node.setShaderInput("uReflUVScale", uv_scale)
         # Geometric-swell prototype: vertex-shader displacement (off by default).
         self.ocean_node.setShaderInput("uGeometricSwell", 1 if geometric_swell else 0)
@@ -743,17 +757,15 @@ class Ocean:
         # The wave pattern is anchored in world space (shader reads world
         # position), so sliding the plane introduces no motion artifacts.
         self.ocean_node.setPos(camera_pos.x, camera_pos.y, 0.0)
-        self.ocean_node.setShaderInput(
-            "uModelMatrix", self.ocean_node.getMat(self.base_node)
+        frame = self._frame_inputs
+        frame["uModelMatrix"][0] = self.ocean_node.getMat(self.base_node)
+        frame["iTime"][0] = current_time
+        frame["iCameraPos"][0] = LVecBase3f(camera_pos)
+        frame["uCamForward"][0] = LVecBase3f(
+            self.game.app.camera.getQuat(self.base_node).getForward()
         )
-        self.ocean_node.setShaderInput("iTime", current_time)
-        self.ocean_node.setShaderInput("iCameraPos", camera_pos)
-        self.ocean_node.setShaderInput(
-            "uCamForward",
-            self.game.app.camera.getQuat(self.base_node).getForward(),
-        )
-        self.ocean_node.setShaderInput("uPixelAngle", self._pixel_angle(fov.y))
-        self.ocean_node.setShaderInput("uReflMVP", mvp)
+        frame["uPixelAngle"][0] = self._pixel_angle(fov.y)
+        frame["uReflMVP"][0] = mvp
         self.seabed.update((camera_pos.x, camera_pos.y))
 
     def set_atmosphere_frame(

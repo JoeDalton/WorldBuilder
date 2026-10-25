@@ -279,6 +279,40 @@ def test_terrain_reports_loading(showbase, moon_spec):
         executor.shutdown()
 
 
+def test_uploads_are_shown_a_few_frames_later_whenever_they_land(
+    showbase, moon_spec, monkeypatch
+):
+    """Regression (#20): an upload landing one frame after a pass waited for
+    the camera to move or the 15-frame fallback, not the 3 frames meant."""
+    from world_builder.terrain.terrain import Terrain, TerrainSettings
+
+    executor = ChunkExecutor(backend="inline", inline_budget=64)
+    terrain = Terrain(
+        showbase.render,
+        moon_spec,
+        executor=executor,
+        settings=TerrainSettings(min_level=7),
+    )
+    try:
+        camera = TangentFrame.at(30.0, 20.0).up * (terrain.radius + 2000.0)
+        terrain.update(camera)  # the first pass
+        passes = []
+        select = terrain._select
+        monkeypatch.setattr(
+            terrain, "_select", lambda cam: (passes.append(terrain._frame), select(cam))
+        )
+        first = terrain._frame
+        uploads = iter([1])  # one upload, in the frame after the pass
+        monkeypatch.setattr(terrain, "_upload", lambda: next(uploads, 0))
+        for _ in range(6):
+            terrain.update(camera)
+        every = TerrainSettings().select_every_on_upload
+        assert passes == [first + every]
+    finally:
+        terrain.destroy()
+        executor.shutdown()
+
+
 # ── pool size ──────────────────────────────────────────────────────────────────
 
 

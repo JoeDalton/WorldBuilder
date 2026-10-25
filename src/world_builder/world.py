@@ -633,6 +633,15 @@ class World:
             return np.zeros(3)
         return np.array(camera.get_pos(self.app.render), dtype=np.float64)
 
+    def camera_forward(self) -> np.ndarray | None:
+        """:returns: the camera's view direction (render's axes are the
+        world's), or None without a camera"""
+        camera = getattr(self.app, "camera", None)
+        if camera is None:
+            return None
+        f = camera.get_quat(self.app.render).get_forward()
+        return np.array([f.x, f.y, f.z])
+
     def depth_ranges(self, origin_world: ArrayLike) -> tuple[float, float]:
         """Split and far distances for :class:`SplitDepthCameras` this
         frame: the split follows the nearest ground, the far plane reaches
@@ -744,9 +753,10 @@ class World:
         camera_render = self.camera_render()
         camera = np.asarray(origin_world, dtype=np.float64) + camera_render
         self.camera_world = camera
+        forward = self.camera_forward()
 
         for body in self.bodies:
-            body.terrain.update(camera, camera_render)
+            body.terrain.update(camera, camera_render, camera_forward=forward)
         self.atmospheres.update(camera)
         if self.sky is not None:
             if far is None:

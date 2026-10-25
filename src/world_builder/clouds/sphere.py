@@ -81,6 +81,7 @@ from panda3d.core import (
 
 from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.clouds.cloud import (
+    MAX_SHELLS,
     PRESETS,
     CloudSettings,
     CloudType,
@@ -123,14 +124,16 @@ if TYPE_CHECKING:
     from world_builder.terrain.workers import ChunkExecutor
 
 _SHADERS = Path(__file__).parent / "shaders"
-#: Cull bins, between opaque (20) and transparent (30): the deck's first,
-#: then one back-to-front bin per shell, the coarsest first.
+#: Cull bins, between opaque (20) and transparent (30), after the sky's (21,
+#: ``sky.SKY_BIN_SORT``): the deck's first, then one back-to-front bin per
+#: shell, the coarsest first.
 CLOUD_BIN = "cloud_sphere"
-_CLOUD_BIN_SORT = 21
-#: The shells' bin sorts, shell 0 (the nearest, drawn last) first. 25 is
-#: skipped: it is the flat field's bin (``field._CLOUD_BIN_SORT``), and a tie
-#: would leave the two kinds' order undefined in one scene.
-_SHELL_BIN_SORTS = (29, 28, 27, 26, 24, 23, 22)
+_CLOUD_BIN_SORT = 22
+#: The shells' bin sorts, shell 0 (the nearest, drawn last) first: at most
+#: :data:`cloud.MAX_SHELLS` shells. 25 is skipped: it is the flat field's bin
+#: (``field._CLOUD_BIN_SORT``), and a tie would leave the two kinds' order
+#: undefined in one scene.
+_SHELL_BIN_SORTS = (29, 28, 27, 26, 24, 23)
 #: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box),
 #: rounded to the nearest level of the planet's grid.
 BASE_TILE_SIZE = 8000.0
@@ -373,7 +376,7 @@ def _ensure_bin():
     manager = CullBinManager.get_global_ptr()
     if manager.find_bin(CLOUD_BIN) == -1:
         manager.add_bin(CLOUD_BIN, CullBinManager.BT_back_to_front, _CLOUD_BIN_SORT)
-    for shell in range(MAX_LAYERS - 1):
+    for shell in range(MAX_SHELLS):
         if manager.find_bin(_shell_bin(shell)) == -1:
             manager.add_bin(
                 _shell_bin(shell),
@@ -489,7 +492,9 @@ class _Tile:
     #: farthest particle reach from the centre, metres
     reach: float = 0.0
     #: camera position (planet frame) of the last re-sort; None = never
-    sorted_from: np.ndarray | None = None
+    sorted_from: tuple[float, float, float] | None = None
+    #: the tile's centre (planet frame), as floats for the per-frame scoring
+    centre: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 class SphericalClouds:
@@ -684,6 +689,8 @@ class SphericalClouds:
         self._wanted: list[Key] = []
         self._shown: set[Key] = set()
         self._ready: dict[Key, CloudTile] = {}
+        self._pixel_angle = 0.001
+        self._sky_light: float | None = None
         self._origin = None
         self._camera = np.zeros(3)
         self._last_select = None
@@ -858,7 +865,9 @@ class SphericalClouds:
 
         :param strength: the new ambient sky weight
         """
-        self.root.set_shader_input("skyStrength", float(strength))
+        if strength != self._sky_light:  # a demo restates it every frame
+            self._sky_light = strength
+            self.root.set_shader_input("skyStrength", float(strength))
 
     def set_pixel_angle(self, radians: float) -> None:
         """The angle one pixel spans (vertical fov / window height): how far
@@ -867,7 +876,11 @@ class SphericalClouds:
 
         :param radians: the angle per pixel
         """
-        self.root.set_shader_input("uPixelAngle", float(radians))
+        # Set every frame by World: a new value only when it changes, or the
+        # root's render state (over every tile) is rebuilt each frame.
+        if radians != self._pixel_angle:
+            self._pixel_angle = radians
+            self.root.set_shader_input("uPixelAngle", float(radians))
 
     def update(
         self, camera_world: ArrayLike, camera_render: ArrayLike = (0.0, 0.0, 0.0)
@@ -1013,13 +1026,15 @@ class SphericalClouds:
                     np.sqrt((p[:, 0:3] ** 2).sum(axis=1).max()) + p[:, 3].max()
                 )
             node.set_pos(*(tile.centre - self._origin))
-            self._tiles[key] = _Tile(node, tris, tile, reach)
+            centre = tuple(float(c) for c in tile.centre)
+            self._tiles[key] = _Tile(node, tris, tile, reach, centre=centre)
             if tris is not None:
                 node.reparent_to(self.tiles_root)
                 self._shown.add(key)
             count += 1
         # Ready tiles nobody wants any more.
-        for key in [k for k in self._ready if k not in set(self._wanted)]:
+        wanted = set(self._wanted)
+        for key in [k for k in self._ready if k not in wanted]:
             del self._ready[key]
 
     def _resort(self, cam) -> None:
@@ -1032,24 +1047,25 @@ class SphericalClouds:
         reads as shadows sliding across it. New tiles come first.
         """
         stale = []
+        here = tuple(float(c) for c in cam)  # math.dist: no numpy per tile
         for key in self._shown:
             tile = self._tiles[key]
             if tile.tris is None:
                 continue
             if tile.sorted_from is None:
-                stale.append((np.inf, key))
+                stale.append((math.inf, key))
                 continue
-            moved = float(np.linalg.norm(cam - tile.sorted_from))
+            moved = math.dist(here, tile.sorted_from)
             if moved == 0.0:
                 continue
-            gap = float(np.linalg.norm(tile.data.centre - cam)) - tile.reach
+            gap = math.dist(tile.centre, here) - tile.reach
             stale.append((moved / max(gap, 0.05 * tile.reach, 1.0), key))
         stale.sort(reverse=True)
         for score, key in stale[: self._settings.resorts_per_frame]:
             if score < 1e-3:  # a tenth of a degree: nothing visible changes
                 break
             tile = self._tiles[key]
-            tile.sorted_from = cam.copy()
+            tile.sorted_from = here
             p = tile.data.particles
             offset = tile.data.centre - cam
             distance = np.einsum("ij,ij->i", p[:, 0:3] + offset, p[:, 0:3] + offset)

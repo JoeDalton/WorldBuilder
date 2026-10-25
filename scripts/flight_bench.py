@@ -37,8 +37,11 @@ point, heading west):
 
 Each starts from a settled view, so it measures flying, not the initial fill.
 Per flight it prints the frame count, mean fps, frame time (median, p95,
-max), the demo's update (median, p95), chunks generated per second and the
-mean backlog (chunks wanted).
+max), the demo's update (median, p95), chunks generated per second, the
+mean backlog (chunks wanted), the refinement lag (from a chunk first
+wanted to it drawn: median and p95, and the median of the three finest
+levels, the ground nearest the camera) and the finest level drawn, on
+average over the frames (lower is sharper).
 """
 
 from __future__ import annotations
@@ -122,8 +125,10 @@ def run(demo: TerrainDemo, flight: str, seconds: float, profile: bool) -> None:
     _release(demo)
     _settle(demo)
     _start(demo, flight)
-    frames, updates, backlog = [], [], []
+    frames, updates, backlog, finest = [], [], [], []
     generated = sum(body.terrain.stats["generated"] for body in demo.bodies)
+    for body in demo.bodies:
+        body.terrain.refine_lags.clear()
     original = demo._update
 
     def timed(task) -> int:
@@ -143,6 +148,7 @@ def run(demo: TerrainDemo, flight: str, seconds: float, profile: bool) -> None:
         now = time.perf_counter()
         frames.append(now - last)
         backlog.append(sum(body.terrain.stats["wanted"] for body in demo.bodies))
+        finest.append(demo.body.terrain.stats["finest"])
         last = now
         if (
             flight == "descent"
@@ -165,12 +171,17 @@ def run(demo: TerrainDemo, flight: str, seconds: float, profile: bool) -> None:
     generated = sum(body.terrain.stats["generated"] for body in demo.bodies) - generated
     f = np.array(frames[3:]) * 1e3
     u = np.array(updates[3:]) * 1e3
+    lagged = [lag for b in demo.bodies for lag in b.terrain.refine_lags] or [(0, 0.0)]
+    lags = np.array([t for _, t in lagged]) * 1e3
+    near = np.array([t for level, t in lagged if level <= 2] or [0.0]) * 1e3
     print(
         f"{flight:<8} {len(f):5d} frames  fps {1e3 / np.mean(f):5.1f}   "
         f"frame ms median {np.median(f):5.1f} p95 {np.percentile(f, 95):5.1f} "
         f"max {f.max():6.1f}   demo update ms median {np.median(u):5.1f} "
         f"p95 {np.percentile(u, 95):5.1f}   chunks/s {generated / elapsed:4.0f}"
         f"  backlog mean {np.mean(backlog):4.0f}"
+        f"   lag ms median {np.median(lags):5.0f} p95 {np.percentile(lags, 95):5.0f}"
+        f" levels 0-2 {np.median(near):5.0f}   finest level {np.mean(finest):4.1f}"
     )
     if profiler:
         out = io.StringIO()

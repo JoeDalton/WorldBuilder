@@ -10,13 +10,27 @@ of cells per octave and must never visibly tile.
 Each octave of :func:`fbm` / :func:`ridged` is sampled in its own randomly
 rotated and offset frame, so octaves do not share lattice axes (which shows as
 grid-aligned ridges) and the planet's poles are not special.
+
+numpy pays ~150 operations per octave, so :func:`fbm` and :func:`ridged` sum
+their octaves in a small C library (``native/noise.c``) when it is built:
+about 5x faster, the same noise (sums differ from numpy's in the last bits).
+The wheels ship it; ``invoke native`` builds it in a source checkout. Without
+it the numpy code below runs. ``WORLD_BUILDER_NO_NATIVE_NOISE`` forces numpy,
+``WORLD_BUILDER_REQUIRE_NATIVE`` makes a missing library an error.
 """
 
 from __future__ import annotations
 
+import ctypes
 import functools
+import logging
+import os
+import sys
+from pathlib import Path
 
 import numpy as np
+
+LOGGER = logging.getLogger(__name__)
 
 # Skew / unskew factors of the 3D simplex lattice.
 _F3 = 1.0 / 3.0
@@ -224,6 +238,182 @@ def _octave(points: np.ndarray, frequency: float, seed: int, index: int) -> np.n
     return simplex3(points @ (rotation.T * frequency) + offset, seed + index)
 
 
+class _Plan:
+    """The octaves one :func:`fbm` or :func:`ridged` call evaluates.
+
+    :ivar octaves: (index, frequency, weight) per evaluated octave, the
+        weight multiplying its signal in the sum
+    :ivar norm: what the sum is divided by
+    :ivar frames: (len(octaves), 12) for the native library: each octave's
+        ``rotation.T * frequency`` (row-major), then its offset
+    :ivar seeds: (len(octaves),) uint64, mixed
+    :ivar weights: (len(octaves),) float64
+    """
+
+    def __init__(self, seed: int, octaves: list[tuple[int, float, float]], norm: float):
+        self.octaves = octaves
+        self.norm = norm
+        self.frames = np.zeros((len(octaves), 12))
+        for row, (index, frequency, _) in enumerate(octaves):
+            rotation, offset = octave_frame(seed, index)
+            self.frames[row, :9] = (rotation.T * frequency).ravel()
+            self.frames[row, 9:] = offset
+        self.seeds = np.array(
+            [_mix_seed(seed + index) for index, _, _ in octaves], dtype=np.uint64
+        )
+        self.weights = np.array([weight for _, _, weight in octaves])
+
+
+@functools.lru_cache(maxsize=1024)
+def _fbm_plan(
+    wavelength: float,
+    octaves: int,
+    seed: int,
+    lacunarity: float,
+    gain: float,
+    min_wavelength: float | None,
+) -> _Plan:
+    max_frequency = None if min_wavelength is None else 1.0 / min_wavelength
+    evaluated = []
+    frequency = 1.0 / wavelength
+    for index in range(octaves):
+        weight = octave_weight(frequency, max_frequency)
+        if weight <= 0.0:
+            break
+        evaluated.append((index, frequency, gain**index * weight))
+        frequency *= lacunarity
+    # The full amplitude sum, skipped octaves included, so every level shares
+    # one normalisation.
+    norm = sum(gain**index for index in range(octaves))
+    return _Plan(seed, evaluated, norm)
+
+
+@functools.lru_cache(maxsize=1024)
+def _ridged_plan(
+    wavelength: float,
+    octaves: int,
+    seed: int,
+    lacunarity: float,
+    persistence: float,
+    min_wavelength: float | None,
+) -> _Plan:
+    max_frequency = None if min_wavelength is None else 1.0 / min_wavelength
+    frequency = 1.0 / wavelength
+    evaluated = [(0, frequency, 1.0)]
+    amplitude, norm = 1.0, 1.0
+    for index in range(1, octaves):
+        frequency *= lacunarity
+        amplitude *= persistence
+        norm += amplitude
+        # An octave of zero weight adds nothing, and leaves the signal feeding
+        # the next one as it was.
+        weight = octave_weight(frequency, max_frequency)
+        if weight > 0.0:
+            evaluated.append((index, frequency, amplitude * weight))
+    return _Plan(seed, evaluated, norm)
+
+
+# ── native library ────────────────────────────────────────────────────────────
+
+#: Interface version of the native library (``WB_NOISE_ABI`` in noise.c).
+_NATIVE_ABI = 1
+_SUFFIX = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
+#: Where the native noise library is built and shipped. Found by path: the
+#: ``native`` package's own imports lead back here.
+NATIVE_LIBRARY = Path(__file__).parent / "native" / f"libwb_noise{_SUFFIX}"
+
+
+class _NativeNoise:
+    """ctypes binding of ``native/noise.c``."""
+
+    def __init__(self, lib: ctypes.CDLL):
+        ptr, i64, i32, f64 = (
+            ctypes.c_void_p,
+            ctypes.c_int64,
+            ctypes.c_int32,
+            ctypes.c_double,
+        )
+        lib.wb_simplex3.argtypes = [ptr, i64, ctypes.c_uint64, ptr]
+        lib.wb_fbm.argtypes = [ptr, i64, i32, ptr, ptr, ptr, ptr]
+        lib.wb_ridged.argtypes = [ptr, i64, i32, ptr, ptr, ptr, f64, f64, ptr]
+        for function in (lib.wb_simplex3, lib.wb_fbm, lib.wb_ridged):
+            function.restype = None
+        self._lib = lib
+
+    def simplex3(self, points: np.ndarray, seed: np.uint64) -> np.ndarray:
+        points = np.ascontiguousarray(points, dtype=np.float64)
+        out = np.empty(len(points))
+        self._lib.wb_simplex3(
+            points.ctypes.data, len(points), int(seed), out.ctypes.data
+        )
+        return out
+
+    def fbm(self, points: np.ndarray, plan: _Plan) -> np.ndarray:
+        """:returns: the plan's weighted sum of octaves, not normalised"""
+        points = np.ascontiguousarray(points, dtype=np.float64)
+        out = np.empty(len(points))
+        self._lib.wb_fbm(
+            points.ctypes.data,
+            len(points),
+            len(plan.weights),
+            plan.frames.ctypes.data,
+            plan.seeds.ctypes.data,
+            plan.weights.ctypes.data,
+            out.ctypes.data,
+        )
+        return out
+
+    def ridged(
+        self, points: np.ndarray, plan: _Plan, offset: float, gain: float
+    ) -> np.ndarray:
+        """:returns: the ridged sum over the plan's octaves, not normalised"""
+        points = np.ascontiguousarray(points, dtype=np.float64)
+        out = np.empty(len(points))
+        self._lib.wb_ridged(
+            points.ctypes.data,
+            len(points),
+            len(plan.weights),
+            plan.frames.ctypes.data,
+            plan.seeds.ctypes.data,
+            plan.weights.ctypes.data,
+            offset,
+            gain,
+            out.ctypes.data,
+        )
+        return out
+
+
+@functools.cache
+def _native() -> _NativeNoise | None:
+    """:returns: the native noise library, or None to use numpy"""
+    if os.environ.get("WORLD_BUILDER_NO_NATIVE_NOISE"):
+        return None
+    if not NATIVE_LIBRARY.exists():
+        problem = f"{NATIVE_LIBRARY.name} is not built"
+    else:
+        try:
+            lib = ctypes.CDLL(str(NATIVE_LIBRARY))
+        except OSError as error:
+            problem = f"cannot load {NATIVE_LIBRARY.name}: {error}"
+        else:
+            if lib.wb_noise_abi() == _NATIVE_ABI:
+                return _NativeNoise(lib)
+            problem = f"{NATIVE_LIBRARY.name} is out of date"
+    message = (
+        f"{problem}: noise runs in numpy, terrain generation is about 3x "
+        "slower. Build it with `invoke native` (docs/source/native_build.md)."
+    )
+    if os.environ.get("WORLD_BUILDER_REQUIRE_NATIVE"):
+        raise RuntimeError(message)
+    LOGGER.warning(message)
+    return None
+
+
+def native_noise() -> bool:
+    """:returns: whether the native noise library is in use"""
+    return _native() is not None
+
+
 def fbm(
     points: np.ndarray,
     wavelength: float,
@@ -246,19 +436,14 @@ def fbm(
     :returns: (N,) in about [-1, 1] (normalised by the full amplitude sum, so
         band limiting only removes detail and never rescales the field)
     """
-    max_frequency = None if min_wavelength is None else 1.0 / min_wavelength
+    plan = _fbm_plan(wavelength, octaves, seed, lacunarity, gain, min_wavelength)
+    native = _native()
+    if native is not None:
+        return native.fbm(points, plan) / plan.norm
     total = np.zeros(len(points))
-    frequency = 1.0 / wavelength
-    for index in range(octaves):
-        weight = octave_weight(frequency, max_frequency)
-        if weight <= 0.0:
-            break
-        total += (gain**index * weight) * _octave(points, frequency, seed, index)
-        frequency *= lacunarity
-    # The full amplitude sum, skipped octaves included, so every level shares
-    # one normalisation.
-    norm = sum(gain**index for index in range(octaves))
-    return total / norm
+    for index, frequency, weight in plan.octaves:
+        total += weight * _octave(points, frequency, seed, index)
+    return total / plan.norm
 
 
 def ridged(
@@ -288,25 +473,23 @@ def ridged(
     :param min_wavelength: octaves shorter than this are faded out
     :returns: (N,) in about [0, 1]
     """
-    max_frequency = None if min_wavelength is None else 1.0 / min_wavelength
-    frequency = 1.0 / wavelength
+    plan = _ridged_plan(
+        wavelength, octaves, seed, lacunarity, persistence, min_wavelength
+    )
+    native = _native()
+    if native is not None:
+        return native.ridged(points, plan, offset, gain) / plan.norm
+    (_, frequency, _), *rest = plan.octaves
     signal = offset - np.abs(_octave(points, frequency, seed, 0))
     signal *= signal
     total = signal.copy()
-    amplitude, norm = 1.0, 1.0
-    for index in range(1, octaves):
-        frequency *= lacunarity
-        amplitude *= persistence
-        norm += amplitude
-        weight = octave_weight(frequency, max_frequency)
-        if weight <= 0.0:
-            continue
+    for index, frequency, weight in rest:
         feed = np.clip(signal * gain, 0.0, 1.0)
         signal = offset - np.abs(_octave(points, frequency, seed, index))
         signal *= signal
         signal *= feed
-        total += (amplitude * weight) * signal
-    return total / norm
+        total += weight * signal
+    return total / plan.norm
 
 
 def warp(

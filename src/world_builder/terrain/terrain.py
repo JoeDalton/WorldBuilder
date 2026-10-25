@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -78,6 +78,8 @@ SHADER_PATH = Path(__file__).parent / "shaders"
 #: above ORIGIN_SNAP * 16 of altitude the grid grows to altitude / 16.
 ORIGIN_SNAP = 4096.0
 LOGGER = logging.getLogger(__name__)
+#: Chunks whose refinement lag :attr:`Terrain.refine_lags` keeps.
+LAG_SAMPLES = 2000
 #: Below the caps (``TerrainSettings.store_size``, ``node_cache_size``), a
 #: terrain keeps this many times what its current selection needs (at least
 #: MIN_RESIDENT): a planet seen only from afar shrinks to a few hundred chunks
@@ -266,6 +268,8 @@ class Terrain:
     :ivar materials: the biome textures (share them with other terrains)
     :ivar executor: the generation pool
     :ivar stats: counters and timings for an on-screen readout
+    :ivar refine_lags: (level, seconds from the chunk first wanted by an LOD
+        pass to it drawn), for the latest :data:`LAG_SAMPLES` chunks drawn
     """
 
     #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
@@ -358,12 +362,16 @@ class Terrain:
         self._snap = ORIGIN_SNAP
         self._camera = np.zeros(3)
         self._render_camera = np.zeros(3)
+        self._forward = None
         self._last_select_pos = None
         self._last_select_frame = 0
+        self._unshown = 0  # chunks uploaded since the last LOD pass
         self._frame = 0
         self._wanted: list[tuple] = []
         self._loading = True  # the last LOD pass still wanted chunks
         self.collision: TerrainCollision | None = None
+        self.refine_lags: deque[tuple[int, float]] = deque(maxlen=LAG_SAMPLES)
+        self._wanted_since: dict[tuple, float] = {}
         self.stats = {
             "shown": 0,
             "stored": 0,
@@ -508,7 +516,10 @@ class Terrain:
             self.collision = None
 
     def update(
-        self, camera_world: ArrayLike, camera_render: ArrayLike = (0.0, 0.0, 0.0)
+        self,
+        camera_world: ArrayLike,
+        camera_render: ArrayLike = (0.0, 0.0, 0.0),
+        camera_forward: ArrayLike | None = None,
     ) -> None:
         """Per-frame update: re-base the root, take finished chunks, upload a
         few, and run an LOD pass when the camera has moved enough (or new
@@ -518,17 +529,22 @@ class Terrain:
             float64 (the planet frame if :attr:`position` is the origin)
         :param camera_render: where the camera is in the render frame (the
             game keeps it at the origin)
+        :param camera_forward: the view direction (world frame), so ground in
+            view is generated before ground behind; None = no preference
         """
         self._frame += 1
         cam = np.asarray(camera_world, dtype=np.float64) - self.position
         render_cam = np.asarray(camera_render, dtype=np.float64)
         self._camera = cam.copy()
         self._render_camera = render_cam.copy()
+        self._forward = camera_forward
         self._rebase(cam, render_cam)
 
         finished = self.executor.collect(self._channel)
         for chunk in finished:
             self._store(chunk)
+        # Once per frame (and per pass), not per chunk: it scans the store.
+        self._evict_store()
         if finished:
             self.stats["generated"] += len(finished)
             gen = [c.gen_ms for c in finished]
@@ -536,7 +552,7 @@ class Terrain:
                 np.mean(gen)
             )
 
-        uploaded = self._upload()
+        self._unshown += self._upload()
         # Re-select after moving a quarter of a leaf (29 m at 600 km) at the
         # default split factor of 2, or a 250th of the altitude: well inside
         # the selector's 15 % hysteresis band (a leaf splits at split_factor
@@ -553,11 +569,12 @@ class Terrain:
         )
         # New uploads only need a pass to be shown, which can wait a frame or
         # two: while refining, uploads land every frame, and a pass per
-        # frame was most of the frame.
+        # frame was most of the frame. Uploads wait for it whichever frame
+        # they landed in.
         since = self._frame - self._last_select_frame
         if (
             moved
-            or (uploaded and since >= settings.select_every_on_upload)
+            or (self._unshown and since >= settings.select_every_on_upload)
             or since >= settings.select_every
         ):
             self._select(cam)
@@ -756,10 +773,10 @@ class Terrain:
         node.set_pos(*(node.get_python_tag("centre") - self._origin))
 
     def _store(self, chunk: ChunkData) -> None:
+        """Keep a chunk; the store is trimmed by the next :meth:`update`."""
         self.store[chunk.key] = chunk
         self._bounds[chunk.key] = (chunk.h_min, chunk.h_max)
         self.store.move_to_end(chunk.key)
-        self._evict_store()
 
     def _resident(self, cap: int) -> int:
         """:returns: how many chunks to keep, given what the selection needs"""
@@ -832,19 +849,31 @@ class Terrain:
         start = time.perf_counter()
         self._last_select_pos = cam.copy()
         self._last_select_frame = self._frame
+        self._unshown = 0
 
         selection = self.selector.select(
             cam,
             ready=self.nodes.__contains__,
             bounds=self._bounds.get,
+            forward=self._forward,
         )
         draw = set(selection.draw)
         for key in self.shown - draw:
             node = self.nodes.get(key)
             if node is not None:
                 node.detach_node()
+        now = time.perf_counter()
         for key in draw - self.shown:
             self.nodes[key].reparent_to(self.root)
+            since = self._wanted_since.pop(key, None)
+            if since is not None:
+                self.refine_lags.append((key[0], now - since))
+        for key in selection.wanted:
+            self._wanted_since.setdefault(key, now)
+        if len(self._wanted_since) > 4 * LAG_SAMPLES:  # never drawn: forget
+            self._wanted_since = {
+                k: t for k, t in self._wanted_since.items() if now - t < 30.0
+            }
         # A split node's children must stay ready even when they are not drawn
         # (their own children are, or they are culled): the selector splits a
         # node only while all its visible children are ready. Evicting one as

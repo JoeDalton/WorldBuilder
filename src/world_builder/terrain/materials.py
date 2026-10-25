@@ -161,7 +161,9 @@ def load_materials(
             )
         tile_m[layer] = tile
         maps = found[biome]
-        placeholder = make_placeholder(layer, size)
+        # Only for missing maps: a placeholder costs seconds at 2048.
+        missing = any(kind not in maps for kind, _ in _MAP_PATTERNS)
+        placeholder = make_placeholder(layer, size) if missing else {}
         albedo = _load(maps.get("albedo"), size, 3)
         if albedo is None:
             albedo = placeholder["albedo"]

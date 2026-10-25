@@ -579,8 +579,9 @@ class TerrainDemo(ShowBase):
         self.camera.set_pos(0.0, 0.0, 0.0)
         self.camera.set_quat(self.render, self._orientation)
 
+        forward = self._forward()
         for terrain in self._terrains():
-            terrain.update(self.cam_world)
+            terrain.update(self.cam_world, camera_forward=forward)
         ranges = []
         for body in self.bodies:
             spec = body.terrain.spec

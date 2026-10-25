@@ -237,7 +237,6 @@ class Starfield:
         sky = Sky(render, Starfield(seed=3), atmospheres)
 
     :ivar catalogue: the point stars (:func:`make_stars`)
-    :ivar glow: the diffuse light's cube map (:func:`glow_texture`)
     """
 
     def __init__(
@@ -257,8 +256,14 @@ class Starfield:
         self.catalogue = make_stars(seed, stars, galactic_pole, red, blue)
         self._glow_args = (seed, galactic_pole, nebula_scale, nebula_coverage)
         self.glow_size = int(glow_size)
-        self.glow = glow_texture(make_glow(self.glow_size, *self._glow_args))
-        self._glows = {self.glow_size: self.glow}
+        # Made when first asked for (seconds at 256), at the size the sky uses.
+        self._glows: dict[int, Texture] = {}
+
+    @property
+    def glow(self) -> Texture:
+        """The diffuse light's cube map (:func:`glow_texture`) at
+        ``glow_size``."""
+        return self.glow_at(self.glow_size)
 
     def glow_at(self, size: int) -> Texture:
         """:returns: the diffuse light's cube map at another size (the same
