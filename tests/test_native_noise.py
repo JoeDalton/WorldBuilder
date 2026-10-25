@@ -143,3 +143,29 @@ def test_cloud_volume_fbm_is_bit_identical(native, volume, monkeypatch):
     np.testing.assert_array_equal(
         clouds_noise.fbm(volume, coords, field, 2, 0.0), expected["mean0"]
     )
+
+
+def test_the_swell_matches_numpy(native, monkeypatch):
+    """The water collisions stand on (swell.h) is the numpy fallback's."""
+    from world_builder.ocean import swell as swell_module
+    from world_builder.ocean.ocean import swell_rotations
+    from world_builder.terrain.chart import TangentFrame
+
+    frame = TangentFrame.at(10.0, 20.0)
+    a, b = swell_rotations(
+        frame.up, frame.east, frame.north, (0.6, 0.8), 0.004, 0.1, 600e3, 1234.5
+    )
+    swell = swell_module.Swell(20.0, 0.004, a, b)
+    rng = np.random.default_rng(3)
+    dirs = rng.normal(size=(4000, 3))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    depths = rng.uniform(0.0, 120.0, len(dirs))
+    max_freqs = rng.choice([0.0, 0.25 / 1.8, 0.25 / 29.0, 0.25 / 230.0], len(dirs))
+    native_heights = swell.heights(dirs * 600e3, depths, max_freqs)
+    with monkeypatch.context() as m:
+        m.setattr(swell_module, "native_library", lambda: None)
+        numpy_heights = swell.heights(dirs * 600e3, depths, max_freqs)
+    np.testing.assert_allclose(native_heights, numpy_heights, rtol=0, atol=1e-9)
+    # About sea level, within the amplitude.
+    assert abs(float(np.mean(numpy_heights))) < 1.0
+    assert np.all(np.abs(numpy_heights) <= 0.75 * 20.0)

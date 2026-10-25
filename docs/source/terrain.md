@@ -169,8 +169,7 @@ Nothing else changes:
 
 - the window's depth buffer and MSAA
 - the existing shaders
-- the terrain's coastline depth bias
-- the ocean's reflection camera, which keeps its own copy of the lens
+- the sea's reflection camera, which keeps its own copy of the lens
 
 ## Lighting
 
@@ -238,24 +237,26 @@ A body seen through another's air is dimmed and tinted by it: from the
 planet's surface by day the moon is a pale disc in a blue sky (see
 [Atmosphere, sky and planet clouds](atmosphere.md)).
 
-## Ocean, sky and clouds in the demo
+## Sea, sky and clouds
 
-- **The swell ocean is a flat-world object.** The demo puts it in a frame
-  that follows the point under the camera: the tangent plane at sea level.
-  Its xy are anchored to the ground through a chart that re-centres every
-  50 km, at which point the wave pattern jumps once. Its droop uses the
-  terrain's radius (`Ocean(planet_radius=..., exact_sphere=True)`), and it is
-  seen through the atmosphere like everything else.
-- **Above 15 km the swell ocean is hidden** (handed over between 14 and
-  16 km). The terrain draws the sea itself instead
-  (`Terrain.set_sea_surface`): seabed vertices are lifted to sea level and
-  shaded as water, tinted by depth, with the sky light reflected at grazing
-  angles.
-- **The swell ocean reflects the terrain.** The ocean's reflection camera
+- **The terrain draws its own sea** on planets with `spec.has_ocean`
+  (see [Sea](ocean.md)). `terrain.vert` lifts every vertex under sea level
+  to the water, raised by the swell, and keeps its depth for the shading.
+  The chunks with water hang under `Terrain.sea_root`, so the near look's
+  shader (`Terrain.set_sea_near`, set by a `Sea`) costs land nothing.
+  Each chunk tells the shader its centre and its resolution
+  (`uChunkCentre`), so the swell is computed in the planet frame and
+  flattens with the chunk's level.
+- **LOD and culling.** The LOD measures the ground's own range, seabed
+  included, so open sea stays coarse. Each chunk's culling box covers what
+  is drawn: the water and its swell.
+- **The terrain is reflected by the sea.** The sea's reflection camera
   draws the scene a second time; `TerrainSettings.reflected` off (LOW's)
   hides the terrain from it by `depth.REFLECTION_CAMERA_MASK`. Its clip
   plane at the water is applied by the terrain's vertex shader
-  (`gl_ClipDistance`), since a custom shader does not get it for free.
+  (`gl_ClipDistance`), since a custom shader does not get it for free. The
+  same shader clips the wet vertices out of that pass, so the sea does not
+  reflect itself.
 - **Sky, haze and the limb** come from the planet's atmosphere (single
   scattering), and the clouds from one planet-wide density field: see
   [Atmosphere, sky and planet clouds](atmosphere.md). The terrain takes
@@ -277,7 +278,7 @@ The solid answers for every drawn chunk within `max_distance` of the camera. Chu
 **What the game gets:**
 
 - **Spheres** (ships, ordnance, sensors) and **segments** (lasers) get ordinary `CollisionEntry` objects, so event and queue handlers work unchanged.
-- **At most one entry per collider per frame**, with the surface point and the normal of the very triangle drawn there. With the sea, the sea surface is solid and its normal is the local vertical.
+- **At most one entry per collider per frame**, with the surface point and the normal of the very triangle drawn there. With the sea, the drawn water is solid, swell included (`Terrain.set_swell`, which a `Sea` calls every frame), and its normal is the drawn triangle's.
 - **No holes at LOD seams.** Each direction is answered by exactly one drawn chunk.
 - **Material:** the node's owner tag is a `TerrainSurface`. Its `material_at(point, relative_to=None)` names the ground at a hit point: `"water"`, or the dominant biome's name.
 
@@ -295,7 +296,7 @@ The library ships in the Linux (x86_64, aarch64), Windows x64 and macOS (univers
 
 ## Paths to SpaceFlight
 
-- **Collision:** `terrain.enable_collision(into_mask)` with SpaceFlight's terrain into-mask. The existing `ship-into-terrain`, `laser-into-terrain` and sensor handlers then see the planet. `munition_into_terrain` picks its sparks with `owner.material_at(hit_point, root_node)`. The flat ocean `CollisionPlane` goes away where there is a terrain. Gravity and a radial "up" for flight are a separate matter, not needed for collision.
+- **Collision:** `terrain.enable_collision(into_mask)` with SpaceFlight's terrain into-mask. The existing `ship-into-terrain`, `laser-into-terrain` and sensor handlers then see the planet. `munition_into_terrain` picks its sparks with `owner.material_at(hit_point, root_node)`. The flat ocean `CollisionPlane` goes away where there is a terrain: the sea is solid where it is drawn. Gravity and a radial "up" for flight are a separate matter, not needed for collision.
 - **Loading phase:** a level should wait for `not terrain.loading` (held for a moment) before ships fly near the ground, since ground that is not drawn yet is not solid.
 - **Camera:** SpaceFlight already keeps the player at the render origin
   (`recenter_render_origin`). The terrain's root must hang under `render`,

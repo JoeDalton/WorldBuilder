@@ -98,6 +98,7 @@ def _library() -> ctypes.CDLL:
         "wb_terrain_segment": (N, [P, P, P, P]),
         "wb_terrain_sphere": (N, [P, P, D, N, P]),
         "wb_terrain_material": (N, [P, P]),
+        "wb_terrain_set_swell": (None, [P, N, D, D, P, P, N, D, D]),
     }
     for name, (restype, argtypes) in signatures.items():
         function = getattr(lib, name)
@@ -221,6 +222,28 @@ class NativeTerrain:
         ):
             return None
         return out[0:3].copy(), out[3:6].copy()
+
+    def set_swell(self, swell) -> None:
+        """The sea's swell now (:class:`world_builder.ocean.swell.Swell`):
+        the water it raises is solid; None = calm water at sea level."""
+        if swell is None:
+            self._lib.wb_terrain_set_swell(
+                self._handle, 0, 0.0, 0.0, None, None, 0, 0.0, 0.0
+            )
+            return
+        rot_a = np.ascontiguousarray(swell.rot_a, dtype=np.float64)
+        rot_b = np.ascontiguousarray(swell.rot_b, dtype=np.float64)
+        self._lib.wb_terrain_set_swell(
+            self._handle,
+            1,
+            float(swell.amplitude),
+            float(swell.scale),
+            rot_a.ctypes.data,
+            rot_b.ctypes.data,
+            int(swell.by_depth),
+            float(swell.shallow),
+            float(swell.deep),
+        )
 
     def material(self, point: ArrayLike) -> int:
         """:returns: the dominant biome index at the vertex nearest a surface

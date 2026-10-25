@@ -1,5 +1,5 @@
-// The water's colour by depth, shared by ocean.frag and the terrain's sea
-// surface (terrain.frag), so the sea keeps its colour across their handover.
+// The water's colour by depth, shared by the sea's near look (sea.glsl) and
+// its far look (terrain_frag.glsl), so the sea keeps its colour as they fade.
 
 // Share of the deep water's colour over a sea floor this deep (metres), seen
 // cosView from the vertical, the rest being the shallow colour: Beer-Lambert

@@ -203,6 +203,9 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         points[inner], inner_dirs, centre, elevation, normals, w_bytes, skirt_depth
     )
     local = vertices["vertex"]
+    if spec.has_ocean:
+        # The box of what is drawn: the shader lifts the seabed to the water.
+        local = _sea_lifted(local, inner_dirs, elevation, centre, radius)
     return ChunkData(
         key=key,
         version=version,
@@ -218,6 +221,29 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         geometric_error=geometric_error,
         gen_ms=(time.perf_counter() - start) * 1e3,
     )
+
+
+def _sea_lifted(
+    local: np.ndarray,
+    dirs: np.ndarray,
+    elevation: np.ndarray,
+    centre: np.ndarray,
+    radius: float,
+) -> np.ndarray:
+    """:returns: the vertices as terrain.vert draws them over a sea: grid
+    vertices under sea level at sea level, skirts hanging from their lifted
+    edge (centre-relative, float32)"""
+    lifted = local.copy()
+    count = VERTS * VERTS
+    wet = elevation.ravel() < 0.0
+    lifted[:count][wet] = (dirs[wet] * radius - centre).astype(np.float32)
+    ring = skirt_ring()
+    edge_wet = wet[ring]
+    if np.any(edge_wet):
+        # A skirt keeps its depth below the (lifted) edge.
+        drop = (elevation.ravel()[ring, None] * dirs[ring]).astype(np.float32)
+        lifted[count:][edge_wet] -= drop[edge_wet]
+    return lifted
 
 
 def _grid_normals(points: np.ndarray, border: int, step: int) -> np.ndarray:

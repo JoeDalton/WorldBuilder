@@ -28,9 +28,9 @@ times a few frames, then saves a screenshot::
                      uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
                      octaves at most, 8 flat colour; default 0)
     --frames         frames timed once settled (default 60)
-    --ocean-debug    Ocean.set_debug_mode view (ocean.frag's uDebugMode:
-                     9 octaves resolved, 10 unresolved slope spread, ...;
-                     default 0)
+    --ocean-debug    Sea.set_debug_mode view (sea.glsl's uSeaDebug, on water
+                     in its near look: 9 octaves resolved, 10 unresolved
+                     slope spread, 12 depth, ...; default 0)
 
 No multisampling, vsync off. Once a pose has settled, N frames are timed,
 each waiting for the GPU to finish (a one-pixel read back): CPU and GPU time
@@ -40,8 +40,8 @@ pose prints whether it settled, the body's chunk count and finest level, the
 cloud billboards, the LOD pass and the median frame time.
 
 Poses: ground (the level's start), coast (2 km up over the reference point),
-high (20 km up), swell / sea_surface (either side of the ocean handover at
-15 km: the swell ocean, then the terrain's own flat sea), stratosphere (200 km
+high (20 km up), swell / sea_surface (13 and 17 km up, inside the sea's
+12-18 km fade from its near look to its flat far one), stratosphere (200 km
 up), orbit (3 radii up, looking down), corner (over a cube corner, where three
 faces meet), lod (the LOD debug view from 20 km), in_clouds (inside the cloud
 deck, 2.7 km up), sunset (600 m up, looking west at the sun 3 degrees up),
@@ -51,7 +51,8 @@ moon's sand), night_orbit (1.5 radii up, looking down at the terminator: the
 sun 60 degrees below the nadir's horizon), night_sea (3 m over the sea, the
 sun 8 degrees down: the sky's reflection must be as dark as the sky), beach
 (40 m up, 300 m off the coast nearest the reference point, looking at it: the
-ocean's foam, colour by depth and swell). Every
+sea's foam, colour by depth and swell), open_sea (150 m over open water,
+looking along it: the swell and how it flattens with distance). Every
 other pose has the sun at azimuth 210, elevation 35, as seen there.
 """
 
@@ -132,6 +133,9 @@ def _poses(demo: TerrainDemo) -> dict:
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     # At sea level by night: the sky's reflection must be as dark as the sky.
     poses["night_sea"] = (-6.272, -52.0456, 3.0, -115.0, 2.0, 0, 0)
+    # The open sea by day, 150 m up, looking out over it: the swell, and
+    # where it fades out with the terrain's LOD (4-7 km away).
+    poses["open_sea"] = (-6.272, -52.0456, 150.0, -115.0, -4.0, 0, 0)
     beach = _beach_pose(demo)
     if beach is not None:
         poses["beach"] = beach
@@ -218,7 +222,7 @@ def main() -> None:
         "--frames", type=int, default=60, help="frames timed once settled"
     )
     parser.add_argument(
-        "--ocean-debug", type=int, default=0, help="Ocean.set_debug_mode view"
+        "--ocean-debug", type=int, default=0, help="Sea.set_debug_mode view"
     )
     args = parser.parse_args()
     window_config("Terrain shots", args.size, args.offscreen, vsync=False)

@@ -1,15 +1,22 @@
 # Ocean Geometric-Swell Artifacts — Investigation Report
 
-> **Historical report — does not describe the current code.** None of the §3
-> shader toggles (`uReflRayToPlane`, `uShadeFromPlane`, `uAANormal`,
-> `uAALo`/`uAAHi`), the `vSurfacePos` varying or the extra debug modes are in
-> the code today; `ocean.frag` debug mode 8 is now the FM phase field. The §2a
-> reflection fix is not applied either: `ocean.frag` still samples the
-> reflection at the flat footprint (`uReflMVP * vec4(vWorldPos.xy, 0.0, 1.0)`).
-> The demo script (`scripts/ocean_demo.py`), the capture tooling and the
-> `ocean_debug/` evidence images were never committed. Contrary to the §6
-> recommendation, `SceneOcean` runs with `geometric_swell=True` (see
-> `scenes.py`). The diagnosis below still applies to that mode.
+> **Historical report: it does not describe the current code.** It was written
+> against the old `Ocean` (its own swell mesh, `ocean.vert` / `ocean.frag`),
+> which is gone: the terrain's chunks now draw the sea (see
+> `docs/source/ocean.md`). What changed for the mechanisms below:
+>
+> - **§2b (grazing normal aliasing).** The swell's normal is now the analytic
+>   gradient of the same field the vertices are raised by (`swell.glsl`), and
+>   its tilt fades by the pixel's footprint like a wave octave, its lost slope
+>   kept as variance for the rough fresnel. The geometry also fades the swell
+>   out with the chunk's level (gone 4–7 km from a low camera), so the
+>   horizon band has no displaced geometry. Not yet checked at the report's
+>   Z≈3 among the crests, in motion.
+> - **§2a (reflection slide)** still applies: `sea.glsl` samples the
+>   reflection at the fragment's vertical footprint on the mirror plane, not
+>   at the view ray's hit (`P*`).
+> - None of the §3 shader toggles exist. `uSeaDebug` keeps modes 1–7, and
+>   mode 8 is the FM phase field.
 
 **Status: NOT SOLVED.** The fixes tried help when the camera is *above* the
 swell crests but **introduce a worse, hard-edged artifact at low altitude**

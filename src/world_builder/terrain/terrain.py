@@ -34,6 +34,7 @@ seen through every atmosphere of the world along the sight line.
 
 from __future__ import annotations
 
+import functools
 import logging
 import time
 from collections import OrderedDict, deque
@@ -57,6 +58,8 @@ from panda3d.core import (
 from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.ocean.ocean import bind_sea_defaults
+from world_builder.ocean.swell import Swell
 from world_builder.quality import RESTART, QualityLevel, QualitySettings, knob
 from world_builder.terrain.biomes import BIOME_COLORS
 from world_builder.terrain.chunkgen import ChunkData
@@ -74,6 +77,19 @@ from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.workers import ChunkExecutor
 
 SHADER_PATH = Path(__file__).parent / "shaders"
+
+
+@functools.cache
+def _shader(fragment: str) -> Shader:
+    """:returns: the terrain's shader with this fragment stage: terrain.frag,
+    or terrain_sea.frag (with the sea's near look)"""
+    return Shader.load(
+        Shader.SL_GLSL,
+        vertex=SHADER_PATH / "terrain.vert",
+        fragment=SHADER_PATH / fragment,
+    )
+
+
 #: The terrain root is re-based to the camera snapped to this grid, metres;
 #: above ORIGIN_SNAP * 16 of altitude the grid grows to altitude / 16.
 ORIGIN_SNAP = 4096.0
@@ -323,13 +339,15 @@ class Terrain:
         settings = settings or TerrainSettings()
         self._settings = settings
         self.root = parent.attach_new_node("terrain")
-        self.root.set_shader(
-            Shader.load(
-                Shader.SL_GLSL,
-                vertex=SHADER_PATH / "terrain.vert",
-                fragment=SHADER_PATH / "terrain.frag",
-            )
-        )
+        self.root.set_shader(_shader("terrain.frag"))
+        # The chunks with water hang here: a Sea gives them the shader with
+        # its near look (set_sea_near), which the others never pay for.
+        self.sea_root = self.root.attach_new_node("terrain_sea")
+        #: How far the sea's swell may raise the water, metres (a Sea sets
+        #: it): the chunks with water are culled by bounds this much wider
+        self.sea_swell = 0.0
+        #: The sea's swell (set_swell); None = calm water at sea level
+        self.swell: Swell | None = None
         self.max_distance = max_distance
         self.materials = materials or load_materials(max_size=settings.texture_size)
         self.blend_depth = DEFAULT_BLEND_DEPTH
@@ -440,6 +458,7 @@ class Terrain:
         self.spec = self.planet.spec
         self.grid = self.planet.grid
         self.root.set_shader_input("uMaxLevel", self.grid.max_level)
+        self.root.set_shader_input("uSeaSurface", int(self.spec.has_ocean))
         for node in self.nodes.values():
             node.remove_node()
         self.nodes.clear()
@@ -463,6 +482,7 @@ class Terrain:
             level=self.min_level,
             store_chunk=self._store,
         )
+        self.query.swell = getattr(self, "swell", None)
         if self.collision is not None:
             self.collision.reset()
         self._last_select_pos = None
@@ -631,22 +651,29 @@ class Terrain:
             + self._render_camera
         )
 
-    def set_sea_surface(self, on: bool) -> None:
-        """Draw the sea as flat water at sea level (seen from high up, where
-        the swell ocean is not shown), instead of the bare seabed.
+    def set_swell(self, swell: Swell | None) -> None:
+        """The sea's swell now (a :class:`world_builder.ocean.Sea` gives it
+        every frame): queries and collisions follow the water it raises, as
+        the shader draws it. None = calm water at sea level."""
+        self.swell = swell
+        self.query.swell = swell
+        if self.collision is not None:
+            self.collision.set_swell(swell)
 
-        Seabed vertices are lifted to sea level and shaded as water, tinted by
-        depth, reflecting the sky light at grazing angles.
-
-        :param on: water on; off (the default) draws the seabed for the swell
-            ocean to cover
-        """
-        self.root.set_shader_input("uSeaSurface", 1 if on else 0)
+    def set_sea_near(self, on: bool) -> None:
+        """Draw the chunks with water with the sea's near look
+        (:class:`world_builder.ocean.Sea` turns it on below its altitude
+        band), or with the far look only (the plain shader)."""
+        if on != getattr(self, "_sea_near", False):
+            self._sea_near = on
+            if on:
+                self.sea_root.set_shader(_shader("terrain_sea.frag"))
+            else:
+                self.sea_root.clear_shader()  # the root's
 
     def set_shallow_water(self, color: ArrayLike, depth: float) -> None:
-        """The sea surface's tint over shallow seabed: give it the swell
-        ocean's (``Ocean(shallow_color=..., shallow_depth=...)``), so the coast
-        keeps its colour across their handover. Defaults to the shared
+        """The sea's tint over shallow seabed, near and far (a
+        :class:`world_builder.ocean.Sea` sets its own). Defaults to the shared
         :data:`world_builder.SHALLOW_WATER_COLOR` and
         :data:`world_builder.SHALLOW_WATER_DEPTH_M`.
 
@@ -733,6 +760,7 @@ class Terrain:
         root.set_shader_input("uMaxLevel", 0)
         root.set_shader_input("uFace", 0)
         root.set_shader_input("uChunk", LVecBase4f(0.0, 0.0, 1.0, 0.0))
+        root.set_shader_input("uChunkCentre", LVecBase4f(0.0, 0.0, 0.0, 0.0))
         # Inputs that change every frame are arrays bound once and written in
         # place: setting a new value on the root would make a new render
         # state per input per frame, for Panda to compose and collect.
@@ -748,9 +776,12 @@ class Terrain:
             array[0] = LVecBase3f(*value)
             self._frame_inputs[name] = array
             root.set_shader_input(name, array)
+        # The sea (set_spec turns it on for a planet with one): its seabed
+        # lifted to the water and drawn as such (the far look; a Sea adds the
+        # near one).
         root.set_shader_input("uSeaSurface", 0)
         self.set_shallow_water(SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M)
-        root.set_shader_input("uDepthBias", 6.0)
+        bind_sea_defaults(root)
         self.set_sun(sun_direction, sun_color, ambient)
 
     def _rebase(self, cam: np.ndarray, render_cam: np.ndarray) -> None:
@@ -775,6 +806,10 @@ class Terrain:
     def _store(self, chunk: ChunkData) -> None:
         """Keep a chunk; the store is trimmed by the next :meth:`update`."""
         self.store[chunk.key] = chunk
+        # The ground's bounds, seabed included, also where the sea is drawn
+        # over it: deep water stays coarse (its surface has no relief to
+        # resolve), the shallows refine like the land (the coast, the foam).
+        # Culling uses the chunk's own box, which holds the sea surface.
         self._bounds[chunk.key] = (chunk.h_min, chunk.h_max)
         self.store.move_to_end(chunk.key)
 
@@ -811,8 +846,14 @@ class Terrain:
             chunk = self.store.get(key)
             if chunk is None or key in self.nodes:
                 continue
-            node = NodePath(build_chunk_node(chunk))
+            wet = bool(self.spec.has_ocean and chunk.h_min < 0.0)
+            node = NodePath(build_chunk_node(chunk, self.sea_swell if wet else 0.0))
             node.set_python_tag("centre", chunk.centre)
+            node.set_python_tag("wet", wet)
+            node.set_shader_input(
+                "uChunkCentre",
+                LVecBase4f(*chunk.centre, 0.25 / self.grid.spacing(key[0])),
+            )
             u0, v0 = self.grid.uv_origin(key)
             node.set_shader_input("uLevel", key[0])
             node.set_shader_input("uFace", key[1])
@@ -864,7 +905,8 @@ class Terrain:
                 node.detach_node()
         now = time.perf_counter()
         for key in draw - self.shown:
-            self.nodes[key].reparent_to(self.root)
+            node = self.nodes[key]
+            node.reparent_to(self.sea_root if node.get_python_tag("wet") else self.root)
             since = self._wanted_since.pop(key, None)
             if since is not None:
                 self.refine_lags.append((key[0], now - since))

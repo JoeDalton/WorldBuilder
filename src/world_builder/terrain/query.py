@@ -9,7 +9,9 @@ below (or above) p, ``altitude(p)`` how far p is above that surface.
 The physical surface is the chunk grid at :attr:`TerrainQuery.level`, the
 finest level the renderer draws: a radial ray is intersected with the very
 triangle on screen (same vertices, same diagonal), so collisions match what
-is seen exactly.
+is seen exactly. Over the sea that triangle's seabed corners are raised to the
+water, as terrain.vert raises them: sea level, plus the swell when
+:attr:`TerrainQuery.swell` is set.
 
 Query results are shaped for the game's collision code when it is wired in:
 :meth:`TerrainQuery.sphere_contact` returns the (hit point, surface normal)
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, MutableMapping
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -40,6 +43,9 @@ from world_builder.terrain.cubesphere import (
     face_dirs,
 )
 from world_builder.terrain.planet import Planet
+
+if TYPE_CHECKING:
+    from world_builder.ocean.swell import Swell
 
 #: Face-parameter margin of the sphere_contact sample window: cells near a
 #: face's corners are down to 0.71x the nominal spacing.
@@ -62,8 +68,8 @@ class TerrainQuery:
         :param planet: the planet
         :param store: shared chunk cache (the renderer's); a private one if None
         :param version: spec version stamped on chunks generated here
-        :param include_ocean: treat the sea surface (sea level) as solid;
-            defaults to whether the planet has an ocean
+        :param include_ocean: treat the sea surface (the water as drawn) as
+            solid; defaults to whether the planet has an ocean
         :param level: grid level queries read by default; keep it equal to
             the finest level drawn, so the physical ground is the visible one
         :param store_chunk: called with each chunk generated here, to put it
@@ -80,6 +86,9 @@ class TerrainQuery:
         self.include_ocean = (
             planet.spec.has_ocean if include_ocean is None else include_ocean
         )
+        #: The sea's swell (``Terrain.set_swell`` sets it every frame); None
+        #: = calm water at sea level
+        self.swell: Swell | None = None
 
     # ── point queries ──────────────────────────────────────────────────────────
 
@@ -270,19 +279,18 @@ class TerrainQuery:
 
     def _surface(self, points, level, generate):
         dirs, shape = _directions(points)
-        h, n = self._interpolate(dirs, level, generate)
-        if self.include_ocean:
-            wet = h < 0.0
-            h = np.where(wet, 0.0, h)
-            n[wet] = dirs[wet]
+        h, n = self._interpolate(dirs, level, generate, sea=self.include_ocean)
         return h.reshape(shape), n.reshape(*shape, 3)
 
     def _key_of(self, dirs: np.ndarray, level: int):
         face, i, j, _, _ = self.grid.locate(dirs[:1], level)
         return level, int(face[0]), int(i[0]), int(j[0])
 
-    def _interpolate(self, dirs: np.ndarray, level: int, generate: bool):
-        """Height and triangle normal at (N, 3) directions."""
+    def _interpolate(
+        self, dirs: np.ndarray, level: int, generate: bool, sea: bool = False
+    ):
+        """Height and triangle normal at (N, 3) directions: of the ground, or
+        with *sea* of the surface drawn (the water over the sea)."""
         heights = np.zeros(len(dirs))
         normals = np.zeros((len(dirs), 3))
         if len(dirs) == 0:
@@ -309,11 +317,23 @@ class TerrainQuery:
         for (f, ki, kj), sel in groups:
             chunk = self._chunk((level, f, ki, kj), generate)
             if chunk is None:
-                heights[sel] = self.planet.sample_dirs(dirs[sel], apply_stamps=True)[0]
+                ground = self.planet.sample_dirs(dirs[sel], apply_stamps=True)[0]
+                if sea:
+                    water = self._water(dirs[sel], -ground, level)
+                    ground = np.where(ground < 0.0, water, ground)
+                heights[sel] = ground
                 normals[sel] = dirs[sel]
                 continue
-            heights[sel], normals[sel] = self._triangle_intersect(chunk, dirs[sel])
+            heights[sel], normals[sel] = self._triangle_intersect(chunk, dirs[sel], sea)
         return heights, normals
+
+    def _water(self, dirs: np.ndarray, depths: np.ndarray, level: int) -> np.ndarray:
+        """The water's height over unit directions with seabed this deep, as a
+        chunk of *level* draws it (its swell band-limited by its spacing)."""
+        if self.swell is None:
+            return np.zeros(len(dirs))
+        max_freq = 0.25 / self.grid.spacing(level)
+        return self.swell.heights(dirs * self.radius, depths, max_freq)
 
     def _chunk(self, key, generate: bool) -> ChunkData | None:
         """The chunk at *key*, generated, or its finest stored ancestor."""
@@ -345,8 +365,11 @@ class TerrainQuery:
         fv = (b + 1.0) * (self.grid.n0 / 2.0) / scale - j * QUADS
         return fu, fv
 
-    def _triangle_intersect(self, chunk: ChunkData, dirs: np.ndarray):
-        """Radial rays against the chunk's own triangles (diagonal (i, j)-(i+1, j+1)).
+    def _triangle_intersect(
+        self, chunk: ChunkData, dirs: np.ndarray, sea: bool = False
+    ):
+        """Radial rays against the chunk's own triangles (diagonal (i, j)-(i+1, j+1)),
+        with *sea* their seabed corners raised to the water (terrain.vert's).
 
         :returns: heights (N,) and triangle normals (N, 3)
         """
@@ -357,7 +380,17 @@ class TerrainQuery:
         base = row * VERTS + col
 
         def corner(index):  # only the needed vertices go to float64
-            return grid_vertices[index].astype(np.float64) + chunk.centre
+            v = grid_vertices[index].astype(np.float64) + chunk.centre
+            if not sea:
+                return v
+            r = np.linalg.norm(v, axis=1)
+            ground = r - self.radius
+            wet = ground < 0.0
+            if np.any(wet):
+                up = v[wet] / r[wet, None]
+                water = self._water(up, -ground[wet], chunk.key[0])
+                v[wet] = up * (self.radius + water)[:, None]
+            return v
 
         v00 = corner(base)
         v01 = corner(base + 1)  # +u

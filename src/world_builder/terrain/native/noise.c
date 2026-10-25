@@ -14,6 +14,8 @@
 #include <math.h>
 #include <stdint.h>
 
+#include "swell.h"
+
 #if defined(_WIN32)
 #define WB_API __declspec(dllexport)
 #else
@@ -21,7 +23,7 @@
 #endif
 
 /* Bumped when a signature or a result changes; noise.py checks it. */
-#define WB_NOISE_ABI 2
+#define WB_NOISE_ABI 3
 
 static const double F3 = 1.0 / 3.0;
 static const double G3 = 1.0 / 6.0;
@@ -214,3 +216,12 @@ WB_API void wb_volume_fbm(const float *volume, int64_t size,
   }
 }
 
+/* The sea's swell (swell.h): the water's height at n sea-level points over
+ * seabed this deep, each for its own resolution (max_freqs). */
+WB_API void wb_swell_heights(const WbSwell *swell, const double *points,
+                             const double *depths, const double *max_freqs,
+                             int64_t n, double *out) {
+  int64_t a;
+  for (a = 0; a < n; a++)
+    out[a] = wb_swell_height(swell, points + 3 * a, depths[a], max_freqs[a]);
+}

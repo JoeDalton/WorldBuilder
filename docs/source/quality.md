@@ -31,7 +31,7 @@ change takes effect:
 | Mode | What happens |
 |---|---|
 | `live` | At once: a shader input, a budget or a cache size. Lower caches evict on the next update, never a chunk or tile the drawn view needs. |
-| `rebuild` | The object rebuilds a part of itself. The clouds re-plan their shells and regenerate their tiles (a few seconds of refill). The ocean makes its reflection buffer or swell mesh again. The sky makes a new Milky Way texture. |
+| `rebuild` | The object rebuilds a part of itself. The clouds re-plan their shells and regenerate their tiles (a few seconds of refill). The sea makes its reflection buffer again. The sky makes a new Milky Way texture. |
 | `restart` | Only a newly built object takes it: the terrain's texture size and worker count. `set_settings` logs that it will apply at the next start. |
 
 ## A game's settings menu, without naming a knob
@@ -75,7 +75,7 @@ it, choices by their label:
 ```json
 {"version": 1, "preset": "mid",
  "overrides": {"terrain": {"detail_far": 3000.0},
-               "ocean": {"seabed_cascades": "low"}}}
+               "ocean": {"foam_noise": false}}}
 ```
 
 To show which preset each part is at, use `section_level(section)`, which
@@ -177,7 +177,7 @@ labels and ranges below are what the schema gives.
 | `tile_cache` (advanced) | Tiles kept | live | 0 to 2000 tiles | 160 | 160 | 160 | 160 |
 | `resort_frames` (advanced) | Re-sort period (flat clouds) | live | 1 to 60 frames | 8 | 8 | 8 | 8 |
 
-### `ocean`: Ocean (`OceanSettings`)
+### `ocean`: Sea (`OceanSettings`)
 
 | Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
 |---|---|---|---|---|---|---|---|
@@ -186,14 +186,12 @@ labels and ranges below are what the schema gives.
 | `aa_gone_px` (advanced) | Wave cut-off | live | 2 to 32 px | 6 | 5 | 4 | 3 |
 | `rough_fresnel` | Distant water roughness | live | on / off | off | on | on | on |
 | `reflection_blur` | Reflection blur | live | 0 to 1 | 0 | 0.25 | 0.25 | 0.25 |
-| `seabed_cascades` (advanced) | Seabed detail | live | low, mid, high, ultra | low | mid | high | ultra |
 | `depth_colour` | Shallow water colour | live | on / off | on | on | on | on |
 | `foam` | Shoreline foam | live | on / off | on | on | on | on |
 | `foam_noise` (advanced) | Foam detail | live | on / off | off | on | on | on |
 | `swell_by_depth` | Swell calms in shallows | live | on / off | on | on | on | on |
 | `reflection_scale` | Reflection quality | rebuild | 0.1 to 1 x | 0.25 | 0.35 | 0.5 | 0.75 |
 | `reflection_fov_scale` (advanced) | Reflection margin | live | 1 to 2 x | 1.1 | 1.1 | 1.1 | 1.1 |
-| `swell_grid_subdivs` (advanced) | Swell mesh detail | rebuild | 64 to 1024 quads | 256 | 384 | 512 | 512 |
 
 ## Notes
 
@@ -211,7 +209,7 @@ labels and ranges below are what the schema gives.
 - **The flat cloud field** takes the same `CloudSettings`, but only its
   billboard count, sun march, reflection and re-sort period. The other
   fields belong to the planet's clouds.
-- **The ocean's reflection** is sized from the main camera's display region
+- **The sea's reflection** is sized from the main camera's display region
   (`app.cam`). A game that renders its scene at a lower resolution than the
   window gets a reflection sized to that resolution, with nothing to set.
 

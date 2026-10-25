@@ -78,9 +78,8 @@ when a ray crosses two atmospheres.
   the air in front.
 - **Other bodies:** a moon is a terrain like any other, seen through the
   planet's air: dimmed and tinted by day, untouched from space.
-- **The ocean** (opt-in, `Atmospheres.bind(ocean.ocean_node)` and
-  `Ocean.set_atmosphere_frame`): its distance haze is replaced by the
-  atmospheres. Unbound, as in SpaceFlight, it is unchanged.
+- **The sea:** drawn by the terrain, so seen through the air like the
+  ground, in both its looks.
 - **Planet clouds:** per vertex for billboards (the air barely changes across
   one, and per pixel it would be paid for every layer of overdraw), per pixel
   for the deck.
@@ -106,11 +105,11 @@ The demo uses them each frame for:
   world's own shaders (models, ships). The white test ball ahead of the start
   pose shows them; models skip the world's exposure and tonemap, see
   [Lighting on objects](object_lighting.md);
-- **the swell ocean**: `Ocean.set_light` scales its water colour (tuned in
-  daylight) by the light on the sea under the camera over the daylight's, so
-  the sea is dark by night;
+- **the sea's near look**: `Sea.set_light` scales its water colour (tuned
+  in daylight) by the light on the sea under the camera over the daylight's,
+  so the sea is dark by night;
 - **an ambient scale** (F9 / F10) applied to the terrain's sky light, the
-  clouds' (`SphericalClouds.set_sky_light`), the ocean's and Panda3D's.
+  clouds' (`SphericalClouds.set_sky_light`), the sea's and Panda3D's.
 
 ### Left out: true multiple scattering (the Bruneton option)
 

@@ -1,199 +1,29 @@
 """
-Unit tests for the ocean's procedural swell-grid mesh
-(world_builder.ocean.make_swell_grid_mesh and border_coords), the decoding of
-its reflection, and the CPU side of its screen-space wave filtering.
-
-These build CPU-side geometry only (a GeomVertexData and its index buffer),
-so they run fully headless with no window, GPU context or ShowBase — safe for CI.
+Unit tests for the CPU halves of the sea's shading (world_builder.ocean): the
+decoding of its reflection, its screen-space wave filtering and the wave
+phases computed in float64. Headless: no window or GPU context.
 """
 
 import math
 
 import numpy as np
 import pytest
-from panda3d.core import GeomVertexReader
 
-from world_builder import PLANET_RADIUS_M
-from world_builder.ocean import (
-    OceanSettings,
-    aces_tonemap,
-    border_coords,
-    make_swell_grid_mesh,
-)
+from world_builder.ocean import OceanSettings, aces_tonemap
 from world_builder.ocean.ocean import (
     C_WAVE,
     DEFAULT_EXPOSURE,
     FRESNEL_LUT_SLOPE_MAX,
+    WAVE_SCALE,
     rough_fresnel_table,
+    wave_directions,
+    wave_phases,
     wave_tail_variance,
     wave_weight_sum,
 )
 from world_builder.quality import QualityLevel
 
-CURVATURE = 1.0 / (2.0 * PLANET_RADIUS_M)
-
-
-def _read_positions(node):
-    """
-    Read back every vertex position of a single-Geom node.
-
-    :param node: the GeomNode returned by make_swell_grid_mesh
-    :return: an (n, 3) float array of vertex positions
-    """
-    vdata = node.get_geom(0).get_vertex_data()
-    reader = GeomVertexReader(vdata, "vertex")
-    positions = []
-    while not reader.is_at_end():
-        positions.append(tuple(reader.get_data3()))
-    return np.array(positions)
-
-
-def _grid_size(subdivs, rings):
-    """:returns: vertices per axis — the inner span plus a border ring each side."""
-    return subdivs + 1 + 2 * rings
-
-
-# ── Border rings ────────────────────────────────────────────────────────────────
-
-
-def test_border_rings_are_geometric_and_land_on_the_edge():
-    """The growth factor is derived, not chosen, so the last ring is exactly the
-    surface's edge whatever the ring count."""
-    grid_half, outer_half, rings = 4000.0, 555000.0, 28
-    border = border_coords(grid_half, outer_half, rings)
-    assert len(border) == rings
-    assert border[-1] == pytest.approx(outer_half)
-    assert border[0] > grid_half
-    ratios = border[1:] / border[:-1]
-    np.testing.assert_allclose(ratios, ratios[0], rtol=1e-9)
-
-
-def test_border_ring_sag_stays_below_visual_acuity():
-    """The ring count is set by SAG — the error from approximating the planet's
-    curve with flat cells, ``spacing^2 / (8R)`` — as an angle at the distance it
-    is seen from. This is what a single huge border quad could not do at all, and
-    what makes 28 rings rather than 15 the right number: geometric growth makes
-    the outermost step enormous, so too few rings degrade quickly."""
-    grid_half, outer_half = 4000.0, 555000.0
-    border = border_coords(grid_half, outer_half, 28)
-    spacing = np.diff(np.concatenate([[grid_half], border]))
-    sag = spacing**2 / (8.0 * PLANET_RADIUS_M)
-    worst = np.degrees(sag / border).max() * 60.0
-    assert worst < 1.0, f"worst sag {worst:.2f} arcmin"
-    # And too few rings really is worse, so the number is doing something.
-    coarse = border_coords(grid_half, outer_half, 15)
-    coarse_spacing = np.diff(np.concatenate([[grid_half], coarse]))
-    coarse_sag = coarse_spacing**2 / (8.0 * PLANET_RADIUS_M)
-    assert np.degrees(coarse_sag / coarse).max() * 60.0 > 2.0
-
-
-# ── The mesh ────────────────────────────────────────────────────────────────────
-
-
-def test_swell_grid_mesh_vertex_count_and_coords():
-    """The grid is a tensor product of one coordinate list: the border rings
-    mirrored below the dense span, the span itself, then the rings above it."""
-    grid_half, subdivs, outer_half, rings = 4000.0, 8, 24000.0, 5
-    node = make_swell_grid_mesh(grid_half, subdivs, outer_half, border_rings=rings)
-    m = _grid_size(subdivs, rings)
-
-    positions = _read_positions(node)
-    assert positions.shape == (m * m, 3)
-
-    inner = -grid_half + 2.0 * grid_half * np.arange(subdivs + 1) / subdivs
-    border = border_coords(grid_half, outer_half, rings)
-    expected = np.sort(np.concatenate([-border, inner, border]).astype(np.float32))
-    np.testing.assert_allclose(np.unique(positions[:, 0]), expected, rtol=1e-5)
-    np.testing.assert_allclose(np.unique(positions[:, 1]), expected, rtol=1e-5)
-
-
-def test_a_flat_planet_gives_a_flat_sheet():
-    """curvature=0 gives an exactly flat sheet — all displacement then comes
-    from the vertex shader's swell."""
-    node = make_swell_grid_mesh(4000.0, 8, 24000.0, curvature=0.0, border_rings=5)
-    np.testing.assert_array_equal(_read_positions(node)[:, 2], 0.0)
-
-
-def test_the_surface_droops_by_the_true_radius():
-    """Per-vertex from x^2 + y^2, not per axis: the tensor-product grid has to
-    sample a paraboloid of REVOLUTION, or the surface would curve differently
-    along the diagonals than along the axes."""
-    node = make_swell_grid_mesh(4000.0, 8, 24000.0, curvature=CURVATURE, border_rings=5)
-    positions = _read_positions(node)
-    expected = -CURVATURE * (positions[:, 0] ** 2 + positions[:, 1] ** 2)
-    np.testing.assert_allclose(positions[:, 2], expected, rtol=1e-4, atol=1e-3)
-    # Centre untouched, and the drop grows with distance.
-    assert positions[:, 2].max() == pytest.approx(0.0, abs=1e-6)
-    assert positions[:, 2].min() < 0.0
-
-
-def test_the_droop_puts_the_horizon_where_geometry_says():
-    """A flat plane's horizon sits at exactly eye level at every altitude; a
-    curved one dips by sqrt(2h/R) — 1.0 degree at 1 km of altitude, 3.05 at 9 km —
-    and that dip is what the drop has to produce."""
-    for altitude, expected_dip in ((1000.0, 1.01), (9000.0, 3.05)):
-        horizon = math.sqrt(2.0 * PLANET_RADIUS_M * altitude)
-        drop = CURVATURE * horizon**2
-        # Angle below eye level of the surface point at the horizon distance.
-        dip = math.degrees(math.atan((altitude + drop) / horizon))
-        assert dip == pytest.approx(expected_dip, rel=0.01)
-
-
-def test_swell_grid_mesh_triangles_valid_and_wound():
-    """Two triangles per cell, every index in range, with the documented winding."""
-    grid_half, subdivs, outer_half, rings = 1000.0, 6, 12000.0, 4
-    node = make_swell_grid_mesh(grid_half, subdivs, outer_half, border_rings=rings)
-    m = _grid_size(subdivs, rings)
-
-    prim = node.get_geom(0).get_primitive(0)
-    assert prim.get_num_vertices() == 6 * (m - 1) * (m - 1)
-
-    indices = [prim.get_vertex(i) for i in range(prim.get_num_vertices())]
-    assert min(indices) >= 0
-    assert max(indices) < m * m
-    # First cell: triangles (v0, v0+1, v0+m) and (v0+1, v0+m+1, v0+m), v0 = 0.
-    assert indices[:6] == [0, 1, m, 1, m + 1, m]
-
-
-def test_swell_grid_mesh_scales_with_subdivisions_and_rings():
-    """Vertex and triangle counts follow the inner span plus the border rings."""
-    for subdivs in (4, 16, 64):
-        for rings in (1, 5):
-            node = make_swell_grid_mesh(2000.0, subdivs, 10000.0, border_rings=rings)
-            m = _grid_size(subdivs, rings)
-            geom = node.get_geom(0)
-            assert geom.get_vertex_data().get_num_rows() == m * m
-            assert geom.get_primitive(0).get_num_vertices() == 6 * (m - 1) * (m - 1)
-
-
-def test_ocean_radius_defaults_to_the_shared_planet():
-    """The terrain demo passes its own radius; SpaceFlight relies on the default."""
-    import inspect
-
-    from world_builder.ocean import Ocean
-
-    parameter = inspect.signature(Ocean).parameters["planet_radius"]
-    assert parameter.default == PLANET_RADIUS_M
-
-
-def test_exact_sphere_droop_lies_on_the_sphere():
-    radius = 600e3
-    node = make_swell_grid_mesh(
-        4000.0, 8, 150e3, curvature=1.0 / (2.0 * radius), exact_sphere=True
-    )
-    v = _read_positions(node).astype(np.float64)
-    distance = np.sqrt(v[:, 0] ** 2 + v[:, 1] ** 2 + (v[:, 2] + radius) ** 2)
-    np.testing.assert_allclose(distance, radius, atol=0.05)
-    # The paraboloid stands above it far out.
-    parabolic = _read_positions(
-        make_swell_grid_mesh(4000.0, 8, 150e3, curvature=1.0 / (2.0 * radius))
-    )
-    assert np.max(parabolic[:, 2] - v[:, 2]) > 50.0
-
-
-# ── Reflection decoding ─────────────────────────────────────────────────────────
-
-# ocean.frag's aces_inverse, row-major (its GLSL literals are column-major).
+# sea.glsl's aces_inverse, row-major (its GLSL literals are column-major).
 _M1_INV = np.array(
     [
         [1.764741, -0.675778, -0.088963],
@@ -211,7 +41,7 @@ _M2_INV = np.array(
 
 
 def _aces_inverse(display):
-    """A port of ocean.frag's aces_inverse: display colour to linear light."""
+    """A port of sea.glsl's aces_inverse: display colour to linear light."""
     w = np.minimum(_M2_INV @ np.clip(display, 0.0, 1.0) ** 2.2, 1.0)
     qa = 1.0 - 0.983729 * w
     qb = 0.0245786 - 0.4329510 * w
@@ -250,7 +80,7 @@ def test_double_tonemap_would_brighten_a_night_sky():
 
 
 def test_c_wave_is_the_mean_square_octave_slope():
-    """ocean.frag's C_WAVE: (exp(sin x - 1) cos x)^2 averaged over a period."""
+    """sea.glsl's C_WAVE: (exp(sin x - 1) cos x)^2 averaged over a period."""
     x = np.linspace(0.0, 2.0 * math.pi, 200001)
     assert np.mean((np.exp(np.sin(x) - 1.0) * np.cos(x)) ** 2) == pytest.approx(
         C_WAVE, rel=1e-5
@@ -305,7 +135,27 @@ def test_quality_presets_order_their_cost():
         # A cheaper preset drops octaves sooner (more pixels per wavelength).
         assert a.aa_gone_px >= b.aa_gone_px and a.aa_full_px >= b.aa_full_px
         assert a.reflection_scale <= b.reflection_scale
-        assert a.swell_grid_subdivs <= b.swell_grid_subdivs
     for level in levels:
         settings = OceanSettings.preset(level)
         assert settings.aa_full_px > settings.aa_gone_px >= 2.0  # Nyquist
+
+
+def test_wave_phases_carry_the_far_part_of_every_octave():
+    """sea.glsl adds each octave's phase at the chart point (from here) to
+    the local part it computes in float32: together they are the octave's
+    full phase, frequency * direction . position + speed * time, mod 2 pi."""
+    directions = wave_directions((0.6, 0.8), 0.5)
+    origin = np.array([31234.5, -27890.25])  # tens of km from the anchor
+    local = np.array([3.5, -12.0])
+    time = 4321.0
+    far = wave_phases(directions, origin, time)
+    i = np.arange(len(directions))
+    frequency = 1.18**i
+    near = frequency * (directions @ (local * WAVE_SCALE))
+    full = frequency * (directions @ ((origin + local) * WAVE_SCALE))
+    full += 2.0 * 1.07**i * time
+    np.testing.assert_allclose(
+        np.mod(far + near - full + math.pi, 2.0 * math.pi) - math.pi, 0.0, atol=1e-6
+    )
+    assert np.all((far >= 0.0) & (far < 2.0 * math.pi))
+    np.testing.assert_allclose(np.linalg.norm(directions, axis=1), 1.0)

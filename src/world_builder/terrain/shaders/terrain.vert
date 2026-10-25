@@ -1,14 +1,16 @@
 #version 330
 
 // Terrain chunk vertex shader: the true sphere (chunks are already curved), the
-// sea-surface mode seen from high up, coastline depth separation, and the clip
-// distance the ocean's reflection pass needs.
+// sea surface (seabed vertices lifted to the water, which the fragment shader
+// shades as sea), and the clip distance the sea's reflection pass needs.
 
 in vec4 p3d_Vertex;     // relative to the chunk centre, planet axes (metres)
 in vec3 p3d_Normal;
 in float height;        // metres above sea level (a skirt's own, below its edge)
 in vec4 biome_a;        // snow, rock, grass, forest
 in vec4 biome_b;        // desert, beach, -, skirt flag
+
+#pragma include "../../ocean/shaders/swell.glsl"
 
 uniform mat4 p3d_ModelViewProjectionMatrix;
 uniform mat4 p3d_ModelViewMatrix;
@@ -17,11 +19,14 @@ uniform vec4 p3d_ClipPlane[1];  // reflection pass only (view space)
 
 uniform vec3  uCamPos;          // MAIN camera in the render frame (also in the mirror pass)
 uniform vec3  uPlanetCentre;    // planet centre in the render frame
-uniform int   uSeaSurface;      // 1: lift the seabed to sea level, shade it as water
-uniform float uDepthBias;       // coastline separation, in depth-buffer steps
+uniform int   uSeaSurface;      // 1: the planet has a sea: the seabed is lifted
+                                // to it and shaded as water
 uniform vec4  uChunk;           // first vertex's uv (wrapped), uv metres per vertex
                                 // step, skirt depth
 uniform int   uFace;            // cube face, for the texture tangents
+uniform vec4  uChunkCentre;     // the chunk's centre, planet frame (the swell's
+                                // point), and 1 / (4 vertex spacing): the finest
+                                // swell it draws
 
 out vec3 vRelPos;     // position relative to the camera, render frame
 out vec2 vUv;         // ground-anchored texture coordinate, metres
@@ -63,27 +68,32 @@ void main() {
     float drawn = height;
 
     if (uSeaSurface == 1 && ground < 0.0) {
-        // Up to sea level; a skirt keeps hanging its depth below it.
-        vec3 lift = up * -ground;
+        // Up to the water: sea level and the swell, which has as much detail
+        // as the chunk's vertices can carry. A skirt keeps hanging its depth
+        // below its edge's water.
+        vec3 planet = uChunkCentre.xyz + p3d_Vertex.xyz;
+        if (skirt) {
+            planet += up * uChunk.w;  // its edge's point
+        }
+        float water = swellHeight(planet - up * ground, -ground, uChunkCentre.w);
+        vec3 lift = up * (water - ground);
         local.xyz += transpose(rotation) * lift;
         world += lift;
-        drawn -= ground;
+        drawn += water - ground;
         N = up;
     }
 
     gl_Position = p3d_ModelViewProjectionMatrix * local;
 
-    // Land just above the sea and seabed just below it sit within one depth
-    // step of the ocean at range; nudging land nearer and seabed farther by a
-    // fixed number of steps keeps the coastline stable at every distance.
-    // Not needed when the terrain draws the sea itself.
-    float side = uSeaSurface == 1 ? 0.0 : clamp(drawn, -1.0, 1.0);
-    gl_Position.z -= side * uDepthBias * (2.0 / 16777216.0) * gl_Position.w;
-
-    // The ocean's reflection camera clips at the water plane (a clip plane
-    // on its initial state), which a shader must apply itself. Panda enables
-    // the clip distance only while a clip plane is on: other passes ignore it.
-    gl_ClipDistance[0] = dot(p3d_ClipPlane[0], p3d_ModelViewMatrix * local);
+    // The sea's reflection camera clips at the water plane (a clip plane on
+    // its initial state), which a shader must apply itself. Panda enables the
+    // clip distance only while a clip plane is on, and passes a zero plane
+    // otherwise. The sea is not in its own reflection: in that pass its
+    // vertices are clipped too (clipping, not a discard, which would cost the
+    // early depth test everywhere).
+    bool mirror = p3d_ClipPlane[0] != vec4(0.0);
+    gl_ClipDistance[0] = mirror && uSeaSurface == 1 && ground < 0.0
+        ? -1.0 : dot(p3d_ClipPlane[0], p3d_ModelViewMatrix * local);
 
     vRelPos = world - uCamPos;
     vUv = uChunk.xy + gridCoord(gl_VertexID) * uChunk.z;

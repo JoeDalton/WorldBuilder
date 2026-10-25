@@ -99,6 +99,7 @@ class TerrainCollision:
         self._samples = samples
         self._registered: set[tuple] = set()
         self.native = self._make_native()
+        self.native.set_swell(terrain.swell)
         self._root = terrain.root.get_parent().attach_new_node("terrain-collision")
         node = CollisionNode(name)
         node.set_from_collide_mask(BitMask32.all_off())
@@ -161,6 +162,12 @@ class TerrainCollision:
         self.native = self._make_native()
         self.native.attach(node, self._samples)
         self._registered = set()
+        self.native.set_swell(self.terrain.swell)
+
+    def set_swell(self, swell) -> None:
+        """The sea's swell now (``Terrain.set_swell``): the water it raises,
+        as drawn, is solid. None = calm water at sea level."""
+        self.native.set_swell(swell)
 
     def material_at(self, point: ArrayLike, relative_to: NodePath | None) -> str | None:
         frame = relative_to if relative_to is not None else self.node.get_top()

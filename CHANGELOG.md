@@ -37,6 +37,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in ~9 s. (#20)
 - Per-frame shader inputs of the ocean are bound once and written in place;
   the clouds' pixel angle and sky light are set only when they change. (#20)
+- The sea is drawn by the terrain's own chunks, on the true sphere and with
+  the terrain's LOD, instead of by a separate mesh under the camera (#20):
+  - `world_builder.ocean.Sea` gives it its near look (the old ocean's waves,
+    reflection, depth colour and foam) below `OceanLook.near_band`
+    (12-18 km), crossfaded into the terrain's flat water above: the 15 km
+    handover and its first-time shader compile are gone. Only chunks with
+    water pay for the near look's shader.
+  - The swell is a field of the planet-frame point, the same for every
+    camera, drifting with the wind by slow rotations (no seams, no anchor
+    jumps). It fades out with each chunk's resolution, so it flattens with
+    distance through the LOD.
+  - Collision and `TerrainQuery` follow the drawn water, swell included,
+    instead of the sea-level sphere (`Terrain.set_swell`, which `Sea` calls
+    every frame). The swell's CPU copy is `terrain/native/swell.h`, in the
+    noise library (ABI 3) and the collision solid, with a numpy fallback.
+  - Depth colour and foam read each vertex's own depth instead of seabed
+    textures baked on a tangent plane, so they reach every distance the
+    chunks resolve; the waves' phases are computed in float64 on the CPU.
+  - The coastline is one mesh, without the depth bias that hid two meshes'
+    seam.
+
+### Removed
+
+- `world_builder.ocean.Ocean`, its swell mesh, `ocean/seabed.py` and the
+  `ocean.vert` / `ocean.frag` / `seabed.glsl` shaders; use `Sea`, which a
+  `World` builds from an `OceanLook`. (#20)
+- `OceanSettings.seabed_cascades` and `swell_grid_subdivs`: saved settings
+  that name them load with a warning. (#20)
+- `OceanLook.handover`, `Terrain.set_sea_surface` and `World`'s
+  `BodyOcean`; `Body.ocean` is now the body's `Sea`. `OceanLook.haze_color`
+  and `haze_distance` are ignored (the atmosphere hazes the sea). (#20)
 
 ### Fixed
 

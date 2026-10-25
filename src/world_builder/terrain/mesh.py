@@ -64,17 +64,21 @@ def shared_triangles() -> GeomTriangles:
     return tris
 
 
-def build_chunk_node(chunk: ChunkData) -> GeomNode:
+def build_chunk_node(chunk: ChunkData, margin: float = 0.0) -> GeomNode:
     """A GeomNode for one chunk, relative to its centre (:attr:`ChunkData.centre`).
 
     :param chunk: generated chunk data
+    :param margin: metres to widen its bounds by on every side (what the
+        shader moves its vertices by: the sea's swell)
     :returns: the node, bounds final
     """
     vdata = GeomVertexData(f"terrain{chunk.key}", vertex_format(), Geom.UH_static)
     rows = len(chunk.vertex_bytes) // VERTEX_DTYPE.itemsize
     vdata.unclean_set_num_rows(rows)
     memoryview(vdata.modify_array(0)).cast("B")[:] = chunk.vertex_bytes
-    bounds = BoundingBox(Point3(*chunk.aabb_min), Point3(*chunk.aabb_max))
+    bounds = BoundingBox(
+        Point3(*(chunk.aabb_min - margin)), Point3(*(chunk.aabb_max + margin))
+    )
     geom = Geom(vdata)
     geom.add_primitive(shared_triangles())
     # On the Geom too, in case the cull tests Geoms individually.

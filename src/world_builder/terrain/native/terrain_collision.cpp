@@ -21,6 +21,8 @@
 #include "register_type.h"
 #include "pandaVersion.h"
 
+#include "swell.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -98,7 +100,9 @@ class TerrainData : public ReferenceCount {
 public:
   TerrainData(double radius, int max_level, int64_t n0, bool ocean)
       : radius(radius), max_level(max_level), n0(n0), ocean(ocean),
-        spacing0(M_PI * radius / 2.0 / (double)n0), finest(max_level) {}
+        spacing0(M_PI * radius / 2.0 / (double)n0), finest(max_level), swell_on(false) {
+    std::memset(&swell, 0, sizeof(swell));
+  }
   ~TerrainData() { for (auto &kv : chunks) delete kv.second; }
 
   double radius;
@@ -109,6 +113,29 @@ public:
   int finest;
   V3 origin;
   std::unordered_map<uint64_t, Chunk *> chunks;
+  // The sea's swell now (swell.h), which raises the drawn water.
+  WbSwell swell;
+  bool swell_on;
+
+  // The highest the water stands above sea level.
+  double sea_top() const {
+    return swell_on ? (1.0 - WB_SWELL_MEAN) * std::fabs(swell.amplitude) : 0.0;
+  }
+
+  // A grid vertex as drawn (terrain.vert): under sea level, raised to the
+  // water, its swell band-limited by the chunk's spacing.
+  V3 drawn(const V3 &v, const Chunk *c) const {
+    double r = v.length();
+    double ground = r - radius;
+    if (ground >= 0.0) return v;
+    V3 up = v * (1.0 / r);
+    double water = 0.0;
+    if (swell_on) {
+      double p[3] = {up.x * radius, up.y * radius, up.z * radius};
+      water = wb_swell_height(&swell, p, -ground, 0.25 / spacing_at(c));
+    }
+    return up * (radius + water);
+  }
 
   void add(Chunk *chunk) {
     uint64_t key = pack(chunk->level, chunk->face, chunk->i, chunk->j);
@@ -182,8 +209,11 @@ public:
   }
 
   // Radial ray against the drawn triangle under unit direction d
-  // (query._triangle_intersect). False where no chunk is drawn.
-  bool surface(const V3 &d, Surface &out, const Chunk *hint = nullptr) const {
+  // (query._triangle_intersect): over the sea, its corners raised to the
+  // water, unless `ground` asks for the bare seabed. False where no chunk is
+  // drawn.
+  bool surface(const V3 &d, Surface &out, const Chunk *hint = nullptr,
+               bool ground = false) const {
     double fu, fv;
     const Chunk *c = locate(d, hint, fu, fv);
     if (c == nullptr) return false;
@@ -191,8 +221,10 @@ public:
     int row = std::min(QUADS - 1, std::max(0, (int)std::floor(fv)));
     int base = row * VERTS + col;
     const float *p = c->pos.data();
+    bool sea = ocean && !ground;
     auto vertex = [&](int index) {
-      return V3(p[3 * index], p[3 * index + 1], p[3 * index + 2]) + c->centre;
+      V3 v = V3(p[3 * index], p[3 * index + 1], p[3 * index + 2]) + c->centre;
+      return sea ? drawn(v, c) : v;
     };
     V3 v00 = vertex(base), v01 = vertex(base + 1), v10 = vertex(base + VERTS),
        v11 = vertex(base + VERTS + 1);
@@ -204,10 +236,6 @@ public:
     out.height = t - radius;
     out.normal = n;
     out.chunk = c;
-    if (ocean && out.height < 0.0) {
-      out.height = 0.0;
-      out.normal = d;
-    }
     return true;
   }
 
@@ -227,7 +255,7 @@ public:
     } else {
       top = c->h_max;
     }
-    return ocean ? std::max(top, 0.0) : top;
+    return ocean ? std::max(top, sea_top()) : top;
   }
 
   double spacing_at(const Chunk *c) const {
@@ -377,8 +405,8 @@ public:
     face_coords(d, face, ka, kb);
     const Chunk *c = find(face, ka, kb, nullptr);
     if (c == nullptr) return -2;
-    if (ocean && surface(d, surf, c) && surf.height <= 0.0 && surf.normal.dot(d) > 0.999999) {
-      return -1;
+    if (ocean && surface(d, surf, c, true) && surf.height < 0.0) {
+      return -1;  // the seabed is under water (query.material_at)
     }
     double scale = (double)((int64_t)1 << c->level);
     int col = std::min(QUADS, std::max(0, (int)std::lround(ka / scale - (double)(c->i * QUADS))));
@@ -489,6 +517,24 @@ WB_API void *wb_terrain_new(double radius, int max_level, long long n0, int ocea
   TerrainData *data = new TerrainData(radius, max_level, (int64_t)n0, ocean != 0);
   data->ref();
   return data;
+}
+
+// The sea's swell now (world_builder.ocean.swell.Swell; on = 0: calm water
+// at sea level). The rotations are row-major, applied as R . point.
+WB_API void wb_terrain_set_swell(void *handle, int on, double amplitude, double scale,
+                                 const double *rot_a, const double *rot_b, int by_depth,
+                                 double shallow, double deep) {
+  TerrainData *data = (TerrainData *)handle;
+  data->swell_on = on != 0;
+  if (!data->swell_on) return;
+  WbSwell &s = data->swell;
+  s.amplitude = amplitude;
+  s.scale = scale;
+  std::memcpy(s.rot_a, rot_a, sizeof(s.rot_a));
+  std::memcpy(s.rot_b, rot_b, sizeof(s.rot_b));
+  s.by_depth = by_depth;
+  s.shallow = shallow;
+  s.deep = deep;
 }
 
 WB_API void wb_terrain_free(void *handle) {

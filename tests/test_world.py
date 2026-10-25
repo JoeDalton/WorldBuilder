@@ -21,7 +21,7 @@ from world_builder.depth import (
     NEAR_CAMERA_MASK,
     SplitDepthCameras,
 )
-from world_builder.ocean import Ocean
+from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
 from world_builder.sky import Sky
 from world_builder.terrain.chart import TangentFrame
@@ -30,7 +30,6 @@ from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.world import (
     Body,
     BodyLook,
-    BodyOcean,
     CloudLook,
     OceanLook,
     SkyLook,
@@ -65,7 +64,7 @@ def _same(a, b) -> bool:
     "look,part,own",
     [
         (CloudLook, SphericalClouds.__init__, ()),
-        (OceanLook, Ocean.__init__, OceanLook.WORLD_FIELDS),
+        (OceanLook, Sea.__init__, OceanLook.WORLD_FIELDS),
         (SkyLook, Sky.__init__, ("stars",)),
     ],
 )
@@ -250,41 +249,59 @@ def test_body_by_name():
 # ── ocean ──────────────────────────────────────────────────────────────────────
 
 
-def _ocean(look=OceanLook()):
-    """A BodyOcean over stand-ins: what its handover switches."""
-    ocean = object.__new__(BodyOcean)
-    ocean.look = look
-    ocean.terrain = MagicMock(radius=R)
-    ocean.ocean = MagicMock()
-    ocean._anchor = None
-    ocean.swell = True
-    return ocean
+def _sea(look=OceanLook()):
+    """A Sea over stand-ins: what its altitude band and its chart do."""
+    sea = object.__new__(Sea)
+    sea.near_band = look.near_band
+    sea.anchor_range = look.anchor_range
+    sea.terrain = MagicMock(radius=R, position=np.zeros(3))
+    sea.terrain.to_render.side_effect = lambda p: np.asarray(p)
+    sea.terrain.spec.has_ocean = True
+    sea.app = MagicMock()
+    sea.frame = MagicMock()
+    sea.refl_buffer = MagicMock()
+    sea._showing = None
+    sea._frame_inputs = MagicMock()
+    sea._anchor = None
+    return sea
 
 
-def test_ocean_hands_the_sea_over_with_hysteresis():
-    ocean = _ocean()
-    low, high = OceanLook().handover
-    ocean.handover(high + 1.0)
-    assert not ocean.swell
-    ocean.terrain.set_sea_surface.assert_called_with(True)
-    ocean.ocean.base_node.hide.assert_called_once()
-    ocean.handover((low + high) / 2)  # inside the band: unchanged
-    assert not ocean.swell
-    ocean.handover(low - 1.0)
-    assert ocean.swell
-    ocean.terrain.set_sea_surface.assert_called_with(False)
-    ocean.ocean.refl_buffer.set_active.assert_called_with(True)
+def test_the_near_look_fades_through_its_band():
+    sea = _sea()
+    sea._place = MagicMock()
+    sea._mirror = MagicMock()
+    sea._drift_swell = MagicMock()
+    sea._clock = lambda: 1.0
+    sea._directions = np.zeros((64, 2))
+    sea._chart_xy = (0.0, 0.0)
+    low, high = OceanLook().near_band
+    up = TangentFrame.at(10.0, 20.0).up
+    sea.update(up * (R + low - 1.0))
+    assert sea.near == 1.0
+    sea.terrain.set_sea_near.assert_called_with(True)
+    sea.update(up * (R + 0.5 * (low + high)))
+    assert sea.near == pytest.approx(0.5)
+    sea.update(up * (R + high + 1.0))
+    assert sea.near == 0.0
+    sea.refl_buffer.set_active.assert_called_with(False)
+    sea.terrain.set_sea_near.assert_called_with(False)
+    sea.terrain.spec.has_ocean = False  # a dry planet: never the near look
+    sea.update(up * (R + 10.0))
+    assert sea.near == 0.0
 
 
-def test_ocean_waves_stay_anchored_then_re_anchor():
-    ocean = _ocean()
+def test_the_waves_stay_anchored_then_re_anchor():
+    sea = _sea()
     start = TangentFrame.at(10.0, 20.0).up
-    assert ocean.anchor(start) == (0.0, 0.0)
+    sea._place(start)
+    assert sea._chart_xy == (0.0, 0.0)
     near = TangentFrame.at(10.0 + math.degrees(10e3 / R), 20.0).up  # 10 km north
-    gx, gy = ocean.anchor(near)
+    sea._place(near)
+    gx, gy = sea._chart_xy
     assert gx == pytest.approx(0.0, abs=1.0) and gy == pytest.approx(10e3, rel=1e-3)
     far = TangentFrame.at(10.0 + math.degrees(60e3 / R), 20.0).up  # past 50 km
-    assert ocean.anchor(far) == (0.0, 0.0)
+    sea._place(far)
+    assert sea._chart_xy == (0.0, 0.0)
 
 
 # ── a whole world ──────────────────────────────────────────────────────────────
@@ -347,7 +364,7 @@ def test_a_whole_world(window, monkeypatch):
             world.update(origin, far=depth.far)
             window.graphicsEngine.render_frame()
 
-        assert planet.ocean.swell
+        assert planet.ocean.near == 1.0
         # The sea's plane is the tangent plane at the camera's nadir (the
         # camera is wherever earlier tests left it, near render's origin)
         nadir = world.camera_world / np.linalg.norm(world.camera_world)

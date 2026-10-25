@@ -9,14 +9,13 @@ This is also a full vibe-coding experiment for me
 | `world_builder.atmosphere` | Single-scattering atmospheres (sky colour, sunsets, aerial perspective, the limb from space), applied by every shader |
 | `world_builder.sky` | A star field (procedural, with tunable nebulae, or a painted cube map) and the sun, seen through the air |
 | `world_builder.clouds` | Volumetric billboard clouds: a flat field, or a whole planet's, following a weather map (billboards near, a deck far, one pattern) |
-| `world_builder.ocean` | A camera-locked reflective ocean with an optional geometric swell |
+| `world_builder.ocean` | The sea's look on the terrain's own chunks: filtered waves, a drifting swell that collisions follow, planar reflections, depth colour and shoreline foam |
 | `world_builder.depth` | A near/far camera split, for views from the ground to orbit |
 
-The ocean and the flat cloud field curve with the planet by a camera-relative
-drop, `d²/2R`, so they meet at the horizon (`world_builder.PLANET_RADIUS_M` by
-default). The terrain and the planet clouds are real geometry around the
-planet's centre; `scripts/demo_terrain.py` shows how to place the ocean
-under the camera next to them.
+The flat cloud field curves with the planet by a camera-relative drop,
+`d²/2R`, so it meets the horizon (`world_builder.PLANET_RADIUS_M` by default).
+The terrain, its sea and the planet clouds are real geometry around the
+planet's centre.
 
 ## Try it
 

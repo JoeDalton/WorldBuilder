@@ -27,6 +27,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -316,7 +317,7 @@ def _ridged_plan(
 # ── native library ────────────────────────────────────────────────────────────
 
 #: Interface version of the native library (``WB_NOISE_ABI`` in noise.c).
-_NATIVE_ABI = 2
+_NATIVE_ABI = 3
 _SUFFIX = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
 #: Where the native noise library is built and shipped. Found by path: the
 #: ``native`` package's own imports lead back here.
@@ -349,6 +350,8 @@ class _NativeNoise:
             f64,
             ptr,
         ]
+        lib.wb_swell_heights.argtypes = [ptr, ptr, ptr, ptr, i64, ptr]
+        lib.wb_swell_heights.restype = None
         for function in (lib.wb_simplex3, lib.wb_fbm, lib.wb_ridged, lib.wb_volume_fbm):
             function.restype = None
         self._lib = lib
@@ -433,6 +436,28 @@ class _NativeNoise:
             out.ctypes.data,
         )
         return out.reshape(shape)
+
+    def swell_heights(
+        self, swell: Any, points: np.ndarray, depths: np.ndarray, max_freqs: np.ndarray
+    ) -> np.ndarray:
+        """``wb_swell_heights`` (world_builder.ocean.swell): the water's
+        height at (n, 3) sea-level points, metres
+
+        :param swell: a ``WbSwell`` ctypes structure
+        """
+        points = np.ascontiguousarray(points, dtype=np.float64)
+        depths = np.ascontiguousarray(depths, dtype=np.float64)
+        max_freqs = np.ascontiguousarray(max_freqs, dtype=np.float64)
+        out = np.empty(len(points))
+        self._lib.wb_swell_heights(
+            ctypes.addressof(swell),
+            points.ctypes.data,
+            depths.ctypes.data,
+            max_freqs.ctypes.data,
+            len(points),
+            out.ctypes.data,
+        )
+        return out
 
 
 def native_library() -> _NativeNoise | None:
