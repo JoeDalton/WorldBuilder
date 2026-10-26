@@ -23,7 +23,7 @@
 #endif
 
 /* Bumped when a signature or a result changes; noise.py checks it. */
-#define WB_NOISE_ABI 7
+#define WB_NOISE_ABI 8
 
 static const double F3 = 1.0 / 3.0;
 static const double G3 = 1.0 / 6.0;

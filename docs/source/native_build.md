@@ -36,7 +36,7 @@ Without the library, `Terrain.enable_collision` raises `NativeCollisionError` an
 
 `world_builder.terrain.noise` sums the octaves of `fbm` and `ridged` in `libwb_noise.so` (`.dylib`, `.dll`) when it is there: about 5x faster than numpy, which pays ~150 array operations per octave. A terrain chunk takes ~8 ms instead of ~24, and the weather map, the Milky Way glow and the sea level follow.
 
-It also computes, natively when it can:
+It also computes, natively when it can (`gravity.c`: the summed gravity of the world's bodies at many points, `world_builder.gravity`, 4-9x faster than numpy):
 
 - **The clouds' density** (`wb_volume_fbm`): the octaves of the tiling 64³ noise volume, sampled as `clouds/noise.py` and the GPU sample it. Cloud tiles, the column peaks and the deck's light table use it.
 - **A chunk's geometry** (`chunk.c`): the steps of `chunkgen.generate_chunk` that only shape the grid, none of the planet's rules: the face's directions on a separable grid (`wb_face_grid`, one tangent per row and column), the normals and the slope (`wb_chunk_surface`), the vertex buffer and the box of what is drawn (`wb_chunk_pack`). Each follows its numpy expression's order of operations; `tests/test_native_noise.py` compares whole chunks, a coastal one included (identical here).
@@ -46,7 +46,7 @@ It also computes, natively when it can:
 
 - **Same noise.** It is the numpy code's simplex noise point by point: one octave gives the same bits. Sums of octaves differ from numpy's in the last bits (~1e-12), because numpy rotates the points with BLAS. Within one run every chunk comes from the same code, so neighbouring chunks' edges still match exactly. `tests/test_native_noise.py` compares the two.
 - **Same on every platform.** It is built without floating-point contraction (`-ffp-contract=off`, MSVC's `/fp:precise`), so no compiler fuses a multiply and an add into an FMA and rounds differently on another machine.
-- **No Panda3D, no Python.h.** The binding is ctypes, in `noise.py` itself: the library is found by path (importing the `native` package would import the terrain back), and its name carries no Panda3D series. `wb_noise_abi()` guards against a stale build: bump `WB_NOISE_ABI` in `noise.c` and `_NATIVE_ABI` in `noise.py` together whenever an exported function changes (7 since the clouds' tile vertices).
+- **No Panda3D, no Python.h.** The binding is ctypes, in `noise.py` itself: the library is found by path (importing the `native` package would import the terrain back), and its name carries no Panda3D series. `wb_noise_abi()` guards against a stale build: bump `WB_NOISE_ABI` in `noise.c` and `_NATIVE_ABI` in `noise.py` together whenever an exported function changes (8 since the gravity field).
 - **Without it** a warning is logged and numpy runs. `WORLD_BUILDER_NO_NATIVE_NOISE` forces numpy (to compare); `WORLD_BUILDER_REQUIRE_NATIVE` makes a missing library an error, as for collision.
 
 `scripts/build_native.sh` and `build_native.ps1` build it first, with the system's compiler only; `invoke native` runs them. The platform wheels carry it next to the collision library.

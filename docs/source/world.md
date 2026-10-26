@@ -25,8 +25,9 @@ world = World(
             atmosphere=AtmosphereParams(),
             clouds=CloudLook(altitude=2200.0),
             ocean=OceanLook(swell_amplitude=20.0),
+            mass=5.97e24,
         ),
-        BodyLook("moon", moon_spec, position=moon_centre, ambient=(0.025,) * 3),
+        BodyLook("moon", moon_spec, position=moon_centre, ambient=(0.025,) * 3, mass=7.35e22),
     ],
     sun=SunLook(direction=toward_the_sun),
     sky=SkyLook(),
@@ -142,6 +143,10 @@ band (see `world_builder.depth`).
 
 - **`depth_ranges(origin_world)`**: split and far distances over every body
   (`SplitDepthCameras.system_ranges`).
+- **`gravity_field(g_constant=1.0)`**: the bodies' gravity as point masses
+  (`BodyLook.mass`, keyword only); `acceleration(points)` is the raw vector
+  for N points at once (numpy, or native: 4-9x faster), `-g` is "up". The
+  field is capped inside a body, at its surface value.
 - **`loading`**: True while any terrain waits for ground or any clouds for
   tiles. Wait for it to stay False for a moment before trusting the ground
   (see the terrain's loading phase in [Terrain](terrain.md)).

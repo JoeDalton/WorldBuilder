@@ -317,7 +317,7 @@ def _ridged_plan(
 # ── native library ────────────────────────────────────────────────────────────
 
 #: Interface version of the native library (``WB_NOISE_ABI`` in noise.c).
-_NATIVE_ABI = 7
+_NATIVE_ABI = 8
 _SUFFIX = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
 #: Where the native noise library is built and shipped. Found by path: the
 #: ``native`` package's own imports lead back here.
