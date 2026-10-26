@@ -214,7 +214,7 @@ def test_billboard_order_matches_numpy(native, monkeypatch):
     )
 
     def sorted_tile(offsets):
-        node, tris = sphere._tile_node(data)
+        node, tris, _ = sphere._tile_node(data)
         tile = sphere._Tile(node, tris, data)
         for offset in offsets:
             sphere._sort_billboards(tile, np.asarray(offset))
@@ -232,3 +232,31 @@ def test_billboard_order_matches_numpy(native, monkeypatch):
     distance = np.einsum("ij,ij->i", xyz, xyz)
     assert np.all(np.diff(distance) <= 1e-3 * distance[1:])  # farthest first
     np.testing.assert_array_equal(index[:6], order[0] * 4 + sphere._QUAD_TRIS)
+
+
+def test_billboard_vertices_match_numpy(native, monkeypatch):
+    """billboards.c builds a tile's vertices, bounds and reach as numpy does."""
+    from world_builder.clouds import sphere
+
+    rng = np.random.default_rng(6)
+    particles = rng.uniform(-3000.0, 3000.0, (3000, 9)).astype(np.float32)
+    particles[:, 3] = rng.uniform(50.0, 400.0, 3000)
+    data = sphere.CloudTile((8, 1, 2, 3), 0, np.zeros(3), particles, 0.0)
+
+    def built():
+        node, tris, reach = sphere._tile_node(data)
+        vdata = node.node().get_geom(0).get_vertex_data()
+        vertices = bytes(memoryview(vdata.get_array(0)).cast("B"))
+        index = bytes(memoryview(tris.get_vertices()).cast("B"))
+        bounds = node.node().get_bounds()
+        return vertices, index, reach, tuple(bounds.get_min()), tuple(bounds.get_max())
+
+    got = built()
+    with monkeypatch.context() as m:
+        m.setattr(sphere, "native_library", lambda: None)
+        expected = built()
+    assert got[0] == expected[0]
+    assert got[1] == expected[1]
+    assert got[2] == pytest.approx(expected[2], rel=1e-6)
+    np.testing.assert_array_equal(got[3], expected[3])
+    np.testing.assert_array_equal(got[4], expected[4])

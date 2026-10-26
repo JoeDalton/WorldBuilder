@@ -83,6 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a frame in low flight, p95 17.7 → 16.5 ms, the mean 13.3 → 12.5 ms. The
   numpy fallback sorts stably over the previous order too, so both give the
   same order. (#20)
+- The planet clouds' tiles are built in the native library too, straight
+  into Panda's vertex buffer (`wb_billboard_vertices`): 0.3-1 ms a tile
+  instead of 0.6-3.6, the low flight's p95 16.25 → 15.9 ms and its update
+  p95 8.5 → 7.8 ms. (#20)
 
 ### Removed
 

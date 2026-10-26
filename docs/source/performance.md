@@ -765,6 +765,25 @@ What remains is the four tiles' sorts at 54 µs per thousand billboards in
 flight (17 in isolation: the particles are cold in the cache by then), and
 the scoring.
 
+### The clouds' tiles built in C
+
+A tile's upload built its vertices in numpy (four per billboard, then a
+copy into Panda's buffer): 0.6 ms for 1,900 billboards, 3.6 ms for 8,200,
+up to three tiles a frame. Building them in the workers would have sent five
+times the bytes through the pipe and still copied them on the main thread.
+`wb_billboard_vertices` writes them straight into Panda's buffer instead,
+with the tile's bounds and reach in the same pass, and the index buffer is
+sized directly (`add_next_vertices` cost 0.15 ms of it). A tile: 0.3 ms /
+0.75 ms / 1.0 ms for 1,900 / 5,700 / 8,200 billboards; numpy and C give the
+same bytes (tested).
+
+| Low flight, four runs each | Before | Native build |
+|---|---|---|
+| Frame mean | 12.3-12.5 ms | 12.1-12.5 ms |
+| Frame p95 | 15.9-16.5 ms (16.25) | 15.6-16.7 ms (15.9) |
+| Update mean / p95 | 5.7 / 8.5 ms | 5.6 / 7.8 ms |
+| The clouds' upload in slow frames | +1.1 to +1.3 ms | +0.15 to +0.45 ms |
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

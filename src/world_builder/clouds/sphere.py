@@ -444,34 +444,48 @@ def _shaders() -> tuple[Shader, Shader]:
     return tiles, deck
 
 
-def _tile_node(tile: CloudTile) -> tuple[NodePath, GeomTriangles]:
-    """A GeomNode for one tile (4 vertices per particle), and its index buffer."""
+def _tile_node(tile: CloudTile) -> tuple[NodePath, GeomTriangles, float]:
+    """A GeomNode for one tile (4 vertices per particle), its index buffer,
+    and the tile's reach (the farthest a billboard reaches from its centre).
+
+    The vertices are written straight into Panda's buffer: by the native
+    library when it is built (0.6-3.6 ms a tile in numpy, a fraction of
+    that natively).
+    """
     p = tile.particles
     n = len(p)
-    verts = np.empty((n, 4, 11), dtype=np.float32)
-    verts[:, :, 0:3] = p[:, None, 0:3]
-    verts[:, :, 3:5] = _CORNERS[None, :, :]
-    verts[:, :, 5] = p[:, None, 3]
-    verts[:, :, 6:10] = p[:, None, 4:8]
-    verts[:, :, 10] = p[:, None, 8]
     vdata = GeomVertexData("cloud_tile", _vertex_format(), GeomEnums.UH_static)
     vdata.unclean_set_num_rows(4 * n)
-    memoryview(vdata.modify_array(0)).cast("B")[:] = verts.tobytes()
+    buffer = memoryview(vdata.modify_array(0)).cast("B")
+    native = native_library()
+    if native is not None:
+        box, reach = native.billboard_vertices(p, np.frombuffer(buffer, np.float32))
+        low, high = box[0:3], box[3:6]
+    else:
+        verts = np.frombuffer(buffer, np.float32).reshape(n, 4, 11)
+        verts[:, :, 0:3] = p[:, None, 0:3]
+        verts[:, :, 3:5] = _CORNERS[None, :, :]
+        verts[:, :, 5] = p[:, None, 3]
+        verts[:, :, 6:10] = p[:, None, 4:8]
+        verts[:, :, 10] = p[:, None, 8]
+        radius = p[:, 3].max()
+        low = p[:, 0:3].min(axis=0) - radius
+        high = p[:, 0:3].max(axis=0) + radius
+        reach = float(np.sqrt((p[:, 0:3] ** 2).sum(axis=1).max()) + radius)
+    del buffer
     tris = GeomTriangles(GeomEnums.UH_dynamic)
     tris.set_index_type(GeomEnums.NT_uint32)
-    tris.add_next_vertices(6 * n)
+    indices = tris.modify_vertices()
+    indices.unclean_set_num_rows(6 * n)
     order = (np.arange(n, dtype=np.uint32)[:, None] * 4 + _QUAD_TRIS).ravel()
-    memoryview(tris.modify_vertices()).cast("B")[:] = order.tobytes()
+    memoryview(indices).cast("B")[:] = order.tobytes()
     geom = Geom(vdata)
     geom.add_primitive(tris)
     node = GeomNode(f"clouds{tile.key}")
     node.add_geom(geom)
-    reach = float(p[:, 3].max())
-    low = p[:, 0:3].min(axis=0) - reach
-    high = p[:, 0:3].max(axis=0) + reach
     node.set_bounds(BoundingBox(Point3(*low), Point3(*high)))
     node.set_final(True)
-    return NodePath(node), tris
+    return NodePath(node), tris, reach
 
 
 def _deck_mesh(radius: float, quads: int = DECK_QUADS) -> GeomNode:
@@ -1104,12 +1118,8 @@ class SphericalClouds:
             if len(tile.particles) == 0:
                 node, tris = NodePath("empty"), None
             else:
-                node, tris = _tile_node(tile)
+                node, tris, reach = _tile_node(tile)
                 node.set_bin(_shell_bin(self.spec.shell_of(key[0])), 0)
-                p = tile.particles
-                reach = float(
-                    np.sqrt((p[:, 0:3] ** 2).sum(axis=1).max()) + p[:, 3].max()
-                )
             node.set_pos(*(tile.centre - self._origin))
             centre = tuple(float(c) for c in tile.centre)
             self._tiles[key] = _Tile(node, tris, tile, reach, centre=centre)

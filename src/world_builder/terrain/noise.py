@@ -317,7 +317,7 @@ def _ridged_plan(
 # ── native library ────────────────────────────────────────────────────────────
 
 #: Interface version of the native library (``WB_NOISE_ABI`` in noise.c).
-_NATIVE_ABI = 6
+_NATIVE_ABI = 7
 _SUFFIX = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
 #: Where the native noise library is built and shipped. Found by path: the
 #: ``native`` package's own imports lead back here.
@@ -383,8 +383,10 @@ class _NativeNoise:
         ]
         # The planet clouds' back-to-front order (billboards.c).
         lib.wb_billboard_order.argtypes = [ptr, i64, i64, ptr, ptr, ptr]
+        lib.wb_billboard_vertices.argtypes = [ptr, i64, ptr, ptr, ptr]
         for function in (
             lib.wb_billboard_order,
+            lib.wb_billboard_vertices,
             lib.wb_face_grid,
             lib.wb_chunk_surface,
             lib.wb_chunk_pack,
@@ -512,6 +514,29 @@ class _NativeNoise:
             order.ctypes.data,
             index.ctypes.data,
         )
+
+    def billboard_vertices(
+        self, particles: np.ndarray, out: np.ndarray
+    ) -> tuple[np.ndarray, float]:
+        """A cloud tile's vertices (``wb_billboard_vertices``).
+
+        :param particles: (n, 9) float32, ``CloudTile.particles``
+        :param out: (4 n * 11,) float32, filled (four corners a billboard)
+        :returns: the tile's box (min xyz, max xyz; float32) and its reach
+        """
+        particles = np.ascontiguousarray(particles, dtype=np.float32)
+        assert particles.shape[1] == 9 and out.dtype == np.float32
+        assert out.size == 4 * 11 * len(particles)
+        box = np.empty(6, dtype=np.float32)
+        reach = ctypes.c_double()
+        self._lib.wb_billboard_vertices(
+            particles.ctypes.data,
+            len(particles),
+            out.ctypes.data,
+            box.ctypes.data,
+            ctypes.byref(reach),
+        )
+        return box, reach.value
 
     def face_grid(self, face: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
         """``cubesphere.face_dirs(face, *np.meshgrid(a, b))``: (len(b) *
