@@ -14,9 +14,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`g = -G sum m (x - p) / |x - p|^3`, capped inside a body at its surface
   value). A fused native kernel (`native/gravity.c`, 4-9x faster) with a numpy
   fallback.
+- `world_builder.asteroids`: asteroid fields from a spec, stored nowhere
+  (docs/source/asteroids.md). A `FieldSpec` sets the extent (box or ball, soft
+  edges), the density and its clumping (noise above a threshold set from a
+  coverage), the size distribution (`Distribution`: uniform, normal,
+  lognormal, power law, U-shaped, table), spins (axis distribution, size
+  scaling, free symmetric-top tumble), prototypes, ice and keep-outs.
+  `Scatter` gives the rocks of any part of it, the same every time: Poisson
+  cells per size class, density thinning and a Matern hard core (no two
+  rocks overlap). A native scatter (`native/scatter.c`) gives numpy's rocks
+  ~100x faster. `python -m world_builder.asteroids.preview` draws a field's
+  rocks and statistics. (#14)
+- Rock prototypes (`asteroids.shape`, `asteroids.prototype`,
+  `asteroids.mesh`): an ellipsoid with lumpy noise, ridges and craters,
+  meshed on the terrain's cube-sphere grid at four levels of detail (band
+  limited, crack-free, with each level's error), with a full-detail normal
+  map and a radius grid for collision; built by `ChunkExecutor` workers.
+  `scripts/asteroid_gallery.py` renders them. (#14)
+- `world_builder.asteroids.field.AsteroidField`: an asteroid field drawn by
+  hardware instancing around the camera (one draw per prototype and level
+  of detail), rocks held per size class within their drawing distance,
+  levels of detail by pixel error, spin and tumble in the vertex shader at
+  the game's clock, the terrain's materials and lighting. `AsteroidSettings`
+  (the `asteroids` section of `WorldSettings`) sets its costs.
+  `scripts/demo_asteroids.py` flies through one; `scripts/asteroid_bench.py
+  --field` times it: 3-5 ms p95 frames against SpaceFlight's 10-37 ms for
+  the same 15 km cube. (#14)
+- `AsteroidField.enable_collision`: the rocks near the camera solid to a
+  game's CollisionTraverser, through a native solid
+  (`native/asteroid_collision.cpp`, in the collision library) testing spheres
+  and segments against each rock's finest mesh as drawn, turned to the
+  field's time; one entry per collider. Its owner gives the material
+  (`material_at`) and the surface's speed (`velocity_at`) at a hit.
+  `scripts/asteroid_bench.py --collision` times it: 2.4 ms a traverse
+  against 32 ms for SpaceFlight's per-rock spheres. (#14)
+- `scripts/asteroid_bench.py`: frame times of an asteroid field flown along
+  fixed paths; `--legacy` rebuilds SpaceFlight's current field (one node and
+  collision sphere per rock) as the reference to beat. (#14)
+- `scripts/compare_shots.py`: compares two folders of screenshots pixel by
+  pixel, for shader changes meant to change nothing. (#14)
 
 ### Changed
 
+- The terrain's fragment shader is split into includes other shaders can
+  share, with no pixel changed: `terrain_material.glsl` (the biome texture
+  blend, `layeredMaterial`) and `object_light.glsl` (sun, sky light and
+  highlight, `objectLight`); it takes `aces_tonemap` from `display.glsl`
+  instead of keeping its own copy. (#14)
 - **Breaking:** `BodyLook.mass` is required (keyword only), for the gravity
   field; `Body.mass` reads it.
 - Terrain chunks generate about 3x faster (~8 ms instead of ~24): the noise

@@ -65,10 +65,18 @@ of their own that:
 - lights with the same light values (the sun's colour and direction, the
   ambient), unclipped;
 - ends with the same exposure and tone map as the terrain (`uExposure`,
-  `aces_tonemap`, shared rather than copied, so the two cannot drift);
+  `aces_tonemap` from `atmosphere/shaders/display.glsl`, which the terrain
+  includes too, so the two cannot drift);
 - optionally applies the atmosphere between the camera and the model
   (`atmosphere.glsl`'s `applyAtmospheres`, as the terrain does), for distant
   objects.
+
+The terrain's own lighting and textures are includes such a shader can share:
+`terrain/shaders/object_light.glsl` (`objectLight`: Lambert, the gloss
+highlight and the sky light, in linear light) and
+`terrain/shaders/terrain_material.glsl` (`layeredMaterial`: the biome texture
+layers blended by weight and height, with the rock projected from the sides
+on steep ground). The asteroids (issue #14) are drawn with both.
 
 Textured models would also need their textures decoded to linear light first
 (`pow(texel, 2.2)`) so they come out of the display encoding as authored.

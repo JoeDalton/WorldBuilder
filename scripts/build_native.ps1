@@ -45,7 +45,7 @@ $Work = (New-Item -ItemType Directory -Force (Join-Path $env:TEMP "wb_native")).
 Push-Location $Work
 try {
     & cl.exe /nologo /O2 /fp:precise /MD /utf-8 /DNDEBUG /LD `
-        "$Src\noise.c" "$Src\lod.c" "$Src\chunk.c" "$Src\billboards.c" "$Src\gravity.c" "/Fe$Src\libwb_noise.dll" `
+        "$Src\noise.c" "$Src\lod.c" "$Src\chunk.c" "$Src\billboards.c" "$Src\gravity.c" "$Src\scatter.c" "/Fe$Src\libwb_noise.dll" `
         /link "/IMPLIB:$Work\wb_noise.lib"
     if ($LASTEXITCODE) { throw "cl failed (noise)" }
 } finally {
@@ -59,7 +59,7 @@ try {
 Push-Location $Work
 try {
     & cl.exe /nologo /std:c++14 /O2 /EHsc /MD /utf-8 /DNDEBUG /LD `
-        "/I$Sdk\include" "$Src\terrain_collision.cpp" "/Fe$Out" `
+        "/I$Sdk\include" "$Src\terrain_collision.cpp" "$Src\asteroid_collision.cpp" "/Fe$Out" `
         /link "/LIBPATH:$Sdk\lib" "/IMPLIB:$Work\terrain_collision.lib" `
         libpanda.lib libpandaexpress.lib libp3dtool.lib libp3dtoolconfig.lib
     if ($LASTEXITCODE) { throw "cl failed" }

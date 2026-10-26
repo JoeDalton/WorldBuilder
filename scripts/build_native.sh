@@ -17,7 +17,7 @@ PYTHON=${1:-python3}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 SRC=$HERE/src/world_builder/terrain/native
 
-# The noise library (noise, swell, LOD, chunk geometry, cloud order): plain C, no headers but the system's. No floating-point
+# The noise library (noise, swell, LOD, chunk geometry, cloud order, gravity, asteroid scatter): plain C, no headers but the system's. No floating-point
 # contraction (FMA), so every platform computes the same terrain.
 NOISE_FLAGS="-std=c99 -O3 -ffp-contract=off -fvisibility=hidden"
 if [ "$(uname -s)" = Darwin ]; then
@@ -25,11 +25,11 @@ if [ "$(uname -s)" = Darwin ]; then
     ARCHS=$(lipo -archs "$(ls "$PANDA_DIR"/libpanda.*.dylib | head -1)")
     clang $NOISE_FLAGS -dynamiclib $(printf -- '-arch %s ' $ARCHS) \
         -mmacosx-version-min="${MACOSX_DEPLOYMENT_TARGET:-11.0}" \
-        "$SRC/noise.c" "$SRC/lod.c" "$SRC/chunk.c" "$SRC/billboards.c" "$SRC/gravity.c" -o "$SRC/libwb_noise.dylib" -install_name @rpath/libwb_noise.dylib
+        "$SRC/noise.c" "$SRC/lod.c" "$SRC/chunk.c" "$SRC/billboards.c" "$SRC/gravity.c" "$SRC/scatter.c" -o "$SRC/libwb_noise.dylib" -install_name @rpath/libwb_noise.dylib
     codesign --force --sign - "$SRC/libwb_noise.dylib"
     echo "built $SRC/libwb_noise.dylib"
 else
-    gcc $NOISE_FLAGS -fPIC -shared "$SRC/noise.c" "$SRC/lod.c" "$SRC/chunk.c" "$SRC/billboards.c" "$SRC/gravity.c" -o "$SRC/libwb_noise.so" -lm
+    gcc $NOISE_FLAGS -fPIC -shared "$SRC/noise.c" "$SRC/lod.c" "$SRC/chunk.c" "$SRC/billboards.c" "$SRC/gravity.c" "$SRC/scatter.c" -o "$SRC/libwb_noise.so" -lm
     echo "built $SRC/libwb_noise.so"
 fi
 
@@ -56,7 +56,7 @@ if [ "$(uname -s)" = Darwin ]; then
         $(printf -- '-arch %s ' $(lipo -archs "$PANDA_LIB/libpanda.$SERIES.dylib")) \
         -mmacosx-version-min="${MACOSX_DEPLOYMENT_TARGET:-11.0}" \
         -I"$PANDA_SDK_INCLUDE" -I"$EIGEN_INCLUDE" \
-        "$SRC/terrain_collision.cpp" -o "$OUT" -install_name "@rpath/$(basename "$OUT")" \
+        "$SRC/terrain_collision.cpp" "$SRC/asteroid_collision.cpp" -o "$OUT" -install_name "@rpath/$(basename "$OUT")" \
         -L"$PANDA_LIB" -lpanda."$SERIES" -lpandaexpress."$SERIES" \
         -lp3dtool."$SERIES" -lp3dtoolconfig."$SERIES" \
         -Wl,-rpath,@loader_path/../../../panda3d -Wl,-rpath,"$PANDA_LIB"
@@ -79,7 +79,7 @@ OUT=$SRC/libterrain_collision-panda$SERIES.so
 # panda3d.core first.
 g++ -std=c++14 -O3 -fPIC -shared -D_GLIBCXX_USE_CXX11_ABI=0 -DNDEBUG \
     -I"$PANDA_SDK_INCLUDE" -I"$EIGEN_INCLUDE" \
-    "$SRC/terrain_collision.cpp" -o "$OUT" \
+    "$SRC/terrain_collision.cpp" "$SRC/asteroid_collision.cpp" -o "$OUT" \
     -L"$PANDA_LIB" -l:libpanda.so."$SERIES" -l:libpandaexpress.so."$SERIES" \
     -l:libp3dtool.so."$SERIES" -l:libp3dtoolconfig.so."$SERIES" \
     -Wl,-rpath,'$ORIGIN/../../../panda3d'

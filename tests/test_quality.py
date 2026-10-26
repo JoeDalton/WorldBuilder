@@ -53,6 +53,13 @@ COST_FIELDS = {
         "reflection_scale",
         "foam_noise",
     ],
+    "asteroids": [
+        "max_lod",
+        "normal_size",
+        "instance_budget",
+        "detail_far",
+        "texture_size",
+    ],
 }
 
 

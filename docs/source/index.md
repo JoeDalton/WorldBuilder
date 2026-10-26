@@ -23,6 +23,9 @@ it works.
 - [The native collision library](native_build.md): the C++ collision solid
   behind terrain collision, how it is built and shipped in a wheel for each
   platform, and what it depends on.
+- [Asteroid fields](asteroids.md): fields and rings of rocks scattered from
+  a spec, stored nowhere: sizes, density, clumping, spins, keep-outs,
+  rock shapes; its [backlog](asteroids_backlog.md) lists what could be better.
 - [Clouds](clouds.md): billboard clouds, their density fields and shading.
 - [Quality settings](quality.md): every cost/quality knob, the LOW to ULTRA
   presets, and how a game's settings menu reads and saves them.
@@ -41,6 +44,8 @@ terrain
 atmosphere
 ocean
 native_build
+asteroids
+asteroids_backlog
 clouds
 quality
 performance
