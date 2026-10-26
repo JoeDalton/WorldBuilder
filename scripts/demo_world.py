@@ -103,6 +103,7 @@ def planet_look(spec, clouds: bool) -> BodyLook:
             tuned_elevation=WATER_TUNED_ELEVATION,
         ),
         ambient=SKY_AMBIENT,
+        mass=5.97e24,
     )
 
 
@@ -113,6 +114,7 @@ def moon_look(spec, distance: float) -> BodyLook:
         replace(PRESETS["moon"], seed=MOON_SEED),
         position=tuple(TerrainDemo._moon_position(spec, distance)),
         ambient=SPACE_AMBIENT,
+        mass=7.35e22,
     )
 
 

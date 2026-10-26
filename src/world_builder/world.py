@@ -22,6 +22,7 @@ Usage::
                 atmosphere=AtmosphereParams(),
                 clouds=CloudLook(altitude=2200.0),
                 ocean=OceanLook(),
+                mass=5.97e24,
             ),
         ],
         sun=SunLook(direction=(0.4, -0.5, 0.75)),
@@ -56,7 +57,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -76,6 +77,7 @@ from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.gravity import Gravity
 from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
 from world_builder.sky import Sky
@@ -190,6 +192,8 @@ class BodyLook:
     :ivar spec: its planet (a preset, or a level file's, see
         :func:`world_builder.terrain.level.load_level`)
     :ivar position: its centre, world frame, metres
+    :ivar mass: its mass, in the units of the gravity constant given to
+        :meth:`World.gravity_field` (keyword only: it has no default)
     :ivar atmosphere: its air; None = airless
     :ivar clouds: its planet clouds; None = none (needs air)
     :ivar ocean: its sea's near look; None = the terrain draws its sea as
@@ -207,6 +211,7 @@ class BodyLook:
     ocean: OceanLook | None = None
     ambient: tuple[float, float, float] = (0.34, 0.44, 0.64)
     exposure: float = 0.9
+    mass: float = field(kw_only=True)
 
 
 # ── the parts of one body ────────────────────────────────────────────────────
@@ -244,6 +249,10 @@ class Body:
     @property
     def radius(self) -> float:
         return self.terrain.radius
+
+    @property
+    def mass(self) -> float:
+        return self.look.mass
 
     def parts(self) -> list:
         """:returns: its parts that take world settings"""
@@ -505,6 +514,15 @@ class World:
             )
             for body in self.bodies
         )
+
+    def gravity_field(self, g_constant: float = 1.0) -> Gravity:
+        """The bodies' gravity as point masses (see :mod:`world_builder.gravity`).
+        Build it once and evaluate it for many points: the bodies do not move.
+
+        :param g_constant: G, in the units of the bodies' masses
+        :returns: the field; ``acceleration(points)`` is the raw gravity vector
+        """
+        return Gravity.from_bodies(self.bodies, g_constant)
 
     def nearest(self, camera_world: ArrayLike) -> Body:
         """:returns: the body whose sea level is nearest a point"""

@@ -25,11 +25,11 @@ if [ "$(uname -s)" = Darwin ]; then
     ARCHS=$(lipo -archs "$(ls "$PANDA_DIR"/libpanda.*.dylib | head -1)")
     clang $NOISE_FLAGS -dynamiclib $(printf -- '-arch %s ' $ARCHS) \
         -mmacosx-version-min="${MACOSX_DEPLOYMENT_TARGET:-11.0}" \
-        "$SRC/noise.c" "$SRC/lod.c" "$SRC/chunk.c" "$SRC/billboards.c" -o "$SRC/libwb_noise.dylib" -install_name @rpath/libwb_noise.dylib
+        "$SRC/noise.c" "$SRC/lod.c" "$SRC/chunk.c" "$SRC/billboards.c" "$SRC/gravity.c" -o "$SRC/libwb_noise.dylib" -install_name @rpath/libwb_noise.dylib
     codesign --force --sign - "$SRC/libwb_noise.dylib"
     echo "built $SRC/libwb_noise.dylib"
 else
-    gcc $NOISE_FLAGS -fPIC -shared "$SRC/noise.c" "$SRC/lod.c" "$SRC/chunk.c" "$SRC/billboards.c" -o "$SRC/libwb_noise.so" -lm
+    gcc $NOISE_FLAGS -fPIC -shared "$SRC/noise.c" "$SRC/lod.c" "$SRC/chunk.c" "$SRC/billboards.c" "$SRC/gravity.c" -o "$SRC/libwb_noise.so" -lm
     echo "built $SRC/libwb_noise.so"
 fi
 

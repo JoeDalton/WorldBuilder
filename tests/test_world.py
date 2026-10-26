@@ -86,9 +86,15 @@ def test_looks_are_their_parts_arguments(look, part, own):
     "bodies,message",
     [
         ([], "needs a body"),
-        ([BodyLook("a", EARTHLIKE), BodyLook("a", MOON)], "must differ"),
-        ([BodyLook("a", EARTHLIKE, clouds=CloudLook())], "need an atmosphere"),
-        ([BodyLook("a", PRESETS["desert"], ocean=OceanLook())], "has_ocean"),
+        (
+            [BodyLook("a", EARTHLIKE, mass=1.0), BodyLook("a", MOON, mass=1.0)],
+            "must differ",
+        ),
+        (
+            [BodyLook("a", EARTHLIKE, clouds=CloudLook(), mass=1.0)],
+            "need an atmosphere",
+        ),
+        ([BodyLook("a", PRESETS["desert"], ocean=OceanLook(), mass=1.0)], "has_ocean"),
     ],
 )
 def test_a_world_refuses_what_it_cannot_build(bodies, message):
@@ -99,10 +105,10 @@ def test_a_world_refuses_what_it_cannot_build(bodies, message):
 # ── stand-ins ──────────────────────────────────────────────────────────────────
 
 
-def _body(name="planet", spec=EARTHLIKE, position=(0.0, 0.0, 0.0), **look):
+def _body(name="planet", spec=EARTHLIKE, position=(0.0, 0.0, 0.0), mass=1.0, **look):
     terrain = MagicMock(position=np.array(position, float), radius=spec.radius)
     terrain.loading = False
-    return Body(look=BodyLook(name, spec, position, **look), terrain=terrain)
+    return Body(look=BodyLook(name, spec, position, mass=mass, **look), terrain=terrain)
 
 
 def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
@@ -175,6 +181,15 @@ def test_nearest_body_is_by_sea_level():
     world = _world(planet, moon)
     assert world.nearest([0.0, 0.0, R + 1e5]) is planet
     assert world.nearest([0.0, 1e7 - MOON.radius - 10.0, 0.0]) is moon
+
+
+def test_gravity_field_pulls_toward_the_bodies():
+    planet = _body(mass=6e24)
+    moon = _body("moon", MOON, position=(0.0, 1e7, 0.0), mass=7e22)
+    field = _world(planet, moon).gravity_field(g_constant=6.674e-11)
+    g = field.acceleration([0.0, 0.0, R + 1e5])
+    assert g[2] == pytest.approx(-6.674e-11 * 6e24 / (R + 1e5) ** 2, rel=1e-2)
+    assert field.acceleration([0.0, 1e7 - MOON.radius, 0.0])[1] > 0
 
 
 def test_light_through_the_air():
@@ -337,8 +352,9 @@ def test_a_whole_world(window, monkeypatch):
                 atmosphere=AtmosphereParams(),
                 clouds=CloudLook(altitude=2200.0),
                 ocean=OceanLook(),
+                mass=5.97e24,
             ),
-            BodyLook("moon", MOON, position=tuple(frame.up * 1e7)),
+            BodyLook("moon", MOON, position=tuple(frame.up * 1e7), mass=7.35e22),
         ],
         sun=SunLook(direction=tuple(frame.up + frame.north)),
         sky=SkyLook(),
