@@ -44,6 +44,14 @@ world.destroy()
 
 `scripts/demo_world.py` is the terrain demo rebuilt this way.
 
+**Open space.** A world may have no body: `World(app, [], sun=..., sky=...,
+space_ambient=...)` is the sky, the sun and the Panda3D lights alone, for a
+space level. Its light everywhere is the bare sun and `space_ambient` (the
+sky light away from any body), `loading` is always False, and `depth_ranges`
+gives a fixed split (`SPACE_SPLIT_M`, 2 km) and far plane (`SPACE_FAR_M`,
+1,000 km). An asteroid field (`world_builder.asteroids`) can share its worker
+pool (`executor=world.executor`).
+
 ## Looks
 
 Each look field is an argument of the same name of the part it configures,

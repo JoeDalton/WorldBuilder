@@ -75,6 +75,8 @@ EPOCH_S = 1024.0
 #: Frames between uploads of the instance table, at most (new rocks are at
 #: the edge of their drawing distance: a few frames late is unseen).
 UPLOAD_EVERY = 3
+#: Without a camera (headless), the pixel scale ranges are set for.
+HEADLESS_PIXELS_PER_RADIAN = 900.0 / math.radians(40.0)
 #: Past the budget, the smallest size drawn grows by this factor per frame;
 #: well under it, it shrinks back.
 BUDGET_STEP = 1.1
@@ -156,6 +158,7 @@ class AsteroidField:
         self.far = float(far)
         self.position = np.asarray(position, dtype=np.float64)
         self.orientation = np.asarray(orientation, dtype=np.float64)
+        self._rotation_matrix = _rotation(self.orientation)
         self._owns_executor = executor is None
         self.executor = executor or ChunkExecutor(backend=backend)
         self._channel = f"{name}:{id(self)}"
@@ -227,12 +230,13 @@ class AsteroidField:
         field, unit quaternion)."""
         self.position = np.asarray(position, dtype=np.float64)
         self.orientation = np.asarray(orientation, dtype=np.float64)
+        self._rotation_matrix = _rotation(self.orientation)
         self._set_rotation()
 
     @property
     def rotation(self) -> np.ndarray:
         """(3, 3) world from field"""
-        return _rotation(self.orientation)
+        return self._rotation_matrix
 
     def to_field(self, point_world: ArrayLike) -> np.ndarray:
         """:returns: a world point in the field frame"""
@@ -289,15 +293,21 @@ class AsteroidField:
         :param camera_render: the camera in render (render's axes are the
             world's)
         :param cameras: the views the rocks may be seen in (camera
-            NodePaths), the first giving the pixel scale; None = the app's
+            NodePaths), the first giving the pixel scale; None = the app's.
+            Without any (headless), nothing is drawn; the rocks are still
+            held and solid
         """
         start = time.perf_counter()
         self._take_prototypes()
-        cameras = list(cameras) if cameras is not None else [self.app.cam]
+        if cameras is None:
+            cameras = [getattr(self.app, "cam", None)]
+        cameras = [view for view in cameras if view is not None]
         camera = self.to_field(camera_world)
-        main_lens = cameras[0].node().get_lens()
-        height = self.app.win.get_y_size() if self.app.win is not None else 900
-        pixels_per_radian = height / math.radians(main_lens.get_vfov())
+        if cameras and self.app.win is not None:
+            vfov = cameras[0].node().get_lens().get_vfov()
+            pixels_per_radian = self.app.win.get_y_size() / math.radians(vfov)
+        else:  # headless: rocks held and solid as on a 900-pixel 40-degree view
+            pixels_per_radian = HEADLESS_PIXELS_PER_RADIAN
         # Rocks in and out of range.
         ranges = self.population.ranges(pixels_per_radian, self._min_pixels, self.far)
         added, removed = self.population.update(camera, ranges)
@@ -330,7 +340,9 @@ class AsteroidField:
             frame["uCamCell"][k] = LVecBase3f(*cell)
             frame["uCamLocal"][k] = LVecBase3f(*(camera - cell * c.cell))
         visible_ms = 0.0
-        if self._errors is not None:
+        if self._errors is not None and self.collision is not None:
+            self.collision.update(camera, camera_render, now)
+        if self._errors is not None and cameras:
             t = time.perf_counter()
             planes = np.array([self._planes(view) for view in cameras])
             visible = self.population.visible(
@@ -346,8 +358,6 @@ class AsteroidField:
             self._budget(visible.in_range)
             self._last_visible = visible
             visible_ms = (time.perf_counter() - t) * 1e3
-            if self.collision is not None:
-                self.collision.update(camera, camera_render, now)
         self.stats = {
             "rocks": self.population.count,
             "drawn": 0 if self._last_visible is None else len(self._last_visible.slots),
@@ -385,9 +395,12 @@ class AsteroidField:
         for prototype in self.executor.collect(self._channel):
             self._prototypes[prototype.key] = prototype
         wanted = self.spec.shapes.prototypes
-        missing = [k for k in range(wanted) if k not in self._prototypes]
-        if missing:
-            self.executor.request(missing, self._channel)
+        if len(self._prototypes) < wanted:
+            # Requested keys stay wanted until built: ask again only when
+            # nothing is in flight (an inline executor runs a few per call)
+            if self.executor.pending_for(self._channel) == 0:
+                missing = [k for k in range(wanted) if k not in self._prototypes]
+                self.executor.request(missing, self._channel)
             return
         prototypes = self._prototype_list()
         self.root.set_shader_input("uRockNormals", normal_map_texture(prototypes))
@@ -434,7 +447,7 @@ class AsteroidField:
         )
         quat = view.get_quat(self.app.render)
         to_render = _rotation((quat.get_r(), quat.get_i(), quat.get_j(), quat.get_k()))
-        to_field = _rotation(self.orientation).T
+        to_field = self._rotation_matrix.T
         return local @ (to_field @ to_render).T
 
     def _draw(self, visible) -> None:
@@ -570,7 +583,7 @@ class AsteroidField:
         self._set_rotation()
 
     def _set_rotation(self) -> None:
-        r = _rotation(self.orientation)
+        r = self._rotation_matrix
         # Panda's matrices act on row vectors: its rows are GLSL's columns.
         # A mat3 input is given as a 4x4 (its upper-left 3x3 is taken).
         m = np.eye(4)

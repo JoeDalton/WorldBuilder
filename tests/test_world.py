@@ -85,7 +85,6 @@ def test_looks_are_their_parts_arguments(look, part, own):
 @pytest.mark.parametrize(
     "bodies,message",
     [
-        ([], "needs a body"),
         (
             [BodyLook("a", EARTHLIKE, mass=1.0), BodyLook("a", MOON, mass=1.0)],
             "must differ",
@@ -124,6 +123,7 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world.sun_light = world.ambient_light = None
     world._sun = np.array([0.0, 0.0, 1.0])
     world._sun_color = np.array([2.0, 2.0, 2.0])
+    world._space_ambient = np.array([0.1, 0.2, 0.3])
     return world
 
 
@@ -154,6 +154,23 @@ def test_update_without_far_takes_the_depth_ranges():
     origin = np.array([0.0, 0.0, R + 1000.0])
     world.update(origin)
     assert world.sky.update.call_args[0][1] == world.depth_ranges(origin)[1]
+
+
+def test_open_space_is_a_world_without_bodies():
+    """No planet: the sky, the sun and the lights alone, a fixed depth split,
+    the bare sun and the space ambient light, nothing loading."""
+    from world_builder.world import SPACE_FAR_M, SPACE_SPLIT_M
+
+    world = _world()
+    origin = np.array([1e6, -2e6, 3e5])
+    assert world.depth_ranges(origin) == (SPACE_SPLIT_M, SPACE_FAR_M)
+    direct, ambient = world.light_at(origin)
+    np.testing.assert_allclose(direct, [2.0, 2.0, 2.0])
+    np.testing.assert_allclose(ambient, [0.1, 0.2, 0.3])
+    assert not world.loading
+    world.update(origin)
+    world.sky.update.assert_called_once()
+    assert world.sky.update.call_args[0][1] == SPACE_FAR_M
 
 
 def test_depth_ranges_cover_every_body():
@@ -395,3 +412,30 @@ def test_a_whole_world(window, monkeypatch):
     assert shutdowns == [1]
     assert world.bodies == [] and world.sky is None
     assert not window.render.find("**/planet_sea_frame")
+
+
+def test_open_space_builds_and_draws(window):
+    """A world of the sky, the sun and the lights alone (no body), as a space
+    level has: built, drawn, its lights the bare sun, gone after destroy."""
+    world = World(
+        window,
+        bodies=[],
+        sun=SunLook(direction=(0.3, -0.8, 0.5)),
+        sky=SkyLook(),
+        settings=WorldSettings.preset("low"),
+        backend="inline",
+        light_scale=0.5,
+        space_ambient=(0.1, 0.1, 0.2),
+    )
+    try:
+        assert world.bodies == [] and not world.loading
+        for _ in range(2):
+            world.update(np.array([5e6, 0.0, 0.0]), far=1e6)
+            window.graphicsEngine.render_frame()
+        sun = np.array(world.sun_light.node().get_color())[:3]
+        np.testing.assert_allclose(sun, 0.5 * np.array(SunLook().color), rtol=1e-6)
+        ambient = np.array(world.ambient_light.node().get_color())[:3]
+        np.testing.assert_allclose(ambient, [0.05, 0.05, 0.1], rtol=1e-6)
+    finally:
+        world.destroy()
+    assert world.sky is None or world.sky.node.is_empty()

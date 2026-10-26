@@ -48,11 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`material_at`) and the surface's speed (`velocity_at`) at a hit.
   `scripts/asteroid_bench.py --collision` times it: 2.4 ms a traverse
   against 32 ms for SpaceFlight's per-rock spheres. (#14)
+- An `AsteroidField` without a camera (headless) keeps its rocks and their
+  collision up to date and draws nothing. (#14)
 - `scripts/asteroid_bench.py`: frame times of an asteroid field flown along
   fixed paths; `--legacy` rebuilds SpaceFlight's current field (one node and
   collision sphere per rock) as the reference to beat. (#14)
 - `scripts/compare_shots.py`: compares two folders of screenshots pixel by
   pixel, for shader changes meant to change nothing. (#14)
+
+- `World` takes no body for open space: the sky, the sun and the lights
+  alone, `space_ambient` the sky light away from any body. (#14)
 
 ### Changed
 

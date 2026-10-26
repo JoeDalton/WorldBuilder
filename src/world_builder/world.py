@@ -88,6 +88,11 @@ from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.terrain.terrain import Terrain
 from world_builder.terrain.workers import ChunkExecutor
 
+#: Open space (a world with no body): the depth split and the far plane,
+#: metres (the sky is drawn just inside the far plane).
+SPACE_SPLIT_M = 2000.0
+SPACE_FAR_M = 1.0e6
+
 # ── looks: what the game decides ─────────────────────────────────────────────
 
 
@@ -296,10 +301,12 @@ class World:
         light_scale: float = 1.0,
         clock: Callable[[], float] | None = None,
         backend: str = "process",
+        space_ambient: ArrayLike = (0.025, 0.025, 0.03),
     ) -> None:
         """
         :param app: the ShowBase: its render, camera, lens and window
-        :param bodies: the planets and moons (at least one)
+        :param bodies: the planets and moons; none for open space (the sky,
+            the sun and the lights alone)
         :param sun: the sun
         :param sky: the sky; None = none (the game draws its own)
         :param settings: what every part costs; None = HIGH
@@ -314,11 +321,11 @@ class World:
             frame time
         :param backend: where chunks and cloud tiles are generated
             (:class:`ChunkExecutor`)
-        :raises ValueError: no body, two bodies of one name, clouds without
-            air, or an ocean on a dry planet
+        :param space_ambient: the sky light where there is no body (open
+            space), linear
+        :raises ValueError: two bodies of one name, clouds without air, or
+            an ocean on a dry planet
         """
-        if not bodies:
-            raise ValueError("a world needs a body")
         names = [look.name for look in bodies]
         if len(set(names)) != len(names):
             raise ValueError(f"body names must differ: {names}")
@@ -332,6 +339,7 @@ class World:
         self.settings = settings or WorldSettings()
         self._sun = self._unit(sun.direction)
         self._sun_color = np.asarray(sun.color, dtype=np.float64)
+        self._space_ambient = np.asarray(space_ambient, dtype=np.float64)
         if clock is None:
             frame_clock = ClockObject.get_global_clock()
             clock = frame_clock.get_frame_time
@@ -420,7 +428,9 @@ class World:
             render.set_light(self.ambient_light)
 
         #: The camera's world position at the last update
-        self.camera_world = np.asarray(bodies[0].position, dtype=np.float64)
+        self.camera_world = np.asarray(
+            bodies[0].position if bodies else (0.0, 0.0, 0.0), dtype=np.float64
+        )
 
     def _make_clouds(self, look: BodyLook, atmosphere: int) -> SphericalClouds:
         cl = look.clouds
@@ -502,8 +512,11 @@ class World:
         the farthest visible part of any body.
 
         :param origin_world: render's origin in the world frame (float64)
-        :returns: (split, far), metres
+        :returns: (split, far), metres; in open space (no body) a fixed
+            split and :data:`SPACE_FAR_M`
         """
+        if not self.bodies:
+            return SPACE_SPLIT_M, SPACE_FAR_M
         camera = np.asarray(origin_world, dtype=np.float64) + self.camera_render()
         return SplitDepthCameras.system_ranges(
             (
@@ -537,8 +550,11 @@ class World:
         there: through the nearest body's air, or in its shadow if airless.
 
         :param point_world: world frame, metres
-        :returns: (direct, ambient), linear rgb
+        :returns: (direct, ambient), linear rgb; in open space (no body) the
+            bare sun and ``space_ambient``
         """
+        if not self.bodies:
+            return self._sun_color.copy(), self._space_ambient.copy()
         return self._light_at(self.nearest(point_world), point_world)
 
     def _light_at(self, body: Body, point_world) -> tuple[np.ndarray, np.ndarray]:
