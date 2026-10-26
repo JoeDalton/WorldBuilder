@@ -36,6 +36,7 @@ out vec3 vNormal;
 out vec3 vUp;         // local vertical
 out vec4 vBiomeA;
 out vec4 vBiomeB;
+out vec4 vSwell;     // the swell: gradient per metre (planet axes), field
 flat out int vFace;
 
 const int QUADS = 64;
@@ -66,6 +67,7 @@ void main() {
     bool skirt = biome_b.a > 0.5;
     float ground = skirt ? height + uChunk.w : height;  // the (edge) ground height
     float drawn = height;
+    vSwell = vec4(0.0, 0.0, 0.0, SWELL_MEAN);
 
     if (uSeaSurface == 1 && ground < 0.0) {
         // Up to the water: sea level and the swell, which has as much detail
@@ -75,7 +77,12 @@ void main() {
         if (skirt) {
             planet += up * uChunk.w;  // its edge's point
         }
-        float water = swellHeight(planet - up * ground, -ground, uChunkCentre.w);
+        // The field and its gradient, for the near look's shading too: the
+        // geometry's own swell, so the normal follows the drawn water.
+        vec3 grad;
+        float field = swellField(planet - up * ground, uChunkCentre.w, grad);
+        float water = uSwellAmplitude * swellDepthFactor(-ground) * (field - SWELL_MEAN);
+        vSwell = vec4(grad, field);
         vec3 lift = up * (water - ground);
         local.xyz += transpose(rotation) * lift;
         world += lift;

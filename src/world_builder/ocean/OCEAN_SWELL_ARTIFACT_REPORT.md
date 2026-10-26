@@ -6,9 +6,10 @@
 > `docs/source/ocean.md`). What changed for the mechanisms below:
 >
 > - **§2b (grazing normal aliasing).** The swell's normal is now the analytic
->   gradient of the same field the vertices are raised by (`swell.glsl`), and
->   its tilt fades by the pixel's footprint like a wave octave, its lost slope
->   kept as variance for the rough fresnel. The geometry also fades the swell
+>   gradient of the same field the vertices are raised by (`swell.glsl`),
+>   computed per vertex with the height (§6's direction 2), and its tilt fades
+>   by the pixel's footprint like a wave octave, its lost slope kept as
+>   variance for the rough fresnel. The geometry also fades the swell
 >   out with the chunk's level (gone 4–7 km from a low camera), so the
 >   horizon band has no displaced geometry. Not yet checked at the report's
 >   Z≈3 among the crests, in motion.

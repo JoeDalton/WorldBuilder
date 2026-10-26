@@ -23,6 +23,7 @@ in vec3 vNormal;
 in vec3 vUp;
 in vec4 vBiomeA;   // snow, rock, grass, forest
 in vec4 vBiomeB;   // desert, beach, -, skirt flag
+in vec4 vSwell;    // the swell: gradient per metre (planet axes), field
 flat in int vFace;
 
 uniform sampler2DArray uAlbedoH;  // sRGB albedo + height
@@ -54,7 +55,6 @@ uniform int   uMaxLevel;
 out vec4 fragColor;
 
 #ifdef SEA_NEAR
-uniform vec3  uPlanetCentre;      // the planet's centre, render frame
 #pragma include "../../ocean/shaders/swell.glsl"
 #pragma include "../../ocean/shaders/sea.glsl"
 #endif
@@ -115,7 +115,7 @@ void main() {
     // work below.
     if (uSeaSurface == 1 && vSeabed < 0.0 && uSeaNear >= 1.0 && uDebugMode == 0) {
         bool raw;
-        vec3 near = seaShade(uCamPos + vRelPos, uCamPos + vRelPos - uPlanetCentre,
+        vec3 near = seaShade(uCamPos + vRelPos, vSwell,
                              vRelPos / max(dist, 1e-3), dist,
                              -vSeabed, uChunk.z, raw);
         if (!raw) {
@@ -279,7 +279,7 @@ void main() {
         if (uSeaNear > 0.0) {
             // The near look, crossfaded in below the sea's altitude band.
             bool raw;
-            vec3 near = seaShade(uCamPos + vRelPos, uCamPos + vRelPos - uPlanetCentre,
+            vec3 near = seaShade(uCamPos + vRelPos, vSwell,
                              vRelPos / max(dist, 1e-3), dist,
                                  -vSeabed, uChunk.z, raw);
             if (raw) {

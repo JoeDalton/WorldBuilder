@@ -285,12 +285,13 @@ vec3 aces_inverse(vec3 display) {
 // atmospheres and the tonemap (or, with a debug view, the view's display
 // colour, and raw set).
 //
-// P: the fragment, render frame; planet: the same, planet frame; Vr: from
-// the camera to it, unit, render frame; dist: its distance; depth: metres of
+// P: the fragment, render frame; swell: the swell there, interpolated from
+// the vertices (terrain.vert's vSwell: its gradient per metre, planet axes,
+// and its field); Vr: from the camera to it, unit, render frame; dist: its distance; depth: metres of
 // water under it; spacing: the chunk's vertex spacing (how finely the depth
 // is known).
 // ---------------------------------------------------------------------------
-vec3 seaShade(vec3 P, vec3 planet, vec3 Vr, float dist, float depth, float spacing,
+vec3 seaShade(vec3 P, vec4 swell, vec3 Vr, float dist, float depth, float spacing,
               out bool raw) {
     raw = false;
     // The fragment on the tangent plane, in chart coordinates: local, near
@@ -316,14 +317,15 @@ vec3 seaShade(vec3 P, vec3 planet, vec3 Vr, float dist, float depth, float spaci
     // Flattens the normal toward a mirror at grazing angles.
     float detailAngle = smoothstep(GRAZE_LO, GRAZE_HI, abs(V.z));
 
-    // --- Swell field (the geometry's, sampled once; drives both the small
-    //     waves' frequency modulation and the swell's tilt) ------------------
+    // --- Swell field (the geometry's, from its vertices: as much of it as
+    //     the chunk draws; drives both the small waves' frequency modulation
+    //     and the swell's tilt) ----------------------------------------------
     // Its tilt faded like an octave by its finer noise layer: sub-pixel swell
     // keeps only its mean slope variance.
     float swellFade = 1.0 - smoothstep(uAAStart, uAAEnd,
                                        6.2831853 * iSwellScale * 2.1 * footMax);
-    vec3  swellGrad;
-    float s0    = swellField(planet, 0.0, swellGrad);
+    vec3  swellGrad = swell.xyz;
+    float s0        = swell.w;
     // Per unit of the first layer's noise, on the plane's axes.
     vec2  sgrad = vec2(dot(swellGrad, uSeaEast), dot(swellGrad, uSeaNorth))
                 / iSwellScale;

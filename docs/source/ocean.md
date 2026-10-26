@@ -102,9 +102,13 @@ and no look gets the far look only.
     level 5, 4–7 km from a low camera.
   - With 20 m of amplitude the water stays within about −4 to +7 m.
 - **Shading.**
-  - The near look tilts its normal by the same field's analytic gradient
-    (`swell_amplitude / 20`, and the depth factor). That replaces three
-    evaluations by finite differences.
+  - The near look tilts its normal by the gradient of the very field the
+    vertices are raised by (`swell_amplitude / 20`, and the depth factor),
+    computed analytically per vertex with the height and interpolated
+    (`vSwell`). So the shading follows the drawn water, and its detail fades
+    with the chunk's level like the geometry's. Evaluating the field again per
+    pixel cost 0.8-1.6 ms a frame low over the sea on a GTX 1070 (32 lattice
+    hashes a pixel, each five 32-bit integer multiplies).
   - The field also shifts the small waves' phase (`fm_depth`), so the
     dominant octave's tiling drifts.
 
@@ -138,6 +142,9 @@ and no look gets the far look only.
     clips its own wet vertices in that pass, so the sea is not in its own
     reflection. That is clipping, not a discard, which would cost the early
     depth test everywhere.
+  - Chunks that are all water are hidden from the reflection camera
+    (`REFLECTION_CAMERA_MASK`): it would clip every vertex of them, and their
+    bounds, which reach the water, keep the clip plane from culling them.
   - The terrain is reflected or not with `TerrainSettings.reflected`.
 - **The lookup.** The sea samples the reflection at each fragment's footprint
   on the mirror plane, perturbed by the ripples and clamped to the rendered

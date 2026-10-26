@@ -317,7 +317,7 @@ def _ridged_plan(
 # ── native library ────────────────────────────────────────────────────────────
 
 #: Interface version of the native library (``WB_NOISE_ABI`` in noise.c).
-_NATIVE_ABI = 3
+_NATIVE_ABI = 4
 _SUFFIX = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
 #: Where the native noise library is built and shipped. Found by path: the
 #: ``native`` package's own imports lead back here.
@@ -354,7 +354,33 @@ class _NativeNoise:
         lib.wb_swell_heights.restype = None
         for function in (lib.wb_simplex3, lib.wb_fbm, lib.wb_ridged, lib.wb_volume_fbm):
             function.restype = None
+        # The LOD selection (lod.c; world_builder.terrain.quadtree).
+        lib.wb_lod_new.argtypes = [f64, i32, i64, f64]
+        lib.wb_lod_new.restype = ptr
+        lib.wb_lod_free.argtypes = [ptr]
+        lib.wb_lod_set_params.argtypes = [ptr, f64, f64, f64, f64, i32]
+        lib.wb_lod_reset.argtypes = [ptr]
+        lib.wb_lod_set_bounds.argtypes = [ptr, ptr, ptr, i64]
+        lib.wb_lod_set_ready.argtypes = [ptr, ptr, i32, i64]
+        lib.wb_lod_select.argtypes = [ptr, ptr, ptr]
+        lib.wb_lod_result.argtypes = [ptr, i32, ctypes.POINTER(i64)]
+        lib.wb_lod_result.restype = ctypes.POINTER(i32)
+        for function in (
+            lib.wb_lod_free,
+            lib.wb_lod_set_params,
+            lib.wb_lod_reset,
+            lib.wb_lod_set_bounds,
+            lib.wb_lod_set_ready,
+            lib.wb_lod_select,
+        ):
+            function.restype = None
         self._lib = lib
+
+    @property
+    def lib(self) -> ctypes.CDLL:
+        """The loaded library, its signatures set (for the other native
+        modules: ``quadtree.NativeLodSelector``)"""
+        return self._lib
 
     def simplex3(self, points: np.ndarray, seed: np.uint64) -> np.ndarray:
         points = np.ascontiguousarray(points, dtype=np.float64)

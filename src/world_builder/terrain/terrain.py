@@ -46,6 +46,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import (
     BitMask32,
+    CullBinManager,
     LVecBase3f,
     LVecBase4f,
     NodePath,
@@ -72,7 +73,12 @@ from world_builder.terrain.materials import (
 )
 from world_builder.terrain.mesh import build_chunk_node
 from world_builder.terrain.planet import Planet, PlanetSpec
-from world_builder.terrain.quadtree import UNKNOWN_BOUNDS, LodSelector
+from world_builder.terrain.quadtree import (
+    UNKNOWN_BOUNDS,
+    LodSelector,
+    NativeLodSelector,
+    make_selector,
+)
 from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.workers import ChunkExecutor
 
@@ -90,10 +96,22 @@ def _shader(fragment: str) -> Shader:
     )
 
 
+def _ensure_terrain_bin() -> None:
+    manager = CullBinManager.get_global_ptr()
+    if manager.find_bin(TERRAIN_BIN) == -1:
+        manager.add_bin(TERRAIN_BIN, CullBinManager.BT_front_to_back, TERRAIN_BIN_SORT)
+
+
 #: The terrain root is re-based to the camera snapped to this grid, metres;
 #: above ORIGIN_SNAP * 16 of altitude the grid grows to altitude / 16.
 ORIGIN_SNAP = 4096.0
 LOGGER = logging.getLogger(__name__)
+#: The chunks' cull bin: front to back, before the opaque bin (20), so near
+#: ground hides what lies behind it before that is shaded (early depth test).
+#: Panda's opaque bin sorts by state, which chunks share, so its order was
+#: arbitrary: front to back saves 1-1.6 ms a frame low over the sea.
+TERRAIN_BIN = "terrain"
+TERRAIN_BIN_SORT = 19
 #: Chunks whose refinement lag :attr:`Terrain.refine_lags` keeps.
 LAG_SAMPLES = 2000
 #: Below the caps (``TerrainSettings.store_size``, ``node_cache_size``), a
@@ -340,6 +358,8 @@ class Terrain:
         self._settings = settings
         self.root = parent.attach_new_node("terrain")
         self.root.set_shader(_shader("terrain.frag"))
+        _ensure_terrain_bin()
+        self.root.set_bin(TERRAIN_BIN, 0)
         # The chunks with water hang here: a Sea gives them the shader with
         # its near look (set_sea_near), which the others never pay for.
         self.sea_root = self.root.attach_new_node("terrain_sea")
@@ -368,7 +388,7 @@ class Terrain:
         self._channel = f"terrain-{id(self):x}"
         self.planet: Planet | None = None
         self.query: TerrainQuery | None = None
-        self.selector: LodSelector | None = None
+        self.selector: LodSelector | NativeLodSelector | None = None
         self.store: OrderedDict[tuple, ChunkData] = OrderedDict()
         # (h_min, h_max) per stored chunk: one tuple per chunk, which the
         # selector's geometry cache recognises by identity.
@@ -466,7 +486,9 @@ class Terrain:
         self._bounds.clear()
         self.shown.clear()
         self._keep = set()
-        self.selector = LodSelector(
+        # The native pass when the library is built; it keeps its own copy
+        # of what is stored (bounds) and uploaded (ready), told below.
+        self.selector = make_selector(
             self.grid,
             max_distance=self.max_distance,
             horizon_floor=0.0 if self.spec.has_ocean else UNKNOWN_BOUNDS[0],
@@ -810,7 +832,9 @@ class Terrain:
         # over it: deep water stays coarse (its surface has no relief to
         # resolve), the shallows refine like the land (the coast, the foam).
         # Culling uses the chunk's own box, which holds the sea surface.
-        self._bounds[chunk.key] = (chunk.h_min, chunk.h_max)
+        bounds = (chunk.h_min, chunk.h_max)
+        self._bounds[chunk.key] = bounds
+        self.selector.set_bounds(chunk.key, bounds)
         self.store.move_to_end(chunk.key)
 
     def _resident(self, cap: int) -> int:
@@ -831,8 +855,10 @@ class Terrain:
                 continue
             del self.store[old]
             del self._bounds[old]
+            self.selector.set_bounds(old, None)
             if old in self.nodes:
                 self.nodes.pop(old).remove_node()
+                self.selector.set_ready(old, False)
             excess -= 1
 
     def _upload(self) -> int:
@@ -850,6 +876,11 @@ class Terrain:
             node = NodePath(build_chunk_node(chunk, self.sea_swell if wet else 0.0))
             node.set_python_tag("centre", chunk.centre)
             node.set_python_tag("wet", wet)
+            if wet and chunk.h_max < 0.0:
+                # All water: the reflection clips every vertex of it (its
+                # surface is not in its own mirror). Its bounds reach above
+                # the mirror plane, so the clip plane would not cull it.
+                node.hide(REFLECTION_CAMERA_MASK)
             node.set_shader_input(
                 "uChunkCentre",
                 LVecBase4f(*chunk.centre, 0.25 / self.grid.spacing(key[0])),
@@ -865,6 +896,7 @@ class Terrain:
             )
             self._place(key, node)
             self.nodes[key] = node
+            self.selector.set_ready(key, True)
             count += 1
         if count:
             per_chunk = (time.perf_counter() - start) * 1e3 / count
@@ -884,6 +916,7 @@ class Terrain:
                 break
             if key not in self._keep and key not in wanted:
                 self.nodes.pop(key).remove_node()
+                self.selector.set_ready(key, False)
                 excess -= 1
 
     def _select(self, cam: np.ndarray) -> None:
@@ -920,9 +953,12 @@ class Terrain:
         # (their own children are, or they are culled): the selector splits a
         # node only while all its visible children are ready. Evicting one as
         # "least recently drawn" collapsed its whole subtree to a coarse parent
-        # for a few frames, then refined it again.
+        # for a few frames, then refined it again. Kept chunks are never
+        # evicted, so their place in the LRU order matters only once they are
+        # let go: they become the most recently used then (the order they
+        # would have had if marked on every pass, for a fraction of the cost).
         keep = selection.keep
-        for key in keep:
+        for key in self._keep - keep:
             if key in self.nodes:
                 self.nodes.move_to_end(key)
             if key in self.store:

@@ -601,11 +601,93 @@ Demo start-up (clouds on): first frame 3.7 s → 2.1 s, everything loaded
 generation in a busy machine: ~900 chunks at ~150 a second with 3 workers
 beside the renderer (chunks take ~13 ms there against 8 idle).
 
+## 16. The sea on the terrain's chunks
+
+The sea moved from its own mesh under the camera onto the terrain's chunks
+(see [Sea](ocean.md)). Measured against the clouds round (§15) with
+`terrain_shots.py --offscreen`, the two trees run in turn, twice each, every
+frame waiting for the GPU. A first version was 1-4 ms slower wherever the
+sea showed. Swapping pieces out one at a time (a scratch script hiding the
+reflection, the near look, the wet chunks) found three causes:
+
+- **The swell evaluated per pixel.** The near look recomputed the 3D swell
+  field and its gradient for every water pixel: 32 lattice hashes of five
+  32-bit integer multiplies each, 0.8-1.6 ms on a GTX 1070. The vertices
+  already compute the field to raise the water; they now pass it and its
+  gradient on (`vSwell`). The shading then follows the drawn water, and the
+  images match.
+- **All-water chunks in the reflection.** Panda culls a node wholly behind
+  the mirror's clip plane. Seabed bounds were below it; the water's are not,
+  so the mirror pass drew every all-water chunk only to clip each vertex
+  (about +1 ms). Those chunks are now hidden from the reflection camera.
+- **Draw order.** Panda's opaque bin sorts by state, which chunks share, so
+  they drew in no useful order and hidden water was shaded. The terrain now
+  draws front to back in its own bin (`TERRAIN_BIN`): 1.0-1.6 ms less at the
+  sea poses, and some on land too.
+
+| Pose | Before (§15) | After |
+|---|---|---|
+| Start pose (ground) | 11.3 ms | 10.7 ms |
+| Beach (40 m) | 13.5 ms | 14.7 ms |
+| Coast (2 km) | 12.7 ms | 12.7 ms |
+| Sunset (600 m) | 12.0 ms | 12.6 ms |
+| Night sea (3 m) | 11.8 ms | 12.5 ms |
+| 13 km | 8.8 ms | 9.3 ms |
+| 17 km | 5.8 ms | 8.3 ms |
+| 20 km | 6.1 ms | 6.2 ms |
+| Orbit | 2.2 ms | 2.4 ms |
+
+What remains:
+
+- **The near look costs a little more low over the sea** (0.5-1.2 ms). Part
+  of it is the near look's shader variant, larger for the land in coastal
+  chunks too (0.2-0.7 ms, measured with its share at 0); the rest was not
+  broken down.
+- **Between 12 and 18 km the near look fades out** instead of switching at
+  15 km, so the reflection pass and the near look run up to 18 km (2.5 ms at
+  17 km, where the old ocean was hidden). `OceanLook.near_band` sets the
+  band; a lower one moves that cost down.
+
+Flights: the low flight 15.3 → 14.5 ms median (`flight_bench.py`), and the
+descent through the band has no spike (worst frame 21-24 ms, 38-43 before,
+the old handover's). The descent used to stop only above dry land: it
+tested `demo._ground` for truth, and the old query clamped the sea to
+exactly 0. Start-up is unchanged (first frame 1.7 s, everything loaded
+8.7-9.0 s).
+
+Gone with the separate ocean: its 324k-vertex mesh, drawn by both cameras;
+the seabed bakes (15-36 ms each, half of it holding the GIL); the 600 ms
+shader compile the first time the old ocean showed.
+
+## 17. The LOD pass in C
+
+In fast low flight the LOD pass ran nearly every frame on the main thread:
+~470 nodes visited and ~870 measured per pass, in Python floats, 2.4 ms at
+the start pose. `lod.c` runs the same pass, operation for operation
+(`tests/test_native_lod.py` requires identical selections along flights).
+It keeps its own copy of the chunks' bounds and readiness, which `Terrain`
+updates where they change, so a pass calls nothing back.
+
+- The traversal: 1.03 ms in Python, 0.023 ms in C, for a pass over 450
+  drawn chunks. Turning the results into Python keys costs more than the
+  pass (0.15 ms, with `zip` over the columns).
+- Around it, `Terrain._select` marked every kept chunk (~1,500) as recently
+  used in two LRU dicts on every pass. Kept chunks are never evicted, so
+  only the ones let go are marked now, when they are let go: the same order
+  for the chunks that can be evicted.
+
+The pass at the static poses: 2.4 ms → 0.5 ms. Low flight
+(`flight_bench.py --flight low`, two runs each, the same tree with the
+Python selector patched in): frame median 14.5 → 13.0 ms, the demo's update
+8.4 → 6.4 ms, refinement lag 345 → 270 ms (median). The machine had just
+been rebooted and its GPU held a low power state (P5), which slows the GPU
+side of every frame; these numbers are CPU-side and compared within the
+same session.
+
 ## Not covered
 
-The ocean was not profiled on its own: its main cost is its reflection
-pass, which re-renders the scene (terrain, sky and clouds; M takes the
-terrain out of it), measured as a whole in the
-[performance backlog](performance_backlog.md). The flat cloud field's
+The sea's parts are measured in §16; its reflection pass re-renders the
+scene (terrain, sky and clouds; M takes the terrain out of it), measured as a
+whole in the [performance backlog](performance_backlog.md). The flat cloud field's
 profiling and an open alternative design are in
 `world_builder/clouds/view_aligned_slicing.md`.

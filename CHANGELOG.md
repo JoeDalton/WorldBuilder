@@ -57,6 +57,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     chunks resolve; the waves' phases are computed in float64 on the CPU.
   - The coastline is one mesh, without the depth bias that hid two meshes'
     seam.
+- The terrain's chunks draw front to back in their own cull bin
+  (`terrain.TERRAIN_BIN`, before the opaque bin): 1-1.6 ms less a frame low
+  over the sea. Chunks that are all water stay out of the sea's reflection,
+  and the near look's swell tilt comes from the vertices instead of being
+  evaluated per pixel. (#20)
+- The LOD pass runs in the native library (`lod.c`,
+  `quadtree.NativeLodSelector`, picked by `make_selector`; the Python
+  `LodSelector` stays, as the reference and the fallback): 0.5 ms a pass
+  instead of 2.4 at the start pose, and in low flight 1.5 ms off the frame
+  and a fifth off the refinement lag. Kept chunks are marked as recently used
+  only when they are let go, not on every pass. (#20)
 
 ### Removed
 
@@ -73,6 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chunks uploaded in the frame after an LOD pass waited for the camera to
   move or for the 15-frame fallback before being shown. (#20)
+- `flight_bench.py`'s descent stopped only over dry land; over a calm sea it
+  flew on to its time limit. (#20)
 
 ## [0.2.0] 2026-10-23
 

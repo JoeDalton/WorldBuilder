@@ -56,9 +56,9 @@ breakdown above predates them: frames are 1–3 ms shorter now.
   after its upload (`select_every_on_upload`): 100 ms a level at 30 fps.
   Time-based instead of frame-based would help slow machines; a pass every
   frame and a deeper queue were within noise at 30 Hz.
-- **An incremental LOD pass in fast flight.** Each pass walks the whole
-  quadtree (1–2.5 ms at low altitude). Revisiting only the nodes near a
-  split or merge threshold since the last pass would save most of that.
+- The LOD pass: native instead (performance.md §17). An incremental pass
+  would save little more: the C traversal takes 0.02 ms; what remains of a
+  pass (0.5 ms) is Python around it.
 
 ## Savings with a cost
 

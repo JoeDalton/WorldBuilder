@@ -150,15 +150,9 @@ def run(demo: TerrainDemo, flight: str, seconds: float, profile: bool) -> None:
         backlog.append(sum(body.terrain.stats["wanted"] for body in demo.bodies))
         finest.append(demo.body.terrain.stats["finest"])
         last = now
-        if (
-            flight == "descent"
-            and demo._ground
-            and (
-                float(np.linalg.norm(demo._relative()))
-                - demo.body.radius
-                - demo._ground
-                < 400.0
-            )
+        if flight == "descent" and (
+            float(np.linalg.norm(demo._relative())) - demo.body.radius - demo._ground
+            < 400.0
         ):
             break
     if profiler:

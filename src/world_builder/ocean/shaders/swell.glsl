@@ -1,7 +1,8 @@
 // The sea's swell: a height field of the planet-frame point, the same for
-// every camera, which terrain.vert raises the water by and sea.glsl tilts its
-// normal by. The native library computes the very same field on the CPU
-// (noise.c's wb_swell, from swell.h), so collisions follow the drawn water.
+// every camera. terrain.vert raises the water by it, and hands its value and
+// gradient to sea.glsl, which tilts the normal by them. The native library
+// computes the very same field on the CPU (noise.c's wb_swell_heights, from
+// swell.h), so collisions follow the drawn water.
 //
 // The product of two layers of two-octave value noise, each layer turning
 // slowly about its own axis through the planet's centre (uSwellRotA, B, from
