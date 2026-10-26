@@ -144,15 +144,24 @@ shadow each other, and why their silhouettes are exactly as crisp as the field.
     phase for the forward-scatter silver lining, a short per-fragment march
     toward the sun through the field (which is what makes clouds shadow each
     other), the "powder" dark-edge term, a multiple-scattering fill and a
-    soft-knee roll-off. All live uniforms: `set_sun` moves the sun with no
-    rebuild. Rules in the Python and in `cloud.frag`, each with a visible
-    signature when broken:
+    soft-knee roll-off (planet clouds: the sky's tonemap instead, below). All
+    live uniforms: `set_sun` moves the sun with no rebuild. Rules in the
+    Python and in `cloud.frag`, each with a visible signature when broken:
     - `sun_brightness` and `exposure` are not independent gains: the knee
       saturates above about 3, so too bright a pair flattens lit and shadowed
       sides onto the same white.
     - The knee is applied to the **peak channel** and scales the colour. A
       per-channel knee drives every channel to the same asymptote, so an orange
       dusk sun at silver-lining intensity maps to white.
+    - **Planet clouds** go through the sky's display transform instead
+      (`displayColour`, `atmosphere/shaders/display.glsl`): ACES per channel
+      and display gamma, keeping the hue only above white, at the sky's
+      exposure (0.9). With the knee (hue kept at every level, no gamma), the
+      warm excess of lit tops seen through a long low path of air showed
+      orange at noon, and hazed cloud never met the sky's colour behind it
+      ([atmosphere](atmosphere.md#clouds-at-the-horizon)). The flat field
+      keeps the knee: it has no air, and draws over the caller's own colours,
+      set for it.
     - The multiple-scattering fill is **sky-coloured and not phase-weighted**:
       light reaching a shadowed interior comes from the sky and neighbouring
       cloud, not down a beam. Sun-tinted, dusk shadows go orange instead of

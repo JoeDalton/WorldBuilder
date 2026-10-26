@@ -597,7 +597,7 @@ class SphericalClouds:
         sun_brightness: float = 2.8,
         sky_strength: float = 0.35,
         sky_occlusion: float = 0.55,
-        exposure: float = 1.15,
+        exposure: float = 0.9,
         near_fade_radii: float = 2.5,
         channel: str | None = None,
         game: Any = None,
@@ -628,7 +628,8 @@ class SphericalClouds:
         :param sky_strength: ambient sky weight (live: :meth:`set_sky_light`)
         :param sky_occlusion: fraction of sky light reaching the slab's
             underside
-        :param exposure: cloud radiance scale before the soft-knee roll-off
+        :param exposure: cloud radiance scale before the sky's tonemap
+            (display.glsl's displayColour); the sky's own by default
         :param near_fade_radii: fade a billboard within this many of its radii
             of the camera (0 = off)
         :param channel: the executor channel for the tiles; None = one of its

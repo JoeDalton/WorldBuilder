@@ -114,8 +114,7 @@ The demo uses them each frame for:
 ### Left out: true multiple scattering (the Bruneton option)
 
 Light scattered more than once is only the flat twilight fill above: its
-colour and its fading are guesses, and lit clouds come out a little yellow
-(the cloud shader puts half the reddening back, standing in for it). Clouds
+colour and its fading are guesses. Clouds
 in the planet's shadow follow the same twilight curve for their sky light,
 plus a stand-in for the light of the still-lit air above them
 ([the terminator on the clouds](#the-terminator-on-the-clouds)).
@@ -360,6 +359,35 @@ in `cloud_field.glsl` (billboards per vertex, the deck per pixel) spread it:
 The terrain and Panda3D's lights still use the plain shadow: on the ground
 the sun has set long before, so there is no line to see there.
 
+### Clouds at the horizon
+
+Seen down a long, low path through the air (toward the horizon from the
+ground, or toward the limb from above), a cloud is mostly hidden by the haze
+in front of it. That air lets red through much better than blue: about
+(0.44, 0.21, 0.04) over 100 km at cloud height. Sunlit tops are brighter than
+the haze, and what gets through of the difference is reddened; shaded sides,
+darker than the haze, come out bluish. In linear light this is mild, the
+lit tops about (1.48, 1.45, 1.28), as distant cloud looks a little warm.
+
+It showed orange, even with the sun overhead, because the clouds alone
+skipped the display transform that the sky and the terrain share. Their soft
+knee kept the hue at every level and wrote linear light with no display
+gamma, so the warm excess stayed saturated and no tint was softened (a
+blue/red ratio of 0.87 displayed as 0.87, not 0.94). Hazed cloud never met
+the sky's colour behind it either. Planet clouds now take the sky's own
+transform (`displayColour` in `atmosphere/shaders/display.glsl`): ACES per
+channel up to white, keeping the hue above it, then the display gamma, at the
+sky's exposure (0.9). Their sunlight now takes the air's whole reddening
+(`cloudSunTint`): the half it took before showed orange only without the
+gamma, and paled sunsets to gold through it.
+
+Measured on the demo at 1.3 km with the sun 80° up, the brightest horizon
+tops went from (0.86, 0.84, 0.75) to (0.89, 0.87, 0.83) displayed; near
+clouds kept their contrast. Ruled out on the way: the sunlight's own tint
+(`sunset_radius`, `grazingLight`, `cloudTwilight`), since with only the air
+in front turned off (`uCloudDebug` bit 2) the clouds came out white; and too
+few samples of that air per vertex (as orange with 8 as with 4).
+
 ### Not yet
 
 - **Wind:** the clouds are static.
@@ -369,18 +397,3 @@ the sun has set long before, so there is no line to see there.
   then say which).
 - **Weather that moves:** the map is fixed; the cyclones could drift with the
   zonal wind and the map be rebuilt (a few seconds) or advected.
-
-### Known issues
-
-- **Clouds too red on the horizon at noon** (reported 2026-10-22, not yet
-  investigated).
-  - **What is seen:** flying low with the sun at its zenith, the clouds
-    toward the horizon look too red. At noon they should look nearly white,
-    with only some haze.
-  - **Leads, unchecked:**
-    - the long, low path to the horizon clouds through the air, reddened as
-      for a sunset;
-    - `AtmosphereParams.sunset_radius`, which reddens sunsets on small
-      planets as on a 6371 km one;
-    - the deck's own sun and twilight terms (`grazingLight`,
-      `cloudTwilight`).

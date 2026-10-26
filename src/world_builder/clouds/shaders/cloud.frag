@@ -6,6 +6,7 @@
 // flat distance haze. uDeck == 1 draws the far-field deck surface instead of a
 // billboard. The flat field leaves all of it off.
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
+#pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "cloud_field.glsl"
 // Cloud colour pass. Each billboard is a SAMPLE OF A VOLUME, not a sprite: its
 // outline and colour are functions of world position alone, while the sprite only
@@ -52,6 +53,12 @@ out vec4 fragColor;
 // The lit air's light on a cloud in the planet's shadow, as a share of the
 // sunlight it would take (cloudTwilight).
 const float TWILIGHT_GLOW = 0.25;
+
+// Planet mode: where the display transform starts keeping the light's hue,
+// and where it keeps it fully (peak channel, after exposure; display.glsl's
+// displayColour). The sky's own range.
+const float KEEP_HUE_FROM = 0.4;
+const float KEEP_HUE_TO = 5.0;
 
 float hgPhase(float x, float g) {
     float g2 = g * g;
@@ -234,12 +241,24 @@ void main() {
         colour = colour * transmittance + inscatter;
     }
 
-    // Soft knee on the PEAK channel, scaling the colour, which preserves hue (a
-    // per-channel knee maps a bright orange sun to white). Colours are never
-    // negative, so peak / sqrt(peak² + 1) / peak needs no zero guard.
     colour *= exposure;
-    float peak = max(max(colour.r, colour.g), colour.b);
-    colour *= inversesqrt(peak * peak + 1.0);
+    if (uSpherical == 1) {
+        // The sky's display transform, so cloud hazed by the air meets the
+        // sky behind it. Per channel below white: a long low path through the
+        // air reddens what it lets through, and under the knee below (no
+        // display gamma, hue kept at every level) the lit tops' excess over
+        // the haze showed orange at noon. Hue kept above white: per channel
+        // only, a dusk sun's orange light maps to white.
+        colour = displayColour(colour, KEEP_HUE_FROM, KEEP_HUE_TO);
+    } else {
+        // The flat field has no air and draws over the caller's own colours
+        // (hazeColor, the background), set for this soft knee: on the PEAK
+        // channel, scaling the colour, which preserves hue (a per-channel
+        // knee maps a bright orange sun to white). Colours are never
+        // negative, so peak / sqrt(peak² + 1) / peak needs no zero guard.
+        float peak = max(max(colour.r, colour.g), colour.b);
+        colour *= inversesqrt(peak * peak + 1.0);
+    }
 
     // Haze acts on the displayed colour: it sits between the eye and the cloud.
     colour = mix(colour, hazeColor, haze);
