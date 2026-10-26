@@ -144,8 +144,17 @@ than the camera through the world:
   `origin` is the camera snapped to a 3D grid: 4 km up to 64 km of
   altitude, then doubled as often as needed to stay at least altitude / 16,
   so orbital speeds do not re-place every tile each frame.
-- Tiles hang under the root at `centre − origin`, and their vertices are
-  float32 offsets from their own float64 centre.
+- Tiles hang under cell nodes, and cells under the root at
+  `cell centre − origin`:
+  - a cell is a tile's ancestor about 32 km wide (`terrain.CELL_SIZE`, level
+    8 here), for every finer tile;
+  - the coarser tiles, drawn only far away, share one cell at the planet's
+    centre.
+  - A tile sits at `centre − cell centre`, set once at upload, and its
+    vertices are float32 offsets from its own float64 centre.
+  - When the origin snaps, only the cells move: a few dozen nodes instead
+    of every uploaded tile (which made a 5-13 ms frame every 4 km in low
+    flight).
 - `Terrain.to_render(p)` places any other planet-frame object the same way.
 
 | Tile | Size | float32 vertex resolution |
@@ -153,6 +162,9 @@ than the camera through the world:
 | Leaf (level 0) | 115 m | under 1 mm |
 | Level 6 | 7.4 km | about 2 mm |
 | Face root | 940 km | about 6 cm (only ever seen from far away) |
+
+A tile's offset from its cell adds as much again: about 1 mm under a 32 km
+cell, a few centimetres under the planet's (tiles ≥ 30 km away).
 
 ### Depth
 

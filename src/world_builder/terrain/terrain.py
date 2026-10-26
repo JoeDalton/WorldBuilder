@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import math
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
@@ -105,6 +106,11 @@ def _ensure_terrain_bin() -> None:
 #: The terrain root is re-based to the camera snapped to this grid, metres;
 #: above ORIGIN_SNAP * 16 of altitude the grid grows to altitude / 16.
 ORIGIN_SNAP = 4096.0
+#: Chunks finer than the level whose chunks are about this wide, metres, hang
+#: under a cell node: their ancestor at that level. A rebase then moves the
+#: cells, not every chunk (it took 5-13 ms over ~1,500 nodes). The coarser
+#: chunks, drawn only far away, hang under one cell at the planet's centre.
+CELL_SIZE = 32_000.0
 LOGGER = logging.getLogger(__name__)
 #: The chunks' cull bin: front to back, before the opaque bin (20), so near
 #: ground hides what lies behind it before that is shaded (early depth test).
@@ -394,6 +400,8 @@ class Terrain:
         # selector's geometry cache recognises by identity.
         self._bounds: dict[tuple, tuple[float, float]] = {}
         self.nodes: OrderedDict[tuple, NodePath] = OrderedDict()
+        # (cell key or None for the planet's, wet) -> (node, its centre)
+        self._cells: dict[tuple, tuple[NodePath, np.ndarray]] = {}
         self.shown: set[tuple] = set()
         self._keep: set[tuple] = set()  # drawn chunks and their ancestors
         self._origin = None
@@ -482,6 +490,13 @@ class Terrain:
         for node in self.nodes.values():
             node.remove_node()
         self.nodes.clear()
+        for cell, _ in self._cells.values():
+            cell.remove_node()
+        self._cells.clear()
+        size0 = self.grid.chunk_size(0)
+        self._cell_level = min(
+            self.grid.max_level, max(0, round(math.log2(CELL_SIZE / size0)))
+        )
         self.store.clear()
         self._bounds.clear()
         self.shown.clear()
@@ -816,14 +831,37 @@ class Terrain:
         rebased = self._origin is None or bool(np.any(origin != self._origin))
         if rebased:
             self._origin = origin
-            for key, node in self.nodes.items():
-                self._place(key, node)
+            for name, (cell, centre) in list(self._cells.items()):
+                if cell.get_num_children() == 0:  # made again when needed
+                    cell.remove_node()
+                    del self._cells[name]
+                else:
+                    cell.set_pos(*(centre - origin))
         self.root.set_pos(*(render_cam - (cam - origin)))
         if self.collision is not None:
             self.collision.follow(self.root, origin, rebased)
 
-    def _place(self, key, node: NodePath) -> None:
-        node.set_pos(*(node.get_python_tag("centre") - self._origin))
+    def _cell(self, key, wet: bool) -> tuple[NodePath, np.ndarray]:
+        """:returns: the cell node a chunk hangs under (made if new), and the
+        cell's centre, planet frame. The chunk's position is relative to it:
+        float32 offsets of at most ~CELL_SIZE."""
+        level, face, i, j = key
+        top = self._cell_level
+        shift = top - level
+        cell_key = (top, face, i >> shift, j >> shift) if level < top else None
+        name = (cell_key, wet)
+        entry = self._cells.get(name)
+        if entry is None:
+            centre = (
+                np.zeros(3)
+                if cell_key is None
+                else self.grid.centre_dir(cell_key) * self.spec.radius
+            )
+            cell = (self.sea_root if wet else self.root).attach_new_node("cell")
+            if self._origin is not None:
+                cell.set_pos(*(centre - self._origin))
+            entry = self._cells[name] = (cell, centre)
+        return entry
 
     def _store(self, chunk: ChunkData) -> None:
         """Keep a chunk; the store is trimmed by the next :meth:`update`."""
@@ -874,7 +912,6 @@ class Terrain:
                 continue
             wet = bool(self.spec.has_ocean and chunk.h_min < 0.0)
             node = NodePath(build_chunk_node(chunk, self.sea_swell if wet else 0.0))
-            node.set_python_tag("centre", chunk.centre)
             node.set_python_tag("wet", wet)
             if wet and chunk.h_max < 0.0:
                 # All water: the reflection clips every vertex of it (its
@@ -894,7 +931,7 @@ class Terrain:
                     u0, v0, (1 << key[0]) * self.grid.uv_unit, chunk.skirt_depth
                 ),
             )
-            self._place(key, node)
+            node.set_pos(*(chunk.centre - self._cell(key, wet)[1]))
             self.nodes[key] = node
             self.selector.set_ready(key, True)
             count += 1
@@ -939,7 +976,7 @@ class Terrain:
         now = time.perf_counter()
         for key in draw - self.shown:
             node = self.nodes[key]
-            node.reparent_to(self.sea_root if node.get_python_tag("wet") else self.root)
+            node.reparent_to(self._cell(key, node.get_python_tag("wet"))[0])
             since = self._wanted_since.pop(key, None)
             if since is not None:
                 self.refine_lags.append((key[0], now - since))

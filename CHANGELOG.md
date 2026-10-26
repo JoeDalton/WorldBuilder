@@ -73,6 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes 6.7 ms instead of 8 (median), and the refinement lag in low flight
   drops by another fifth. The planet's rules (curves, biomes, stamps, paints)
   stay in Python only. (#20)
+- Terrain tiles hang under cell nodes about 32 km wide (`terrain.CELL_SIZE`),
+  so an origin snap moves the cells instead of every tile: the 5-13 ms frame
+  every 4 km of low flight is gone (p95 18.7 → 17.4 ms, the mean unchanged).
+  `flight_bench.py` takes `--trace` (what the slowest frames spend) and
+  `--no-hud`. (#20)
 
 ### Removed
 

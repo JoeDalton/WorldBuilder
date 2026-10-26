@@ -705,6 +705,44 @@ skirts). A chunk: 8.0 → 6.7 ms median (70 chunks, levels 0-6). In low flight
 ~130, the refinement lag 214 ms instead of ~270 (median), 980 ms instead of
 1,400-1,800 (p95).
 
+## 19. The slowest frames
+
+The mean was down to what the GPU and the main thread's steady work cost;
+this round targets the slowest 5 % of frames. A feature is kept only if the
+p95 drops and the mean frame and update do not rise.
+
+`flight_bench.py --trace` times the main thread's parts in every frame and
+prints what the frames at or over the p95 spend beyond the median ones;
+`--no-hud` skips the demo's HUD (~5 ms every 0.2 s, out of scope). Low
+flight before this round, without the HUD: mean 13.5 ms, median 13.2, p95
+18-19, max 36-47.
+
+| Part | In slow frames | In median frames | Share of slow frames |
+|---|---|---|---|
+| `Terrain._rebase` | 3.8 ms | 0.1 ms | 50 % |
+| Panda's `renderFrame` | 6.8 ms | 5.5 ms | all |
+| The clouds' tile uploads | 1.0 ms | 0.1 ms | 30 % |
+| The clouds' re-sort | 2.1 ms | 1.5 ms | all |
+| Panda's state GC | 1.7 ms | 1.2 ms | all |
+
+### Re-basing by cells
+
+Every 4 km of flight the origin snaps and the terrain re-placed every
+uploaded tile (~1,500 `set_pos`, drawn or not): a 5-13 ms frame. Tiles now
+hang under cells about 32 km wide (the coarse ones under one cell at the
+planet's centre), and a snap moves the cells only (see
+[Terrain](terrain.md), precision).
+
+| Low flight, two runs each | Before | Cells |
+|---|---|---|
+| Frame mean | 13.4-13.5 ms | 13.3 ms |
+| Frame p95 | 18.5-18.9 ms | 17.4 ms |
+| Frame max | 35-38 ms | 27-33 ms |
+| Update mean / p95 | 6.6-6.7 / 10.6-11.0 ms | 6.4-6.5 / 9.3-10.0 ms |
+
+`Terrain._rebase` left the slow frames (+3.2 ms → +0.02). The clouds'
+re-basing, which snapped in the same frames, went with it (+0.36 → +0.06).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

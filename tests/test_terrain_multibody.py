@@ -360,3 +360,33 @@ def test_a_channel_runs_its_own_generator(planet_spec):
         time.sleep(0.01)
     executor.shutdown()
     assert done[0].value == 12
+
+
+def test_chunks_keep_their_place_across_a_rebase(showbase, two_bodies):
+    """A rebase moves the cells, not the chunks: every drawn chunk stays
+    where it is relative to the camera, to float32 precision (millimetres
+    under a cell, centimetres for the coarse chunks under the planet's)."""
+    planet, _ = two_bodies
+    frame = TangentFrame.at(-12.0, 40.0)
+    cameras = [
+        frame.up * (planet.radius + 1500.0) + frame.east * east
+        for east in (0.0, 3000.0, 9000.0)
+    ]
+    origins = []
+    for camera in cameras:
+        _settle((planet,), camera, frames=30)
+        origins.append(planet._origin.copy())
+        fine = 0
+        for key in planet.shown:
+            node = planet.nodes[key]
+            expected = planet.store[key].centre - camera
+            under_cell = key[0] < planet._cell_level
+            fine += under_cell
+            np.testing.assert_allclose(
+                node.get_pos(showbase.render),
+                expected,
+                rtol=0,
+                atol=0.02 if under_cell else 0.2,
+            )
+        assert fine > 0
+    assert any(np.any(a != b) for a, b in zip(origins, origins[1:]))
