@@ -897,11 +897,15 @@ class Terrain:
         excess = len(self.store) - self._resident(self._settings.store_size)
         if excess <= 0:
             return
-        protected = self._keep | set(self._wanted)
-        for old in list(self.store):
+        keep, wanted = self._keep, set(self._wanted)
+        for _ in range(len(self.store)):
             if excess <= 0:
                 break
-            if old in protected:
+            old = next(iter(self.store))
+            if old in keep or old in wanted:
+                # In use: the most recently used now, so the oldest stay in
+                # front (walking past every kept chunk cost up to 0.6 ms).
+                self.store.move_to_end(old)
                 continue
             del self.store[old]
             del self._bounds[old]
@@ -937,7 +941,8 @@ class Terrain:
             self.selector.set_ready(key, True)
             count += 1
         if count:
-            self._write_chunk_table()
+            self._write_chunk_table(self._new_slots)
+            self._new_slots = []
             per_chunk = (time.perf_counter() - start) * 1e3 / count
             self.stats["upload_ms"] = 0.8 * self.stats["upload_ms"] + 0.2 * per_chunk
         self._evict_nodes()
@@ -968,15 +973,23 @@ class Terrain:
         if old is None:
             self._slots: dict[tuple, int] = {}
             self._free_slots = list(range(slots - 1, -1, -1))
+            self._new_slots: list[int] = []
         else:
             self._free_slots = list(range(slots - 1, old.shape[1] - 1, -1)) + (
                 self._free_slots
             )
 
-    def _write_chunk_table(self) -> None:
+    def _write_chunk_table(self, slots: list[int] | None = None) -> None:
+        """Copy the table into the texture: every slot, or just these."""
+        values = self._chunk_values
+        ram = np.frombuffer(
+            memoryview(self._chunk_texture.modify_ram_image()), np.float32
+        ).reshape(values.shape)
         # Panda keeps an RGBA texture's RAM image as BGRA.
-        bgra = self._chunk_values[..., [2, 1, 0, 3]]
-        memoryview(self._chunk_texture.modify_ram_image())[:] = bgra.tobytes()
+        if slots is None:
+            ram[:] = values[..., [2, 1, 0, 3]]
+        else:
+            ram[:, slots] = values[:, slots][..., [2, 1, 0, 3]]
 
     def _take_slot(self, key, chunk: ChunkData) -> int:
         """A free slot of the chunk table, filled with the chunk's values
@@ -985,6 +998,7 @@ class Terrain:
             self._make_chunk_table(2 * self._chunk_values.shape[1])
         slot = self._free_slots.pop()
         self._slots[key] = slot
+        self._new_slots.append(slot)
         level, face = key[0], key[1]
         u0, v0 = self.grid.uv_origin(key)
         values = self._chunk_values
@@ -1005,11 +1019,14 @@ class Terrain:
         if excess <= 0:
             return
         # Wanted chunks were just uploaded for the next selection to use.
-        wanted = set(self._wanted)
-        for key in list(self.nodes):
+        keep, wanted = self._keep, set(self._wanted)
+        for _ in range(len(self.nodes)):
             if excess <= 0:
                 break
-            if key not in self._keep and key not in wanted:
+            key = next(iter(self.nodes))
+            if key in keep or key in wanted:
+                self.nodes.move_to_end(key)  # in use (see _evict_store)
+            else:
                 self._drop_node(key)
                 excess -= 1
 

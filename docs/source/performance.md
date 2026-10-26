@@ -896,6 +896,30 @@ It is a process-wide Panda setting, so the library does not set it: the
 demo and the scripts do (`demo_terrain.window_config`), and a game drawing
 the world should load it too ([A whole world](world.md)).
 
+### Evictions that walk past nothing
+
+The store and the uploaded nodes are LRU dicts, trimmed each frame past
+their resident limit, never a chunk the selection keeps. Since chunks are
+marked as recently used only when they leave the selection (§17), the kept
+ones sat at the front of both dicts, and every trim walked past them: 420 to
+640 of them a call, 0.42 ms a frame each in median frames, up to 0.6 ms. A
+trim now moves a kept chunk it meets to the end (it is in use: as recently
+used as any), so the front holds the evictable ones. The chunk table also
+copies only the slots an upload pass filled, already in BGRA order, instead
+of the whole table twice.
+
+| Low flight, two runs each | Before | After |
+|---|---|---|
+| Frame mean | 9.7-9.8 ms | 8.6-8.7 ms |
+| Frame p95 | 13.2-13.4 ms | 11.6-11.7 ms |
+| Update mean | 5.5 ms | 4.4-4.5 ms |
+| Refinement lag (median) | 144-153 ms | 110-129 ms |
+| `_evict_store` / `_evict_nodes` / `_upload` (median frame) | 0.42 / 0.42 / 1.28 ms | 0.04 / 0.07 / 0.67 ms |
+
+Smaller upload budgets (3 chunks and 2 ms a frame, or 4 and 3, against 6
+and 4) did not lower the p95 any more (11.7-13.6 ms against 11.9), with
+uploads this cheap: the defaults stay.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

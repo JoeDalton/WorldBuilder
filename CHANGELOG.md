@@ -114,6 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   composed-transform cache only made garbage to collect. Low flight: mean
   10.65 → 9.6 ms, p95 14.25 → 13.05 ms. Recommended for games
   (docs/source/world.md). (#20)
+- The terrain's store and node trims move a kept chunk they meet to the end
+  of the LRU order instead of walking past every kept chunk each frame
+  (0.42 ms each), and the chunk table copies only the new slots: low flight
+  mean 9.75 → 8.65 ms, p95 13.3 → 11.65 ms. (#20)
 
 ### Removed
 
