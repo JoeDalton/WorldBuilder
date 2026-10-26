@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `world_builder.gravity.Gravity` and `World.gravity_field(g_constant)`: the
+  bodies' raw gravity vector at many points at once, from point masses
+  (`g = -G sum m (x - p) / |x - p|^3`, capped inside a body at its surface
+  value). A fused native kernel (`native/gravity.c`, 4-9x faster) with a numpy
+  fallback.
+
 ### Changed
 
+- **Breaking:** `BodyLook.mass` is required (keyword only), for the gravity
+  field; `Body.mass` reads it.
 - Terrain chunks generate about 3x faster (~8 ms instead of ~24): the noise
   sums its octaves in a small native library (`native/noise.c`, plain C over
   ctypes), shipped in the platform wheels next to the collision library and
