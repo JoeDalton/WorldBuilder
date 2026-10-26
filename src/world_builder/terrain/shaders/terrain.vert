@@ -1,14 +1,17 @@
 #version 330
 
 // Terrain chunk vertex shader: the true sphere (chunks are already curved), the
-// sea-surface mode seen from high up, coastline depth separation, and the clip
-// distance the ocean's reflection pass needs.
+// sea surface (seabed vertices lifted to the water, which the fragment shader
+// shades as sea), and the clip distance the sea's reflection pass needs.
 
 in vec4 p3d_Vertex;     // relative to the chunk centre, planet axes (metres)
 in vec3 p3d_Normal;
 in float height;        // metres above sea level (a skirt's own, below its edge)
 in vec4 biome_a;        // snow, rock, grass, forest
-in vec4 biome_b;        // desert, beach, -, skirt flag
+in vec4 biome_b;        // desert, beach, then the chunk's slot (low byte; high
+                        // 7 bits) with the skirt flag (top bit), set at upload
+
+#pragma include "../../ocean/shaders/swell.glsl"
 
 uniform mat4 p3d_ModelViewProjectionMatrix;
 uniform mat4 p3d_ModelViewMatrix;
@@ -17,11 +20,16 @@ uniform vec4 p3d_ClipPlane[1];  // reflection pass only (view space)
 
 uniform vec3  uCamPos;          // MAIN camera in the render frame (also in the mirror pass)
 uniform vec3  uPlanetCentre;    // planet centre in the render frame
-uniform int   uSeaSurface;      // 1: lift the seabed to sea level, shade it as water
-uniform float uDepthBias;       // coastline separation, in depth-buffer steps
-uniform vec4  uChunk;           // first vertex's uv (wrapped), uv metres per vertex
-                                // step, skirt depth
-uniform int   uFace;            // cube face, for the texture tangents
+uniform int   uSeaSurface;      // 1: the planet has a sea: the seabed is lifted
+                                // to it and shaded as water
+// Each chunk's own values, by its slot (Terrain's chunk table; one texture
+// for all chunks rather than inputs per chunk, which made Panda set every
+// chunk's state apart: ~2.5 ms a frame). Per slot, three texels:
+//   0: the chunk's centre, planet frame (the swell's point), and
+//      1 / (4 vertex spacing): the finest swell it draws;
+//   1: its first vertex's uv (wrapped), uv metres per vertex step, skirt depth;
+//   2: its level and cube face.
+uniform sampler2D uChunkTable;
 
 out vec3 vRelPos;     // position relative to the camera, render frame
 out vec2 vUv;         // ground-anchored texture coordinate, metres
@@ -31,7 +39,10 @@ out vec3 vNormal;
 out vec3 vUp;         // local vertical
 out vec4 vBiomeA;
 out vec4 vBiomeB;
+out vec4 vSwell;     // the swell: gradient per metre (planet axes), field
 flat out int vFace;
+flat out int vLevel;
+flat out float vStep;  // uv metres per vertex step (about the vertex spacing)
 
 const int QUADS = 64;
 const int VERTS = QUADS + 1;
@@ -58,32 +69,48 @@ void main() {
     vec3 world = (p3d_ModelMatrix * local).xyz;
     vec3 up = normalize(world - uPlanetCentre);
     vec3 N = normalize(rotation * p3d_Normal);
-    bool skirt = biome_b.a > 0.5;
+    int high = int(biome_b.a * 255.0 + 0.5);
+    int slot = int(biome_b.b * 255.0 + 0.5) + 256 * (high & 127);
+    bool skirt = high >= 128;
+    vec4 uChunkCentre = texelFetch(uChunkTable, ivec2(slot, 0), 0);
+    vec4 uChunk = texelFetch(uChunkTable, ivec2(slot, 1), 0);
+    vec4 ids = texelFetch(uChunkTable, ivec2(slot, 2), 0);
     float ground = skirt ? height + uChunk.w : height;  // the (edge) ground height
     float drawn = height;
+    vSwell = vec4(0.0, 0.0, 0.0, SWELL_MEAN);
 
     if (uSeaSurface == 1 && ground < 0.0) {
-        // Up to sea level; a skirt keeps hanging its depth below it.
-        vec3 lift = up * -ground;
+        // Up to the water: sea level and the swell, which has as much detail
+        // as the chunk's vertices can carry. A skirt keeps hanging its depth
+        // below its edge's water.
+        vec3 planet = uChunkCentre.xyz + p3d_Vertex.xyz;
+        if (skirt) {
+            planet += up * uChunk.w;  // its edge's point
+        }
+        // The field and its gradient, for the near look's shading too: the
+        // geometry's own swell, so the normal follows the drawn water.
+        vec3 grad;
+        float field = swellField(planet - up * ground, uChunkCentre.w, grad);
+        float water = uSwellAmplitude * swellDepthFactor(-ground) * (field - SWELL_MEAN);
+        vSwell = vec4(grad, field);
+        vec3 lift = up * (water - ground);
         local.xyz += transpose(rotation) * lift;
         world += lift;
-        drawn -= ground;
+        drawn += water - ground;
         N = up;
     }
 
     gl_Position = p3d_ModelViewProjectionMatrix * local;
 
-    // Land just above the sea and seabed just below it sit within one depth
-    // step of the ocean at range; nudging land nearer and seabed farther by a
-    // fixed number of steps keeps the coastline stable at every distance.
-    // Not needed when the terrain draws the sea itself.
-    float side = uSeaSurface == 1 ? 0.0 : clamp(drawn, -1.0, 1.0);
-    gl_Position.z -= side * uDepthBias * (2.0 / 16777216.0) * gl_Position.w;
-
-    // The ocean's reflection camera clips at the water plane (a clip plane
-    // on its initial state), which a shader must apply itself. Panda enables
-    // the clip distance only while a clip plane is on: other passes ignore it.
-    gl_ClipDistance[0] = dot(p3d_ClipPlane[0], p3d_ModelViewMatrix * local);
+    // The sea's reflection camera clips at the water plane (a clip plane on
+    // its initial state), which a shader must apply itself. Panda enables the
+    // clip distance only while a clip plane is on, and passes a zero plane
+    // otherwise. The sea is not in its own reflection: in that pass its
+    // vertices are clipped too (clipping, not a discard, which would cost the
+    // early depth test everywhere).
+    bool mirror = p3d_ClipPlane[0] != vec4(0.0);
+    gl_ClipDistance[0] = mirror && uSeaSurface == 1 && ground < 0.0
+        ? -1.0 : dot(p3d_ClipPlane[0], p3d_ModelViewMatrix * local);
 
     vRelPos = world - uCamPos;
     vUv = uChunk.xy + gridCoord(gl_VertexID) * uChunk.z;
@@ -93,5 +120,7 @@ void main() {
     vUp = up;
     vBiomeA = biome_a;
     vBiomeB = biome_b;
-    vFace = uFace;
+    vFace = int(ids.y + 0.5);
+    vLevel = int(ids.x + 0.5);
+    vStep = uChunk.z;
 }

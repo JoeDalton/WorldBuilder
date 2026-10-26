@@ -37,6 +37,7 @@ Packing: ``albedo_height`` = sRGB albedo + linear height in alpha, and
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from dataclasses import dataclass
@@ -161,7 +162,9 @@ def load_materials(
             )
         tile_m[layer] = tile
         maps = found[biome]
-        placeholder = make_placeholder(layer, size)
+        # Only for missing maps: a placeholder costs seconds at 2048.
+        missing = any(kind not in maps for kind, _ in _MAP_PATTERNS)
+        placeholder = make_placeholder(layer, size) if missing else {}
         albedo = _load(maps.get("albedo"), size, 3)
         if albedo is None:
             albedo = placeholder["albedo"]
@@ -211,12 +214,22 @@ def tileable_noise(
     """
     rng = np.random.default_rng(seed)
     white = rng.normal(size=(size, size))
-    fx = np.fft.fftfreq(size) * size
-    f = np.hypot(fx[None, :], fx[:, None])
-    shape = np.where(f >= low_cut, 1.0 / np.maximum(f, 1e-6) ** beta, 0.0)
-    noise = np.real(np.fft.ifft2(np.fft.fft2(white) * shape))
+    # Real input: the half spectrum is enough (the same noise, twice as fast).
+    noise = np.fft.irfft2(
+        np.fft.rfft2(white) * _spectrum(size, beta, low_cut), s=white.shape
+    )
     noise -= noise.min()
     return noise / max(noise.max(), 1e-9)
+
+
+@functools.lru_cache(maxsize=32)
+def _spectrum(size: int, beta: float, low_cut: float) -> np.ndarray:
+    """:returns: the 1/f^beta filter over the half spectrum of a size x size
+    real image (frequencies in cycles per tile, below *low_cut* removed)"""
+    fy = np.fft.fftfreq(size) * size
+    fx = np.fft.rfftfreq(size) * size
+    f = np.hypot(fx[None, :], fy[:, None])
+    return np.where(f >= low_cut, 1.0 / np.maximum(f, 1e-6) ** beta, 0.0)
 
 
 def make_placeholder(layer: int, size: int) -> dict[str, np.ndarray]:

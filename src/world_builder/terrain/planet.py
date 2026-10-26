@@ -39,11 +39,10 @@ import math
 from dataclasses import dataclass, field, replace
 
 import numpy as np
-from scipy.interpolate import PchipInterpolator
 
 from world_builder.terrain.chart import dirs_from_latlon, latlon
 from world_builder.terrain.cubesphere import face_dirs, grid_for
-from world_builder.terrain.noise import fbm, ridged, smoothstep, warp
+from world_builder.terrain.noise import fbm, native_library, ridged, smoothstep, warp
 
 #: Default terrain planet radius, metres (a small, Kerbin-like world).
 TERRAIN_RADIUS_M = 600e3
@@ -326,7 +325,7 @@ class Planet:
         target = LOW_BAND_TARGET * self.elevation.feature_scale / self.grid.spacing0
         self.low_band_step = min(1 << max(0, round(math.log2(target))), self.grid.n0)
         points = np.array(self.elevation.continent_curve)
-        self._continent_curve = PchipInterpolator(points[:, 0], points[:, 1])
+        self._continent_curve = Pchip(points[:, 0], points[:, 1])
         self._curve_range = (points[0, 0], points[-1, 0])
         self._stamp_bases: dict[int, float] = {}
 
@@ -341,13 +340,9 @@ class Planet:
         """
         spec = self.spec
         e, c = self.elevation, self.climate
-        p = dirs * spec.radius
         seed = spec.seed * 1000
-        q = warp(p, e.warp_wavelength, e.warp_amplitude, 3, seed + _SEED_WARP)
-        continent = (
-            fbm(q, e.continent_wavelength, e.continent_octaves, seed + _SEED_CONTINENT)
-            - spec.sea_bias
-        )
+        p, q, continent = self._continental(dirs)
+        continent = continent - spec.sea_bias
         mask = fbm(q, e.mountain_mask_wavelength, 3, seed + _SEED_MASK)
         lat, _ = latlon(dirs)
         temperature = (
@@ -366,6 +361,20 @@ class Planet:
             p, c.humidity_wavelength, c.humidity_octaves, seed + _SEED_HUMIDITY
         )
         return np.column_stack([q - p, continent, mask, temperature, humidity])
+
+    def _continental(
+        self, dirs: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """:returns: the sample points p (metres), the warped points q, and
+        the continental field at q, sea bias not removed"""
+        e = self.elevation
+        seed = self.spec.seed * 1000
+        p = dirs * self.spec.radius
+        q = warp(p, e.warp_wavelength, e.warp_amplitude, 3, seed + _SEED_WARP)
+        continent = fbm(
+            q, e.continent_wavelength, e.continent_octaves, seed + _SEED_CONTINENT
+        )
+        return p, q, continent
 
     # ── full evaluation ────────────────────────────────────────────────────────
 
@@ -488,8 +497,7 @@ class Planet:
         :returns: the sampled fields
         """
         grid = self.grid
-        ga, gb = np.meshgrid(grid.param(ka), grid.param(kb))
-        dirs = face_dirs(face, ga, gb)
+        dirs = _face_grid(face, grid.param(ka), grid.param(kb))
         if step >= self.low_band_step:
             low = self.low_band(dirs)
         else:
@@ -555,9 +563,73 @@ class Planet:
 
         :returns: (len(lb), len(la), 7)
         """
-        ga, gb = np.meshgrid(self.grid.param(la), self.grid.param(lb))
-        dirs = face_dirs(face, ga, gb)
+        dirs = _face_grid(face, self.grid.param(la), self.grid.param(lb))
         return self.low_band(dirs).reshape(len(lb), len(la), -1)
+
+
+class Pchip:
+    """Monotone piecewise-cubic interpolation (PCHIP), as scipy's
+    ``PchipInterpolator`` (the same slopes: Fritsch-Butland, with its
+    one-sided end slopes) for inputs within the points' range. Here so that
+    every worker process does not import ``scipy.interpolate`` (~0.1 s).
+
+    :param x: (n,) increasing abscissae, n >= 2
+    :param y: (n,) values
+    """
+
+    def __init__(self, x: np.ndarray, y: np.ndarray):
+        self.x = np.asarray(x, dtype=np.float64)
+        self.y = np.asarray(y, dtype=np.float64)
+        h = np.diff(self.x)
+        m = np.diff(self.y) / h
+        d = np.zeros_like(self.y)
+        if len(m) == 1:
+            d[:] = m[0]
+        else:
+            # Interior: weighted harmonic mean of the neighbouring secants,
+            # zero at a local extremum (keeps the curve monotone).
+            flat = (np.sign(m[1:]) != np.sign(m[:-1])) | (m[1:] == 0) | (m[:-1] == 0)
+            w1, w2 = 2.0 * h[1:] + h[:-1], h[1:] + 2.0 * h[:-1]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                mean = (w1 / m[:-1] + w2 / m[1:]) / (w1 + w2)
+                d[1:-1] = np.where(flat, 0.0, 1.0 / mean)
+            d[0] = _pchip_end(h[0], h[1], m[0], m[1])
+            d[-1] = _pchip_end(h[-1], h[-2], m[-1], m[-2])
+        self.slopes = d
+
+    def __call__(self, x: np.ndarray) -> np.ndarray:
+        """:returns: the curve at *x* (within the points' range)"""
+        x = np.asarray(x, dtype=np.float64)
+        k = np.clip(np.searchsorted(self.x, x, side="right") - 1, 0, len(self.x) - 2)
+        h = self.x[k + 1] - self.x[k]
+        t = (x - self.x[k]) / h
+        t2, t3 = t * t, t * t * t
+        return (
+            (2.0 * t3 - 3.0 * t2 + 1.0) * self.y[k]
+            + (t3 - 2.0 * t2 + t) * h * self.slopes[k]
+            + (3.0 * t2 - 2.0 * t3) * self.y[k + 1]
+            + (t3 - t2) * h * self.slopes[k + 1]
+        )
+
+
+def _pchip_end(h0: float, h1: float, m0: float, m1: float) -> float:
+    """One-sided three-point slope at an end, kept monotone (scipy's)."""
+    d = ((2.0 * h0 + h1) * m0 - h0 * m1) / (h0 + h1)
+    if np.sign(d) != np.sign(m0):
+        return 0.0
+    if np.sign(m0) != np.sign(m1) and abs(d) > 3.0 * abs(m0):
+        return 3.0 * m0
+    return float(d)
+
+
+def _face_grid(face: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """:returns: ``face_dirs`` over the grid a x b, rows along b: in the
+    native library when it is built (one tangent per row and column)"""
+    native = native_library()
+    if native is not None:
+        return native.face_grid(face, a, b)
+    ga, gb = np.meshgrid(a, b)
+    return face_dirs(face, ga, gb)
 
 
 def _catmull_rom_weights(
@@ -599,7 +671,8 @@ def _sea_bias(spec: PlanetSpec) -> float:
     dirs = rng.normal(size=(_SEA_BIAS_SAMPLES, 3))
     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
     unbiased = Planet.__new__(Planet)
-    unbiased.spec = replace(spec, sea_bias=0.0)
+    unbiased.spec = spec
     unbiased.elevation, unbiased.climate = scaled_params(spec)
-    continent = unbiased.low_band(dirs)[:, 3]
+    # The continental field alone (the low band's other fields cost as much)
+    _, _, continent = unbiased._continental(dirs)
     return float(np.quantile(continent, spec.elevation.ocean_fraction))

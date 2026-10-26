@@ -237,7 +237,6 @@ class Starfield:
         sky = Sky(render, Starfield(seed=3), atmospheres)
 
     :ivar catalogue: the point stars (:func:`make_stars`)
-    :ivar glow: the diffuse light's cube map (:func:`glow_texture`)
     """
 
     def __init__(
@@ -257,15 +256,39 @@ class Starfield:
         self.catalogue = make_stars(seed, stars, galactic_pole, red, blue)
         self._glow_args = (seed, galactic_pole, nebula_scale, nebula_coverage)
         self.glow_size = int(glow_size)
-        self.glow = glow_texture(make_glow(self.glow_size, *self._glow_args))
-        self._glows = {self.glow_size: self.glow}
+        # Made when first asked for (~0.4 s at 256), at the size the sky uses.
+        self._glows: dict[int, Texture] = {}
+        self._glow_jobs: dict[int, Any] = {}
+
+    def prefetch_glow(self, executor: Any, size: int | None = None) -> None:
+        """Start making the glow at *size* in a worker pool, so it is ready
+        when the sky asks for it (:meth:`glow_at` takes it from there).
+
+        :param executor: a :class:`world_builder.terrain.workers.ChunkExecutor`
+        :param size: texels per face; None = ``glow_size``
+        """
+        size = int(size or self.glow_size)
+        if size not in self._glows and size not in self._glow_jobs:
+            self._glow_jobs[size] = executor.submit_once(
+                make_glow, size, *self._glow_args
+            )
+
+    @property
+    def glow(self) -> Texture:
+        """The diffuse light's cube map (:func:`glow_texture`) at
+        ``glow_size``."""
+        return self.glow_at(self.glow_size)
 
     def glow_at(self, size: int) -> Texture:
         """:returns: the diffuse light's cube map at another size (the same
         sky; made once per size)"""
         size = int(size)
         if size not in self._glows:
-            self._glows[size] = glow_texture(make_glow(size, *self._glow_args))
+            job = self._glow_jobs.pop(size, None)
+            data = (
+                job.result() if job is not None else make_glow(size, *self._glow_args)
+            )
+            self._glows[size] = glow_texture(data)
         return self._glows[size]
 
 

@@ -24,6 +24,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import SamplerState, Texture
 
+from world_builder.terrain.noise import native_library
 from world_builder.utils import clamp
 
 # Volume resolution, and the random lattice it is upsampled from. NOISE_SIZE must be
@@ -44,6 +45,10 @@ OCTAVE_OFFSETS = (
     (-0.57, 0.11, 0.83),
     (0.67, -0.29, 0.41),
 )
+#: One octave of weight 1 at scale 1, unshifted: :func:`sample_volume` through
+#: the native fbm (``x * 1.0 + 0.0`` is ``x``: the same samples).
+_ONE = (1.0,)
+_ZERO = ((0.0, 0.0, 0.0),)
 
 #: Coverage calibration resolution (see :func:`column_peaks`): within 0.3% of the
 #: requested coverage. 96 rather than 128 on purpose: a power of two lands every
@@ -320,6 +325,9 @@ def sample_volume(volume: np.ndarray, coords: np.ndarray) -> np.ndarray:
     :param volume: (n, n, n) float array indexed [z, y, x]
     :param coords: (..., 3) sample positions in noise coords
     """
+    native = native_library()
+    if native is not None and volume.dtype == np.float32:
+        return native.volume_fbm(volume, coords, _ONE, _ONE, _ZERO, 1, 0.0)
     size = volume.shape[0]
     coords = np.asarray(coords, dtype=np.float64)
     texel = coords - 0.5
@@ -364,6 +372,21 @@ def fbm(
     """
     if octave_mean is None:
         octave_mean = float(volume.mean())
+    native = native_library()
+    if native is not None and volume.dtype == np.float32:
+        # zip() below: as many octaves as the shortest of the three
+        count = min(
+            len(spec.octave_scales), len(spec.octave_weights), len(OCTAVE_OFFSETS)
+        )
+        return native.volume_fbm(
+            volume,
+            coords,
+            spec.octave_scales[:count],
+            spec.octave_weights[:count],
+            OCTAVE_OFFSETS[:count],
+            min(octaves, count),
+            octave_mean,
+        )
     total = np.zeros(np.shape(coords)[:-1], dtype=np.float64)
     for index, (scale, weight, offset) in enumerate(
         zip(spec.octave_scales, spec.octave_weights, OCTAVE_OFFSETS)
@@ -656,7 +679,7 @@ def density_on_sphere(
 
     :param volume: the noise octave (quantised, to match the GPU)
     :param weather: (6, n, n, 2) cube map of coverage and shift
-        (:func:`weather.weather_cube`)
+        (:func:`weather.weather_cube`), or its (6, n, n) shift plane alone
     :param spec: a resolved field (a shell's: :meth:`sphere.ShellSpec.field_of`)
     :param points: (..., 3) planet-frame positions, metres
     :param radius: sea-level radius, metres
@@ -674,7 +697,8 @@ def density_on_sphere(
     base, thickness = spec.slab
     h = (r - radius - base) / max(thickness, 1e-3)
     coords = points * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    shift = sample_cube(weather[..., 1], points)
+    plane = weather[..., 1] if weather.ndim == 4 else weather
+    shift = sample_cube(plane, points)
     raw = fbm(volume, coords, spec, octaves) + shift
     if early_out:
         # cloud_field.glsl's cloudDensity: what is still to come at most.

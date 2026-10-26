@@ -23,7 +23,7 @@ from panda3d.core import (
 
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import AzimuthalEquidistantChart, TangentFrame
-from world_builder.terrain.chunkgen import QUADS, generate_chunk
+from world_builder.terrain.chunkgen import QUADS, VERTS, generate_chunk
 from world_builder.terrain.native import NativeCollisionError, NativeTerrain, _binding
 from world_builder.terrain.planet import PRESETS, Planet
 from world_builder.terrain.query import TerrainQuery
@@ -208,17 +208,62 @@ def test_nothing_registered_there(planet, land):
 def test_the_sea_surface_is_solid(planet, sea):
     chunk, query, native = sea
     radius = planet.spec.radius
+    # The drawn water: flat triangles of sea-level corners, a little under
+    # the sphere between them and tilted by up to a vertex spacing.
+    spacing = planet.grid.spacing(chunk.key[0])
+    sag, tilt = spacing**2 / (8.0 * radius) + 1e-3, np.degrees(spacing / radius) + 1e-6
     for direction in _inside(planet, chunk, np.random.default_rng(6), 10):
         hit = native.segment(direction * (radius + 100.0), direction * (radius - 100.0))
         assert hit is not None
         _, point, normal = hit
-        assert np.linalg.norm(point) == pytest.approx(radius, abs=1e-3)
-        assert _angle(normal, direction) < 1e-3
+        assert np.linalg.norm(point) == pytest.approx(radius, abs=sag)
+        assert _angle(normal, direction) < tilt
         assert native.material(point) == -1
         assert query.material_at(point, generate=False) == "water"
         contact = native.sphere(direction * (radius + 2.0), 5.0)
         assert contact is not None
-        assert _angle(contact[1], direction) < 1e-3
+        assert _angle(contact[1], direction) < tilt
+
+
+def test_the_swell_is_solid_where_it_is_drawn(planet, sea):
+    """With a swell, the water as terrain.vert raises it is solid: at a grid
+    vertex the solid and the query both stand on Swell.heights there, at the
+    chunk's own resolution, and the water moves with time."""
+    from world_builder.ocean.ocean import swell_rotations
+    from world_builder.ocean.swell import Swell
+
+    chunk, query, native = sea
+    radius = planet.spec.radius
+    frame = TangentFrame.at(planet.spec.reference_lat, planet.spec.reference_lon)
+    grid = chunk.vertices()["vertex"][: VERTS * VERTS].astype(np.float64)
+    picked = grid[[20 * VERTS + 20, 31 * VERTS + 40, 50 * VERTS + 10]] + chunk.centre
+    ups = picked / np.linalg.norm(picked, axis=1, keepdims=True)
+    depths = radius - np.linalg.norm(picked, axis=1)
+    max_freq = 0.25 / planet.grid.spacing(chunk.key[0])
+    waters = []
+    try:
+        for time in (0.0, 600.0):
+            a, b = swell_rotations(
+                frame.up, frame.east, frame.north, (1.0, 0.0), 0.004, 0.1, radius, time
+            )
+            swell = Swell(20.0, 0.004, a, b, by_depth=False)
+            native.set_swell(swell)
+            query.swell = swell
+            water = swell.heights(ups * radius, depths, max_freq)
+            heights = query.height_at(ups * (radius + 50.0), generate=False)
+            np.testing.assert_allclose(heights, water, atol=1e-6)
+            for up, expected in zip(ups, water):
+                _, point, _ = native.segment(
+                    up * (radius + 100.0), up * (radius - 100.0)
+                )
+                assert np.linalg.norm(point) - radius == pytest.approx(
+                    expected, abs=1e-4
+                )
+            waters.append(water)
+    finally:
+        native.set_swell(None)
+        query.swell = None
+    assert np.abs(waters[1] - waters[0]).max() > 0.01  # the water moves
 
 
 def test_a_panda_series_without_a_build_is_refused(monkeypatch):

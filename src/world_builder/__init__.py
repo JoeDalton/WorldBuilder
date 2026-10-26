@@ -42,7 +42,7 @@ PLANET_RADIUS_M = 6371000.0
 
 #: Shallow water's colour (linear), and the depth over which the deep water's
 #: colour takes over from it (Beer-Lambert e-folding, metres). Shared by the
-#: ocean and the terrain's own sea surface, so the sea's colour holds across
-#: their handover. The deep colour is the ocean's ``water_color``.
+#: sea's near and far looks, so its colour holds as they fade. The deep
+#: colour is the sea's ``water_color``.
 SHALLOW_WATER_COLOR = (0.03, 0.16, 0.15)
 SHALLOW_WATER_DEPTH_M = 8.0

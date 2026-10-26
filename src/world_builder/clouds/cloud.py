@@ -41,6 +41,12 @@ from world_builder.clouds.noise import (
 )
 from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 
+#: Most billboard shells a planet's clouds take: one cull bin each between
+#: the opaque and transparent bins (``sphere._SHELL_BIN_SORTS``), which the
+#: sky, the deck and the flat field share. Their layers fit ``MAX_LAYERS``.
+MAX_SHELLS = 6
+assert MAX_SHELLS < MAX_LAYERS
+
 
 class CloudType(Enum):
     """The preset cloud types: the keys of :data:`PRESETS`."""
@@ -217,6 +223,9 @@ class CloudSettings(QualitySettings):
     :ivar shells: planet clouds: billboard shells before the deck takes
         over, each twice as far as the last. Rebuild
     :ivar reflected: drawn in the ocean's reflection. Live
+    :ivar half_resolution: drawn at half the view's resolution and laid over
+        it (``clouds.half_res``; World, given the split cameras, and the
+        demo draw that pass). Live
     :ivar uploads_per_frame: planet clouds: tiles uploaded per frame. Live
     :ivar resorts_per_frame: planet clouds: tiles re-sorted per frame. Live
     :ivar tile_cache: planet clouds: tiles kept beyond those wanted. Live
@@ -269,7 +278,7 @@ class CloudSettings(QualitySettings):
         "Billboard distance",
         REBUILD,
         unit="shells",
-        range=(1, MAX_LAYERS - 1),
+        range=(1, MAX_SHELLS),
         advanced=True,
         help="Billboard shells, each twice as far as the last, before the flat "
         "deck takes over.",
@@ -278,6 +287,12 @@ class CloudSettings(QualitySettings):
         True,
         "In reflections",
         help="Draw the clouds in the sea's reflection (about 1-1.7 ms).",
+    )
+    half_resolution: bool = knob(
+        False,
+        "Half-resolution clouds",
+        help="Draw the clouds at half the view's resolution: about half their "
+        "cost low over the planet, softer cloud edges against the ground.",
     )
     uploads_per_frame: int = knob(
         3, "Tile uploads per frame", range=(1, 32), advanced=True
@@ -570,6 +585,12 @@ def atlas_mean_alpha() -> float:
     if not image.has_alpha():
         return 1.0
     width, height = image.get_x_size(), image.get_y_size()
+    # The alpha as an array (a loop of get_alpha calls took ~80 ms): a texture
+    # holds it bottom-up, PNMImage rows are top-down.
+    texture = Texture()
+    texture.load(image)
+    alpha = np.frombuffer(texture.get_ram_image_as("A").get_data(), dtype=np.uint8)
+    alpha = alpha.reshape(height, width)[::-1] / float(image.get_maxval())
     totals = []
     for u_min, v_min, u_size, v_size in atlas_rects():
         # UVs are bottom-left origin; PNMImage rows are top-down.
@@ -579,7 +600,6 @@ def atlas_mean_alpha() -> float:
         y1 = max(y0 + 1, int(round((1.0 - v_min) * height)))
         x0, x1 = max(0, x0), min(width, x1)
         y0, y1 = max(0, y0), min(height, y1)
-        alphas = [image.get_alpha(x, y) for y in range(y0, y1) for x in range(x0, x1)]
-        if alphas:
-            totals.append(sum(alphas) / len(alphas))
+        if x1 > x0 and y1 > y0:
+            totals.append(float(alpha[y0:y1, x0:x1].mean()))
     return float(np.mean(totals)) if totals else 1.0

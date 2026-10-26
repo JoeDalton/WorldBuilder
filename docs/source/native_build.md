@@ -1,6 +1,9 @@
-# The native collision library
+# The native libraries
 
-Terrain collision (`Terrain.enable_collision`, see [terrain](terrain.md)) rests on a small C++ library, `src/world_builder/terrain/native/terrain_collision.cpp`. This page covers why it is compiled, how it is built and shipped for each platform, and what it depends on.
+Two small compiled libraries sit in `src/world_builder/terrain/native/`:
+
+- **Terrain collision** (`Terrain.enable_collision`, see [terrain](terrain.md)): `terrain_collision.cpp`, built against Panda3D. Most of this page is about it: why it is compiled, how it is built and shipped for each platform, and what it depends on.
+- **Noise** (`noise.c`, see [below](#the-noise-library)): plain C, no dependency. Terrain generation runs without it, about 3x slower.
 
 ## Why a compiled solid
 
@@ -23,11 +26,30 @@ One `CollisionTerrain` solid stands for the whole planet's drawn chunks. The chu
 invoke native      # also run by `invoke develop`
 ```
 
-It builds the library for the Poetry venv's panda3d: `scripts/build_native.sh` on Linux and macOS, `scripts/build_native.ps1` on Windows (MSVC, found with `vswhere`). The output sits next to `_binding.py` as `libterrain_collision-panda<major>.<minor>.so` (`.dylib` on macOS, `.dll` on Windows) and is git-ignored. `invoke develop` only warns if the build fails.
+It builds the libraries for the Poetry venv's panda3d: `scripts/build_native.sh` on Linux and macOS, `scripts/build_native.ps1` on Windows (MSVC, found with `vswhere`). The output sits next to `_binding.py` as `libwb_noise.so` and `libterrain_collision-panda<major>.<minor>.so` (`.dylib` on macOS, `.dll` on Windows) and is git-ignored. `invoke develop` only warns if the build fails.
 
 Other headers can be given to `build_native.sh` with `PANDA_SDK_INCLUDE` and `EIGEN_INCLUDE`, and another Python as its argument. The scripts refuse headers of another version than the installed wheel's.
 
 Without the library, `Terrain.enable_collision` raises `NativeCollisionError` and the tests in `tests/test_terrain_collision.py` are skipped. Setting `WORLD_BUILDER_REQUIRE_NATIVE` makes them fail instead (CI does).
+
+## The noise library
+
+`world_builder.terrain.noise` sums the octaves of `fbm` and `ridged` in `libwb_noise.so` (`.dylib`, `.dll`) when it is there: about 5x faster than numpy, which pays ~150 array operations per octave. A terrain chunk takes ~8 ms instead of ~24, and the weather map, the Milky Way glow and the sea level follow.
+
+It also computes, natively when it can:
+
+- **The clouds' density** (`wb_volume_fbm`): the octaves of the tiling 64³ noise volume, sampled as `clouds/noise.py` and the GPU sample it. Cloud tiles, the column peaks and the deck's light table use it.
+- **A chunk's geometry** (`chunk.c`): the steps of `chunkgen.generate_chunk` that only shape the grid, none of the planet's rules: the face's directions on a separable grid (`wb_face_grid`, one tangent per row and column), the normals and the slope (`wb_chunk_surface`), the vertex buffer and the box of what is drawn (`wb_chunk_pack`). Each follows its numpy expression's order of operations; `tests/test_native_noise.py` compares whole chunks, a coastal one included (identical here).
+- **The planet clouds' billboards** (`billboards.c`): a tile's vertices, bounds and reach at upload, written straight into Panda's buffer (`wb_billboard_vertices`), and its billboards back to front from the camera at each re-sort, radix-sorted and written as its triangle indices (`wb_billboard_order`, stable over the tile's previous order like the numpy fallback). Both give numpy's bytes (`tests/test_native_noise.py`).
+- **The LOD selection** (`lod.c`, `wb_lod_*`): `quadtree.LodSelector`'s pass, operation for operation, in its own source file of the same library. It keeps a copy of the chunks' state (bounds, ready), which `Terrain` updates as chunks are stored, uploaded and evicted, so a pass makes no call back into Python. `tests/test_native_lod.py` runs both selectors through the same flights and requires the same selections.
+- **The sea's swell** (`wb_swell_heights`): the height of the drawn water for `world_builder.ocean.swell.Swell`, for collision queries. The swell itself is in `swell.h`, a header of static inline C99 that the collision solid includes too, so both answer with the same function. The GLSL copy (`ocean/shaders/swell.glsl`) is kept in step by `tests/test_native_noise.py` (C against numpy) and `tests/test_scene.py` (the GPU's against the CPU's).
+
+- **Same noise.** It is the numpy code's simplex noise point by point: one octave gives the same bits. Sums of octaves differ from numpy's in the last bits (~1e-12), because numpy rotates the points with BLAS. Within one run every chunk comes from the same code, so neighbouring chunks' edges still match exactly. `tests/test_native_noise.py` compares the two.
+- **Same on every platform.** It is built without floating-point contraction (`-ffp-contract=off`, MSVC's `/fp:precise`), so no compiler fuses a multiply and an add into an FMA and rounds differently on another machine.
+- **No Panda3D, no Python.h.** The binding is ctypes, in `noise.py` itself: the library is found by path (importing the `native` package would import the terrain back), and its name carries no Panda3D series. `wb_noise_abi()` guards against a stale build: bump `WB_NOISE_ABI` in `noise.c` and `_NATIVE_ABI` in `noise.py` together whenever an exported function changes (7 since the clouds' tile vertices).
+- **Without it** a warning is logged and numpy runs. `WORLD_BUILDER_NO_NATIVE_NOISE` forces numpy (to compare); `WORLD_BUILDER_REQUIRE_NATIVE` makes a missing library an error, as for collision.
+
+`scripts/build_native.sh` and `build_native.ps1` build it first, with the system's compiler only; `invoke native` runs them. The platform wheels carry it next to the collision library.
 
 ## Platform wheels
 
@@ -42,7 +64,7 @@ Releases carry one wheel per platform, plus the sdist, which has no library:
 
 Windows on ARM has no Panda3D wheel, so it isn't covered (x64 Python under emulation takes the x64 wheel).
 
-Every wheel starts from the same pure wheel (`python -m build`, built once on Linux, so the Python files are identical everywhere). `scripts/platform_wheel.py` adds the library and retags it `py3-none-<platform>` with `Root-Is-Purelib: false`. Each platform then differs in how the library is built and found:
+Every wheel starts from the same pure wheel (`python -m build`, built once on Linux, so the Python files are identical everywhere). `scripts/platform_wheel.py` adds the libraries and retags it `py3-none-<platform>` with `Root-Is-Purelib: false`. Each platform then differs in how the library is built and found:
 
 - **Linux** (`scripts/build_manylinux_wheel.sh`): runs inside the manylinux2014 image, whose GCC 10 and glibc 2.17 are the toolchain of Panda's own wheels. `auditwheel repair` checks the glibc and libstdc++ symbol versions against the policy and applies the tag, without copying Panda's libraries in. The library finds Panda's through the relative rpath `$ORIGIN/../../../panda3d` (from `site-packages/world_builder/terrain/native/`). The amd64 SDK package serves both architectures: its `dtool_config.h` covers aarch64 under `#ifdef __aarch64__` (only Cg, unused here).
 - **Windows** (`scripts/build_native.ps1`): links against the SDK's import libraries, which the wheel lacks, and loads the wheel's DLLs at runtime. They are already loaded by then (the binding imports `panda3d.core` first), and Windows reuses a loaded DLL of the same name.
@@ -56,7 +78,7 @@ On every push to `main` and every version tag (`.github/workflows/ci.yml`):
 
 - `package` builds the sdist and the pure wheel;
 - `build_wheels` builds the platform wheels (the table above);
-- `test_wheels` installs each in a clean venv for each of Python 3.12, 3.13 and 3.14, on Intel and Apple silicon for macOS, and runs the whole suite with `WORLD_BUILDER_REQUIRE_NATIVE=1`, so no collision test can be skipped. A step first checks the package comes from `site-packages` and prints how the library finds Panda's;
+- `test_wheels` installs each in a clean venv for each of Python 3.12, 3.13 and 3.14, on Intel and Apple silicon for macOS, and runs the whole suite with `WORLD_BUILDER_REQUIRE_NATIVE=1`, so no collision or native noise test can be skipped. A step first checks the package comes from `site-packages` and prints how the collision library finds Panda's;
 - on a tag, `release` checks that every platform wheel is named after the tag and attaches them with the sdist to its release.
 
 To reproduce a Linux build locally:
@@ -68,7 +90,7 @@ docker run --rm -v "$PWD":/io quay.io/pypa/manylinux2014_$(uname -m) \
     /io/scripts/build_manylinux_wheel.sh "/io/$(ls dist/*-py3-none-any.whl)" /io/wheelhouse
 ```
 
-macOS: `scripts/build_macos_wheel.sh dist/*-py3-none-any.whl wheelhouse`. Windows: `scripts/build_native.ps1`, then `python scripts/platform_wheel.py dist/*-py3-none-any.whl <the .dll> win_amd64 wheelhouse`.
+macOS: `scripts/build_macos_wheel.sh dist/*-py3-none-any.whl wheelhouse`. Windows: `scripts/build_native.ps1`, then `python scripts/platform_wheel.py dist/*-py3-none-any.whl win_amd64 wheelhouse <the two .dll>`.
 
 ## Loading
 

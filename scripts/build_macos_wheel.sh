@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Turn the pure world_builder wheel into a macOS wheel carrying the native
-# terrain collision library: universal2 (x86_64 and arm64), like Panda3D's own
+# libraries (noise, terrain collision): universal2 (x86_64 and arm64), like Panda3D's own
 # wheels from Python 3.12, whose libraries it links against. See
 # docs/source/native_build.md.
 #
 #   scripts/build_macos_wheel.sh <pure wheel> <out dir>
 #
-# The library is Python-independent (ctypes, no Python.h), so the wheel is
+# The libraries are Python-independent (ctypes, no Python.h), so the wheel is
 # tagged py3-none-macosx_11_0_<architectures>.
 set -euo pipefail
 
@@ -31,4 +31,5 @@ ARCHS=$(lipo -archs "$LIB")
 case "$ARCHS" in
     "x86_64 arm64" | "arm64 x86_64") ARCHS=universal2 ;;
 esac
-"$PYTHON" "$HERE/scripts/platform_wheel.py" "$PURE" "$LIB" "macosx_11_0_$ARCHS" "$OUT"
+"$PYTHON" "$HERE/scripts/platform_wheel.py" "$PURE" "macosx_11_0_$ARCHS" "$OUT" \
+    "$(dirname "$LIB")/libwb_noise.dylib" "$LIB"

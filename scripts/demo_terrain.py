@@ -4,7 +4,7 @@ Standalone flythrough demo for the procedural planet terrain.
 Flies a free camera around a small planetary system: a Kerbin-sized planet
 (600 km) with hand-made stamps (world_builder/terrain/levels/demo.yaml), its
 atmosphere, its clouds (cumulus over the whole planet, following its
-weather) and the WorldBuilder ocean, an airless sand moon 10,000 km away,
+weather) and its sea, an airless sand moon 10,000 km away,
 and a procedural star field, from orbit down to the ground of either. Run it
 from an environment where world_builder is importable::
 
@@ -78,8 +78,8 @@ differs from every preset).
 Lighting: the sun is one direction for the whole system; the atmosphere
 reddens it and the planets' shadows hide it. Panda3D's own lights (a
 DirectionalLight and an AmbientLight on render, for anything drawn without
-the world's shaders) follow the light at the camera, and the swell ocean is
-lit as the sea under the camera (Ocean.set_light), so it darkens at night.
+the world's shaders) follow the light at the camera, and the sea's near look
+is lit as the sea under the camera (Sea.set_light), so it darkens at night.
 A white ball (Panda3D's smiley, untextured, 20 m across) floats ahead of the
 start pose, at its height, to judge how they light an object.
 
@@ -93,7 +93,6 @@ import argparse
 import math
 import sys
 from dataclasses import dataclass, replace
-from types import SimpleNamespace
 
 import numpy as np
 from direct.gui.OnscreenText import OnscreenText
@@ -105,21 +104,21 @@ from panda3d.core import (
     GraphicsWindow,
     LMatrix3f,
     LQuaternionf,
-    LVecBase3f,
     TextNode,
     Vec3,
     loadPrcFileData,
 )
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
+from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.ocean import Sea
 from world_builder.quality import QualityLevel
 from world_builder.settings import SECTIONS, WorldSettings
 from world_builder.sky import Sky, Starfield
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import (
-    AzimuthalEquidistantChart,
     TangentFrame,
     latlon,
 )
@@ -128,11 +127,7 @@ from world_builder.terrain.level import DEMO_LEVEL, load_level
 from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 
-INITIAL_FAR_M = 600000.0  # the lens the ocean's reflection camera copies
-# The ocean's own haze (it blends to this by distance where no atmosphere
-# is bound; the demo binds one).
-HAZE_COLOR = (0.62, 0.71, 0.84)
-HAZE_DISTANCE = 150000.0
+INITIAL_FAR_M = 600000.0  # the lens the sea's reflection camera copies
 SPEED = 300.0  # metres/second at low altitude
 BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground
@@ -144,10 +139,10 @@ MOON_SEED = 7
 MOON_ZENITH_ANGLE = 75.0
 # The camera stays within this many moon distances of the planet.
 MAX_RANGE_FACTOR = 3.0
-# The swell ocean is built for eyes up to 20 km; above this band the terrain
-# draws the sea itself, as flat water (hysteresis, so it does not flicker).
-OCEAN_HANDOVER = (14000.0, 16000.0)
-# The ocean's wave pattern is anchored to the ground through a chart around
+# The sea's near look (waves, reflection, foam) fades into its far one (flat
+# water lit per pixel) over this band of altitudes, metres.
+OCEAN_NEAR_BAND = (12000.0, 18000.0)
+# The sea's wave pattern is anchored to the ground through a chart around
 # this point, re-anchored (a jump in the pattern) past this distance.
 OCEAN_ANCHOR_RANGE = 50000.0
 # Sunlight above the air (the atmosphere reddens it), the planet's sky light,
@@ -203,6 +198,11 @@ def window_config(
     make (Panda picks the config with the most samples, x16 on a GTX 1070,
     whatever count is asked for), and it was most of the clouds' cost.
 
+    No transform cache: the world moves around the camera, so every drawn
+    node's net transform is new every frame and Panda's cache of composed
+    transforms only filled up for its garbage collection to empty (1 ms a
+    frame in low flight). A game drawing WorldBuilder's world wants the same.
+
     :param title: the window's title
     :param size: "width height"
     :param offscreen: an offscreen buffer (no display refresh cap or
@@ -217,6 +217,7 @@ def window_config(
         "framebuffer-multisample 0",
         "multisamples 0",
         "depth-bits 24",
+        "transform-cache false",
     ]
     if not vsync:
         lines.append("sync-video false")
@@ -331,7 +332,7 @@ class TerrainDemo(ShowBase):
         :param clouds: draw the planet's clouds
         :param cloud_debug: the clouds' profiling switches
             (:meth:`SphericalClouds.set_debug`)
-        :param ocean_debug: the ocean's debug view (:meth:`Ocean.set_debug_mode`)
+        :param ocean_debug: the sea's debug view (:meth:`Sea.set_debug_mode`)
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -360,6 +361,9 @@ class TerrainDemo(ShowBase):
         self.executor = ChunkExecutor(
             backend=backend, workers=world.terrain.workers or None
         )
+        # The sky's glow is made in the pool while the terrains are built.
+        stars = Starfield()
+        stars.prefetch_glow(self.executor, world.sky.glow_size)
         # The planet's air: everything is seen through it, the moon included.
         self.atmospheres = Atmospheres(world.atmosphere)
         self.atmospheres.add(spec.radius, AtmosphereParams())
@@ -392,18 +396,28 @@ class TerrainDemo(ShowBase):
         self.body = self.home  # the nearest body, updated every frame
 
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
-        self.sky = Sky(self.render, Starfield(), self.atmospheres, settings=world.sky)
+        self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.clouds = None
         self._cloud_debug = cloud_debug
         self._rebuild_clouds()
-        # Built before the depth split changes the lens: the ocean's
-        # reflection camera copies it once.
-        self.ocean = self._make_ocean()
+        # Built before the depth split changes the lens: the sea's reflection
+        # camera copies it once.
+        self.ocean = Sea(
+            self,
+            self.terrain,
+            self._clock.get_frame_time,
+            settings=self.world.ocean,
+            # The game's 20 m swell, in deep water: it dies out over the
+            # shallows, so it does not drown the beaches.
+            swell_amplitude=20.0,
+            near_band=OCEAN_NEAR_BAND,
+            anchor_range=OCEAN_ANCHOR_RANGE,
+        )
         self.ocean.set_debug_mode(ocean_debug)
         self.depth = SplitDepthCameras(self, near=1.0)
-        self._ocean_low = True  # below the handover band
-        self._apply_ocean()
+        self.half_res = None  # the clouds' half-resolution pass, if asked for
+        self._sync_half_res()
         self._debug = 0
         # Panda3D lights for anything not drawn by the world's own shaders
         # (models, ships): the sun and the sky as they are at the camera.
@@ -500,59 +514,6 @@ class TerrainDemo(ShowBase):
 
     # ── scene pieces ───────────────────────────────────────────────────────────
 
-    def _make_ocean(self):
-        """The game's real curved ocean, in a frame that follows the nadir.
-
-        The ocean is a flat-world object (sea level at z = 0, droop from the
-        camera). Its frame is the tangent plane at the sea-level point under
-        the camera, so it is exact where it matters; its xy follow the ground
-        (a chart around an anchor), so the waves stay put.
-        """
-        from world_builder.ocean import Ocean
-
-        self._sea_frame = self.render.attach_new_node("sea_frame")
-        self._ocean_anchor = None
-        self._game = SimpleNamespace(
-            app=self,
-            root_node=self._sea_frame,
-            method_lists={},
-            game_time=SimpleNamespace(get_current_time=self._clock.get_frame_time),
-        )
-        ocean = Ocean(
-            game=self._game,
-            settings=self.world.ocean,
-            geometric_swell=True,
-            # The game's 20 m swell, in deep water: the seabed (set_seabed,
-            # below) makes it die out over the shallows, so it does not drown
-            # the beaches.
-            swell_amplitude=20.0,
-            haze_color=LVecBase3f(*HAZE_COLOR),
-            haze_distance=HAZE_DISTANCE,
-            # The terrain is a true sphere: the paraboloid would stand 58 m
-            # above its sea level 100 km out.
-            planet_radius=self.radius,
-            exact_sphere=True,
-        )
-        self.atmospheres.bind(ocean.ocean_node)
-        ocean.set_seabed(self._seabed_heights)
-        return ocean
-
-    def _seabed_heights(self, points: np.ndarray, texel: float) -> np.ndarray:
-        """The ocean's seabed sampler (on its worker thread): the drawn
-        terrain under points of the sea's plane, read at the grid level
-        matching the texel and only from stored chunks (generating one would
-        take the workers' time from the terrain).
-
-        :param points: (N, 3) planet frame, metres
-        :param texel: the seabed texel, metres
-        :returns: (N,) ground heights, metres (negative under the sea)
-        """
-        query = self.terrain.query
-        grid = query.grid
-        level = int(math.floor(math.log2(max(texel / grid.spacing0, 1.0))))
-        level = min(max(level, query.level), grid.max_level)
-        return query.ground_height_at(points, level=level, generate=False)
-
     def _make_test_ball(self):
         """A white ball ahead of the start pose, level with it, lit by Panda3D's
         lights as any model is: for judging them.
@@ -579,8 +540,9 @@ class TerrainDemo(ShowBase):
         self.camera.set_pos(0.0, 0.0, 0.0)
         self.camera.set_quat(self.render, self._orientation)
 
+        forward = self._forward()
         for terrain in self._terrains():
-            terrain.update(self.cam_world)
+            terrain.update(self.cam_world, camera_forward=forward)
         ranges = []
         for body in self.bodies:
             spec = body.terrain.spec
@@ -594,17 +556,18 @@ class TerrainDemo(ShowBase):
             )
         split, far = SplitDepthCameras.system_ranges(ranges)
         self.depth.update(split, far)
+        if self.half_res is not None:
+            self.half_res.update()
 
-        home_up = self._relative(self.home) / np.linalg.norm(self._relative(self.home))
-        home_altitude = float(np.linalg.norm(self._relative(self.home))) - self.radius
         self.atmospheres.update(self.cam_world)
         self.sky.update((0.0, 0.0, 0.0), far)
         if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
-            self.clouds.set_pixel_angle(fov / max(self.win.get_y_size(), 1))
+            scale = self.half_res.pixel_scale if self.half_res is not None else 1.0
+            self.clouds.set_pixel_angle(scale * fov / max(self.win.get_y_size(), 1))
             self.clouds.update(self.cam_world)
         self._update_sun()
-        self._update_ocean(home_altitude, home_up)
+        self.ocean.update(self.cam_world)
         self._test_ball.set_pos(*self.home.terrain.to_render(self._test_ball_point))
         # Text geometry is rebuilt on every change: a few times a second is
         # plenty to read, and saves ~1 ms a frame.
@@ -680,7 +643,7 @@ class TerrainDemo(ShowBase):
 
     def _update_lights(self) -> None:
         """Panda3D's sun and ambient lights as they are at the camera, and
-        the swell ocean lit as the sea under it."""
+        the sea's near look lit as the sea under it."""
         direct, ambient = self._light_at(self.body, self.cam_world)
         self.sun_light.node().set_color((*direct, 1.0))
         self.sun_light.node().set_direction(Vec3(*(-self._sun)))
@@ -722,45 +685,6 @@ class TerrainDemo(ShowBase):
             el = max(-10.0, min(89.0, el + degrees))
         d, _, _ = sun_lighting(az, el)
         self._sun = d[0] * east + d[1] * north + d[2] * up
-
-    def _update_ocean(self, altitude: float, up: np.ndarray) -> None:
-        if altitude > OCEAN_HANDOVER[1]:
-            low = False
-        elif altitude < OCEAN_HANDOVER[0]:
-            low = True
-        else:
-            low = self._ocean_low
-        if low != self._ocean_low:
-            self._ocean_low = low
-            self._apply_ocean()
-        if self.ocean.base_node.is_hidden():
-            return
-        # Ground-anchored xy: a chart around an anchor near the nadir.
-        if self._ocean_anchor is not None:
-            gx, gy = self._ocean_anchor.from_dirs(up[None, :])
-            gx, gy = float(gx[0]), float(gy[0])
-        if self._ocean_anchor is None or math.hypot(gx, gy) > OCEAN_ANCHOR_RANGE:
-            lat, lon = latlon(up[None, :])
-            self._ocean_anchor = AzimuthalEquidistantChart(
-                float(lat[0]), float(lon[0]), self.radius
-            )
-            gx = gy = 0.0
-        frame = self._ocean_anchor.frame
-        e = frame.east - up * (frame.east @ up)
-        e /= np.linalg.norm(e)
-        n = np.cross(up, e)
-        sea_point = self.terrain.to_render(up * self.radius)
-        self._sea_frame.set_quat(self.render, _quat_from_axes(e, n, up))
-        # The sea's plane in the planet frame, for its seabed: its (0, 0) is
-        # gx, gy west and south of the nadir's sea-level point.
-        self.ocean.set_seabed_frame(up * self.radius - gx * e - gy * n, e, n)
-        self.ocean.set_atmosphere_frame(
-            self.ocean.base_node.get_mat(self.render), self._sun
-        )
-        self._sea_frame.set_pos(*(sea_point - gx * e - gy * n))
-        for methods in list(self._game.method_lists.values()):
-            for method in methods:
-                method()
 
     def _update_hud(self) -> None:
         body = self.body
@@ -834,17 +758,6 @@ class TerrainDemo(ShowBase):
     def _set_key(self, key: str, pressed: bool) -> None:
         self._keys[key] = pressed
 
-    def _apply_ocean(self) -> None:
-        has_sea = self.terrain.spec.has_ocean
-        swell = has_sea and self._ocean_low
-        if swell:
-            self.ocean.base_node.show()
-            self.ocean.refl_buffer.set_active(True)
-        else:
-            self.ocean.base_node.hide()
-            self.ocean.refl_buffer.set_active(False)
-        self.terrain.set_sea_surface(has_sea and not self._ocean_low)
-
     def _rebuild_clouds(self) -> None:
         """New clouds for the planet (its weather changes with it). They take
         over the old ones' worker channel, which drops their tiles."""
@@ -866,6 +779,21 @@ class TerrainDemo(ShowBase):
         )
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
+        if getattr(self, "half_res", None) is not None:
+            self.half_res.add(self.clouds.root)
+
+    def _sync_half_res(self) -> None:
+        """Build or remove the clouds' half-resolution pass as the settings
+        ask (CloudSettings.half_resolution)."""
+        wanted = self.world.clouds.half_resolution
+        if wanted and self.half_res is None:
+            self.half_res = HalfResClouds(self, self.depth)
+            self.half_res.exclude(self.sky.node)
+            if self.clouds is not None:
+                self.half_res.add(self.clouds.root)
+        elif not wanted and self.half_res is not None:
+            self.half_res.destroy()
+            self.half_res = None
 
     def _cycle_quality(self, section: str) -> None:
         """One part (a WorldSettings section) to its next preset."""
@@ -886,6 +814,7 @@ class TerrainDemo(ShowBase):
         world.apply(*self._terrains(), self.atmospheres, self.sky, self.ocean)
         if self.clouds is not None:
             world.apply(self.clouds)
+        self._sync_half_res()
 
     def set_debug_view(self, view: int) -> None:
         """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts (all bodies)."""
@@ -1057,6 +986,11 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         "--workers", type=int, default=None, help="generation processes"
     )
     parser.add_argument("--no-clouds", action="store_true", help="no clouds")
+    parser.add_argument(
+        "--half-res-clouds",
+        action="store_true",
+        help="clouds at half resolution (CloudSettings.half_resolution)",
+    )
 
 
 def settings_from_args(args: argparse.Namespace) -> WorldSettings:
@@ -1069,6 +1003,8 @@ def settings_from_args(args: argparse.Namespace) -> WorldSettings:
             settings = settings.with_section_level(section, level)
     if args.workers is not None:
         settings = settings.with_value("terrain", "workers", args.workers)
+    if args.half_res_clouds:
+        settings = settings.with_value("clouds", "half_resolution", True)
     return settings
 
 

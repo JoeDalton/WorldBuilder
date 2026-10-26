@@ -1,18 +1,38 @@
 #!/usr/bin/env bash
-# Build the native terrain collision solid (Linux, macOS) against the installed
-# panda3d wheel. See docs/source/native_build.md. Windows: build_native.ps1.
+# Build the native libraries (Linux, macOS): the noise library, then the
+# terrain collision solid against the installed panda3d wheel. See
+# docs/source/native_build.md. Windows: build_native.ps1.
 #
 #   [PANDA_SDK_INCLUDE=<Panda3D SDK headers>] [EIGEN_INCLUDE=<Eigen 3.3 headers>] \
 #       scripts/build_native.sh [python]
 #
 # python: the interpreter whose panda3d wheel to link against (default: python3).
 # Headers not given are fetched by scripts/fetch_native_deps.sh into .cache/native.
-# Writes src/world_builder/terrain/native/libterrain_collision-panda<major>.<minor>.so
-# (.dylib on macOS, for the wheel's architectures: universal2 from Python 3.12).
+# Writes src/world_builder/terrain/native/libwb_noise.so and
+# libterrain_collision-panda<major>.<minor>.so (.dylib on macOS, for the
+# wheel's architectures: universal2 from Python 3.12).
 set -euo pipefail
 
 PYTHON=${1:-python3}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
+SRC=$HERE/src/world_builder/terrain/native
+
+# The noise library (noise, swell, LOD, chunk geometry, cloud order): plain C, no headers but the system's. No floating-point
+# contraction (FMA), so every platform computes the same terrain.
+NOISE_FLAGS="-std=c99 -O3 -ffp-contract=off -fvisibility=hidden"
+if [ "$(uname -s)" = Darwin ]; then
+    PANDA_DIR=$("$PYTHON" -c "import panda3d, os; print(os.path.dirname(panda3d.__file__))")
+    ARCHS=$(lipo -archs "$(ls "$PANDA_DIR"/libpanda.*.dylib | head -1)")
+    clang $NOISE_FLAGS -dynamiclib $(printf -- '-arch %s ' $ARCHS) \
+        -mmacosx-version-min="${MACOSX_DEPLOYMENT_TARGET:-11.0}" \
+        "$SRC/noise.c" "$SRC/lod.c" "$SRC/chunk.c" "$SRC/billboards.c" -o "$SRC/libwb_noise.dylib" -install_name @rpath/libwb_noise.dylib
+    codesign --force --sign - "$SRC/libwb_noise.dylib"
+    echo "built $SRC/libwb_noise.dylib"
+else
+    gcc $NOISE_FLAGS -fPIC -shared "$SRC/noise.c" "$SRC/lod.c" "$SRC/chunk.c" "$SRC/billboards.c" -o "$SRC/libwb_noise.so" -lm
+    echo "built $SRC/libwb_noise.so"
+fi
+
 if [ -z "${PANDA_SDK_INCLUDE:-}" ] || [ -z "${EIGEN_INCLUDE:-}" ]; then
     { read -r FETCHED_PANDA; read -r FETCHED_EIGEN; } < <("$HERE/scripts/fetch_native_deps.sh")
     PANDA_SDK_INCLUDE=${PANDA_SDK_INCLUDE:-$FETCHED_PANDA}
@@ -27,8 +47,6 @@ if [ "$HEADERS" != "$WHEEL_VERSION" ]; then
     echo "headers are Panda3D $HEADERS, the wheel is $WHEEL_VERSION: use headers of the same version" >&2
     exit 1
 fi
-
-SRC=$HERE/src/world_builder/terrain/native
 
 if [ "$(uname -s)" = Darwin ]; then
     OUT=$SRC/libterrain_collision-panda$SERIES.dylib

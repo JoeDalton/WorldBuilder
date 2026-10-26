@@ -81,6 +81,7 @@ from panda3d.core import (
 
 from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.clouds.cloud import (
+    MAX_SHELLS,
     PRESETS,
     CloudSettings,
     CloudType,
@@ -116,24 +117,31 @@ from world_builder.clouds.weather import (
 from world_builder.depth import REFLECTION_CAMERA_MASK
 from world_builder.quality import REBUILD
 from world_builder.terrain.cubesphere import QUADS, CubeGrid, face_dirs, grid_for
+from world_builder.terrain.noise import native_library
 from world_builder.terrain.planet import PlanetSpec
 from world_builder.terrain.quadtree import LodSelector
+from world_builder.terrain.workers import SharedArray, shared_array
 
 if TYPE_CHECKING:
     from world_builder.terrain.workers import ChunkExecutor
 
 _SHADERS = Path(__file__).parent / "shaders"
-#: Cull bins, between opaque (20) and transparent (30): the deck's first,
-#: then one back-to-front bin per shell, the coarsest first.
+#: Cull bins, between opaque (20) and transparent (30), after the sky's (21,
+#: ``sky.SKY_BIN_SORT``): the deck's first, then one back-to-front bin per
+#: shell, the coarsest first.
 CLOUD_BIN = "cloud_sphere"
-_CLOUD_BIN_SORT = 21
-#: The shells' bin sorts, shell 0 (the nearest, drawn last) first. 25 is
-#: skipped: it is the flat field's bin (``field._CLOUD_BIN_SORT``), and a tie
-#: would leave the two kinds' order undefined in one scene.
-_SHELL_BIN_SORTS = (29, 28, 27, 26, 24, 23, 22)
+_CLOUD_BIN_SORT = 22
+#: The shells' bin sorts, shell 0 (the nearest, drawn last) first: at most
+#: :data:`cloud.MAX_SHELLS` shells. 25 is skipped: it is the flat field's bin
+#: (``field._CLOUD_BIN_SORT``), and a tie would leave the two kinds' order
+#: undefined in one scene.
+_SHELL_BIN_SORTS = (29, 28, 27, 26, 24, 23)
 #: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box),
 #: rounded to the nearest level of the planet's grid.
 BASE_TILE_SIZE = 8000.0
+#: Fewest candidate points per rejection-sampling batch of a tile: enough to
+#: measure the accept rate its billboard count follows.
+MIN_TILE_BATCH = 2048
 #: Quads per face edge of the deck sphere.
 DECK_QUADS = 48
 #: The deck's optical depth cap (the billboards' is ~1.5 per quad).
@@ -178,9 +186,12 @@ class SphereCloudSpec:
     :ivar radius: the planet's sea-level radius, metres
     :ivar field: the cloud type's density field, threshold resolved
     :ivar noise_seed: seed of the shared noise volume
-    :ivar weather: the planet's weather (each worker builds its map once)
+    :ivar weather: the planet's weather
     :ivar shift_table: the fbm shift per coverage (:func:`weather.shift_table`)
     :ivar shells: the billboard shells, innermost first
+    :ivar shift: the weather map's fbm shift plane, shared with the workers
+        (a :attr:`terrain.workers.SharedArray.handle`); None = each worker
+        builds the map from *weather* (~0.6 s)
     """
 
     radius: float
@@ -189,6 +200,7 @@ class SphereCloudSpec:
     weather: WeatherSpec
     shift_table: tuple
     shells: tuple
+    shift: tuple | None = None
 
     def shell_of(self, level: int) -> int:
         """:returns: the index of the shell whose tiles are at *level*"""
@@ -222,6 +234,13 @@ def _noise(seed: int) -> np.ndarray:
 @functools.cache
 def _weather(weather: WeatherSpec, table: tuple) -> np.ndarray:
     return weather_cube(weather, np.asarray(table))
+
+
+def _shift_plane(spec: SphereCloudSpec) -> np.ndarray:
+    """:returns: (6, n, n) the weather's fbm shift, shared or built here"""
+    if spec.shift is not None:
+        return shared_array(spec.shift)
+    return _weather(spec.weather, spec.shift_table)[..., 1]
 
 
 def _peaks(seed: int, field: DensityField, radius: float, octaves: int) -> np.ndarray:
@@ -302,7 +321,7 @@ def generate_cloud_tile(
     :param spec: the clouds
     :param key: the tile, (level, face, i, j); its level picks the shell
     :param version: carried through to the result
-    :param batch: candidate points per rejection-sampling batch
+    :param batch: candidate points per rejection-sampling batch, at most
     :returns: the tile's billboards, deterministic for *spec*'s seed and *key*
     """
     start = time.perf_counter()
@@ -310,7 +329,7 @@ def generate_cloud_tile(
     shell = spec.shells[spec.shell_of(level)]
     grid = grid_for(spec.radius)
     volume = _noise(spec.noise_seed)
-    weather = _weather(spec.weather, spec.shift_table)
+    weather = _shift_plane(spec)
     field = shell.field_of(spec.field)
     base, thickness = field.slab
     span = 2.0 * (QUADS << level) / grid.n0
@@ -322,12 +341,17 @@ def generate_cloud_tile(
     mean_r3 = (r_hi**4 - r_lo**4) / (4.0 * (r_hi - r_lo)) if r_hi > r_lo else r_lo**3
     sphere = 4.0 / 3.0 * math.pi * mean_r3
     rng = np.random.default_rng(np.random.SeedSequence([spec.noise_seed, *key]))
+    # The target is proportional to the accept rate, so reaching it takes
+    # about this many candidates whatever the rate: batches of that (a coarse
+    # shell keeps ~700 billboards, it used to try 20,000 points for them).
+    step = int(slab_volume * shell.volume_fraction / sphere * 1.1)
+    step = min(batch, max(MIN_TILE_BATCH, step))
 
     kept, tried, accepted, target = [], 0, 0, None
     while target is None or accepted < target:
-        a = a0 + span * rng.uniform(size=batch)
-        b = b0 + span * rng.uniform(size=batch)
-        height = base + thickness * rng.uniform(size=batch)
+        a = a0 + span * rng.uniform(size=step)
+        b = b0 + span * rng.uniform(size=step)
+        height = base + thickness * rng.uniform(size=step)
         points = face_dirs(face, a, b) * (spec.radius + height)[:, None]
         inside = points[
             density_on_sphere(
@@ -335,7 +359,7 @@ def generate_cloud_tile(
             )
             > 0.0
         ]
-        tried += batch
+        tried += step
         accepted += len(inside)
         kept.append(inside)
         if target is None:
@@ -373,7 +397,7 @@ def _ensure_bin():
     manager = CullBinManager.get_global_ptr()
     if manager.find_bin(CLOUD_BIN) == -1:
         manager.add_bin(CLOUD_BIN, CullBinManager.BT_back_to_front, _CLOUD_BIN_SORT)
-    for shell in range(MAX_LAYERS - 1):
+    for shell in range(MAX_SHELLS):
         if manager.find_bin(_shell_bin(shell)) == -1:
             manager.add_bin(
                 _shell_bin(shell),
@@ -420,34 +444,48 @@ def _shaders() -> tuple[Shader, Shader]:
     return tiles, deck
 
 
-def _tile_node(tile: CloudTile) -> tuple[NodePath, GeomTriangles]:
-    """A GeomNode for one tile (4 vertices per particle), and its index buffer."""
+def _tile_node(tile: CloudTile) -> tuple[NodePath, GeomTriangles, float]:
+    """A GeomNode for one tile (4 vertices per particle), its index buffer,
+    and the tile's reach (the farthest a billboard reaches from its centre).
+
+    The vertices are written straight into Panda's buffer: by the native
+    library when it is built (0.6-3.6 ms a tile in numpy, a fraction of
+    that natively).
+    """
     p = tile.particles
     n = len(p)
-    verts = np.empty((n, 4, 11), dtype=np.float32)
-    verts[:, :, 0:3] = p[:, None, 0:3]
-    verts[:, :, 3:5] = _CORNERS[None, :, :]
-    verts[:, :, 5] = p[:, None, 3]
-    verts[:, :, 6:10] = p[:, None, 4:8]
-    verts[:, :, 10] = p[:, None, 8]
     vdata = GeomVertexData("cloud_tile", _vertex_format(), GeomEnums.UH_static)
     vdata.unclean_set_num_rows(4 * n)
-    memoryview(vdata.modify_array(0)).cast("B")[:] = verts.tobytes()
+    buffer = memoryview(vdata.modify_array(0)).cast("B")
+    native = native_library()
+    if native is not None:
+        box, reach = native.billboard_vertices(p, np.frombuffer(buffer, np.float32))
+        low, high = box[0:3], box[3:6]
+    else:
+        verts = np.frombuffer(buffer, np.float32).reshape(n, 4, 11)
+        verts[:, :, 0:3] = p[:, None, 0:3]
+        verts[:, :, 3:5] = _CORNERS[None, :, :]
+        verts[:, :, 5] = p[:, None, 3]
+        verts[:, :, 6:10] = p[:, None, 4:8]
+        verts[:, :, 10] = p[:, None, 8]
+        radius = p[:, 3].max()
+        low = p[:, 0:3].min(axis=0) - radius
+        high = p[:, 0:3].max(axis=0) + radius
+        reach = float(np.sqrt((p[:, 0:3] ** 2).sum(axis=1).max()) + radius)
+    del buffer
     tris = GeomTriangles(GeomEnums.UH_dynamic)
     tris.set_index_type(GeomEnums.NT_uint32)
-    tris.add_next_vertices(6 * n)
+    indices = tris.modify_vertices()
+    indices.unclean_set_num_rows(6 * n)
     order = (np.arange(n, dtype=np.uint32)[:, None] * 4 + _QUAD_TRIS).ravel()
-    memoryview(tris.modify_vertices()).cast("B")[:] = order.tobytes()
+    memoryview(indices).cast("B")[:] = order.tobytes()
     geom = Geom(vdata)
     geom.add_primitive(tris)
     node = GeomNode(f"clouds{tile.key}")
     node.add_geom(geom)
-    reach = float(p[:, 3].max())
-    low = p[:, 0:3].min(axis=0) - reach
-    high = p[:, 0:3].max(axis=0) + reach
     node.set_bounds(BoundingBox(Point3(*low), Point3(*high)))
     node.set_final(True)
-    return NodePath(node), tris
+    return NodePath(node), tris, reach
 
 
 def _deck_mesh(radius: float, quads: int = DECK_QUADS) -> GeomNode:
@@ -489,7 +527,32 @@ class _Tile:
     #: farthest particle reach from the centre, metres
     reach: float = 0.0
     #: camera position (planet frame) of the last re-sort; None = never
-    sorted_from: np.ndarray | None = None
+    sorted_from: tuple[float, float, float] | None = None
+    #: the tile's centre (planet frame), as floats for the per-frame scoring
+    centre: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    #: its billboards farthest first at the last re-sort (uint32); the next
+    #: one starts from it, so equal distances keep their order
+    order: np.ndarray | None = None
+
+
+def _sort_billboards(tile: _Tile, offset: np.ndarray) -> None:
+    """Write a tile's triangles farthest billboard first, from the camera
+    at *offset* (the tile's centre minus the camera): natively when the
+    library is built (a radix sort, ~10x faster), else in numpy. Both sort
+    stably over the previous order."""
+    p = tile.data.particles
+    if tile.order is None:
+        tile.order = np.arange(len(p), dtype=np.uint32)  # as _tile_node built it
+    native = native_library()
+    if native is not None:
+        index = np.empty(6 * len(p), dtype=np.uint32)
+        native.billboard_order(p, offset, tile.order, index)
+    else:
+        xyz = p[tile.order, 0:3].astype(np.float64) + offset
+        distance = np.einsum("ij,ij->i", xyz, xyz).astype(np.float32)
+        tile.order = tile.order[np.argsort(-distance, kind="stable")]
+        index = (tile.order[:, None] * 4 + _QUAD_TRIS).ravel()
+    memoryview(tile.tris.modify_vertices()).cast("B")[:] = index.tobytes()
 
 
 class SphericalClouds:
@@ -594,8 +657,13 @@ class SphericalClouds:
             planet = planet or PlanetSpec(name="clouds", radius=self.radius)
             weather = WeatherSpec(planet, seed=weather_seed)
         table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
-        #: (6, n, n, 2): coverage and fbm shift (the workers rebuild it)
-        self.weather = _weather(weather, table)
+        # The weather map and the deck's light (~1 s together) are made in the
+        # pool while the caller goes on; update() finishes the set-up when
+        # they are in (see _finish).
+        self._weather_job = executor.submit_once(_weather, weather, table)
+        #: (6, n, n, 2): coverage and fbm shift; None until the set-up is done
+        self.weather: np.ndarray | None = None
+        self._shared_shift: SharedArray | None = None
         self._preset = preset
         self._seed = seed
         self._peaks = peaks
@@ -605,14 +673,12 @@ class SphericalClouds:
         base_level = max(0, round(math.log2(BASE_TILE_SIZE / self.grid.chunk_size(0))))
         self._base_level = base_level
         self._settings = settings
-        params, deck_light = self._configure(settings)
-        self._version = executor.set_spec(
-            self.spec, self._channel, generator=generate_cloud_tile
-        )
+        params, self._deck_job = self._configure(settings)
 
         # ── Nodes and shared inputs ──
         tile_shader, deck_shader = _shaders()
         self.root = parent.attach_new_node("spherical_clouds")
+        self.root.stash()  # out of every camera until the set-up is done
         self.tiles_root = self.root.attach_new_node("cloud_tiles")
         self.tiles_root.set_shader(tile_shader)
         self.deck = self.root.attach_new_node(
@@ -655,8 +721,6 @@ class SphericalClouds:
             cloudNoise=build_noise_texture(volume),
             noiseSize=float(NOISE_SIZE),
             noiseOffset=Vec3(0, 0, 0),
-            weatherMap=build_weather_texture(self.weather),
-            deckLight=build_deck_light_texture(deck_light),
             deckLightCosMin=DECK_LIGHT_COS_MIN,
             uSpherical=1,
             planetRadius=self.radius,
@@ -684,6 +748,8 @@ class SphericalClouds:
         self._wanted: list[Key] = []
         self._shown: set[Key] = set()
         self._ready: dict[Key, CloudTile] = {}
+        self._pixel_angle = 0.001
+        self._sky_light: float | None = None
         self._origin = None
         self._camera = np.zeros(3)
         self._last_select = None
@@ -711,8 +777,10 @@ class SphericalClouds:
         changes = self._settings.changes(settings)
         if not changes:
             return
+        self._finish()
         self._settings = settings
-        params, deck_light = self._configure(settings)
+        params, deck_job = self._configure(settings)
+        deck_light = deck_job.result()
         if REBUILD in changes.values():
             self._version = self.executor.set_spec(
                 self.spec, self._channel, generator=generate_cloud_tile
@@ -742,7 +810,8 @@ class SphericalClouds:
         """Plan the shells and the deck for some settings: sets the bands,
         the deck's layer and :attr:`spec` (what the workers get).
 
-        :returns: the packed layer parameters and the deck's light table
+        :returns: the packed layer parameters, and the deck's light table
+            being made in the pool (a future)
         """
         preset, field, peaks, seed = self._preset, self.field, self._peaks, self._seed
         shells = settings.shells
@@ -817,10 +886,17 @@ class SphericalClouds:
             fade_in=bands[-1],
             octaves=schedule[-1],
         )
-        deck_light = _deck_light(
-            seed, deck.field_of(field), deck_optics, self.radius, table, schedule[-1]
+        deck_job = self.executor.submit_once(
+            _deck_light,
+            seed,
+            deck.field_of(field),
+            deck_optics,
+            self.radius,
+            table,
+            schedule[-1],
         )
         self._bands = bands
+        shared = self._shared_shift
         self.spec = SphereCloudSpec(
             radius=self.radius,
             field=field,
@@ -828,8 +904,9 @@ class SphericalClouds:
             weather=self._weather_spec,
             shift_table=table,
             shells=tuple(shell_specs),
+            shift=None if shared is None else shared.handle,
         )
-        return params, deck_light
+        return params, deck_job
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -858,7 +935,9 @@ class SphericalClouds:
 
         :param strength: the new ambient sky weight
         """
-        self.root.set_shader_input("skyStrength", float(strength))
+        if strength != self._sky_light:  # a demo restates it every frame
+            self._sky_light = strength
+            self.root.set_shader_input("skyStrength", float(strength))
 
     def set_pixel_angle(self, radians: float) -> None:
         """The angle one pixel spans (vertical fov / window height): how far
@@ -867,7 +946,11 @@ class SphericalClouds:
 
         :param radians: the angle per pixel
         """
-        self.root.set_shader_input("uPixelAngle", float(radians))
+        # Set every frame by World: a new value only when it changes, or the
+        # root's render state (over every tile) is rebuilt each frame.
+        if radians != self._pixel_angle:
+            self._pixel_angle = radians
+            self.root.set_shader_input("uPixelAngle", float(radians))
 
     def update(
         self, camera_world: ArrayLike, camera_render: ArrayLike = (0.0, 0.0, 0.0)
@@ -881,6 +964,11 @@ class SphericalClouds:
         :param camera_render: camera in the render frame (the origin when
             the scene is drawn camera-relative)
         """
+        if self._weather_job is not None:
+            if not (self._weather_job.done() and self._deck_job.done()):
+                self.stats["pending"] = 1  # the set-up: World.waiting() counts it
+                return
+            self._finish()
         self._frame += 1
         cam = np.asarray(camera_world, dtype=np.float64) - self.position
         render_cam = np.asarray(camera_render, dtype=np.float64)
@@ -920,6 +1008,30 @@ class SphericalClouds:
         """Take the clouds off the scene and drop their queued tiles."""
         self.executor.request([], self._channel)
         self.root.remove_node()
+        if self._shared_shift is not None:
+            self._shared_shift.release()
+            self._shared_shift = None
+
+    def _finish(self) -> None:
+        """Finish the set-up begun in the pool (waiting for it if need be):
+        the weather map and the deck's light become textures, the weather's
+        shift is shared with the workers, and the tiles can be asked for."""
+        if self._weather_job is None:
+            return
+        self.weather = self._weather_job.result()
+        deck_light = self._deck_job.result()
+        self._weather_job = self._deck_job = None
+        if self.executor.backend == "process":
+            self._shared_shift = SharedArray(self.weather[..., 1])
+            self.spec = replace(self.spec, shift=self._shared_shift.handle)
+        self._version = self.executor.set_spec(
+            self.spec, self._channel, generator=generate_cloud_tile
+        )
+        self.root.set_shader_inputs(
+            weatherMap=build_weather_texture(self.weather),
+            deckLight=build_deck_light_texture(deck_light),
+        )
+        self.root.unstash()
 
     # ── internals ─────────────────────────────────────────────────────────────
 
@@ -1006,20 +1118,18 @@ class SphericalClouds:
             if len(tile.particles) == 0:
                 node, tris = NodePath("empty"), None
             else:
-                node, tris = _tile_node(tile)
+                node, tris, reach = _tile_node(tile)
                 node.set_bin(_shell_bin(self.spec.shell_of(key[0])), 0)
-                p = tile.particles
-                reach = float(
-                    np.sqrt((p[:, 0:3] ** 2).sum(axis=1).max()) + p[:, 3].max()
-                )
             node.set_pos(*(tile.centre - self._origin))
-            self._tiles[key] = _Tile(node, tris, tile, reach)
+            centre = tuple(float(c) for c in tile.centre)
+            self._tiles[key] = _Tile(node, tris, tile, reach, centre=centre)
             if tris is not None:
                 node.reparent_to(self.tiles_root)
                 self._shown.add(key)
             count += 1
         # Ready tiles nobody wants any more.
-        for key in [k for k in self._ready if k not in set(self._wanted)]:
+        wanted = set(self._wanted)
+        for key in [k for k in self._ready if k not in wanted]:
             del self._ready[key]
 
     def _resort(self, cam) -> None:
@@ -1032,27 +1142,23 @@ class SphericalClouds:
         reads as shadows sliding across it. New tiles come first.
         """
         stale = []
+        here = tuple(float(c) for c in cam)  # math.dist: no numpy per tile
         for key in self._shown:
             tile = self._tiles[key]
             if tile.tris is None:
                 continue
             if tile.sorted_from is None:
-                stale.append((np.inf, key))
+                stale.append((math.inf, key))
                 continue
-            moved = float(np.linalg.norm(cam - tile.sorted_from))
+            moved = math.dist(here, tile.sorted_from)
             if moved == 0.0:
                 continue
-            gap = float(np.linalg.norm(tile.data.centre - cam)) - tile.reach
+            gap = math.dist(tile.centre, here) - tile.reach
             stale.append((moved / max(gap, 0.05 * tile.reach, 1.0), key))
         stale.sort(reverse=True)
         for score, key in stale[: self._settings.resorts_per_frame]:
             if score < 1e-3:  # a tenth of a degree: nothing visible changes
                 break
             tile = self._tiles[key]
-            tile.sorted_from = cam.copy()
-            p = tile.data.particles
-            offset = tile.data.centre - cam
-            distance = np.einsum("ij,ij->i", p[:, 0:3] + offset, p[:, 0:3] + offset)
-            order = np.argsort(-distance).astype(np.uint32)
-            index = (order[:, None] * 4 + _QUAD_TRIS).ravel()
-            memoryview(tile.tris.modify_vertices()).cast("B")[:] = index.tobytes()
+            tile.sorted_from = here
+            _sort_billboards(tile, tile.data.centre - cam)

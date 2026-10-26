@@ -26,6 +26,7 @@ import numpy as np
 
 from world_builder.terrain import biomes
 from world_builder.terrain.cubesphere import QUADS, VERTS, Key
+from world_builder.terrain.noise import native_library
 from world_builder.terrain.planet import Planet, PlanetSpec
 
 __all__ = ["QUADS", "VERTS", "VERTEX_DTYPE", "ChunkData", "generate_chunk"]
@@ -173,12 +174,22 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
     sample = planet.sample_face_grid(face, ka, kb, 1 << level)
     full = sample.elevation
     dirs = sample.dirs.reshape(n, n, 3)
-    points = dirs * (radius + full)[:, :, None]
     inner = (slice(border, border + VERTS), slice(border, border + VERTS))
     elevation = full[inner]
 
-    normals = _grid_normals(points, border, 1)
-    slope = biomes.slope_from_normals(_grid_normals(points, border, step), dirs[inner])
+    # The geometry around the planet's rules: in the native library when it
+    # is built (chunk.c), the same values.
+    native = native_library()
+    if native is not None:
+        normals, slope = native.chunk_surface(dirs, full, border, step, radius)
+        normals = normals.reshape(VERTS, VERTS, 3)
+        slope = slope.reshape(VERTS, VERTS)
+    else:
+        points = dirs * (radius + full)[:, :, None]
+        normals = _grid_normals(points, border, 1)
+        slope = biomes.slope_from_normals(
+            _grid_normals(points, border, step), dirs[inner]
+        )
     w = biomes.weights(
         sample.temperature[inner],
         sample.humidity[inner],
@@ -199,10 +210,28 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
     )
     centre = grid.centre_dir(key) * (radius + 0.5 * (h_min + h_max))
 
-    vertices = _pack_vertices(
-        points[inner], inner_dirs, centre, elevation, normals, w_bytes, skirt_depth
-    )
-    local = vertices["vertex"]
+    if native is not None:
+        vertices = np.empty(VERTS * VERTS + 4 * QUADS, dtype=VERTEX_DTYPE)
+        box_min, box_max = native.chunk_pack(
+            vertices,
+            inner_dirs,
+            elevation.ravel(),
+            normals.reshape(-1, 3),
+            w_bytes,
+            centre,
+            radius,
+            skirt_depth,
+            spec.has_ocean,
+        )
+    else:
+        vertices = _pack_vertices(
+            points[inner], inner_dirs, centre, elevation, normals, w_bytes, skirt_depth
+        )
+        local = vertices["vertex"]
+        if spec.has_ocean:
+            # The box of what is drawn: the shader lifts the seabed to the water.
+            local = _sea_lifted(local, inner_dirs, elevation, centre, radius)
+        box_min, box_max = local.min(axis=0), local.max(axis=0)
     return ChunkData(
         key=key,
         version=version,
@@ -210,14 +239,37 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         vertex_bytes=vertices.tobytes(),
         elevation=elevation.astype(np.float32),
         weights=w_bytes,
-        aabb_min=local.min(axis=0),
-        aabb_max=local.max(axis=0),
+        aabb_min=box_min,
+        aabb_max=box_max,
         h_min=h_min,
         h_max=h_max,
         skirt_depth=skirt_depth,
         geometric_error=geometric_error,
         gen_ms=(time.perf_counter() - start) * 1e3,
     )
+
+
+def _sea_lifted(
+    local: np.ndarray,
+    dirs: np.ndarray,
+    elevation: np.ndarray,
+    centre: np.ndarray,
+    radius: float,
+) -> np.ndarray:
+    """:returns: the vertices as terrain.vert draws them over a sea: grid
+    vertices under sea level at sea level, skirts hanging from their lifted
+    edge (centre-relative, float32)"""
+    lifted = local.copy()
+    count = VERTS * VERTS
+    wet = elevation.ravel() < 0.0
+    lifted[:count][wet] = (dirs[wet] * radius - centre).astype(np.float32)
+    ring = skirt_ring()
+    edge_wet = wet[ring]
+    if np.any(edge_wet):
+        # A skirt keeps its depth below the (lifted) edge.
+        drop = (elevation.ravel()[ring, None] * dirs[ring]).astype(np.float32)
+        lifted[count:][edge_wet] -= drop[edge_wet]
+    return lifted
 
 
 def _grid_normals(points: np.ndarray, border: int, step: int) -> np.ndarray:

@@ -2,7 +2,7 @@
 The terrain demo built on :class:`world_builder.world.World`.
 
 Flies the same small planetary system as scripts/demo_terrain.py (the demo
-level's 600 km planet with its air, clouds and swell ocean, an airless moon
+level's 600 km planet with its air, clouds and sea, an airless moon
 10,000 km away, the star field), with the same controls, keys, HUD and
 options. The difference is the assembly: here the world's look is a handful
 of looks (:class:`BodyLook`, :class:`CloudLook`, :class:`OceanLook`,
@@ -43,15 +43,13 @@ from demo_terrain import (  # noqa: E402
     _CONTROLS,
     CLOUD_BASE,
     CLOUD_SKY_LIGHT,
-    HAZE_COLOR,
-    HAZE_DISTANCE,
     HUD_PERIOD,
     INITIAL_FAR_M,
     MAX_RANGE_FACTOR,
     MOON_DISTANCE_M,
     MOON_SEED,
     OCEAN_ANCHOR_RANGE,
-    OCEAN_HANDOVER,
+    OCEAN_NEAR_BAND,
     QUALITY_ALL_KEY,
     QUALITY_KEYS,
     SKY_AMBIENT,
@@ -97,12 +95,10 @@ def planet_look(spec, clouds: bool) -> BodyLook:
             else None
         ),
         ocean=OceanLook(
-            # The game's 20 m swell, in deep water: the seabed makes it die
-            # out over the shallows, so it does not drown the beaches.
+            # The game's 20 m swell, in deep water: it dies out over the
+            # shallows, so it does not drown the beaches.
             swell_amplitude=20.0,
-            haze_color=HAZE_COLOR,
-            haze_distance=HAZE_DISTANCE,
-            handover=OCEAN_HANDOVER,
+            near_band=OCEAN_NEAR_BAND,
             anchor_range=OCEAN_ANCHOR_RANGE,
             tuned_elevation=WATER_TUNED_ELEVATION,
         ),
@@ -188,7 +184,7 @@ class WorldDemo(TerrainDemo):
         self.sky = self.scene.sky
         self.terrain = planet.terrain
         self.clouds = planet.clouds
-        self.ocean = planet.ocean.ocean
+        self.ocean = planet.ocean
         self.bodies = [
             Body(b.name, b.terrain, atmosphere=b.atmosphere is not None)
             for b in self.scene.bodies
@@ -199,8 +195,9 @@ class WorldDemo(TerrainDemo):
         if self.clouds is not None:
             self.clouds.set_debug(cloud_debug)
         self.ocean.set_debug_mode(ocean_debug)
-        # After the world, whose ocean copied the lens.
+        # After the world, whose sea copied the lens.
         self.depth = SplitDepthCameras(self, near=1.0)
+        self.scene.use_split_depth(self.depth)  # the clouds' half-res layers
         self._debug = 0
         self._ground = 0.0
 

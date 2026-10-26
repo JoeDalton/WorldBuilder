@@ -203,9 +203,11 @@ def test_ocean_surface_is_solid_when_included(planet, chart):
     wet = TerrainQuery(planet, include_ocean=True)
     offshore = at(chart, -10000.0, 30000.0, 100.0)  # about 1 km deep for seed 19
     assert float(wet.ground_height_at(offshore)) < -500.0
-    assert float(wet.height_at(offshore)) == 0.0
+    # The drawn water: a triangle of sea-level corners (its chord a hair
+    # under the sphere), facing up.
+    assert float(wet.height_at(offshore)) == pytest.approx(0.0, abs=1e-3)
     up = offshore / np.linalg.norm(offshore)
-    np.testing.assert_allclose(wet.normal_at(offshore), up)
+    np.testing.assert_allclose(wet.normal_at(offshore), up, atol=1e-5)
     assert wet.material_at(offshore) == "water"
 
 

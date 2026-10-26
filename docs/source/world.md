@@ -2,7 +2,7 @@
 
 [`world_builder.world`](../../src/world_builder/world.py)'s `World` builds and
 updates every WorldBuilder part a game draws around its camera:
-- each body's terrain, air, planet clouds and swell ocean;
+- each body's terrain, air, planet clouds and sea;
 - the sky and the sun;
 - Panda3D lights for everything else.
 
@@ -56,15 +56,17 @@ parts.
   - `atmosphere`: `AtmosphereParams`, or None for an airless body.
   - `clouds`: a `CloudLook`, or None. Clouds need air.
   - `ocean`: an `OceanLook`, or None. An ocean needs `spec.has_ocean`.
+    Without one, the terrain still draws its sea, as flat water only.
   - `ambient` and `exposure`: the terrain's sky light and tonemap.
 - **`CloudLook`**: `SphericalClouds`' arguments: altitude, cloud type,
   weather, seeds, shading.
-- **`OceanLook`**: `Ocean`'s arguments: water and haze colours, wind,
-  swell, foam. Three more fields are the world's own:
-  - `handover`: the altitude band where the swell hands the sea over to the
-    terrain's flat water;
-  - `anchor_range`: how far the waves stay anchored before re-anchoring;
-  - `tuned_elevation`: the sun elevation the water colour was tuned in.
+- **`OceanLook`**: `Sea`'s arguments: water colour, wind, swell, foam,
+  `near_band` (the altitudes over which the near look fades into the far
+  one) and `anchor_range` (how far the waves stay anchored before
+  re-anchoring). The other fields are the world's own:
+  - `tuned_elevation`: the sun elevation the water colour was tuned in;
+  - `haze_color` and `haze_distance`: ignored (the atmosphere hazes the
+    sea), kept so older looks still build.
 - **`SunLook`**: the direction toward the sun and its colour above any air.
 - **`SkyLook`**: `Sky`'s arguments: stars, nebula, sun disc, exposure.
 
@@ -105,17 +107,31 @@ In order, it updates:
    whose models use Panda3D's fixed-function lighting scales them down, since
    that lighting has no tone map and clips the physical noon sun (about 2.5)
    to white (see [Lighting on objects](object_lighting.md));
-6. each body's ocean:
-   - hand-over between swell and flat water, by altitude, with hysteresis;
-   - its light, relative to the daylight its colour was tuned in;
+6. each body's sea (`Sea.update`):
+   - its swell, drifted to the game time and handed to the terrain, its
+     query and its collision solid;
+   - its near look's share by altitude (`near_band`), which also turns the
+     reflection pass on or off;
    - its frame, the tangent plane at the camera's nadir, with the waves
-     anchored to the ground through a chart.
+     anchored to the ground through a chart;
+   - while the near look shows, its light, relative to the daylight its
+     colour was tuned in.
 
 ## Order with split depth
 
-Build the world before `SplitDepthCameras`. The ocean's reflection camera
+Build the world before `SplitDepthCameras`. The sea's reflection camera
 copies the app's lens once when it is built, and the split cameras then
-shorten that lens to the near range every frame.
+shorten that lens to the near range every frame. Then hand the split
+cameras to the world, `world.use_split_depth(depth)`: half-resolution
+clouds (`CloudSettings.half_resolution`) mirror them, and stay at full
+resolution without them.
+
+Load `transform-cache false` in the game's PRC (before ShowBase opens its
+window). The world moves around the camera, so every drawn node's net
+transform is new every frame and Panda's cache of composed transforms only
+fills up for its garbage collection to empty: about 1 ms a frame in low
+flight (see [performance](performance.md) §19). The library sets no PRC of
+its own; the demos do.
 
 A game's own translucent volumes, such as shield bubbles, go to
 `depth.update(split, far, translucent=...)`. The split then never cuts one:
@@ -132,7 +148,7 @@ band (see `world_builder.depth`).
 - **`enable_collision(into_mask, bodies=None, **kw)`**: makes bodies' drawn
   terrain solid to the game's collision traverser.
 - **`set_sun(direction)`**: moves the sun; every part follows.
-- **`body(name)`**: a body's terrain, clouds and ocean, for tools and debug
+- **`body(name)`**: a body's terrain, clouds and sea, for tools and debug
   views.
 - **`destroy()`**: removes every part and the lights, and stops the worker
   pool.

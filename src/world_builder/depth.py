@@ -84,6 +84,18 @@ NEAR_CAMERA_MASK = BitMask32.bit(NEAR_BIT)
 #: The far camera's mask: its bit alone, so :data:`HIDE_FROM_FAR` hides
 #: from it.
 FAR_CAMERA_MASK = BitMask32.bit(FAR_BIT)
+#: Camera bits of the half-resolution cloud pass's near and far cameras
+#: (``world_builder.clouds.half_res``).
+CLOUD_NEAR_BIT = 23
+CLOUD_FAR_BIT = 24
+#: ``node.hide(HIDE_FROM_CLOUD_PASS)``: not drawn into the half-resolution
+#: cloud pass (where everything but the clouds only writes depth), e.g. the
+#: sky, which hides nothing.
+HIDE_FROM_CLOUD_PASS = BitMask32.bit(CLOUD_NEAR_BIT) | BitMask32.bit(CLOUD_FAR_BIT)
+#: The tag key the cloud pass's cameras give their own state by
+#: (``Camera.set_tag_state``): ``"terrain"`` on a terrain's root draws it
+#: there with a depth-only fragment stage.
+PASS_TAG = "wb_pass"
 
 
 #: The split is never moved nearer than this off a translucent volume, metres:

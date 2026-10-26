@@ -1,37 +1,28 @@
 """
-A camera-locked reflective ocean, curved with the planet.
+A planet's sea, drawn by its terrain's chunks (see :mod:`world_builder.ocean.sea`).
 
-    ocean.py   the surface mesh (a flat quad, or a dense swell grid ringed by
-               geometric border cells), its planar reflection, the per-frame
-               re-centring under the camera, and what it costs (OceanSettings)
-    seabed.py  the sea floor under it, baked around the camera from an app's
-               sampler: colour by depth, shoreline foam, swell over shallows
+    ocean.py   what the sea costs (OceanSettings) and the CPU halves of its
+               shading: wave directions and phases, the unresolved octaves'
+               variance, the rough fresnel table, the tonemap
+    sea.py     Sea: the near look's inputs on the terrain, its planar
+               reflection, the frame at the camera's nadir
 
-Shaders: ``shaders/ocean.vert`` and ``shaders/ocean.frag``, with
-``seabed.glsl`` and ``water.glsl`` (the colour by depth, shared with the
-terrain's sea surface). Known open issue with the geometric swell:
-``OCEAN_SWELL_ARTIFACT_REPORT.md``.
+Shaders: ``shaders/sea.glsl`` (the near look, included by terrain.frag) and
+``water.glsl`` (the colour by depth).
 """
 
 from world_builder.ocean.ocean import (
-    Ocean,
     OceanSettings,
     aces_tonemap,
-    border_coords,
+    bind_sea_defaults,
     compute_wave_dirs,
-    make_plane_mesh,
-    make_swell_grid_mesh,
 )
-from world_builder.ocean.seabed import Cascade, SeabedMap
+from world_builder.ocean.sea import Sea
 
 __all__ = [
-    "Cascade",
-    "Ocean",
     "OceanSettings",
-    "SeabedMap",
+    "Sea",
     "aces_tonemap",
-    "border_coords",
+    "bind_sea_defaults",
     "compute_wave_dirs",
-    "make_plane_mesh",
-    "make_swell_grid_mesh",
 ]

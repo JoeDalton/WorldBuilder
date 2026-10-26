@@ -34,9 +34,11 @@ seen through every atmosphere of the world along the sight line.
 
 from __future__ import annotations
 
+import functools
 import logging
+import math
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
@@ -45,18 +47,22 @@ import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import (
     BitMask32,
+    CullBinManager,
     LVecBase3f,
-    LVecBase4f,
     NodePath,
     PTA_float,
     PTA_LVecBase3f,
+    SamplerState,
     Shader,
+    Texture,
     Vec3,
 )
 
 from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 from world_builder.atmosphere import Atmospheres, bind_defaults
-from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.depth import PASS_TAG, REFLECTION_CAMERA_MASK
+from world_builder.ocean.ocean import bind_sea_defaults
+from world_builder.ocean.swell import Swell
 from world_builder.quality import RESTART, QualityLevel, QualitySettings, knob
 from world_builder.terrain.biomes import BIOME_COLORS
 from world_builder.terrain.chunkgen import ChunkData
@@ -69,15 +75,63 @@ from world_builder.terrain.materials import (
 )
 from world_builder.terrain.mesh import build_chunk_node
 from world_builder.terrain.planet import Planet, PlanetSpec
-from world_builder.terrain.quadtree import UNKNOWN_BOUNDS, LodSelector
+from world_builder.terrain.quadtree import (
+    UNKNOWN_BOUNDS,
+    LodSelector,
+    NativeLodSelector,
+    make_selector,
+)
 from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.workers import ChunkExecutor
 
 SHADER_PATH = Path(__file__).parent / "shaders"
+
+
+@functools.cache
+def _shader(fragment: str) -> Shader:
+    """:returns: the terrain's shader with this fragment stage: terrain.frag,
+    or terrain_sea.frag (with the sea's near look)"""
+    return Shader.load(
+        Shader.SL_GLSL,
+        vertex=SHADER_PATH / "terrain.vert",
+        fragment=SHADER_PATH / fragment,
+    )
+
+
+def depth_only_shader() -> Shader:
+    """:returns: the terrain's shader with a depth-only fragment stage, for
+    passes that want its depth and nothing else (``terrain.vert`` kept, so
+    the sea's lift and swell are right). Each terrain's root carries the
+    tag ``PASS_TAG = "terrain"`` for a camera's tag state to swap it in."""
+    return _shader("terrain_depth.frag")
+
+
+def _ensure_terrain_bin() -> None:
+    manager = CullBinManager.get_global_ptr()
+    if manager.find_bin(TERRAIN_BIN) == -1:
+        manager.add_bin(TERRAIN_BIN, CullBinManager.BT_front_to_back, TERRAIN_BIN_SORT)
+
+
 #: The terrain root is re-based to the camera snapped to this grid, metres;
 #: above ORIGIN_SNAP * 16 of altitude the grid grows to altitude / 16.
 ORIGIN_SNAP = 4096.0
+#: Chunks finer than the level whose chunks are about this wide, metres, hang
+#: under a cell node: their ancestor at that level. A rebase then moves the
+#: cells, not every chunk (it took 5-13 ms over ~1,500 nodes). The coarser
+#: chunks, drawn only far away, hang under one cell at the planet's centre.
+CELL_SIZE = 32_000.0
+#: Slots the chunk table starts with (it doubles when they run out). A slot
+#: holds one uploaded chunk's own shader values; the vertices name theirs.
+CHUNK_TABLE_SLOTS = 2048
 LOGGER = logging.getLogger(__name__)
+#: The chunks' cull bin: front to back, before the opaque bin (20), so near
+#: ground hides what lies behind it before that is shaded (early depth test).
+#: Panda's opaque bin sorts by state, which chunks share, so its order was
+#: arbitrary: front to back saves 1-1.6 ms a frame low over the sea.
+TERRAIN_BIN = "terrain"
+TERRAIN_BIN_SORT = 19
+#: Chunks whose refinement lag :attr:`Terrain.refine_lags` keeps.
+LAG_SAMPLES = 2000
 #: Below the caps (``TerrainSettings.store_size``, ``node_cache_size``), a
 #: terrain keeps this many times what its current selection needs (at least
 #: MIN_RESIDENT): a planet seen only from afar shrinks to a few hundred chunks
@@ -266,6 +320,8 @@ class Terrain:
     :ivar materials: the biome textures (share them with other terrains)
     :ivar executor: the generation pool
     :ivar stats: counters and timings for an on-screen readout
+    :ivar refine_lags: (level, seconds from the chunk first wanted by an LOD
+        pass to it drawn), for the latest :data:`LAG_SAMPLES` chunks drawn
     """
 
     #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
@@ -319,13 +375,18 @@ class Terrain:
         settings = settings or TerrainSettings()
         self._settings = settings
         self.root = parent.attach_new_node("terrain")
-        self.root.set_shader(
-            Shader.load(
-                Shader.SL_GLSL,
-                vertex=SHADER_PATH / "terrain.vert",
-                fragment=SHADER_PATH / "terrain.frag",
-            )
-        )
+        self.root.set_shader(_shader("terrain.frag"))
+        _ensure_terrain_bin()
+        self.root.set_bin(TERRAIN_BIN, 0)
+        self.root.set_tag(PASS_TAG, "terrain")  # see depth_only_shader
+        # The chunks with water hang here: a Sea gives them the shader with
+        # its near look (set_sea_near), which the others never pay for.
+        self.sea_root = self.root.attach_new_node("terrain_sea")
+        #: How far the sea's swell may raise the water, metres (a Sea sets
+        #: it): the chunks with water are culled by bounds this much wider
+        self.sea_swell = 0.0
+        #: The sea's swell (set_swell); None = calm water at sea level
+        self.swell: Swell | None = None
         self.max_distance = max_distance
         self.materials = materials or load_materials(max_size=settings.texture_size)
         self.blend_depth = DEFAULT_BLEND_DEPTH
@@ -346,24 +407,30 @@ class Terrain:
         self._channel = f"terrain-{id(self):x}"
         self.planet: Planet | None = None
         self.query: TerrainQuery | None = None
-        self.selector: LodSelector | None = None
+        self.selector: LodSelector | NativeLodSelector | None = None
         self.store: OrderedDict[tuple, ChunkData] = OrderedDict()
         # (h_min, h_max) per stored chunk: one tuple per chunk, which the
         # selector's geometry cache recognises by identity.
         self._bounds: dict[tuple, tuple[float, float]] = {}
         self.nodes: OrderedDict[tuple, NodePath] = OrderedDict()
+        # (cell key or None for the planet's, wet) -> (node, its centre)
+        self._cells: dict[tuple, tuple[NodePath, np.ndarray]] = {}
         self.shown: set[tuple] = set()
         self._keep: set[tuple] = set()  # drawn chunks and their ancestors
         self._origin = None
         self._snap = ORIGIN_SNAP
         self._camera = np.zeros(3)
         self._render_camera = np.zeros(3)
+        self._forward = None
         self._last_select_pos = None
         self._last_select_frame = 0
+        self._unshown = 0  # chunks uploaded since the last LOD pass
         self._frame = 0
         self._wanted: list[tuple] = []
         self._loading = True  # the last LOD pass still wanted chunks
         self.collision: TerrainCollision | None = None
+        self.refine_lags: deque[tuple[int, float]] = deque(maxlen=LAG_SAMPLES)
+        self._wanted_since: dict[tuple, float] = {}
         self.stats = {
             "shown": 0,
             "stored": 0,
@@ -432,14 +499,26 @@ class Terrain:
         self.spec = self.planet.spec
         self.grid = self.planet.grid
         self.root.set_shader_input("uMaxLevel", self.grid.max_level)
+        self.root.set_shader_input("uSeaSurface", int(self.spec.has_ocean))
         for node in self.nodes.values():
             node.remove_node()
         self.nodes.clear()
+        self._slots = {}
+        self._free_slots = list(range(len(self._chunk_values[0]) - 1, -1, -1))
+        for cell, _ in self._cells.values():
+            cell.remove_node()
+        self._cells.clear()
+        size0 = self.grid.chunk_size(0)
+        self._cell_level = min(
+            self.grid.max_level, max(0, round(math.log2(CELL_SIZE / size0)))
+        )
         self.store.clear()
         self._bounds.clear()
         self.shown.clear()
         self._keep = set()
-        self.selector = LodSelector(
+        # The native pass when the library is built; it keeps its own copy
+        # of what is stored (bounds) and uploaded (ready), told below.
+        self.selector = make_selector(
             self.grid,
             max_distance=self.max_distance,
             horizon_floor=0.0 if self.spec.has_ocean else UNKNOWN_BOUNDS[0],
@@ -455,6 +534,7 @@ class Terrain:
             level=self.min_level,
             store_chunk=self._store,
         )
+        self.query.swell = getattr(self, "swell", None)
         if self.collision is not None:
             self.collision.reset()
         self._last_select_pos = None
@@ -508,7 +588,10 @@ class Terrain:
             self.collision = None
 
     def update(
-        self, camera_world: ArrayLike, camera_render: ArrayLike = (0.0, 0.0, 0.0)
+        self,
+        camera_world: ArrayLike,
+        camera_render: ArrayLike = (0.0, 0.0, 0.0),
+        camera_forward: ArrayLike | None = None,
     ) -> None:
         """Per-frame update: re-base the root, take finished chunks, upload a
         few, and run an LOD pass when the camera has moved enough (or new
@@ -518,17 +601,22 @@ class Terrain:
             float64 (the planet frame if :attr:`position` is the origin)
         :param camera_render: where the camera is in the render frame (the
             game keeps it at the origin)
+        :param camera_forward: the view direction (world frame), so ground in
+            view is generated before ground behind; None = no preference
         """
         self._frame += 1
         cam = np.asarray(camera_world, dtype=np.float64) - self.position
         render_cam = np.asarray(camera_render, dtype=np.float64)
         self._camera = cam.copy()
         self._render_camera = render_cam.copy()
+        self._forward = camera_forward
         self._rebase(cam, render_cam)
 
         finished = self.executor.collect(self._channel)
         for chunk in finished:
             self._store(chunk)
+        # Once per frame (and per pass), not per chunk: it scans the store.
+        self._evict_store()
         if finished:
             self.stats["generated"] += len(finished)
             gen = [c.gen_ms for c in finished]
@@ -536,7 +624,7 @@ class Terrain:
                 np.mean(gen)
             )
 
-        uploaded = self._upload()
+        self._unshown += self._upload()
         # Re-select after moving a quarter of a leaf (29 m at 600 km) at the
         # default split factor of 2, or a 250th of the altitude: well inside
         # the selector's 15 % hysteresis band (a leaf splits at split_factor
@@ -553,11 +641,12 @@ class Terrain:
         )
         # New uploads only need a pass to be shown, which can wait a frame or
         # two: while refining, uploads land every frame, and a pass per
-        # frame was most of the frame.
+        # frame was most of the frame. Uploads wait for it whichever frame
+        # they landed in.
         since = self._frame - self._last_select_frame
         if (
             moved
-            or (uploaded and since >= settings.select_every_on_upload)
+            or (self._unshown and since >= settings.select_every_on_upload)
             or since >= settings.select_every
         ):
             self._select(cam)
@@ -614,22 +703,29 @@ class Terrain:
             + self._render_camera
         )
 
-    def set_sea_surface(self, on: bool) -> None:
-        """Draw the sea as flat water at sea level (seen from high up, where
-        the swell ocean is not shown), instead of the bare seabed.
+    def set_swell(self, swell: Swell | None) -> None:
+        """The sea's swell now (a :class:`world_builder.ocean.Sea` gives it
+        every frame): queries and collisions follow the water it raises, as
+        the shader draws it. None = calm water at sea level."""
+        self.swell = swell
+        self.query.swell = swell
+        if self.collision is not None:
+            self.collision.set_swell(swell)
 
-        Seabed vertices are lifted to sea level and shaded as water, tinted by
-        depth, reflecting the sky light at grazing angles.
-
-        :param on: water on; off (the default) draws the seabed for the swell
-            ocean to cover
-        """
-        self.root.set_shader_input("uSeaSurface", 1 if on else 0)
+    def set_sea_near(self, on: bool) -> None:
+        """Draw the chunks with water with the sea's near look
+        (:class:`world_builder.ocean.Sea` turns it on below its altitude
+        band), or with the far look only (the plain shader)."""
+        if on != getattr(self, "_sea_near", False):
+            self._sea_near = on
+            if on:
+                self.sea_root.set_shader(_shader("terrain_sea.frag"))
+            else:
+                self.sea_root.clear_shader()  # the root's
 
     def set_shallow_water(self, color: ArrayLike, depth: float) -> None:
-        """The sea surface's tint over shallow seabed: give it the swell
-        ocean's (``Ocean(shallow_color=..., shallow_depth=...)``), so the coast
-        keeps its colour across their handover. Defaults to the shared
+        """The sea's tint over shallow seabed, near and far (a
+        :class:`world_builder.ocean.Sea` sets its own). Defaults to the shared
         :data:`world_builder.SHALLOW_WATER_COLOR` and
         :data:`world_builder.SHALLOW_WATER_DEPTH_M`.
 
@@ -712,10 +808,8 @@ class Terrain:
         root.set_shader_input("uBlendDepth", self.blend_depth)
         root.set_shader_input("uExposure", float(exposure))
         root.set_shader_input("uDebugMode", 0)
-        root.set_shader_input("uLevel", 0)
         root.set_shader_input("uMaxLevel", 0)
-        root.set_shader_input("uFace", 0)
-        root.set_shader_input("uChunk", LVecBase4f(0.0, 0.0, 1.0, 0.0))
+        self._make_chunk_table(CHUNK_TABLE_SLOTS)
         # Inputs that change every frame are arrays bound once and written in
         # place: setting a new value on the root would make a new render
         # state per input per frame, for Panda to compose and collect.
@@ -731,9 +825,12 @@ class Terrain:
             array[0] = LVecBase3f(*value)
             self._frame_inputs[name] = array
             root.set_shader_input(name, array)
+        # The sea (set_spec turns it on for a planet with one): its seabed
+        # lifted to the water and drawn as such (the far look; a Sea adds the
+        # near one).
         root.set_shader_input("uSeaSurface", 0)
         self.set_shallow_water(SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M)
-        root.set_shader_input("uDepthBias", 6.0)
+        bind_sea_defaults(root)
         self.set_sun(sun_direction, sun_color, ambient)
 
     def _rebase(self, cam: np.ndarray, render_cam: np.ndarray) -> None:
@@ -746,20 +843,49 @@ class Terrain:
         rebased = self._origin is None or bool(np.any(origin != self._origin))
         if rebased:
             self._origin = origin
-            for key, node in self.nodes.items():
-                self._place(key, node)
+            for name, (cell, centre) in list(self._cells.items()):
+                if cell.get_num_children() == 0:  # made again when needed
+                    cell.remove_node()
+                    del self._cells[name]
+                else:
+                    cell.set_pos(*(centre - origin))
         self.root.set_pos(*(render_cam - (cam - origin)))
         if self.collision is not None:
             self.collision.follow(self.root, origin, rebased)
 
-    def _place(self, key, node: NodePath) -> None:
-        node.set_pos(*(node.get_python_tag("centre") - self._origin))
+    def _cell(self, key, wet: bool) -> tuple[NodePath, np.ndarray]:
+        """:returns: the cell node a chunk hangs under (made if new), and the
+        cell's centre, planet frame. The chunk's position is relative to it:
+        float32 offsets of at most ~CELL_SIZE."""
+        level, face, i, j = key
+        top = self._cell_level
+        shift = top - level
+        cell_key = (top, face, i >> shift, j >> shift) if level < top else None
+        name = (cell_key, wet)
+        entry = self._cells.get(name)
+        if entry is None:
+            centre = (
+                np.zeros(3)
+                if cell_key is None
+                else self.grid.centre_dir(cell_key) * self.spec.radius
+            )
+            cell = (self.sea_root if wet else self.root).attach_new_node("cell")
+            if self._origin is not None:
+                cell.set_pos(*(centre - self._origin))
+            entry = self._cells[name] = (cell, centre)
+        return entry
 
     def _store(self, chunk: ChunkData) -> None:
+        """Keep a chunk; the store is trimmed by the next :meth:`update`."""
         self.store[chunk.key] = chunk
-        self._bounds[chunk.key] = (chunk.h_min, chunk.h_max)
+        # The ground's bounds, seabed included, also where the sea is drawn
+        # over it: deep water stays coarse (its surface has no relief to
+        # resolve), the shallows refine like the land (the coast, the foam).
+        # Culling uses the chunk's own box, which holds the sea surface.
+        bounds = (chunk.h_min, chunk.h_max)
+        self._bounds[chunk.key] = bounds
+        self.selector.set_bounds(chunk.key, bounds)
         self.store.move_to_end(chunk.key)
-        self._evict_store()
 
     def _resident(self, cap: int) -> int:
         """:returns: how many chunks to keep, given what the selection needs"""
@@ -771,16 +897,21 @@ class Terrain:
         excess = len(self.store) - self._resident(self._settings.store_size)
         if excess <= 0:
             return
-        protected = self._keep | set(self._wanted)
-        for old in list(self.store):
+        keep, wanted = self._keep, set(self._wanted)
+        for _ in range(len(self.store)):
             if excess <= 0:
                 break
-            if old in protected:
+            old = next(iter(self.store))
+            if old in keep or old in wanted:
+                # In use: the most recently used now, so the oldest stay in
+                # front (walking past every kept chunk cost up to 0.6 ms).
+                self.store.move_to_end(old)
                 continue
             del self.store[old]
             del self._bounds[old]
+            self.selector.set_bounds(old, None)
             if old in self.nodes:
-                self.nodes.pop(old).remove_node()
+                self._drop_node(old)
             excess -= 1
 
     def _upload(self) -> int:
@@ -794,25 +925,93 @@ class Terrain:
             chunk = self.store.get(key)
             if chunk is None or key in self.nodes:
                 continue
-            node = NodePath(build_chunk_node(chunk))
-            node.set_python_tag("centre", chunk.centre)
-            u0, v0 = self.grid.uv_origin(key)
-            node.set_shader_input("uLevel", key[0])
-            node.set_shader_input("uFace", key[1])
-            node.set_shader_input(
-                "uChunk",
-                LVecBase4f(
-                    u0, v0, (1 << key[0]) * self.grid.uv_unit, chunk.skirt_depth
-                ),
+            wet = bool(self.spec.has_ocean and chunk.h_min < 0.0)
+            slot = self._take_slot(key, chunk)
+            node = NodePath(
+                build_chunk_node(chunk, self.sea_swell if wet else 0.0, slot)
             )
-            self._place(key, node)
+            node.set_python_tag("wet", wet)
+            if wet and chunk.h_max < 0.0:
+                # All water: the reflection clips every vertex of it (its
+                # surface is not in its own mirror). Its bounds reach above
+                # the mirror plane, so the clip plane would not cull it.
+                node.hide(REFLECTION_CAMERA_MASK)
+            node.set_pos(*(chunk.centre - self._cell(key, wet)[1]))
             self.nodes[key] = node
+            self.selector.set_ready(key, True)
             count += 1
         if count:
+            self._write_chunk_table(self._new_slots)
+            self._new_slots = []
             per_chunk = (time.perf_counter() - start) * 1e3 / count
             self.stats["upload_ms"] = 0.8 * self.stats["upload_ms"] + 0.2 * per_chunk
         self._evict_nodes()
         return count
+
+    def _make_chunk_table(self, slots: int) -> None:
+        """The chunk table: per slot, an uploaded chunk's own shader values,
+        three float texels (terrain.vert: centre and swell band; uv origin,
+        uv step and skirt depth; level and face). One texture for every
+        chunk instead of inputs per chunk node, so Panda draws them all in
+        one state (per-chunk inputs cost ~2.5 ms a frame low over the
+        planet). Kept rows (old values) when it grows."""
+        old = getattr(self, "_chunk_values", None)
+        values = np.zeros((4, slots, 4), dtype=np.float32)  # 4 rows: a power of two
+        if old is not None:
+            values[:, : old.shape[1]] = old
+        self._chunk_values = values
+        texture = Texture("terrain_chunks")
+        texture.setup_2d_texture(slots, 4, Texture.T_float, Texture.F_rgba32)
+        texture.set_compression(Texture.CM_off)
+        texture.set_minfilter(SamplerState.FT_nearest)
+        texture.set_magfilter(SamplerState.FT_nearest)
+        texture.set_wrap_u(SamplerState.WM_clamp)
+        texture.set_wrap_v(SamplerState.WM_clamp)
+        self._chunk_texture = texture
+        self._write_chunk_table()
+        self.root.set_shader_input("uChunkTable", texture)
+        if old is None:
+            self._slots: dict[tuple, int] = {}
+            self._free_slots = list(range(slots - 1, -1, -1))
+            self._new_slots: list[int] = []
+        else:
+            self._free_slots = list(range(slots - 1, old.shape[1] - 1, -1)) + (
+                self._free_slots
+            )
+
+    def _write_chunk_table(self, slots: list[int] | None = None) -> None:
+        """Copy the table into the texture: every slot, or just these."""
+        values = self._chunk_values
+        ram = np.frombuffer(
+            memoryview(self._chunk_texture.modify_ram_image()), np.float32
+        ).reshape(values.shape)
+        # Panda keeps an RGBA texture's RAM image as BGRA.
+        if slots is None:
+            ram[:] = values[..., [2, 1, 0, 3]]
+        else:
+            ram[:, slots] = values[:, slots][..., [2, 1, 0, 3]]
+
+    def _take_slot(self, key, chunk: ChunkData) -> int:
+        """A free slot of the chunk table, filled with the chunk's values
+        (written to the texture once per upload pass)."""
+        if not self._free_slots:
+            self._make_chunk_table(2 * self._chunk_values.shape[1])
+        slot = self._free_slots.pop()
+        self._slots[key] = slot
+        self._new_slots.append(slot)
+        level, face = key[0], key[1]
+        u0, v0 = self.grid.uv_origin(key)
+        values = self._chunk_values
+        values[0, slot] = (*chunk.centre, 0.25 / self.grid.spacing(level))
+        values[1, slot] = (u0, v0, (1 << level) * self.grid.uv_unit, chunk.skirt_depth)
+        values[2, slot] = (level, face, 0.0, 0.0)
+        return slot
+
+    def _drop_node(self, key) -> None:
+        """Remove an uploaded chunk's node and free its slot."""
+        self.nodes.pop(key).remove_node()
+        self._free_slots.append(self._slots.pop(key))
+        self.selector.set_ready(key, False)
 
     def _evict_nodes(self) -> None:
         cap = min(self._settings.node_cache_size, self._settings.store_size)
@@ -820,38 +1019,57 @@ class Terrain:
         if excess <= 0:
             return
         # Wanted chunks were just uploaded for the next selection to use.
-        wanted = set(self._wanted)
-        for key in list(self.nodes):
+        keep, wanted = self._keep, set(self._wanted)
+        for _ in range(len(self.nodes)):
             if excess <= 0:
                 break
-            if key not in self._keep and key not in wanted:
-                self.nodes.pop(key).remove_node()
+            key = next(iter(self.nodes))
+            if key in keep or key in wanted:
+                self.nodes.move_to_end(key)  # in use (see _evict_store)
+            else:
+                self._drop_node(key)
                 excess -= 1
 
     def _select(self, cam: np.ndarray) -> None:
         start = time.perf_counter()
         self._last_select_pos = cam.copy()
         self._last_select_frame = self._frame
+        self._unshown = 0
 
         selection = self.selector.select(
             cam,
             ready=self.nodes.__contains__,
             bounds=self._bounds.get,
+            forward=self._forward,
         )
         draw = set(selection.draw)
         for key in self.shown - draw:
             node = self.nodes.get(key)
             if node is not None:
                 node.detach_node()
+        now = time.perf_counter()
         for key in draw - self.shown:
-            self.nodes[key].reparent_to(self.root)
+            node = self.nodes[key]
+            node.reparent_to(self._cell(key, node.get_python_tag("wet"))[0])
+            since = self._wanted_since.pop(key, None)
+            if since is not None:
+                self.refine_lags.append((key[0], now - since))
+        for key in selection.wanted:
+            self._wanted_since.setdefault(key, now)
+        if len(self._wanted_since) > 4 * LAG_SAMPLES:  # never drawn: forget
+            self._wanted_since = {
+                k: t for k, t in self._wanted_since.items() if now - t < 30.0
+            }
         # A split node's children must stay ready even when they are not drawn
         # (their own children are, or they are culled): the selector splits a
         # node only while all its visible children are ready. Evicting one as
         # "least recently drawn" collapsed its whole subtree to a coarse parent
-        # for a few frames, then refined it again.
+        # for a few frames, then refined it again. Kept chunks are never
+        # evicted, so their place in the LRU order matters only once they are
+        # let go: they become the most recently used then (the order they
+        # would have had if marked on every pass, for a fraction of the cost).
         keep = selection.keep
-        for key in keep:
+        for key in self._keep - keep:
             if key in self.nodes:
                 self.nodes.move_to_end(key)
             if key in self.store:

@@ -20,24 +20,41 @@ once all of them (the ones not culled) are ready to draw, and until then the
 missing children are reported as wanted. Cracks between neighbours of
 different levels are left to the chunk skirts, so no 2:1 balancing is needed.
 
+What is wanted is ordered by benefit: ground with nothing drawn over it
+first (coarse first), then the chunks largest on screen (distance over size),
+those behind the view after the others when the view direction is given.
+
 The traversal runs on Python floats (numpy per node would be slower); the
-per-key geometry is memoised by :meth:`CubeGrid.box`.
+per-key geometry is memoised by :meth:`CubeGrid.box`. The same pass runs in
+the native library when it is built (:class:`NativeLodSelector`, ``lod.c``):
+0.17 ms instead of 1 ms for a low pass over 450 drawn chunks, most of it
+turning the results into Python keys. :func:`make_selector` picks.
 """
 
 from __future__ import annotations
 
+import ctypes
 import math
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+import numpy as np
 from numpy.typing import ArrayLike
 
 from world_builder.terrain.cubesphere import CubeGrid, Key
+from world_builder.terrain.noise import native_library
 
 #: Height bounds assumed for a node nobody has generated yet, metres.
 UNKNOWN_BOUNDS = (-7000.0, 9000.0)
 #: Cached per-node geometry entries before the cache is reset.
 _GEOMETRY_CACHE_LIMIT = 200_000
+#: A wanted chunk behind the view counts as this many times farther. Only the
+#: order changes: turning still finds the ground, a little coarser for longer.
+BEHIND_PENALTY = 3.0
+#: Cosine of the angle off the view direction past which a chunk is behind it
+#: (about 107 degrees: the screen's corners and some margin are in view).
+_BEHIND_COS = -0.3
 
 
 @dataclass
@@ -99,11 +116,20 @@ class LodSelector:
         """Forget the hysteresis state (after a spec change)."""
         self._split.clear()
 
+    def set_bounds(self, key: Key, bounds: tuple[float, float] | None) -> None:
+        """A chunk's height bounds changed (None: forgotten). Nothing to do
+        here: :meth:`select` reads them through its *bounds* callable; the
+        :class:`NativeLodSelector` keeps its own copy."""
+
+    def set_ready(self, key: Key, ready: bool) -> None:
+        """A chunk became drawable, or stopped being. As :meth:`set_bounds`."""
+
     def select(
         self,
         camera: ArrayLike,
         ready: Callable[[Key], bool],
         bounds: Callable[[Key], tuple[float, float] | None],
+        forward: ArrayLike | None = None,
     ) -> Selection:
         """One LOD pass.
 
@@ -114,6 +140,8 @@ class LodSelector:
             the same tuple object for a key while its bounds do not change
             (a dict's ``get`` does): the per-key geometry cache then
             recognises it by identity
+        :param forward: (3,) view direction in the planet frame, to want the
+            chunks in view first; None = no preference
         :returns: what to draw and what to generate
         """
         self._begin(camera)
@@ -128,14 +156,49 @@ class LodSelector:
             if not culled:
                 self._visit(root, box, distance, ready, bounds, selection, split_now)
         self._split = split_now
-        # Coarse first, so the world is covered before it is refined; nearer
-        # first within a level. Distances as measured in the traversal (with
-        # each key's own bounds): re-measuring with other bounds would evict
-        # the geometry cache entries the next pass needs.
-        distances = self._distances
-        selection.wanted.sort(key=lambda k: (-k[0], distances[k]))
-        selection.prefetch.sort(key=distances.__getitem__)
+        priority = self._priority(ready, forward)
+        selection.wanted.sort(key=priority)
+        selection.prefetch.sort(key=self._distances.__getitem__)
         return selection
+
+    def _priority(
+        self, ready: Callable[[Key], bool], forward: ArrayLike | None
+    ) -> Callable[[Key], tuple]:
+        """:returns: the sort key of wanted chunks, most urgent first.
+
+        Ground nothing covers yet (a root, or the child of a root not ready)
+        comes first, coarse first, so the world is covered before it is
+        refined. Every other wanted chunk refines one already drawn: the
+        largest on screen first (distance over size), those behind the view
+        as if farther. Distances as measured in the traversal (with each
+        key's own bounds): re-measuring with other bounds would evict the
+        geometry cache entries the next pass needs.
+        """
+        distances = self._distances
+        top = self.grid.max_level
+        size = self.grid.chunk_size
+        x, y, z = self._camera
+        if forward is not None:
+            fx, fy, fz = (float(c) for c in forward)
+            norm = math.sqrt(fx * fx + fy * fy + fz * fz) or 1.0
+            fx, fy, fz = fx / norm, fy / norm, fz / norm
+        radius = self.radius
+        box = self.grid.box
+
+        def key(k: Key) -> tuple:
+            level = k[0]
+            if level == top or not ready(CubeGrid.parent(k)):
+                return (0, -level, distances[k])
+            score = distances[k] / size(level)
+            if forward is not None and score > 1.0:
+                ux, uy, uz = box(k).up
+                dx, dy, dz = ux * radius - x, uy * radius - y, uz * radius - z
+                along = dx * fx + dy * fy + dz * fz
+                if along < _BEHIND_COS * math.sqrt(dx * dx + dy * dy + dz * dz):
+                    score *= BEHIND_PENALTY
+            return (1, score, 0.0)
+
+        return key
 
     def distance(self, key: Key, box: tuple[float, float]) -> float:
         """:returns: 3D distance from the camera of the last pass to the node's
@@ -306,3 +369,128 @@ class LodSelector:
         )
         self._geometry[key] = entry
         return entry
+
+
+class NativeLodSelector:
+    """:class:`LodSelector`'s pass in the native library (``lod.c``): the same
+    selection, operation for operation.
+
+    It keeps its own copy of the chunks' state, so the caller reports every
+    change (:meth:`set_bounds`, :meth:`set_ready`) and :meth:`select` ignores
+    its *ready* and *bounds* callables. The parameters are attributes, as on
+    :class:`LodSelector`.
+    """
+
+    def __init__(
+        self,
+        grid: CubeGrid,
+        split_factor: float = 2.0,
+        hysteresis: float = 1.15,
+        max_distance: float | None = None,
+        horizon_floor: float = 0.0,
+        min_level: int = 0,
+    ):
+        """As :class:`LodSelector`; the native library must be loaded."""
+        native = native_library()
+        if native is None:
+            raise RuntimeError("the native library is not available")
+        self._lib = lib = native.lib
+        self.grid = grid
+        self._handle = lib.wb_lod_new(
+            grid.radius, grid.max_level, grid.n0, grid.spacing0
+        )
+        self._finalizer = weakref.finalize(self, lib.wb_lod_free, self._handle)
+        self._params = {
+            "split_factor": split_factor,
+            "hysteresis": hysteresis,
+            "max_distance": max_distance,
+            "horizon_floor": horizon_floor,
+            "min_level": min_level,
+        }
+        self._push()
+        self._key = (ctypes.c_int32 * 4)()
+        self._bounds = (ctypes.c_double * 2)()
+        self._camera = (ctypes.c_double * 3)()
+        self._forward = (ctypes.c_double * 3)()
+
+    def _push(self) -> None:
+        p = self._params
+        self._lib.wb_lod_set_params(
+            self._handle,
+            float(p["split_factor"]),
+            float(p["hysteresis"]),
+            -1.0 if p["max_distance"] is None else float(p["max_distance"]),
+            float(p["horizon_floor"]),
+            int(p["min_level"]),
+        )
+
+    def __getattr__(self, name: str):
+        params = self.__dict__.get("_params")
+        if params is not None and name in params:
+            return params[name]
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value) -> None:
+        params = self.__dict__.get("_params")
+        if params is not None and name in params:
+            params[name] = value
+            self._push()
+        else:
+            super().__setattr__(name, value)
+
+    def reset(self) -> None:
+        """Forget the hysteresis state (after a spec change)."""
+        self._lib.wb_lod_reset(self._handle)
+
+    def set_bounds(self, key: Key, bounds: tuple[float, float] | None) -> None:
+        """A chunk's height bounds (h_min, h_max) are known; None: forgotten."""
+        self._key[:] = key
+        if bounds is None:
+            self._lib.wb_lod_set_bounds(self._handle, self._key, None, 1)
+        else:
+            self._bounds[:] = bounds
+            self._lib.wb_lod_set_bounds(self._handle, self._key, self._bounds, 1)
+
+    def set_ready(self, key: Key, ready: bool) -> None:
+        """A chunk became drawable (uploaded), or stopped being."""
+        self._key[:] = key
+        self._lib.wb_lod_set_ready(self._handle, self._key, int(ready), 1)
+
+    def select(
+        self,
+        camera: ArrayLike,
+        ready: Callable[[Key], bool] | None = None,
+        bounds: Callable[[Key], tuple[float, float] | None] | None = None,
+        forward: ArrayLike | None = None,
+    ) -> Selection:
+        """One LOD pass, as :meth:`LodSelector.select`; *ready* and *bounds*
+        are ignored (the state comes from :meth:`set_bounds` and
+        :meth:`set_ready`)."""
+        self._camera[:] = [float(c) for c in camera]
+        if forward is not None:
+            self._forward[:] = [float(c) for c in forward]
+        self._lib.wb_lod_select(
+            self._handle, self._camera, None if forward is None else self._forward
+        )
+        return Selection(
+            draw=self._keys(0),
+            wanted=self._keys(1),
+            prefetch=self._keys(2),
+            keep=set(self._keys(3)),
+        )
+
+    def _keys(self, which: int) -> list[Key]:
+        count = ctypes.c_int64()
+        pointer = self._lib.wb_lod_result(self._handle, which, ctypes.byref(count))
+        if count.value == 0:
+            return []
+        keys = np.ctypeslib.as_array(pointer, shape=(count.value, 4))
+        return list(zip(*keys.T.tolist()))  # tuples made in C: the fastest way
+
+
+def make_selector(grid: CubeGrid, **kwargs) -> LodSelector | NativeLodSelector:
+    """:returns: a :class:`NativeLodSelector` when the native library is
+    there, else a :class:`LodSelector` (same arguments)"""
+    if native_library() is not None:
+        return NativeLodSelector(grid, **kwargs)
+    return LodSelector(grid, **kwargs)

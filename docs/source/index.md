@@ -2,7 +2,7 @@
 
 WorldBuilder procedurally builds worlds in Panda3D: cube-sphere planetary
 terrain seen from orbit to the ground, single-scattering atmospheres, a
-procedural sky (stars, nebulae, the sun), a curved reflective ocean, and
+procedural sky (stars, nebulae, the sun), a reflective sea drawn on the terrain, and
 volumetric billboard clouds (a flat field, or over a whole planet, following
 its weather). It started inside
 [SpaceFlight](https://github.com/JoeDalton/SpaceFlight), which uses it for its
@@ -18,7 +18,8 @@ it works.
   precision and depth, several bodies, and the demo.
 - [Atmosphere, sky and planet clouds](atmosphere.md): the scattering model,
   the star field and the clouds over a whole planet, with their weather.
-- [Ocean](ocean.md): the reflective ocean and its swell.
+- [Sea](ocean.md): the sea the terrain draws, its two looks, its swell and
+  its reflection.
 - [The native collision library](native_build.md): the C++ collision solid
   behind terrain collision, how it is built and shipped in a wheel for each
   platform, and what it depends on.

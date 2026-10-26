@@ -8,14 +8,13 @@ scripts/terrain_shots.py, not here.
 
 import math
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from panda3d.core import BitMask32, CullBinManager, LVecBase3f, NodePath, Texture
+from panda3d.core import LVecBase3f, NodePath, Texture
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
-from world_builder.clouds import field, sphere
+from world_builder.clouds import sphere
 from world_builder.clouds.cloud import CloudSettings
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import (
@@ -79,6 +78,70 @@ def test_split_cameras_draw_into_the_window(window):
     assert cameras.far_region not in list(window.win.get_display_regions())
 
 
+def _card(parent, name, distance, frame, color):
+    """A flat, unlit card *distance* ahead of the camera, its frame in
+    fractions of the view's half-width (x0, x1, z0, z1)."""
+    from panda3d.core import CardMaker
+
+    lens_half = math.tan(math.radians(0.5 * 60.0)) * distance
+    maker = CardMaker(name)
+    x0, x1, z0, z1 = frame
+    maker.set_frame(x0 * lens_half, x1 * lens_half, z0 * lens_half, z1 * lens_half)
+    card = parent.attach_new_node(maker.generate())
+    card.set_y(distance)
+    card.set_color(*color)
+    card.set_light_off(1)
+    card.set_shader_off(1)
+    card.set_texture_off(1)
+    card.set_two_sided(True)
+    return card
+
+
+def test_half_resolution_clouds_are_hidden_by_what_is_in_front(window):
+    """Each depth range's clouds go into their own half-size layer: near
+    ground hides far clouds (one buffer for both ranges showed them through
+    it), and near clouds cover near ground."""
+    from world_builder.clouds.half_res import HalfResClouds
+
+    fov, transform = window.camLens.get_fov(), window.camera.get_transform()
+    window.camLens.set_fov(60.0, 60.0)
+    window.camera.set_pos_hpr(0, 0, 0, 0, 0, 0)
+    cameras = SplitDepthCameras(window, near=1.0)
+    clouds = window.render.attach_new_node("test_clouds")
+    occluder = _card(
+        window.render, "occluder", 50.0, (-0.4, 0.4, -0.4, 0.4), (0, 1, 0, 1)
+    )
+    _card(clouds, "far_cloud", 2000.0, (-2, 2, -2, 2), (1, 0, 0, 1))
+    _card(clouds, "near_cloud", 20.0, (-2, -0.5, -2, 2), (0, 0, 1, 1))
+    half = HalfResClouds(window, cameras)
+    half.add(clouds)
+    try:
+        cameras.update(500.0, 5000.0)
+        half.update()
+        for _ in range(3):
+            window.graphicsEngine.render_frame()
+        shot = window.win.get_screenshot()
+        size = shot.get_x_size()
+        ram = np.frombuffer(shot.get_ram_image_as("RGB").get_data(), np.uint8)
+        rgb = ram.reshape(shot.get_y_size(), size, 3)
+
+        def at(x, y):  # fractions of the view, from the bottom left
+            return tuple(int(c) for c in rgb[int(y * size), int(x * size)])
+
+        assert at(0.55, 0.5) == (0, 255, 0)  # the occluder hides the far cloud
+        assert at(0.9, 0.9) == (255, 0, 0)  # the far cloud elsewhere
+        assert at(0.1, 0.5) == (0, 0, 255)  # the near cloud, in front
+        assert half.pixel_scale == 2.0
+    finally:
+        half.destroy()
+        cameras.destroy()
+        clouds.remove_node()
+        occluder.remove_node()
+        window.camLens.set_fov(fov)
+        window.camera.set_transform(transform)
+    assert clouds.is_empty()
+
+
 def test_split_cameras_keep_the_split_off_translucent_volumes(window):
     """A translucent volume the wanted split would cut moves it in front:
     blended twice where the cameras overlap, it would show a ring there."""
@@ -126,261 +189,294 @@ def test_split_cameras_follow_the_scene_into_a_post_process_buffer(window):
         manager.cleanup()
 
 
-# ── ocean ──────────────────────────────────────────────────────────────────────
+# ── sea ──────────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def ocean(window):
-    from world_builder.ocean import Ocean
+def sea(window):
+    """A Sea on an ocean planet's coarse terrain, its camera 30 m over the
+    water at a point of the planet."""
+    from world_builder.ocean import Sea
+    from world_builder.terrain.terrain import Terrain, TerrainSettings
 
-    root = window.render.attach_new_node("sea")
-    game = SimpleNamespace(
-        app=window,
-        root_node=root,
-        method_lists={},
-        game_time=SimpleNamespace(get_current_time=lambda: 1.5),
+    executor = ChunkExecutor(backend="inline", inline_budget=64)
+    terrain = Terrain(
+        window.render,
+        PRESETS["earthlike"],
+        executor=executor,
+        settings=TerrainSettings(min_level=7),
     )
-    made = Ocean(
-        game=game,
-        geometric_swell=True,
-        planet_radius=R,
-        exact_sphere=True,
+    made = Sea(
+        window,
+        terrain,
+        clock=lambda: 1.5,
         settings=OceanSettings(reflection_scale=0.25),
     )
-    yield made, game
-    if made.game is not None:
-        made.clean()
-    root.remove_node()
+    up = TangentFrame.at(10.0, 20.0).up
+    camera = up * (R + 30.0)
+    terrain.update(camera)
+    window.camera.set_pos(window.render, 0.0, 0.0, 0.0)
+    yield made, terrain, camera
+    made.destroy()
+    terrain.destroy()
+    executor.shutdown()
 
 
-def test_ocean_draws_before_its_first_update(window, ocean):
-    """A game may render frames between building the ocean and its first
+def test_the_terrain_draws_the_sea_of_an_ocean_planet(sea):
+    _, terrain, _ = sea
+    assert _input(terrain.root, "uSeaSurface")[0] == 1
+
+
+def test_sea_draws_before_its_first_update(window, sea):
+    """A game may render frames between building the sea and its first
     update (a loading screen): every shader input it reads is already set."""
-    made, _game = ocean
-    name = made.ocean_node.get_shader_input("uSeabedCount").get_name()
-    assert str(name) == "uSeabedCount"
     window.graphicsEngine.render_frame()  # raises on a missing input
 
 
-def test_ocean_updates_and_mirrors_the_camera(window, ocean):
-    made, game = ocean
-    assert made.id in game.method_lists
-    window.camera.set_pos(made.base_node, 10.0, 20.0, 30.0)
-    window.camera.set_hpr(made.base_node, 15.0, -10.0, 0.0)
-    for method in game.method_lists[made.id]:
-        method()
-    mirrored = made.refl_cam.get_pos(made.base_node)
-    np.testing.assert_allclose(tuple(mirrored), (10.0, 20.0, -30.0), atol=1e-4)
-    assert _input(made.ocean_node, "iTime")[0] == 1.5
+def test_sea_updates_and_mirrors_the_camera(window, sea):
+    made, terrain, camera = sea
+    window.camera.set_hpr(window.render, 15.0, -10.0, 0.0)
+    made.update(camera)
+    assert made.near == 1.0
+    assert terrain.sea_root.get_shader() is not None  # the near look's variant
+    # The frame is the tangent plane at the nadir's sea level: the camera
+    # 30 m above it, its mirror image 30 m below.
+    np.testing.assert_allclose(
+        tuple(window.camera.get_pos(made.frame)), (0.0, 0.0, 30.0), atol=1e-2
+    )
+    np.testing.assert_allclose(
+        tuple(made.refl_cam.get_pos(made.frame)), (0.0, 0.0, -30.0), atol=1e-2
+    )
+    up = made.frame.get_quat(window.render).get_up()
+    np.testing.assert_allclose(tuple(up), camera / np.linalg.norm(camera), atol=1e-5)
+    assert made._frame_inputs["iTime"][0] == 1.5
+    # The octaves' phases reach the shader's array (written through a view).
+    from world_builder.ocean.ocean import wave_phases
+
+    phases = made._frame_inputs["uWavePhase"]
+    expected = wave_phases(made._directions, made._chart_xy, 1.5)
+    np.testing.assert_allclose(
+        [phases[i] for i in range(len(expected))], expected, rtol=1e-6, atol=1e-5
+    )
+    # The swell handed to the terrain is the drift's at the clock's time.
+    np.testing.assert_array_equal(terrain.swell.rot_a, made._drift.at(1.5)[0])
     window.graphicsEngine.render_frame()
-    made.update()  # the reflection texture is realized: the UV scale is set
-    assert getattr(made, "_uv_scale_set", False)
+    made.update(camera)  # the reflection texture is realized: the UV scale is set
+    assert made._uv_scale_set
 
 
-def _drawn(node: NodePath, camera_mask: BitMask32) -> bool:
-    """Panda's rule: drawn if any of the camera's bits is shown, or not
-    controlled, on the node."""
-    n = node.node()
-    shown = n.get_draw_show_mask() | ~n.get_draw_control_mask()
-    return not (shown & camera_mask).is_zero()
+def test_the_near_look_stops_above_its_band(window, sea):
+    made, terrain, camera = sea
+    high = camera / np.linalg.norm(camera) * (R + made.near_band[1] + 100.0)
+    made.update(high)
+    assert made.near == 0.0 and not made.refl_buffer.is_active()
+    assert made._frame_inputs["uSeaNear"][0] == 0.0
+    assert terrain.sea_root.get_shader() is None  # the root's, without it
 
 
-def test_ocean_is_not_in_its_own_mirror(ocean):
-    """Hidden from the whole reflection mask (one bit hid nothing), seen by
-    the main cameras."""
-    from world_builder.ocean.ocean import REFLECTION_CAMERA_MASK
-
-    made, _ = ocean
-    reflection = made.refl_cam_node.get_camera_mask()
-    assert reflection == REFLECTION_CAMERA_MASK
-    assert not _drawn(made.ocean_node, reflection)
-    assert _drawn(made.ocean_node, NEAR_CAMERA_MASK)
-    assert _drawn(made.ocean_node, FAR_CAMERA_MASK)
-    assert _drawn(made.ocean_node, BitMask32.all_on())  # a default camera
-
-
-def test_reflection_follows_the_main_field_of_view(window, ocean):
-    made, _ = ocean
+def test_reflection_follows_the_main_field_of_view(window, sea):
+    made, _, camera = sea
     scale = made.settings.reflection_fov_scale
     lens = window.camLens
     before = lens.get_fov()
     try:
         lens.set_fov(50.0, 30.0)
-        made.update()
+        made.update(camera)
         fov = made.refl_cam_node.get_lens().get_fov()
         np.testing.assert_allclose(tuple(fov), (50.0 * scale, 30.0 * scale))
     finally:
         lens.set_fov(before)
 
 
-def test_everything_drawn_in_the_mirror_writes_its_clip_distance():
-    """The reflection pass turns a clip plane on; a vertex shader drawn
-    through it that leaves gl_ClipDistance[0] unwritten is clipped at
-    random."""
-    src = Path(__file__).parent.parent / "src" / "world_builder"
-    shaders = [
-        "terrain/shaders/terrain.vert",
-        "clouds/shaders/cloud.vert",
-        "clouds/shaders/cloud_sphere.vert",
-        "clouds/shaders/cloud_deck.vert",
-        "sky/shaders/sky.vert",
-        "sky/shaders/stars.vert",
-    ]
-    for name in shaders:
-        assert "gl_ClipDistance[0]" in (src / name).read_text(), name
-
-
-def test_cloud_bins_never_tie(showbase):
-    """The planet clouds' bins (deck, then one per shell) are ordered, sit
-    between opaque and transparent, and never tie with the flat field's."""
-    sphere._ensure_bin()
-    field._ensure_cloud_bins()
-    manager = CullBinManager.get_global_ptr()
-
-    def sort(name):
-        return manager.get_bin_sort(manager.find_bin(name))
-
-    deck = sort(sphere.CLOUD_BIN)
-    shells = [sort(sphere._shell_bin(k)) for k in range(sphere.MAX_LAYERS - 1)]
-    flat = sort(field._CLOUD_BIN)
-    assert all(20 < s < 30 for s in [deck, *shells])
-    assert shells == sorted(shells, reverse=True) and len(set(shells)) == len(shells)
-    assert deck < min(shells)
-    assert flat not in [deck, *shells]
-
-
-def test_ocean_light_and_settings(ocean):
-    made, _ = ocean
+def test_sea_light(sea):
+    made, _, _ = sea
     made.set_light((0.5, 0.25, 0.0))
-    light = _input(made.ocean_node, "iWaterLight")
-    np.testing.assert_allclose(tuple(light)[:3], (0.5, 0.25, 0.0))
+    light = made._frame_inputs["iWaterLight"][0]
+    np.testing.assert_allclose(tuple(light), (0.5, 0.25, 0.0))
     # The shader decodes the reflection as display colours, so where it
     # renders nothing it must find the lit water's colour tonemapped.
     clear = made.refl_buffer.get_clear_color()
     lit = np.multiply(tuple(made._water_color), (0.5, 0.25, 0.0))
     np.testing.assert_allclose(tuple(clear)[:3], aces_tonemap(lit), atol=1e-6)
-    made.set_atmosphere_frame(made.base_node.get_mat(), (0.0, 0.0, 1.0))
 
 
-def test_ocean_settings_set_its_uniforms(ocean):
+def test_sea_settings_set_its_uniforms(sea):
     from dataclasses import replace
 
     from world_builder.ocean import OceanSettings
     from world_builder.ocean.ocean import wave_weight_sum
 
-    made, _ = ocean
-    node = made.ocean_node
-    kept = made.settings
-    try:
-        made.set_settings(replace(OceanSettings.preset("low"), reflection_scale=0.25))
-        assert _input(node, "iIterationsNormal")[0] == 16
-        assert _input(node, "uWaveWeightSum")[0] == pytest.approx(wave_weight_sum(16))
-        assert _input(node, "uAAEnd")[0] == pytest.approx(2.0 * math.pi / 6.0)
-        assert _input(node, "uRoughFresnel")[0] == 0
-        assert _input(node, "uReflBlur")[0] == 0.0
-        assert not made.refl_tex.uses_mipmaps()  # nothing reads them
-        assert _input(node, "uFoamNoiseOn")[0] == 0
-        assert len(made.seabed.cascades) == 2
-        made.set_settings(replace(OceanSettings.preset("high"), reflection_scale=0.25))
-        assert _input(node, "uRoughFresnel")[0] == 1
-        assert made.refl_tex.uses_mipmaps()
-        assert len(made.seabed.cascades) == 3
-        made.set_settings(replace(made.settings, foam=False))
-        assert _input(node, "uFoamOn")[0] == 0
-        made.set_settings(made.settings.with_value("wave_iterations", 10**6))
-        assert _input(node, "iIterationsNormal")[0] == 64  # clamped
-        made.set_debug_mode(10)
-        assert _input(node, "uDebugMode")[0] == 10
-        made.set_swell_amplitude(45.0)
-        assert _input(node, "uSwellAmplitude")[0] == 45.0
-        # A cut-off sharper than full strength is held at it.
-        made.set_settings(replace(made.settings, aa_full_px=5.0, aa_gone_px=9.0))
-        assert _input(node, "uAAEnd")[0] == pytest.approx(2.0 * math.pi / 5.0)
-    finally:
-        made.set_settings(kept)
-        made.set_debug_mode(0)
+    made, terrain, _ = sea
+    node = terrain.root
+    made.set_settings(replace(OceanSettings.preset("low"), reflection_scale=0.25))
+    assert _input(node, "iIterationsNormal")[0] == 16
+    assert _input(node, "uWaveWeightSum")[0] == pytest.approx(wave_weight_sum(16))
+    assert _input(node, "uAAEnd")[0] == pytest.approx(2.0 * math.pi / 6.0)
+    assert _input(node, "uRoughFresnel")[0] == 0
+    assert _input(node, "uReflBlur")[0] == 0.0
+    assert not made.refl_tex.uses_mipmaps()  # nothing reads them
+    assert _input(node, "uFoamNoiseOn")[0] == 0
+    made.set_settings(replace(OceanSettings.preset("high"), reflection_scale=0.25))
+    assert _input(node, "uRoughFresnel")[0] == 1
+    assert made.refl_tex.uses_mipmaps()
+    made.set_settings(replace(made.settings, foam=False))
+    assert _input(node, "uFoamOn")[0] == 0
+    made.set_settings(made.settings.with_value("wave_iterations", 10**6))
+    assert _input(node, "iIterationsNormal")[0] == 64  # clamped
+    made.set_debug_mode(10)
+    assert _input(node, "uSeaDebug")[0] == 10
+    made.set_swell_amplitude(45.0)
+    assert _input(node, "uSwellAmplitude")[0] == 45.0
+    # A cut-off sharper than full strength is held at it.
+    made.set_settings(replace(made.settings, aa_full_px=5.0, aa_gone_px=9.0))
+    assert _input(node, "uAAEnd")[0] == pytest.approx(2.0 * math.pi / 5.0)
 
 
-def test_ocean_reflection_and_swell_mesh_rebuild(window, ocean):
+def test_sea_reflection_rebuild(window, sea):
     """A new reflection scale makes the buffer again on the same camera (its
-    lens, far plane and active flag kept); a new swell mesh replaces the
-    surface's geoms."""
+    lens, far plane and active flag kept)."""
     from dataclasses import replace
 
-    made, _ = ocean
+    made, terrain, _ = sea
     kept = made.settings
     old_buffer, camera = made.refl_buffer, made.refl_cam
     far = made.refl_cam_node.get_lens().get_far()
     width = old_buffer.get_x_size()
-    vertices = made.ocean_node.node().get_geom(0).get_vertex_data().get_num_rows()
     old_buffer.set_active(False)
-    try:
-        made.set_settings(
-            replace(
-                kept, reflection_scale=kept.reflection_scale * 2, swell_grid_subdivs=128
-            )
-        )
-        assert made.refl_buffer is not old_buffer
-        assert made.refl_buffer.get_x_size() == pytest.approx(2 * width, abs=1)
-        assert not made.refl_buffer.is_active()
-        assert made.refl_cam == camera
-        assert made.refl_cam_node.get_lens().get_far() == far
-        engine = window.graphicsEngine
-        assert old_buffer not in [
-            engine.get_window(i) for i in range(engine.get_num_windows())
-        ]
-        assert _input(made.ocean_node, "uReflUVScale")  # rebound
-        rows = made.ocean_node.node().get_geom(0).get_vertex_data().get_num_rows()
-        assert rows < vertices
-    finally:
-        made.set_settings(kept)
-        made.refl_buffer.set_active(True)
+    made.set_settings(replace(kept, reflection_scale=kept.reflection_scale * 2))
+    assert made.refl_buffer is not old_buffer
+    assert made.refl_buffer.get_x_size() == pytest.approx(2 * width, abs=1)
+    assert not made.refl_buffer.is_active()
+    assert made.refl_cam == camera
+    assert made.refl_cam_node.get_lens().get_far() == far
+    engine = window.graphicsEngine
+    assert old_buffer not in [
+        engine.get_window(i) for i in range(engine.get_num_windows())
+    ]
+    rebound = terrain.root.get_shader_input("iReflectionTex").get_texture()
+    assert rebound == made.refl_tex
 
 
-def test_ocean_seabed_bakes_from_its_update(ocean):
-    import time
-
-    made, _ = ocean
-    calls = []
-
-    def beach(points, texel):
-        calls.append(texel)
-        return points[:, 0] * 0.01 - 5.0
-
-    made.set_seabed_frame((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
-    made.set_seabed(beach)
-    try:
-        start = time.monotonic()
-        while _input(made.ocean_node, "uSeabedCount")[0] < 3:
-            assert time.monotonic() - start < 10.0, "no seabed bake landed"
-            made.update()
-            time.sleep(0.01)
-        # Finest first, each at its own texel.
-        assert calls[:3] == sorted(calls[:3])
-    finally:
-        made.set_seabed(None)
-    made.update()
-    assert _input(made.ocean_node, "uSeabedCount")[0] == 0
-
-
-def test_ocean_clean_releases_its_buffer(window, ocean):
-    made, game = ocean
+def test_sea_destroy_releases_its_buffer(window, sea):
+    made, terrain, _ = sea
     buffer = made.refl_buffer
-    made.clean()
-    assert made.id not in game.method_lists
+    made.destroy()
     assert buffer not in [
         window.graphicsEngine.get_window(i)
         for i in range(window.graphicsEngine.get_num_windows())
     ]
+    assert made._frame_inputs["uSeaNear"][0] == 0.0  # the far look stays
+    made.destroy = lambda: None  # the fixture's teardown
 
 
-def test_flat_ocean_is_one_quad(window):
-    from world_builder.ocean.ocean import make_plane_mesh
+def test_the_shader_swell_is_the_cpus(window):
+    """swell.glsl and world_builder.ocean.swell are one field: the GPU's
+    float32 evaluation, read back, matches the CPU's at the same points (the
+    collisions stand on the CPU's, the eye sees the GPU's)."""
+    from panda3d.core import (
+        Geom,
+        GeomNode,
+        GeomPoints,
+        GeomVertexData,
+        GeomVertexFormat,
+        GeomVertexWriter,
+        LMatrix4f,
+        OmniBoundingVolume,
+        Shader,
+    )
 
-    node = make_plane_mesh(100.0)
-    vdata = node.get_geom(0).get_vertex_data()
-    assert vdata.get_num_rows() == 4
-    assert node.get_geom(0).get_primitive(0).get_num_primitives() == 2
+    from world_builder.ocean.ocean import swell_rotations
+    from world_builder.ocean.swell import Swell, swell_field
+
+    size = 32
+    frame = TangentFrame.at(10.0, 20.0)
+    a, b = swell_rotations(
+        frame.up, frame.east, frame.north, (0.6, 0.8), 0.004, 0.1, R, 777.0
+    )
+    rng = np.random.default_rng(5)
+    dirs = frame.up + 0.05 * rng.normal(size=(size * size, 3))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    points = (dirs * R).astype(np.float32)  # what the GPU gets
+    max_freq = 0.25 / 29.0
+    swell = Swell(20.0, 0.004, a, b)
+    expected = swell_field(
+        swell, points.astype(np.float64), np.full(len(points), max_freq)
+    )
+
+    vdata = GeomVertexData("points", GeomVertexFormat.get_v3(), Geom.UH_static)
+    writer = GeomVertexWriter(vdata, "vertex")
+    for x, y, z in points:
+        writer.add_data3f(float(x), float(y), float(z))
+    prim = GeomPoints(Geom.UH_static)
+    prim.add_next_vertices(len(points))
+    geom = Geom(vdata)
+    geom.add_primitive(prim)
+    node = GeomNode("swell_points")
+    node.add_geom(geom)
+    node.set_bounds(OmniBoundingVolume())
+    node.set_final(True)
+    import world_builder.ocean
+
+    shaders = Path(world_builder.ocean.__file__).parent / "shaders"
+    swell_glsl = (shaders / "swell.glsl").read_text()
+    vertex = f"""#version 330
+in vec4 p3d_Vertex;
+uniform float uMaxFreq;
+flat out float vField;
+{swell_glsl}
+void main() {{
+    vec3 g;
+    vField = swellField(p3d_Vertex.xyz, uMaxFreq, g);
+    int x = gl_VertexID % {size}, y = gl_VertexID / {size};
+    gl_Position = vec4((vec2(x, y) + 0.5) / {size}.0 * 2.0 - 1.0, 0.0, 1.0);
+}}
+"""
+    fragment = """#version 330
+flat in float vField;
+out vec4 fragColor;
+void main() {
+    float v = floor(clamp(vField, 0.0, 1.0) * 16777215.0 + 0.5);
+    float r = floor(v / 65536.0);
+    float g = floor((v - r * 65536.0) / 256.0);
+    fragColor = vec4(r, g, v - r * 65536.0 - g * 256.0, 255.0) / 255.0;
+}
+"""
+    root = NodePath("swell_check")
+    points_np = root.attach_new_node(node)
+    points_np.set_shader(Shader.make(Shader.SL_GLSL, vertex, fragment))
+
+    def mat(m):
+        out = np.eye(4)
+        out[:3, :3] = m.T  # Panda multiplies rows
+        return LMatrix4f(*out.ravel())
+
+    points_np.set_shader_inputs(
+        uMaxFreq=max_freq,
+        iSwellScale=0.004,
+        uSwellAmplitude=20.0,
+        uSwellRotA=mat(a),
+        uSwellRotB=mat(b),
+        uSwellByDepth=0,
+        uSwellShallow=5.0,
+        uSwellDeep=60.0,
+    )
+    texture = Texture("swell_check")
+    buffer = window.win.make_texture_buffer("swell_check", size, size, texture, True)
+    try:
+        camera = window.makeCamera(buffer)
+        camera.node().set_scene(root)
+        window.graphicsEngine.render_frame()
+        window.graphicsEngine.render_frame()
+        ram = np.frombuffer(texture.get_ram_image_as("RGB").get_data(), np.uint8)
+        rgb = ram.reshape(size, size, 3).astype(np.int64)
+        got = (rgb[..., 0] * 65536 + rgb[..., 1] * 256 + rgb[..., 2]) / 16777215.0
+        # float32 planet-frame points (6 cm apart at 600 km) move the noise a
+        # little: 3e-4 of the field is 6 mm of water at 20 m of swell.
+        np.testing.assert_allclose(got.ravel(), expected, atol=3e-4)
+        assert np.ptp(expected) > 0.1  # a field, not a constant
+    finally:
+        window.graphicsEngine.remove_window(buffer)
+        root.remove_node()
 
 
 # ── sky ────────────────────────────────────────────────────────────────────────
@@ -433,8 +529,7 @@ def test_terrain_settings(terrain):
     assert _input(root, "uDebugMode")[0] == 3
     terrain.set_blend_depth(0.3)
     assert terrain.blend_depth == 0.3
-    terrain.set_sea_surface(True)
-    assert _input(root, "uSeaSurface")[0] == 1
+    assert _input(root, "uSeaSurface")[0] == 0  # the moon has no sea
     from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 
     np.testing.assert_allclose(_input(root, "uShallowWater")[:3], SHALLOW_WATER_COLOR)
@@ -452,6 +547,69 @@ def test_terrain_settings(terrain):
     terrain.set_max_distance(None)
     terrain.set_sun((0.0, 0.0, 2.0), (1.0, 1.0, 1.0), (0.1, 0.1, 0.1))
     assert tuple(terrain._frame_inputs["uSunDir"][0]) == (0.0, 0.0, 1.0)
+
+
+def test_the_gpu_reads_each_chunks_values(window, terrain):
+    """The chunk table, as the GPU fetches it: each uploaded chunk's slot
+    holds its centre and swell band, uv origin, step and skirt depth, level
+    and face, in that channel order (Panda keeps RGBA as BGRA in RAM)."""
+    from panda3d.core import CardMaker, FrameBufferProperties, Shader
+
+    camera = np.array([0.0, 0.0, terrain.radius + 3000.0])
+    for _ in range(6):
+        terrain.update(camera)
+    assert terrain.nodes
+    slots = sorted(terrain._slots.values())
+    width = max(slots) + 1
+    props = FrameBufferProperties()
+    props.set_rgba_bits(32, 32, 32, 32)
+    props.set_float_color(True)
+    texture = Texture("chunk_table_check")
+    buffer = window.win.make_texture_buffer(
+        "chunk_table_check", width, 3, texture, True, props
+    )
+    maker = CardMaker("copy")
+    maker.set_frame(-1, 1, -1, 1)
+    card = NodePath(maker.generate())
+    card.set_shader(
+        Shader.make(
+            Shader.SL_GLSL,
+            vertex="#version 330\nin vec4 p3d_Vertex;\n"
+            "void main() { gl_Position = vec4(p3d_Vertex.x, p3d_Vertex.z, 0, 1); }",
+            fragment="#version 330\nuniform sampler2D uChunkTable;\n"
+            "out vec4 o;\nvoid main() { o = texelFetch(uChunkTable,"
+            " ivec2(gl_FragCoord.xy), 0); }",
+        )
+    )
+    card.set_shader_input("uChunkTable", terrain._chunk_texture)
+    card.set_depth_test(False)
+    try:
+        cam = window.makeCamera(buffer)
+        cam.node().set_scene(card)
+        window.graphicsEngine.render_frame()
+        window.graphicsEngine.render_frame()
+        ram = np.frombuffer(texture.get_ram_image_as("RGBA").get_data(), np.float32)
+        got = ram.reshape(3, width, 4)
+        for key, slot in terrain._slots.items():
+            chunk = terrain.store[key]
+            u0, v0 = terrain.grid.uv_origin(key)
+            expected = np.array(
+                [
+                    [*chunk.centre, 0.25 / terrain.grid.spacing(key[0])],
+                    [u0, v0, (1 << key[0]) * terrain.grid.uv_unit, chunk.skirt_depth],
+                    [key[0], key[1], 0.0, 0.0],
+                ],
+                dtype=np.float32,
+            )
+            np.testing.assert_array_equal(got[:, slot], expected)
+            # Every vertex of the chunk's node names the slot.
+            vdata = terrain.nodes[key].node().get_geom(0).get_vertex_data()
+            rows = np.frombuffer(memoryview(vdata.get_array(0)).cast("B"), np.uint8)
+            rows = rows.reshape(-1, 36).astype(np.int64)
+            assert np.all(rows[:, 34] + 256 * (rows[:, 35] & 127) == slot)
+            assert np.all(rows[-256:, 35] >= 128) and np.all(rows[:-256, 35] < 128)
+    finally:
+        window.graphicsEngine.remove_window(buffer)
 
 
 def test_terrain_frames(terrain):
@@ -609,7 +767,7 @@ def test_terrain_settings_apply_live(terrain):
 
 
 def test_terrain_caches_follow_their_settings(terrain):
-    """A lower RAM cap evicts on the next store, never a chunk the drawn
+    """A lower RAM cap evicts on the next update, never a chunk the drawn
     selection needs."""
     from dataclasses import replace
 

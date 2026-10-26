@@ -51,7 +51,6 @@ COST_FIELDS = {
         "rough_fresnel",
         "reflection_blur",
         "reflection_scale",
-        "swell_grid_subdivs",
         "foam_noise",
     ],
 }
@@ -188,7 +187,7 @@ def test_a_custom_world_round_trips_through_json():
     settings = (
         WorldSettings.preset("mid")
         .with_value("terrain", "min_level", 3)
-        .with_value("ocean", "seabed_cascades", "ultra")
+        .with_value("ocean", "wave_iterations", 20)
         .with_value("clouds", "shell_octaves", "4")
         .with_value("sky", "star_fraction", 0.25)
     )
@@ -312,7 +311,7 @@ def test_every_world_builder_object_declares_its_settings():
     from world_builder.atmosphere import Atmospheres
     from world_builder.clouds import CloudField, Clouds
     from world_builder.clouds.sphere import SphericalClouds
-    from world_builder.ocean import Ocean
+    from world_builder.ocean import Sea
     from world_builder.sky import Sky
     from world_builder.terrain.terrain import Terrain
 
@@ -324,6 +323,6 @@ def test_every_world_builder_object_declares_its_settings():
         (SphericalClouds, "clouds"),
         (CloudField, "clouds"),
         (Clouds, "clouds"),
-        (Ocean, "ocean"),
+        (Sea, "ocean"),
     ):
         assert world.settings_for(kind) == getattr(world, section)

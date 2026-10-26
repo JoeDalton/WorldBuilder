@@ -1,11 +1,11 @@
 """
-Add the native terrain collision library to the pure world_builder wheel and
-tag it for one platform. Used by scripts/build_manylinux_wheel.sh,
+Add the native libraries (noise, terrain collision) to the pure world_builder
+wheel and tag it for one platform. Used by scripts/build_manylinux_wheel.sh,
 scripts/build_macos_wheel.sh and CI; see docs/source/native_build.md.
 
-    python scripts/platform_wheel.py <pure wheel> <library> <platform tag> <out dir>
+    python scripts/platform_wheel.py <pure wheel> <platform tag> <out dir> <library>...
 
-The library doesn't use Python.h, so the wheel is tagged py3-none-<platform>.
+The libraries don't use Python.h, so the wheel is tagged py3-none-<platform>.
 Needs the ``wheel`` package.
 """
 
@@ -17,12 +17,13 @@ import tempfile
 from pathlib import Path
 
 
-def main(pure: str, library: str, platform: str, out: str) -> None:
+def main(pure: str, platform: str, out: str, *libraries: str) -> None:
     with tempfile.TemporaryDirectory() as work:
         wheel = [sys.executable, "-m", "wheel"]
         subprocess.run([*wheel, "unpack", pure, "-d", work], check=True)
         (unpacked,) = Path(work).glob("world_builder-*")
-        shutil.copy(library, unpacked / "world_builder" / "terrain" / "native")
+        for library in libraries:
+            shutil.copy(library, unpacked / "world_builder" / "terrain" / "native")
         (metadata,) = unpacked.glob("*.dist-info/WHEEL")
         text = metadata.read_text()
         text = text.replace("Root-Is-Purelib: true", "Root-Is-Purelib: false")

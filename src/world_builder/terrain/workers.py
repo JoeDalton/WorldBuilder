@@ -8,7 +8,9 @@ graphics state). The ``thread`` and ``inline`` backends are kept for debugging
 and tests. The pool defaults to one worker per physical core but one
 (:func:`default_workers`), and its processes run at a lower priority
 (:data:`WORKER_NICENESS`), so generation takes only the CPU time the renderer
-leaves.
+leaves. They start with the pool, so their start-up (imports, the native
+noise library) overlaps the caller's own, rather than waiting for the first
+request.
 
 The executor keeps only a short queue (``max_inflight``), so it can follow a
 moving camera: each :meth:`ChunkExecutor.request` cancels queued work that is
@@ -25,9 +27,14 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import sys
+import weakref
 from collections.abc import Callable
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
+from multiprocessing import shared_memory
+
+import numpy as np
 
 from world_builder.terrain.chunkgen import ChunkData, generate_chunk
 from world_builder.terrain.cubesphere import Key
@@ -42,6 +49,15 @@ MIN_WORKERS = 1
 #: Niceness added to worker processes: background generation yields the CPU
 #: to the render loop whenever both want it.
 WORKER_NICENESS = 10
+#: glibc's malloc settings for the worker processes (Linux). By default it maps
+#: and unmaps numpy's ~128 KB temporaries for every operation, so each one
+#: page-faults; kept, a numpy chunk took ~24 ms instead of ~40 (see
+#: docs/source/performance.md, §2). Set in the environment before the workers
+#: spawn (they read it at start), unless already set.
+WORKER_MALLOC_ENV = {
+    "MALLOC_MMAP_THRESHOLD_": "4194304",
+    "MALLOC_TRIM_THRESHOLD_": "67108864",
+}
 
 
 def usable_cpus() -> int:
@@ -137,12 +153,19 @@ class ChunkExecutor:
         self.max_inflight = max(1, max_inflight or 2 * self.workers)
         self.inline_budget = inline_budget
         if backend == "process":
+            if sys.platform.startswith("linux"):
+                for name, value in WORKER_MALLOC_ENV.items():
+                    os.environ.setdefault(name, value)
             self._pool = ProcessPoolExecutor(
                 max_workers=self.workers,
                 mp_context=multiprocessing.get_context("spawn"),
                 initializer=_lower_priority,
                 initargs=(niceness,),
             )
+            # Processes start on demand, one per submission: start them all
+            # now. Not counted as in flight.
+            for _ in range(self.workers):
+                self._pool.submit(_warm_up)
         elif backend == "thread":
             self._pool = ThreadPoolExecutor(max_workers=self.workers)
         elif backend == "inline":
@@ -243,6 +266,23 @@ class ChunkExecutor:
             self._fill()
         return done
 
+    def submit_once(self, fn: Callable, *args) -> Future:
+        """Run ``fn(*args)`` once in the pool, outside the channels (one-off
+        work such as the clouds' set-up; not counted in flight). The inline
+        backend runs it now.
+
+        :param fn: a top-level (picklable) function
+        :returns: its future
+        """
+        if self._pool is None:
+            future: Future = Future()
+            try:
+                future.set_result(fn(*args))
+            except BaseException as error:  # delivered by result(), as a pool's
+                future.set_exception(error)
+            return future
+        return self._pool.submit(fn, *args)
+
     def shutdown(self) -> None:
         """Stop the workers, dropping queued work."""
         if self._pool is not None:
@@ -281,6 +321,13 @@ def _unsent(ch: _Channel):
     return (key for key in ch.wanted if key not in ch.pending)
 
 
+def _warm_up() -> None:
+    """Worker-process start-up task: load what every chunk needs."""
+    from world_builder.terrain import noise
+
+    noise.native_noise()
+
+
 def _lower_priority(niceness: int) -> None:
     """Worker-process initializer: run below the renderer's priority."""
     if niceness and hasattr(os, "nice"):
@@ -288,3 +335,69 @@ def _lower_priority(niceness: int) -> None:
             os.nice(niceness)
         except OSError:  # not permitted here: run at normal priority
             pass
+
+
+class SharedArray:
+    """A read-only array the worker processes see without copying it into
+    every task: shared memory, owned by the process that made it.
+
+    Pass :attr:`handle` in a task's arguments; the worker reads the array with
+    :func:`shared_array`. The memory is freed by :meth:`release`, or when the
+    owner is collected or exits.
+    """
+
+    def __init__(self, array: np.ndarray):
+        array = np.ascontiguousarray(array)
+        memory = shared_memory.SharedMemory(create=True, size=max(array.nbytes, 1))
+        view = np.ndarray(array.shape, dtype=array.dtype, buffer=memory.buf)
+        view[...] = array
+        view.flags.writeable = False
+        #: (name, shape, dtype): picklable, what a worker needs to attach
+        self.handle = (memory.name, array.shape, array.dtype.str)
+        self.array = view
+        _OWNED[memory.name] = view
+        self._release = weakref.finalize(self, _free, memory, memory.name)
+
+    def release(self) -> None:
+        """Free the memory (workers must not read it any more)."""
+        self.array = None
+        self._release()
+
+
+#: Arrays this process shares, by name: read in place, not attached again.
+_OWNED: dict[str, np.ndarray] = {}
+
+
+def _free(memory: shared_memory.SharedMemory, name: str) -> None:
+    _OWNED.pop(name, None)
+    try:
+        memory.close()
+    except BufferError:  # a view is still in use: the mapping goes with it
+        pass
+    try:
+        memory.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def shared_array(handle: tuple) -> np.ndarray:
+    """:returns: the array a :class:`SharedArray` shares (read-only), from its
+    :attr:`~SharedArray.handle`; attached once per process"""
+    name, shape, dtype = handle
+    if name in _OWNED:
+        return _OWNED[name]
+    if name not in _ATTACHED:
+        # Spawned workers share their parent's resource tracker, so attaching
+        # registers nothing new (track=False says so from Python 3.13).
+        if sys.version_info >= (3, 13):
+            memory = shared_memory.SharedMemory(name=name, track=False)
+        else:
+            memory = shared_memory.SharedMemory(name=name)
+        view = np.ndarray(tuple(shape), dtype=np.dtype(dtype), buffer=memory.buf)
+        view.flags.writeable = False
+        _ATTACHED[name] = (memory, view)
+    return _ATTACHED[name][1]
+
+
+#: Arrays attached in this process: (memory, view) by name, kept open.
+_ATTACHED: dict[str, tuple] = {}

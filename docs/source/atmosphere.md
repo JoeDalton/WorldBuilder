@@ -78,9 +78,8 @@ when a ray crosses two atmospheres.
   the air in front.
 - **Other bodies:** a moon is a terrain like any other, seen through the
   planet's air: dimmed and tinted by day, untouched from space.
-- **The ocean** (opt-in, `Atmospheres.bind(ocean.ocean_node)` and
-  `Ocean.set_atmosphere_frame`): its distance haze is replaced by the
-  atmospheres. Unbound, as in SpaceFlight, it is unchanged.
+- **The sea:** drawn by the terrain, so seen through the air like the
+  ground, in both its looks.
 - **Planet clouds:** per vertex for billboards (the air barely changes across
   one, and per pixel it would be paid for every layer of overdraw), per pixel
   for the deck.
@@ -106,11 +105,11 @@ The demo uses them each frame for:
   world's own shaders (models, ships). The white test ball ahead of the start
   pose shows them; models skip the world's exposure and tonemap, see
   [Lighting on objects](object_lighting.md);
-- **the swell ocean**: `Ocean.set_light` scales its water colour (tuned in
-  daylight) by the light on the sea under the camera over the daylight's, so
-  the sea is dark by night;
+- **the sea's near look**: `Sea.set_light` scales its water colour (tuned
+  in daylight) by the light on the sea under the camera over the daylight's,
+  so the sea is dark by night;
 - **an ambient scale** (F9 / F10) applied to the terrain's sky light, the
-  clouds' (`SphericalClouds.set_sky_light`), the ocean's and Panda3D's.
+  clouds' (`SphericalClouds.set_sky_light`), the sea's and Panda3D's.
 
 ### Left out: true multiple scattering (the Bruneton option)
 
@@ -289,6 +288,20 @@ a tile the particles are re-sorted, a few tiles per frame, the stalest first:
 new tiles, then those the camera has moved past most relative to their
 distance. A stale order composites a cloud's far side over its near side,
 which reads as shadows sliding over it.
+
+**At half resolution** (`CloudSettings.half_resolution`, off by default;
+`clouds.half_res.HalfResClouds`). The clouds draw into two offscreen layers
+half the view's size, one per split-depth range, each by a camera sharing
+that range's lens. Everything else draws into them as depth only (the
+terrain through a depth-only fragment stage; the sky is left out), so the
+ground and a game's models still hide the clouds. Each layer is laid over
+its own range's pass by a fullscreen card, premultiplied "over": the far
+layer in the far pass, so near ground covers it as it covers anything far.
+It saves 1-1.7 ms of GPU time low over the planet and costs ~1.2 ms of
+main-thread cull and draw (see [performance](performance.md) §19): a trade
+for GPU-limited setups. `World.use_split_depth(depth)` gives the world the
+split cameras it needs for it; cloud edges against the ground's silhouettes
+are resolved at half resolution.
 
 ### Far: the deck
 
