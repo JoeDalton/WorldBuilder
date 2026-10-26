@@ -59,13 +59,13 @@ void main() {
     // tonemap flattens whatever is brighter than white toward white: the
     // disc (thousands of times brighter) saturated to white whatever its
     // light, and the glow around it paled. Scaled by their brightest channel
-    // instead (keptHue, as the clouds' light), they show the colour of the
+    // instead (display.glsl's keptHue), they show the colour of the
     // sunlight reaching the camera (the air's transmittance along this very
     // ray): orange at sunset, as the light they cast. Faded in above white,
     // so the sky away from the sun is as before. The sea's reflection
     // follows (it mirrors these display colours).
     float peak = displayPeak(colour);
-    float keep = max(disc, smoothstep(0.4, 5.0, peak));
+    float keep = max(disc, smoothstep(KEEP_HUE_FROM, KEEP_HUE_TO, peak));
     if (keep > 0.0) {
         display = mix(display, keptHue(colour, peak), keep);
     }

@@ -54,12 +54,6 @@ out vec4 fragColor;
 // sunlight it would take (cloudTwilight).
 const float TWILIGHT_GLOW = 0.25;
 
-// Planet mode: where the display transform starts keeping the light's hue,
-// and where it keeps it fully (peak channel, after exposure; display.glsl's
-// displayColour). The sky's own range.
-const float KEEP_HUE_FROM = 0.4;
-const float KEEP_HUE_TO = 5.0;
-
 float hgPhase(float x, float g) {
     float g2 = g * g;
     return 0.25 * ((1.0 - g2) * pow(1.0 + g2 - 2.0 * g * x, -1.5));
@@ -244,12 +238,12 @@ void main() {
     colour *= exposure;
     if (uSpherical == 1) {
         // The sky's display transform, so cloud hazed by the air meets the
-        // sky behind it. Per channel below white: a long low path through the
-        // air reddens what it lets through, and under the knee below (no
-        // display gamma, hue kept at every level) the lit tops' excess over
-        // the haze showed orange at noon. Hue kept above white: per channel
-        // only, a dusk sun's orange light maps to white.
-        colour = displayColour(colour, KEEP_HUE_FROM, KEEP_HUE_TO);
+        // sky behind it. Per channel below white, which softens the warm
+        // cast a long low path of air leaves on lit tops (kept, it turned
+        // the horizon's clouds orange at noon); hue kept above white, or a
+        // dusk sun's orange light maps to white. See docs: atmosphere.md,
+        // clouds at the horizon.
+        colour = displayColour(colour);
     } else {
         // The flat field has no air and draws over the caller's own colours
         // (hazeColor, the background), set for this soft knee: on the PEAK

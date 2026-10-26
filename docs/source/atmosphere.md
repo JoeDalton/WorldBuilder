@@ -82,7 +82,9 @@ when a ray crosses two atmospheres.
   ground, in both its looks.
 - **Planet clouds:** per vertex for billboards (the air barely changes across
   one, and per pixel it would be paid for every layer of overdraw), per pixel
-  for the deck.
+  for the deck. They then share the sky's tonemap (`display.glsl`), so a
+  cloud deep in haze ends up the colour of the sky behind it
+  ([clouds at the horizon](#clouds-at-the-horizon)).
 
 `Atmospheres` holds every atmosphere's uniforms in arrays shared by all bound
 nodes and rewrites them in place once a frame, in float64 where it matters

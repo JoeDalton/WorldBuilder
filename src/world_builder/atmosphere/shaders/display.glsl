@@ -32,12 +32,17 @@ vec3 keptHue(vec3 colour, float peak) {
     return pow(colour / peak, vec3(1.0 / 2.2)) * aces_tonemap(vec3(peak)).g;
 }
 
-// The tonemap per channel up to keepFrom (peak), fading to the kept hue by
-// keepTo: below white, a light tint desaturates as it does on everything
+// Where displayColour starts keeping the hue (brightest channel, after
+// exposure), and where it keeps it fully.
+const float KEEP_HUE_FROM = 0.4;
+const float KEEP_HUE_TO = 5.0;
+
+// The tonemap per channel up to KEEP_HUE_FROM, fading to the kept hue by
+// KEEP_HUE_TO: below white, a light tint desaturates as it does on everything
 // else; far above, a coloured light keeps its colour.
-vec3 displayColour(vec3 colour, float keepFrom, float keepTo) {
+vec3 displayColour(vec3 colour) {
     float peak = displayPeak(colour);
-    float keep = smoothstep(keepFrom, keepTo, peak);
+    float keep = smoothstep(KEEP_HUE_FROM, KEEP_HUE_TO, peak);
     vec3 display = aces_tonemap(colour);
     return keep > 0.0 ? mix(display, keptHue(colour, peak), keep) : display;
 }

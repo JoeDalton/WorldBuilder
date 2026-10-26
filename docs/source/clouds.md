@@ -215,7 +215,8 @@ up to orbit. [`weather.py`](../../src/world_builder/clouds/weather.py) builds
 the weather they follow: a cube map of target coverage (`WeatherSpec`), turned
 into the fbm shift that gives it exactly (`shift_table`). The same shaders draw
 it, with `uSpherical` set (`field.flat_mode_inputs` switches that mode off for
-the flat field). The design is described in
+the flat field); in that mode their colour goes through the sky's tonemap
+instead of the flat field's knee (Lighting, above). The design is described in
 [Atmosphere, sky and planet clouds](atmosphere.md#planet-clouds).
 
 ## Testing and the demo
