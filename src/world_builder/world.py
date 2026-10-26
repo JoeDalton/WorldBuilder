@@ -140,7 +140,7 @@ class CloudLook:
     sun_brightness: float = 2.8
     sky_strength: float = 0.35
     sky_occlusion: float = 0.55
-    exposure: float = 1.15
+    exposure: float = 0.9
     near_fade_radii: float = 2.5
 
 

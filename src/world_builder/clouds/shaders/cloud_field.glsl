@@ -251,13 +251,13 @@ float grazingLight(vec3 p, vec3 dir) {
 
 // The sunlight on a cloud at p (planet frame) through the planet's air
 // (atmosphere atmo), as a tint of the sun's colour: relative to the noon
-// sun, so a cloud lit from high up stays white, and only half the reddening
-// (a square root): what multiple scattering in and around the cloud,
-// missing here, gives back. A sunset still turns it orange.
+// sun, so a cloud lit from high up stays white, and with the air's whole
+// reddening, so a sunset turns it orange through the display gamma (half of
+// it, a square root, left sunset clouds pale gold).
 vec3 cloudSunTint(int atmo, vec3 p, vec3 sunDir) {
     vec3 through = atmoSunlight(atmo, p, sunDir)
                  / max(atmoSunlight(atmo, p, normalize(p)), vec3(1e-3));
-    return sqrt(min(through, vec3(1.0))) * grazingLight(p, sunDir);
+    return min(through, vec3(1.0)) * grazingLight(p, sunDir);
 }
 
 // Twilight on a cloud: once it is in the planet's shadow, the air above it is

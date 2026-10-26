@@ -6,6 +6,7 @@
 // flat distance haze. uDeck == 1 draws the far-field deck surface instead of a
 // billboard. The flat field leaves all of it off.
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
+#pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "cloud_field.glsl"
 // Cloud colour pass. Each billboard is a SAMPLE OF A VOLUME, not a sprite: its
 // outline and colour are functions of world position alone, while the sprite only
@@ -234,12 +235,24 @@ void main() {
         colour = colour * transmittance + inscatter;
     }
 
-    // Soft knee on the PEAK channel, scaling the colour, which preserves hue (a
-    // per-channel knee maps a bright orange sun to white). Colours are never
-    // negative, so peak / sqrt(peak² + 1) / peak needs no zero guard.
     colour *= exposure;
-    float peak = max(max(colour.r, colour.g), colour.b);
-    colour *= inversesqrt(peak * peak + 1.0);
+    if (uSpherical == 1) {
+        // The sky's display transform, so cloud hazed by the air meets the
+        // sky behind it. Per channel below white, which softens the warm
+        // cast a long low path of air leaves on lit tops (kept, it turned
+        // the horizon's clouds orange at noon); hue kept above white, or a
+        // dusk sun's orange light maps to white. See docs: atmosphere.md,
+        // clouds at the horizon.
+        colour = displayColour(colour);
+    } else {
+        // The flat field has no air and draws over the caller's own colours
+        // (hazeColor, the background), set for this soft knee: on the PEAK
+        // channel, scaling the colour, which preserves hue (a per-channel
+        // knee maps a bright orange sun to white). Colours are never
+        // negative, so peak / sqrt(peak² + 1) / peak needs no zero guard.
+        float peak = max(max(colour.r, colour.g), colour.b);
+        colour *= inversesqrt(peak * peak + 1.0);
+    }
 
     // Haze acts on the displayed colour: it sits between the eye and the cloud.
     colour = mix(colour, hazeColor, haze);

@@ -60,7 +60,9 @@ parts.
     Without one, the terrain still draws its sea, as flat water only.
   - `ambient` and `exposure`: the terrain's sky light and tonemap.
 - **`CloudLook`**: `SphericalClouds`' arguments: altitude, cloud type,
-  weather, seeds, shading.
+  weather, seeds, shading. Its `exposure` (0.9) feeds the sky's tonemap, as
+  the sky's and the terrain's do; keep them equal, or hazed clouds stop
+  matching the sky behind them.
 - **`OceanLook`**: `Sea`'s arguments: water colour, wind, swell, foam,
   `near_band` (the altitudes over which the near look fades into the far
   one) and `anchor_range` (how far the waves stay anchored before

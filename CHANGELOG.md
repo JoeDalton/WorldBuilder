@@ -133,6 +133,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `swell_rotations` now uses) and is skipped while the clock stands, the
   nadir frame is placed in plain floats, the wave phases are written in one
   go, and the reflection's fov and the water's light only on change. (#20)
+- Planet clouds share the sky's tonemap (`displayColour` in the new
+  `atmosphere/shaders/display.glsl`, which now holds `aces_tonemap` too;
+  `sky_common.glsl` includes it). `CloudLook.exposure` and
+  `SphericalClouds(exposure=)` default to 0.9, the sky's (was 1.15), and the
+  clouds' sunlight takes the air's whole reddening (was half), so sunsets
+  stay orange. From orbit, the clouds along the terminator are a paler
+  orange, and twilight-lit cloud shows faintly inside it. The flat
+  `CloudField` keeps its knee and its 1.15.
 
 ### Removed
 
@@ -147,6 +155,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Planet clouds toward the horizon, and toward the limb from above, looked
+  orange even with the sun overhead. The air in front of them leaves lit
+  tops a little warm, and the clouds' own knee (the hue kept at every level,
+  no display gamma) turned that into orange. Seen from inside the deck, the
+  far clouds' yellow and blue speckle is gone too
+  (docs/source/atmosphere.md, clouds at the horizon).
 - Chunks uploaded in the frame after an LOD pass waited for the camera to
   move or for the 15-frame fallback before being shown. (#20)
 - `flight_bench.py`'s descent stopped only over dry land; over a calm sea it
