@@ -78,6 +78,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every 4 km of low flight is gone (p95 18.7 → 17.4 ms, the mean unchanged).
   `flight_bench.py` takes `--trace` (what the slowest frames spend) and
   `--no-hud`. (#20)
+- The planet clouds' back-to-front re-sort runs in the native library
+  (`billboards.c`, a radix sort writing the triangle indices): 1.45 → 0.75 ms
+  a frame in low flight, p95 17.7 → 16.5 ms, the mean 13.3 → 12.5 ms. The
+  numpy fallback sorts stably over the previous order too, so both give the
+  same order. (#20)
 
 ### Removed
 

@@ -743,6 +743,28 @@ planet's centre), and a snap moves the cells only (see
 `Terrain._rebase` left the slow frames (+3.2 ms → +0.02). The clouds'
 re-basing, which snapped in the same frames, went with it (+0.36 → +0.06).
 
+### The clouds' re-sort in C
+
+The planet clouds re-sort the stalest four shown tiles back to front every
+frame in flight. Scoring the ~86 shown tiles took 0.15 ms; the sorting 1.3 ms
+(numpy's argsort and index arithmetic, ~130 µs per thousand billboards), up
+to 7.9 ms for big tiles. `billboards.c` computes the distances, radix-sorts
+them and writes the triangle indices in one pass. It sorts stably over the
+tile's previous order, as the numpy fallback now does, so the two give the
+same buffer (tested). The tiles re-sorted and when are unchanged.
+
+| Low flight, two runs each | Before | Native re-sort |
+|---|---|---|
+| Frame mean | 13.2-13.4 ms | 12.4-12.6 ms |
+| Frame p95 | 17.6-17.8 ms | 16.3-16.6 ms |
+| Frame max | 30-33 ms | 28-29 ms |
+| Update mean | 6.4-6.5 ms | 5.7 ms |
+| `_resort` (median frame) | 1.45 ms | 0.75 ms |
+
+What remains is the four tiles' sorts at 54 µs per thousand billboards in
+flight (17 in isolation: the particles are cold in the cache by then), and
+the scoring.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

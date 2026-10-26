@@ -317,7 +317,7 @@ def _ridged_plan(
 # ── native library ────────────────────────────────────────────────────────────
 
 #: Interface version of the native library (``WB_NOISE_ABI`` in noise.c).
-_NATIVE_ABI = 5
+_NATIVE_ABI = 6
 _SUFFIX = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
 #: Where the native noise library is built and shipped. Found by path: the
 #: ``native`` package's own imports lead back here.
@@ -381,7 +381,10 @@ class _NativeNoise:
             ptr,
             ptr,
         ]
+        # The planet clouds' back-to-front order (billboards.c).
+        lib.wb_billboard_order.argtypes = [ptr, i64, i64, ptr, ptr, ptr]
         for function in (
+            lib.wb_billboard_order,
             lib.wb_face_grid,
             lib.wb_chunk_surface,
             lib.wb_chunk_pack,
@@ -481,6 +484,34 @@ class _NativeNoise:
             out.ctypes.data,
         )
         return out.reshape(shape)
+
+    def billboard_order(
+        self,
+        particles: np.ndarray,
+        offset: np.ndarray,
+        order: np.ndarray,
+        index: np.ndarray,
+    ) -> None:
+        """A cloud tile's billboards farthest first (``wb_billboard_order``).
+
+        :param particles: (n, k) float32 rows, xyz relative to the tile's
+            centre first
+        :param offset: (3,) the tile's centre minus the camera
+        :param order: (n,) uint32 the previous order, updated in place
+            (stable: equal distances keep it)
+        :param index: (6 n,) uint32, filled with the triangle indices
+        """
+        assert particles.dtype == np.float32 and particles.flags.c_contiguous
+        assert order.dtype == np.uint32 and index.dtype == np.uint32
+        offset = np.ascontiguousarray(offset, dtype=np.float64)
+        self._lib.wb_billboard_order(
+            particles.ctypes.data,
+            particles.shape[1],
+            len(particles),
+            offset.ctypes.data,
+            order.ctypes.data,
+            index.ctypes.data,
+        )
 
     def face_grid(self, face: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
         """``cubesphere.face_dirs(face, *np.meshgrid(a, b))``: (len(b) *

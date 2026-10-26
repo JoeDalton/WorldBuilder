@@ -117,6 +117,7 @@ from world_builder.clouds.weather import (
 from world_builder.depth import REFLECTION_CAMERA_MASK
 from world_builder.quality import REBUILD
 from world_builder.terrain.cubesphere import QUADS, CubeGrid, face_dirs, grid_for
+from world_builder.terrain.noise import native_library
 from world_builder.terrain.planet import PlanetSpec
 from world_builder.terrain.quadtree import LodSelector
 from world_builder.terrain.workers import SharedArray, shared_array
@@ -515,6 +516,29 @@ class _Tile:
     sorted_from: tuple[float, float, float] | None = None
     #: the tile's centre (planet frame), as floats for the per-frame scoring
     centre: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    #: its billboards farthest first at the last re-sort (uint32); the next
+    #: one starts from it, so equal distances keep their order
+    order: np.ndarray | None = None
+
+
+def _sort_billboards(tile: _Tile, offset: np.ndarray) -> None:
+    """Write a tile's triangles farthest billboard first, from the camera
+    at *offset* (the tile's centre minus the camera): natively when the
+    library is built (a radix sort, ~10x faster), else in numpy. Both sort
+    stably over the previous order."""
+    p = tile.data.particles
+    if tile.order is None:
+        tile.order = np.arange(len(p), dtype=np.uint32)  # as _tile_node built it
+    native = native_library()
+    if native is not None:
+        index = np.empty(6 * len(p), dtype=np.uint32)
+        native.billboard_order(p, offset, tile.order, index)
+    else:
+        xyz = p[tile.order, 0:3].astype(np.float64) + offset
+        distance = np.einsum("ij,ij->i", xyz, xyz).astype(np.float32)
+        tile.order = tile.order[np.argsort(-distance, kind="stable")]
+        index = (tile.order[:, None] * 4 + _QUAD_TRIS).ravel()
+    memoryview(tile.tris.modify_vertices()).cast("B")[:] = index.tobytes()
 
 
 class SphericalClouds:
@@ -1127,9 +1151,4 @@ class SphericalClouds:
                 break
             tile = self._tiles[key]
             tile.sorted_from = here
-            p = tile.data.particles
-            offset = tile.data.centre - cam
-            distance = np.einsum("ij,ij->i", p[:, 0:3] + offset, p[:, 0:3] + offset)
-            order = np.argsort(-distance).astype(np.uint32)
-            index = (order[:, None] * 4 + _QUAD_TRIS).ravel()
-            memoryview(tile.tris.modify_vertices()).cast("B")[:] = index.tobytes()
+            _sort_billboards(tile, tile.data.centre - cam)

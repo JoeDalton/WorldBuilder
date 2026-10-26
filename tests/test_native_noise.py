@@ -194,3 +194,41 @@ def test_the_swell_matches_numpy(native, monkeypatch):
     # About sea level, within the amplitude.
     assert abs(float(np.mean(numpy_heights))) < 1.0
     assert np.all(np.abs(numpy_heights) <= 0.75 * 20.0)
+
+
+# ── the planet clouds' back-to-front order ─────────────────────────────────────
+
+
+def test_billboard_order_matches_numpy(native, monkeypatch):
+    """billboards.c sorts a tile as the numpy fallback does (the same keys,
+    both stable over the previous order): farthest first, the same index
+    buffer, from one camera and then another."""
+    from world_builder.clouds import sphere
+
+    rng = np.random.default_rng(5)
+    particles = np.zeros((5000, 9), dtype=np.float32)
+    particles[:, 0:3] = rng.uniform(-3000.0, 3000.0, (5000, 3))
+    particles[:, 3] = 100.0
+    data = sphere.CloudTile(
+        (8, 2, 3, 4), 0, np.array([6.0e5, 1.0e4, 2.0e4]), particles, 0.0
+    )
+
+    def sorted_tile(offsets):
+        node, tris = sphere._tile_node(data)
+        tile = sphere._Tile(node, tris, data)
+        for offset in offsets:
+            sphere._sort_billboards(tile, np.asarray(offset))
+        index = np.frombuffer(memoryview(tris.get_vertices()).cast("B"), np.uint32)
+        return tile.order.copy(), index.copy()
+
+    offsets = [(4000.0, -2500.0, 800.0), (3900.0, -2400.0, 820.0)]
+    order, index = sorted_tile(offsets)
+    with monkeypatch.context() as m:
+        m.setattr(sphere, "native_library", lambda: None)
+        expected_order, expected_index = sorted_tile(offsets)
+    np.testing.assert_array_equal(order, expected_order)
+    np.testing.assert_array_equal(index, expected_index)
+    xyz = particles[order, 0:3].astype(np.float64) + offsets[-1]
+    distance = np.einsum("ij,ij->i", xyz, xyz)
+    assert np.all(np.diff(distance) <= 1e-3 * distance[1:])  # farthest first
+    np.testing.assert_array_equal(index[:6], order[0] * 4 + sphere._QUAD_TRIS)
