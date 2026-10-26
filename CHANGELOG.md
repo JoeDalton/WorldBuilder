@@ -68,6 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of 2.4 at the start pose, and in low flight 1.5 ms off the frame
   and a fifth off the refinement lag. Kept chunks are marked as recently used
   only when they are let go, not on every pass. (#20)
+- A chunk's geometry is computed in the native library too (`chunk.c`: face
+  directions, normals and slope, the vertex buffer and its box): a chunk
+  takes 6.7 ms instead of 8 (median), and the refinement lag in low flight
+  drops by another fifth. The planet's rules (curves, biomes, stamps, paints)
+  stay in Python only. (#20)
 
 ### Removed
 

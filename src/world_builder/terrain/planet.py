@@ -42,7 +42,7 @@ import numpy as np
 
 from world_builder.terrain.chart import dirs_from_latlon, latlon
 from world_builder.terrain.cubesphere import face_dirs, grid_for
-from world_builder.terrain.noise import fbm, ridged, smoothstep, warp
+from world_builder.terrain.noise import fbm, native_library, ridged, smoothstep, warp
 
 #: Default terrain planet radius, metres (a small, Kerbin-like world).
 TERRAIN_RADIUS_M = 600e3
@@ -497,8 +497,7 @@ class Planet:
         :returns: the sampled fields
         """
         grid = self.grid
-        ga, gb = np.meshgrid(grid.param(ka), grid.param(kb))
-        dirs = face_dirs(face, ga, gb)
+        dirs = _face_grid(face, grid.param(ka), grid.param(kb))
         if step >= self.low_band_step:
             low = self.low_band(dirs)
         else:
@@ -564,8 +563,7 @@ class Planet:
 
         :returns: (len(lb), len(la), 7)
         """
-        ga, gb = np.meshgrid(self.grid.param(la), self.grid.param(lb))
-        dirs = face_dirs(face, ga, gb)
+        dirs = _face_grid(face, self.grid.param(la), self.grid.param(lb))
         return self.low_band(dirs).reshape(len(lb), len(la), -1)
 
 
@@ -622,6 +620,16 @@ def _pchip_end(h0: float, h1: float, m0: float, m1: float) -> float:
     if np.sign(m0) != np.sign(m1) and abs(d) > 3.0 * abs(m0):
         return 3.0 * m0
     return float(d)
+
+
+def _face_grid(face: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """:returns: ``face_dirs`` over the grid a x b, rows along b: in the
+    native library when it is built (one tangent per row and column)"""
+    native = native_library()
+    if native is not None:
+        return native.face_grid(face, a, b)
+    ga, gb = np.meshgrid(a, b)
+    return face_dirs(face, ga, gb)
 
 
 def _catmull_rom_weights(

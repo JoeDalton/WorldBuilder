@@ -230,8 +230,9 @@ static void key_box(const Lod *lod, const Node *node, KeyBox *box) {
   step_angle = angle / steps;
   pad = step_angle * step_angle / 8.0 + 1e-9;
   {
-    const double *corners[4] = {boundary[0], boundary[steps], boundary[2 * steps + 1],
-                                boundary[2 * steps + 2]};
+    const double *corners[4];
+    corners[0] = boundary[0], corners[1] = boundary[steps];
+    corners[2] = boundary[2 * steps + 1], corners[3] = boundary[2 * steps + 2];
     cos_r = INFINITY;
     for (k = 0; k < 4; k++) {
       const double *c = corners[k];

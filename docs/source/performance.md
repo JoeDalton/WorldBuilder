@@ -684,6 +684,27 @@ been rebooted and its GPU held a low power state (P5), which slows the GPU
 side of every frame; these numbers are CPU-side and compared within the
 same session.
 
+## 18. A chunk's geometry in C
+
+A chunk took ~8 ms in a worker: 4.3 ms of native noise and ~3.5 ms of numpy
+in ~100 small steps. Only the steps that shape the grid went native
+(`chunk.c`); the planet's rules (curves and masks around the noise, biome
+weights, stamps, paints) stay in Python, so they are written once. Timed per
+step, per chunk:
+
+| Step | numpy | Native |
+|---|---|---|
+| Face directions (and the meshgrid) | 0.41 ms | one tangent per row and column |
+| Normals, and the slope at the biome scale | 0.57 ms | one pass |
+| Vertex packing, the sea box, the bytes | 0.60 ms | one pass |
+
+Each follows its numpy expression's order of operations: on this machine the
+chunks come out identical, a coastal one included (its sea-lifted box and
+skirts). A chunk: 8.0 → 6.7 ms median (70 chunks, levels 0-6). In low flight
+(after §17): 253 chunks a second instead of ~225, the backlog 94 instead of
+~130, the refinement lag 214 ms instead of ~270 (median), 980 ms instead of
+1,400-1,800 (p95).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

@@ -84,19 +84,44 @@ def test_no_points(native):
     assert noise.ridged(empty, 900.0, 4, 1).shape == (0,)
 
 
+def _coast(spec, level=8):
+    """A chunk of *level* with both sea and land in it: of those whose centre
+    is nearest sea level."""
+    planet = planet_for(spec)
+    side = planet.grid.side(level)
+    keys = [(level, 2, i, j) for i in range(side) for j in range(side)]
+    centres = np.array([planet.grid.centre_dir(key) for key in keys])
+    heights = planet.sample_dirs(centres)[0]
+    for k in np.argsort(np.abs(heights))[:20]:
+        chunk = generate_chunk(spec, keys[k])
+        if chunk.h_min < 0.0 < chunk.h_max:
+            return keys[k]
+    raise AssertionError("no coast found")
+
+
 def test_chunks_match_numpy(native, monkeypatch):
+    """The native noise and the native geometry (chunk.c: face grid,
+    normals, slope, packing, the sea box) give numpy's chunk."""
     spec = replace(PRESETS["earthlike"], seed=19).resolved()
     grid = planet_for(spec).grid
-    for level in (0, 5, 10):
-        middle = grid.side(level) // 2
-        key = (level, 2, middle, middle)
+    keys = [
+        (level, 2, grid.side(level) // 2, grid.side(level) // 2) for level in (0, 5, 10)
+    ]
+    keys.append(_coast(spec))
+    for key in keys:
         expected = _numpy(monkeypatch, generate_chunk, spec, key)
         chunk = generate_chunk(spec, key)
         np.testing.assert_allclose(chunk.elevation, expected.elevation, atol=1e-3)
-        np.testing.assert_allclose(
-            chunk.vertices()["vertex"], expected.vertices()["vertex"], atol=1e-3
-        )
+        got, want = chunk.vertices(), expected.vertices()
+        np.testing.assert_allclose(got["vertex"], want["vertex"], atol=1e-3)
+        np.testing.assert_allclose(got["normal"], want["normal"], atol=1e-6)
+        np.testing.assert_allclose(got["height"], want["height"], atol=1e-3)
+        np.testing.assert_array_equal(got["biome_a"], want["biome_a"])
+        np.testing.assert_array_equal(got["biome_b"], want["biome_b"])
         np.testing.assert_array_equal(chunk.weights, expected.weights)
+        np.testing.assert_allclose(chunk.aabb_min, expected.aabb_min, atol=1e-3)
+        np.testing.assert_allclose(chunk.aabb_max, expected.aabb_max, atol=1e-3)
+        assert chunk.skirt_depth == pytest.approx(expected.skirt_depth, abs=1e-3)
 
 
 def test_numpy_can_be_forced(monkeypatch):

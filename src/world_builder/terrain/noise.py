@@ -317,7 +317,7 @@ def _ridged_plan(
 # ── native library ────────────────────────────────────────────────────────────
 
 #: Interface version of the native library (``WB_NOISE_ABI`` in noise.c).
-_NATIVE_ABI = 4
+_NATIVE_ABI = 5
 _SUFFIX = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
 #: Where the native noise library is built and shipped. Found by path: the
 #: ``native`` package's own imports lead back here.
@@ -365,7 +365,26 @@ class _NativeNoise:
         lib.wb_lod_select.argtypes = [ptr, ptr, ptr]
         lib.wb_lod_result.argtypes = [ptr, i32, ctypes.POINTER(i64)]
         lib.wb_lod_result.restype = ctypes.POINTER(i32)
+        # A chunk's geometry (chunk.c; world_builder.terrain.chunkgen).
+        lib.wb_face_grid.argtypes = [i32, ptr, i64, ptr, i64, ptr]
+        lib.wb_chunk_surface.argtypes = [ptr, ptr, i64, i32, i32, f64, ptr, ptr]
+        lib.wb_chunk_pack.argtypes = [
+            ptr,
+            ptr,
+            ptr,
+            ptr,
+            ptr,
+            f64,
+            f64,
+            i32,
+            ptr,
+            ptr,
+            ptr,
+        ]
         for function in (
+            lib.wb_face_grid,
+            lib.wb_chunk_surface,
+            lib.wb_chunk_pack,
             lib.wb_lod_free,
             lib.wb_lod_set_params,
             lib.wb_lod_reset,
@@ -462,6 +481,94 @@ class _NativeNoise:
             out.ctypes.data,
         )
         return out.reshape(shape)
+
+    def face_grid(self, face: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """``cubesphere.face_dirs(face, *np.meshgrid(a, b))``: (len(b) *
+        len(a), 3) unit vectors, rows along *b*"""
+        a = np.ascontiguousarray(a, dtype=np.float64)
+        b = np.ascontiguousarray(b, dtype=np.float64)
+        out = np.empty((len(b) * len(a), 3))
+        self._lib.wb_face_grid(
+            int(face), a.ctypes.data, len(a), b.ctypes.data, len(b), out.ctypes.data
+        )
+        return out
+
+    def chunk_surface(
+        self,
+        dirs: np.ndarray,
+        elevation: np.ndarray,
+        border: int,
+        step: int,
+        radius: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """A chunk's normals and slope (``wb_chunk_surface`` in chunk.c).
+
+        :param dirs: (n, n, 3) the sampled grid's directions
+        :param elevation: (n, n) its heights, metres
+        :returns: the inner grid's normals (VERTS^2, 3) and slope in degrees
+            (VERTS^2,), from the normals at +-*step* samples
+        """
+        dirs = np.ascontiguousarray(dirs, dtype=np.float64)
+        elevation = np.ascontiguousarray(elevation, dtype=np.float64)
+        count = (elevation.shape[0] - 2 * border) ** 2
+        normals = np.empty((count, 3))
+        slope = np.empty(count)
+        self._lib.wb_chunk_surface(
+            dirs.ctypes.data,
+            elevation.ctypes.data,
+            elevation.shape[0],
+            int(border),
+            int(step),
+            float(radius),
+            normals.ctypes.data,
+            slope.ctypes.data,
+        )
+        return normals, slope
+
+    def chunk_pack(
+        self,
+        out: np.ndarray,
+        dirs: np.ndarray,
+        elevation: np.ndarray,
+        normals: np.ndarray,
+        weights: np.ndarray,
+        centre: np.ndarray,
+        radius: float,
+        skirt_depth: float,
+        sea: bool,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Fill a chunk's vertex buffer (``wb_chunk_pack`` in chunk.c).
+
+        :param out: the buffer, ``chunkgen.VERTEX_DTYPE``, grid then skirt
+        :param dirs: (VERTS^2, 3) the inner grid's directions
+        :param elevation: (VERTS^2,) its heights
+        :param normals: (VERTS^2, 3)
+        :param weights: (VERTS^2, 6) uint8 biome weights
+        :param sea: the box holds the water the shader lifts the seabed to
+        :returns: the drawn vertices' box (min, max), centre-relative float32
+        """
+        assert out.dtype.itemsize == 36 and out.flags.c_contiguous
+        dirs = np.ascontiguousarray(dirs, dtype=np.float64)
+        elevation = np.ascontiguousarray(elevation, dtype=np.float64)
+        normals = np.ascontiguousarray(normals, dtype=np.float64)
+        weights = np.ascontiguousarray(weights, dtype=np.uint8)
+        centre = np.ascontiguousarray(centre, dtype=np.float64)
+        box_min = np.empty(3, dtype=np.float32)
+        box_max = np.empty(3, dtype=np.float32)
+        self._lib.wb_chunk_pack(
+            dirs.ctypes.data,
+            elevation.ctypes.data,
+            normals.ctypes.data,
+            weights.ctypes.data,
+            centre.ctypes.data,
+            float(radius),
+            float(skirt_depth),
+            int(sea),
+            out.ctypes.data,
+            box_min.ctypes.data,
+            box_max.ctypes.data,
+        )
+        return box_min, box_max
 
     def swell_heights(
         self, swell: Any, points: np.ndarray, depths: np.ndarray, max_freqs: np.ndarray

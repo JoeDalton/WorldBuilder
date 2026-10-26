@@ -45,12 +45,13 @@ breakdown above predates them: frames are 1–3 ms shorter now.
 
 ## Generation and loading (after #20)
 
-- **The whole chunk in C.** A chunk is ~8 ms: ~5 ms of native noise, ~3 ms
-  of numpy (low-band interpolation, normals, biome weights, vertex packing).
-  Porting `Planet.evaluate` and the rest would make it ~5 ms, at the price of
-  the planet's composition in two languages (stamps and paints still need a
-  bridge). Generation no longer limits refinement at 60 Hz, so only worth it
-  for slower machines or faster flight.
+- **The planet's composition in C.** A chunk is ~6.7 ms since its geometry
+  went native (performance.md §18): ~4.5 ms of native noise, ~2 ms of numpy
+  composition (curves and masks around the noise, biome weights 0.6 ms,
+  stamps 0.7 ms, paints 0.25 ms). Porting those would make it ~5 ms, at the
+  price of the planet's rules in two languages (stamps and paints would need
+  their images passed over). Left out by choice: generation no longer limits
+  refinement at 60 Hz.
 - Cloud tiles and the weather map: done (performance.md §15).
 - **The LOD cadence at low frame rates.** A level waits for a pass 3 frames
   after its upload (`select_every_on_upload`): 100 ms a level at 30 fps.
