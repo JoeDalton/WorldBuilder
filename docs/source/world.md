@@ -126,6 +126,13 @@ cameras to the world, `world.use_split_depth(depth)`: half-resolution
 clouds (`CloudSettings.half_resolution`) mirror them, and stay at full
 resolution without them.
 
+Load `transform-cache false` in the game's PRC (before ShowBase opens its
+window). The world moves around the camera, so every drawn node's net
+transform is new every frame and Panda's cache of composed transforms only
+fills up for its garbage collection to empty: about 1 ms a frame in low
+flight (see [performance](performance.md) §19). The library sets no PRC of
+its own; the demos do.
+
 A game's own translucent volumes, such as shield bubbles, go to
 `depth.update(split, far, translucent=...)`. The split then never cuts one:
 the two cameras overlap by 2%, and they would blend a volume twice in that

@@ -198,6 +198,11 @@ def window_config(
     make (Panda picks the config with the most samples, x16 on a GTX 1070,
     whatever count is asked for), and it was most of the clouds' cost.
 
+    No transform cache: the world moves around the camera, so every drawn
+    node's net transform is new every frame and Panda's cache of composed
+    transforms only filled up for its garbage collection to empty (1 ms a
+    frame in low flight). A game drawing WorldBuilder's world wants the same.
+
     :param title: the window's title
     :param size: "width height"
     :param offscreen: an offscreen buffer (no display refresh cap or
@@ -212,6 +217,7 @@ def window_config(
         "framebuffer-multisample 0",
         "multisamples 0",
         "depth-bits 24",
+        "transform-cache false",
     ]
     if not vsync:
         lines.append("sync-video false")

@@ -109,6 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The chunk nodes' `uChunk`, `uChunkCentre`, `uLevel` and `uFace` inputs
     are gone; `terrain.vert` fetches the values and hands the level and the
     vertex step to the fragment stage as flat varyings.
+- The demos and scripts load `transform-cache false`: the camera-relative
+  world gives every drawn node a new net transform every frame, so Panda's
+  composed-transform cache only made garbage to collect. Low flight: mean
+  10.65 → 9.6 ms, p95 14.25 → 13.05 ms. Recommended for games
+  (docs/source/world.md). (#20)
 
 ### Removed
 

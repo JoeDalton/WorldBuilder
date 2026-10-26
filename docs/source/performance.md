@@ -871,6 +871,31 @@ not. A frame with uploads renders 0.6-0.8 ms slower than one without (its
 new chunks' vertex buffers, and the whole table re-sent: Panda 1.10 has no
 partial texture update).
 
+### No transform cache
+
+Panda's state garbage collection ran every frame: 1.2 ms, 0.6 ms once the
+chunk table left only 65 render states. What remained were transforms: the
+world moves around the camera, so every drawn node's net transform is new
+every frame, once per camera, and Panda's cache of composed transforms only
+filled up (2,200 entries) for the collection to empty. Variants, low
+flight:
+
+| Variant | Frame mean | p95 | Collection |
+|---|---|---|---|
+| Default | 10.7 ms | 14.3 ms | 0.6 ms a frame |
+| `garbage-collect-states-rate 0.25` | 10.9 ms | 14.4 ms | 0.8 ms (5,800 states pile up) |
+| Collection off, by hand every 30 frames | 10.5 ms | 14.0 ms | nothing left to collect |
+| `transform-cache false` | 9.6 ms | 13.1 ms | none (no cache) |
+
+`transform-cache false`, two more runs each: mean 10.65 → 9.6 ms, p95
+14.25 → 13.05 ms. Cruise and descent (three runs each) are unchanged, as
+are still views (GPU-synced poses within ±0.3 ms, the bench's noise): a
+still camera is the only case where a composed transform comes back.
+
+It is a process-wide Panda setting, so the library does not set it: the
+demo and the scripts do (`demo_terrain.window_config`), and a game drawing
+the world should load it too ([A whole world](world.md)).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the
