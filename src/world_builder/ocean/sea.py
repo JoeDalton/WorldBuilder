@@ -56,10 +56,10 @@ from world_builder.ocean.ocean import (
     _MAX_WAVE_ITER,
     DEFAULT_EXPOSURE,
     OceanSettings,
+    SwellDrift,
     aces_tonemap,
     compute_wave_dirs,
     make_fresnel_texture,
-    swell_rotations,
     wave_directions,
     wave_phases,
     wave_tail_variance,
@@ -88,6 +88,14 @@ class Sea:
 
     #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
     SETTINGS_TYPE: ClassVar = OceanSettings
+
+    # What the per-frame work was last done for, so it is skipped when nothing
+    # changed: the clock the swell was handed over at, the light, and what
+    # the reflection's lens follows (fov, margin, render size).
+    _swell_time: float | None = None
+    _light: tuple[float, ...] | None = None
+    _lens_key: tuple | None = None
+    _anchor_east: tuple[float, float, float] = (1.0, 0.0, 0.0)
 
     def __init__(
         self,
@@ -194,6 +202,8 @@ class Sea:
         frame["uSeaReflMVP"][0] = LMatrix4f.ident_mat()
         frame["uSwellRotA"][0] = LMatrix4f.ident_mat()
         frame["uSwellRotB"][0] = LMatrix4f.ident_mat()
+        # The octaves' phases, written in one go through a view of the array.
+        self._phase_view = np.frombuffer(memoryview(frame["uWavePhase"]), np.float32)
         for name_, array in frame.items():
             root.set_shader_input(name_, array)
         root.set_shader_input("iWaterColor", self._water_color)
@@ -214,6 +224,16 @@ class Sea:
         # one axis for the whole planet, whatever the camera.
         spec = terrain.spec
         self._swell_frame = TangentFrame.at(spec.reference_lat, spec.reference_lon)
+        frame = self._swell_frame
+        self._drift = SwellDrift(
+            frame.up,
+            frame.east,
+            frame.north,
+            self._wind_dir,
+            self._swell_scale,
+            self._swell_drift,
+            terrain.radius,
+        )
         root.set_shader_input("uFmDepth", float(fm_depth))
         root.set_shader_input("uFoamColor", LVecBase3f(*foam_color))
         root.set_shader_input("uFoamDepth", float(foam_depth))
@@ -236,7 +256,8 @@ class Sea:
         :param camera_world: the camera in the world frame, metres (float64)
         """
         time = float(self._clock())
-        self._drift_swell(time)
+        if time != self._swell_time:
+            self._drift_swell(time)
         cam = np.asarray(camera_world, dtype=np.float64) - self.terrain.position
         distance = float(np.linalg.norm(cam))
         up = cam / distance
@@ -257,9 +278,7 @@ class Sea:
             return
         self._place(up)
         frame["iTime"][0] = time
-        gx, gy = self._chart_xy
-        for i, phase in enumerate(wave_phases(self._directions, (gx, gy), time)):
-            frame["uWavePhase"][i] = float(phase)
+        self._phase_view[:] = wave_phases(self._directions, self._chart_xy, time)
         self._mirror()
 
     def set_light(self, light: ArrayLike) -> None:
@@ -270,6 +289,10 @@ class Sea:
 
         :param light: linear (r, g, b) factors
         """
+        light = tuple(float(c) for c in light)
+        if light == self._light:
+            return
+        self._light = light
         self._frame_inputs["iWaterLight"][0] = LVecBase3f(*light)
         self.refl_buffer.set_clear_color(self._clear_color(light))
 
@@ -288,6 +311,8 @@ class Sea:
         if "reflection_scale" in changes:
             self._rebuild_reflection()
         self._apply_live(settings)
+        self._swell_time = None  # swell_by_depth: hand the swell over again
+        self._lens_key = None  # the reflection's fov margin, or a new lens
 
     def set_swell_amplitude(self, amplitude: float) -> None:
         """The swell's height in deep water, metres, live. The field mostly
@@ -298,6 +323,7 @@ class Sea:
             1 / ``swell_scale``, 250 m) should stay well above it
         """
         self.swell_amplitude = float(amplitude)
+        self._swell_time = None  # hand the swell over again
         self.terrain.root.set_shader_input("uSwellAmplitude", self.swell_amplitude)
         # The field is at most 1: the water rises at most this much (chunks
         # uploaded from now on are culled by bounds this much wider).
@@ -326,19 +352,11 @@ class Sea:
     # ── internals ─────────────────────────────────────────────────────────────
 
     def _drift_swell(self, time: float) -> None:
-        """The swell layers' rotations at *time* (:func:`swell_rotations`),
-        to the shader (a Panda matrix multiplies a row: the transposes)."""
-        frame = self._swell_frame
-        a, b = swell_rotations(
-            frame.up,
-            frame.east,
-            frame.north,
-            self._wind_dir,
-            self._swell_scale,
-            self._swell_drift,
-            self.terrain.radius,
-            time,
-        )
+        """The swell layers' rotations at *time* (:func:`swell_rotations`,
+        its constant part computed once: :class:`SwellDrift`), to the shader
+        (a Panda matrix multiplies a row: the transposes)."""
+        self._swell_time = time
+        a, b = self._drift.at(time)
         self.swell_rotations = (a, b)
         settings = self._settings
         self.terrain.set_swell(
@@ -366,23 +384,29 @@ class Sea:
             self._anchor = AzimuthalEquidistantChart(
                 float(lat[0]), float(lon[0]), self.terrain.radius
             )
+            self._anchor_east = tuple(float(c) for c in self._anchor.frame.east)
             gx = gy = 0.0
         self._chart_xy = (gx, gy)
-        east = self._anchor.frame.east
-        e = east - up * (east @ up)
-        e /= np.linalg.norm(e)
-        n = np.cross(up, e)
-        origin = self.terrain.to_render(up * self.terrain.radius)
+        # Plain floats: numpy's per-call cost dominates on 3-vectors.
+        ux, uy, uz = (float(c) for c in up)
+        ex, ey, ez = self._anchor_east
+        along = ex * ux + ey * uy + ez * uz
+        ex, ey, ez = ex - ux * along, ey - uy * along, ez - uz * along
+        norm = math.sqrt(ex * ex + ey * ey + ez * ez)
+        ex, ey, ez = ex / norm, ey / norm, ez / norm
+        n = (uy * ez - uz * ey, uz * ex - ux * ez, ux * ey - uy * ex)
+        radius = self.terrain.radius
+        origin = self.terrain.to_render((ux * radius, uy * radius, uz * radius))
         render = self.app.render
         quat = LQuaternionf()
-        quat.set_from_matrix(LMatrix3f(Vec3(*e), Vec3(*n), Vec3(*up)))
+        quat.set_from_matrix(LMatrix3f(Vec3(ex, ey, ez), Vec3(*n), Vec3(ux, uy, uz)))
         self.frame.set_quat(render, quat)
         self.frame.set_pos(render, *origin)
         frame = self._frame_inputs
         frame["uSeaOrigin"][0] = LVecBase3f(*origin)
-        frame["uSeaEast"][0] = LVecBase3f(*e)
+        frame["uSeaEast"][0] = LVecBase3f(ex, ey, ez)
         frame["uSeaNorth"][0] = LVecBase3f(*n)
-        frame["uSeaUp"][0] = LVecBase3f(*up)
+        frame["uSeaUp"][0] = LVecBase3f(ux, uy, uz)
         frame["uSeaChart"][0] = LVecBase2f(gx, gy)
 
     def _mirror(self) -> None:
@@ -396,14 +420,17 @@ class Sea:
         fov = app.camLens.get_fov()
         scale = self._settings.reflection_fov_scale
         lens = self.refl_cam_node.get_lens()
-        lens.set_fov(fov.x * scale, fov.y * scale)
+        size = self._render_size()
+        if (fov.x, fov.y, scale, size) != self._lens_key:
+            self._lens_key = (fov.x, fov.y, scale, size)
+            lens.set_fov(fov.x * scale, fov.y * scale)
+            self._frame_inputs["uSeaPixelAngle"][0] = self._pixel_angle(fov.y)
         view = LMatrix4f()
         view.invert_from(self.refl_cam.get_mat(app.render))
         inputs = self._frame_inputs
         inputs["uSeaReflMVP"][0] = view * lens.get_projection_mat()
         forward = app.camera.get_quat(app.render).get_forward()
         inputs["uSeaCamForward"][0] = LVecBase3f(forward)
-        inputs["uSeaPixelAngle"][0] = self._pixel_angle(fov.y)
         # The texture's valid region (buffer / texture size): its real size is
         # known once the buffer is realized.
         if not self._uv_scale_set:

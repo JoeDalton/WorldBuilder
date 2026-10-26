@@ -250,6 +250,16 @@ def test_sea_updates_and_mirrors_the_camera(window, sea):
     up = made.frame.get_quat(window.render).get_up()
     np.testing.assert_allclose(tuple(up), camera / np.linalg.norm(camera), atol=1e-5)
     assert made._frame_inputs["iTime"][0] == 1.5
+    # The octaves' phases reach the shader's array (written through a view).
+    from world_builder.ocean.ocean import wave_phases
+
+    phases = made._frame_inputs["uWavePhase"]
+    expected = wave_phases(made._directions, made._chart_xy, 1.5)
+    np.testing.assert_allclose(
+        [phases[i] for i in range(len(expected))], expected, rtol=1e-6, atol=1e-5
+    )
+    # The swell handed to the terrain is the drift's at the clock's time.
+    np.testing.assert_array_equal(terrain.swell.rot_a, made._drift.at(1.5)[0])
     window.graphicsEngine.render_frame()
     made.update(camera)  # the reflection texture is realized: the UV scale is set
     assert made._uv_scale_set

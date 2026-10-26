@@ -12,6 +12,7 @@ terrain's shader runs without a sea.
 
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass
 from typing import ClassVar
@@ -248,11 +249,16 @@ def wave_phases(directions: np.ndarray, chart_xy: ArrayLike, time: float) -> np.
     :param time: seconds
     :returns: (_MAX_WAVE_ITER,) radians, in [0, 2 pi)
     """
-    i = np.arange(len(directions))
-    frequency = _FREQ_GROWTH**i
-    speed = 2.0 * _TIME_GROWTH**i
+    frequency, speed = _wave_rates(len(directions))
     point = np.asarray(chart_xy, dtype=np.float64) * WAVE_SCALE
     return np.mod(frequency * (directions @ point) + speed * time, 2.0 * math.pi)
+
+
+@functools.cache
+def _wave_rates(count: int) -> tuple[np.ndarray, np.ndarray]:
+    """:returns: the octaves' frequency and phase speed (wave_phases)"""
+    i = np.arange(count)
+    return _FREQ_GROWTH**i, 2.0 * _TIME_GROWTH**i
 
 
 def wave_weight_sum(iterations: int) -> float:
@@ -419,11 +425,48 @@ def swell_rotations(
     :param time: seconds
     :returns: the two (3, 3) rotations, float64, applied as ``R @ point``
     """
-    up = np.asarray(up, dtype=np.float64)
-    wind = wind_dir[0] * np.asarray(east) + wind_dir[1] * np.asarray(north)
-    across = np.cross(up, wind)
-    a = swell_rotation(np.cross(up, wind), drift / scale / radius * time)
-    b = swell_rotation(
-        np.cross(up, across), 0.6 * drift / (1.7 * scale) / radius * time
-    )
-    return a, b
+    return SwellDrift(up, east, north, wind_dir, scale, drift, radius).at(time)
+
+
+class SwellDrift:
+    """:func:`swell_rotations` with what does not change with time
+    computed once: each layer's axis (its Rodrigues cross matrix K and K²)
+    and its angular speed. :meth:`at` gives the same rotations."""
+
+    def __init__(
+        self,
+        up: ArrayLike,
+        east: ArrayLike,
+        north: ArrayLike,
+        wind_dir: ArrayLike,
+        scale: float,
+        drift: float,
+        radius: float,
+    ):
+        """The arguments of :func:`swell_rotations` but the time."""
+        up = np.asarray(up, dtype=np.float64)
+        wind = wind_dir[0] * np.asarray(east) + wind_dir[1] * np.asarray(north)
+        across = np.cross(up, wind)
+        self._layers = []
+        for axis, speed in (
+            (np.cross(up, wind), drift / scale / radius),
+            (np.cross(up, across), 0.6 * drift / (1.7 * scale) / radius),
+        ):
+            k = axis / np.linalg.norm(axis)
+            cross = np.array(
+                [[0.0, -k[2], k[1]], [k[2], 0.0, -k[0]], [-k[1], k[0], 0.0]]
+            )
+            self._layers.append((cross, cross @ cross, speed))
+
+    def at(self, time: float) -> tuple[np.ndarray, np.ndarray]:
+        """:returns: the two (3, 3) rotations at *time*, seconds"""
+        a, b = (
+            _EYE3
+            + math.sin(speed * time) * cross
+            + (1.0 - math.cos(speed * time)) * square
+            for cross, square, speed in self._layers
+        )
+        return a, b
+
+
+_EYE3 = np.eye(3)

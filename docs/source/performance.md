@@ -920,6 +920,26 @@ Smaller upload budgets (3 chunks and 2 ms a frame, or 4 and 3, against 6
 and 4) did not lower the p95 any more (11.7-13.6 ms against 11.9), with
 uploads this cheap: the defaults stay.
 
+### `Sea.update`
+
+0.56 ms a frame low over the sea: the swell's drift 0.26 ms, placing the
+nadir frame 0.15, the mirror 0.07, the light 0.06, the wave phases 0.04
+plus a 64-entry write loop. The swell layers' axes never change (the wind
+at the planet's reference point), so their Rodrigues terms are computed once
+(`ocean.SwellDrift`; `swell_rotations` is built on it and gives the same
+rotations): a frame turns two angles, and nothing when the clock has not
+moved. The nadir frame is placed in plain floats (numpy's per-call cost
+dominates on 3-vectors), the phases are written through one view of their
+array, and the reflection's fov, its pixel angle and the water's light are
+set only when they change.
+
+| Low flight, two runs each | Before | After |
+|---|---|---|
+| Frame mean | 8.8-9.0 ms | 8.5-8.6 ms |
+| Frame p95 | 12.2-12.6 ms | 11.9-12.0 ms |
+| Update mean | 4.7 ms | 4.3 ms |
+| `Sea.update` (median frame) | 0.47 ms | 0.20 ms |
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

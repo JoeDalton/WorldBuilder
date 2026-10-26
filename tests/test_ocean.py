@@ -159,3 +159,37 @@ def test_wave_phases_carry_the_far_part_of_every_octave():
     )
     assert np.all((far >= 0.0) & (far < 2.0 * math.pi))
     np.testing.assert_allclose(np.linalg.norm(directions, axis=1), 1.0)
+
+
+def test_swell_drift_turns_as_rodrigues_does():
+    """SwellDrift (the constant terms once) gives each layer's rotation about
+    its axis, by its angular speed times the time."""
+    import math
+
+    from world_builder.ocean.ocean import SwellDrift, swell_rotation
+    from world_builder.terrain.chart import TangentFrame
+
+    frame = TangentFrame.at(-20.0, 75.0)
+    up, east, north = (
+        np.asarray(v, dtype=np.float64) for v in (frame.up, frame.east, frame.north)
+    )
+    wind, scale, drift, radius = (0.8, -0.6), 0.004, 0.1, 6.0e5
+    drift_of = SwellDrift(up, east, north, wind, scale, drift, radius)
+    blowing = wind[0] * east + wind[1] * north
+    across = np.cross(up, blowing)
+    for time in (0.0, 2.5, 3600.0, 1.0e6):
+        a, b = drift_of.at(time)
+        np.testing.assert_allclose(
+            a,
+            swell_rotation(np.cross(up, blowing), drift / scale / radius * time),
+            atol=1e-15,
+        )
+        np.testing.assert_allclose(
+            b,
+            swell_rotation(
+                np.cross(up, across), 0.6 * drift / (1.7 * scale) / radius * time
+            ),
+            atol=1e-15,
+        )
+        np.testing.assert_allclose(a @ a.T, np.eye(3), atol=1e-14)  # a rotation
+    assert not math.isclose(drift_of.at(10.0)[0][0, 1], 0.0, abs_tol=1e-12)

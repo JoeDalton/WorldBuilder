@@ -118,6 +118,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the LRU order instead of walking past every kept chunk each frame
   (0.42 ms each), and the chunk table copies only the new slots: low flight
   mean 9.75 → 8.65 ms, p95 13.3 → 11.65 ms. (#20)
+- `Sea.update` costs 0.2 ms a frame instead of 0.47: the swell's drift has
+  its constant terms computed once (`ocean.SwellDrift`, which
+  `swell_rotations` now uses) and is skipped while the clock stands, the
+  nadir frame is placed in plain floats, the wave phases are written in one
+  go, and the reflection's fov and the water's light only on change. (#20)
 
 ### Removed
 

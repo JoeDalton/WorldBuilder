@@ -262,6 +262,7 @@ def _sea(look=OceanLook()):
     sea.refl_buffer = MagicMock()
     sea._showing = None
     sea._frame_inputs = MagicMock()
+    sea._phase_view = np.zeros(64, np.float32)
     sea._anchor = None
     return sea
 
