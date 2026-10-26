@@ -59,7 +59,7 @@ from panda3d.core import (
 
 from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 from world_builder.atmosphere import Atmospheres, bind_defaults
-from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.depth import PASS_TAG, REFLECTION_CAMERA_MASK
 from world_builder.ocean.ocean import bind_sea_defaults
 from world_builder.ocean.swell import Swell
 from world_builder.quality import RESTART, QualityLevel, QualitySettings, knob
@@ -95,6 +95,14 @@ def _shader(fragment: str) -> Shader:
         vertex=SHADER_PATH / "terrain.vert",
         fragment=SHADER_PATH / fragment,
     )
+
+
+def depth_only_shader() -> Shader:
+    """:returns: the terrain's shader with a depth-only fragment stage, for
+    passes that want its depth and nothing else (``terrain.vert`` kept, so
+    the sea's lift and swell are right). Each terrain's root carries the
+    tag ``PASS_TAG = "terrain"`` for a camera's tag state to swap it in."""
+    return _shader("terrain_depth.frag")
 
 
 def _ensure_terrain_bin() -> None:
@@ -366,6 +374,7 @@ class Terrain:
         self.root.set_shader(_shader("terrain.frag"))
         _ensure_terrain_bin()
         self.root.set_bin(TERRAIN_BIN, 0)
+        self.root.set_tag(PASS_TAG, "terrain")  # see depth_only_shader
         # The chunks with water hang here: a Sea gives them the shader with
         # its near look (set_sea_near), which the others never pay for.
         self.sea_root = self.root.attach_new_node("terrain_sea")

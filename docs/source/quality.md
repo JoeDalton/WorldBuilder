@@ -172,6 +172,7 @@ labels and ranges below are what the schema gives.
 | `shell_octaves` | Detail | rebuild | 4-3-3-2, 4-4-3-3, 4-4-4-3, 4 | 4-3-3-2 | 4-4-3-3 | 4-4-4-3 | 4 |
 | `shells` (advanced) | Billboard distance | rebuild | 1 to 6 shells | 4 | 4 | 4 | 4 |
 | `reflected` | In reflections | live | on / off | off | on | on | on |
+| `half_resolution` | Half-resolution clouds | live | on / off | off | off | off | off |
 | `uploads_per_frame` (advanced) | Tile uploads per frame | live | 1 to 32 | 3 | 3 | 3 | 3 |
 | `resorts_per_frame` (advanced) | Tile re-sorts per frame | live | 1 to 32 | 4 | 4 | 4 | 4 |
 | `tile_cache` (advanced) | Tiles kept | live | 0 to 2000 tiles | 160 | 160 | 160 | 160 |

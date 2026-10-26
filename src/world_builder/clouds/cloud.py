@@ -223,6 +223,9 @@ class CloudSettings(QualitySettings):
     :ivar shells: planet clouds: billboard shells before the deck takes
         over, each twice as far as the last. Rebuild
     :ivar reflected: drawn in the ocean's reflection. Live
+    :ivar half_resolution: drawn at half the view's resolution and laid over
+        it (``clouds.half_res``; World, given the split cameras, and the
+        demo draw that pass). Live
     :ivar uploads_per_frame: planet clouds: tiles uploaded per frame. Live
     :ivar resorts_per_frame: planet clouds: tiles re-sorted per frame. Live
     :ivar tile_cache: planet clouds: tiles kept beyond those wanted. Live
@@ -284,6 +287,12 @@ class CloudSettings(QualitySettings):
         True,
         "In reflections",
         help="Draw the clouds in the sea's reflection (about 1-1.7 ms).",
+    )
+    half_resolution: bool = knob(
+        False,
+        "Half-resolution clouds",
+        help="Draw the clouds at half the view's resolution: about half their "
+        "cost low over the planet, softer cloud edges against the ground.",
     )
     uploads_per_frame: int = knob(
         3, "Tile uploads per frame", range=(1, 32), advanced=True

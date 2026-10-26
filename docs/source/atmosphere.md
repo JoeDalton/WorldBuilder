@@ -289,6 +289,20 @@ new tiles, then those the camera has moved past most relative to their
 distance. A stale order composites a cloud's far side over its near side,
 which reads as shadows sliding over it.
 
+**At half resolution** (`CloudSettings.half_resolution`, off by default;
+`clouds.half_res.HalfResClouds`). The clouds draw into two offscreen layers
+half the view's size, one per split-depth range, each by a camera sharing
+that range's lens. Everything else draws into them as depth only (the
+terrain through a depth-only fragment stage; the sky is left out), so the
+ground and a game's models still hide the clouds. Each layer is laid over
+its own range's pass by a fullscreen card, premultiplied "over": the far
+layer in the far pass, so near ground covers it as it covers anything far.
+It saves 1-1.7 ms of GPU time low over the planet and costs ~1.2 ms of
+main-thread cull and draw (see [performance](performance.md) §19): a trade
+for GPU-limited setups. `World.use_split_depth(depth)` gives the world the
+split cameras it needs for it; cloud edges against the ground's silhouettes
+are resolved at half resolution.
+
 ### Far: the deck
 
 Billboards cannot reach orbit: at constant volume fraction their covered area

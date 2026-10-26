@@ -63,10 +63,12 @@ breakdown above predates them: frames are 1–3 ms shorter now.
 
 ## Savings with a cost
 
-- **Clouds at lower resolution:** a half-resolution cloud pass, composited
-  over the scene (plan item 1.7 of the cloud work). It is the biggest
-  remaining lever (clouds are 5–11 ms), but softens silhouettes and needs a
-  depth pre-pass for occlusion.
+- **Clouds at lower resolution:** done as a setting,
+  `CloudSettings.half_resolution` (performance.md §19): 1-1.7 ms less GPU
+  time, ~1.2 ms more main-thread time for its two layer cameras. Making
+  those cheaper (fewer occluders in the layers, or the scene's own depth
+  reused through a game's post-process buffer) would make it pay on
+  CPU-bound machines too.
 - **Cached sun shadow:** the sun's optical depth stored in a 3D texture
   around the camera, refreshed when the sun or camera moves, one fetch
   instead of the march (~3.4 ms at dusk). Its texels (~200 m) are coarser

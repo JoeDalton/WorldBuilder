@@ -121,7 +121,10 @@ In order, it updates:
 
 Build the world before `SplitDepthCameras`. The sea's reflection camera
 copies the app's lens once when it is built, and the split cameras then
-shorten that lens to the near range every frame.
+shorten that lens to the near range every frame. Then hand the split
+cameras to the world, `world.use_split_depth(depth)`: half-resolution
+clouds (`CloudSettings.half_resolution`) mirror them, and stay at full
+resolution without them.
 
 A game's own translucent volumes, such as shield bubbles, go to
 `depth.update(split, far, translucent=...)`. The split then never cuts one:

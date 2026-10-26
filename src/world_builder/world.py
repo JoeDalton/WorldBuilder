@@ -72,6 +72,7 @@ from panda3d.core import (
 from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cloud import CloudType
+from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
@@ -269,6 +270,11 @@ class World:
     :ivar sun_light: Panda3D's sun on render (None without lights)
     :ivar ambient_light: Panda3D's ambient light on render (None without)
     """
+
+    #: The game's split cameras (:meth:`use_split_depth`), and the clouds'
+    #: half-resolution layers when the settings ask for them
+    depth: SplitDepthCameras | None = None
+    half_res: HalfResClouds | None = None
 
     def __init__(
         self,
@@ -554,6 +560,34 @@ class World:
         for body in self.bodies:
             parts += body.parts()
         settings.apply(*parts)
+        self._sync_half_res()
+
+    def use_split_depth(self, depth: SplitDepthCameras) -> None:
+        """The split cameras the game built after the world: the clouds'
+        half-resolution layers (``CloudSettings.half_resolution``) mirror
+        them, so the world needs them for that setting. Call
+        ``depth.update`` before :meth:`update` every frame, as always."""
+        self.depth = depth
+        self._sync_half_res()
+
+    def _sync_half_res(self) -> None:
+        """Build or remove the clouds' half-resolution layers as the
+        settings ask (they need the split cameras)."""
+        clouds = [body.clouds for body in self.bodies if body.clouds is not None]
+        wanted = (
+            self.settings.clouds.half_resolution
+            and self.depth is not None
+            and bool(clouds)
+        )
+        if wanted and self.half_res is None:
+            self.half_res = HalfResClouds(self.app, self.depth)
+            if self.sky is not None:
+                self.half_res.exclude(self.sky.node)
+            for cloud in clouds:
+                self.half_res.add(cloud.root)
+        elif not wanted and self.half_res is not None:
+            self.half_res.destroy()
+            self.half_res = None
 
     def enable_collision(
         self, into_mask: Any, bodies: Iterable[str] | None = None, **kwargs: Any
@@ -602,6 +636,10 @@ class World:
                 far = self.depth_ranges(origin_world)[1]
             self.sky.update(tuple(camera_render), far)
         pixel_angle = self._pixel_angle()
+        if self.half_res is not None:
+            self.half_res.update()
+            if pixel_angle is not None:
+                pixel_angle *= self.half_res.pixel_scale
         for body in self.bodies:
             if body.clouds is not None:
                 if pixel_angle is not None:
@@ -662,6 +700,9 @@ class World:
 
     def destroy(self) -> None:
         """Remove every part and the lights, and stop the workers."""
+        if self.half_res is not None:
+            self.half_res.destroy()
+            self.half_res = None
         render = self.app.render
         for light in (self.sun_light, self.ambient_light):
             if light is not None:

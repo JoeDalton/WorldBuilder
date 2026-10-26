@@ -197,6 +197,7 @@ class WorldDemo(TerrainDemo):
         self.ocean.set_debug_mode(ocean_debug)
         # After the world, whose sea copied the lens.
         self.depth = SplitDepthCameras(self, near=1.0)
+        self.scene.use_split_depth(self.depth)  # the clouds' half-res layers
         self._debug = 0
         self._ground = 0.0
 

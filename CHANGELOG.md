@@ -87,6 +87,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into Panda's vertex buffer (`wb_billboard_vertices`): 0.3-1 ms a tile
   instead of 0.6-3.6, the low flight's p95 16.25 → 15.9 ms and its update
   p95 8.5 → 7.8 ms. (#20)
+- `CloudSettings.half_resolution` (off by default): the clouds drawn at half
+  the view's resolution into one layer per split-depth range and laid over
+  the scene (`clouds.half_res.HalfResClouds`; `World.use_split_depth(depth)`
+  gives the world the split cameras it needs). 1-1.7 ms less GPU time low
+  over the planet, ~1.2 ms more main-thread time: for GPU-limited setups.
+  The demos take `--half-res-clouds`. (#20)
 
 ### Removed
 

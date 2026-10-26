@@ -78,6 +78,70 @@ def test_split_cameras_draw_into_the_window(window):
     assert cameras.far_region not in list(window.win.get_display_regions())
 
 
+def _card(parent, name, distance, frame, color):
+    """A flat, unlit card *distance* ahead of the camera, its frame in
+    fractions of the view's half-width (x0, x1, z0, z1)."""
+    from panda3d.core import CardMaker
+
+    lens_half = math.tan(math.radians(0.5 * 60.0)) * distance
+    maker = CardMaker(name)
+    x0, x1, z0, z1 = frame
+    maker.set_frame(x0 * lens_half, x1 * lens_half, z0 * lens_half, z1 * lens_half)
+    card = parent.attach_new_node(maker.generate())
+    card.set_y(distance)
+    card.set_color(*color)
+    card.set_light_off(1)
+    card.set_shader_off(1)
+    card.set_texture_off(1)
+    card.set_two_sided(True)
+    return card
+
+
+def test_half_resolution_clouds_are_hidden_by_what_is_in_front(window):
+    """Each depth range's clouds go into their own half-size layer: near
+    ground hides far clouds (one buffer for both ranges showed them through
+    it), and near clouds cover near ground."""
+    from world_builder.clouds.half_res import HalfResClouds
+
+    fov, transform = window.camLens.get_fov(), window.camera.get_transform()
+    window.camLens.set_fov(60.0, 60.0)
+    window.camera.set_pos_hpr(0, 0, 0, 0, 0, 0)
+    cameras = SplitDepthCameras(window, near=1.0)
+    clouds = window.render.attach_new_node("test_clouds")
+    occluder = _card(
+        window.render, "occluder", 50.0, (-0.4, 0.4, -0.4, 0.4), (0, 1, 0, 1)
+    )
+    _card(clouds, "far_cloud", 2000.0, (-2, 2, -2, 2), (1, 0, 0, 1))
+    _card(clouds, "near_cloud", 20.0, (-2, -0.5, -2, 2), (0, 0, 1, 1))
+    half = HalfResClouds(window, cameras)
+    half.add(clouds)
+    try:
+        cameras.update(500.0, 5000.0)
+        half.update()
+        for _ in range(3):
+            window.graphicsEngine.render_frame()
+        shot = window.win.get_screenshot()
+        size = shot.get_x_size()
+        ram = np.frombuffer(shot.get_ram_image_as("RGB").get_data(), np.uint8)
+        rgb = ram.reshape(shot.get_y_size(), size, 3)
+
+        def at(x, y):  # fractions of the view, from the bottom left
+            return tuple(int(c) for c in rgb[int(y * size), int(x * size)])
+
+        assert at(0.55, 0.5) == (0, 255, 0)  # the occluder hides the far cloud
+        assert at(0.9, 0.9) == (255, 0, 0)  # the far cloud elsewhere
+        assert at(0.1, 0.5) == (0, 0, 255)  # the near cloud, in front
+        assert half.pixel_scale == 2.0
+    finally:
+        half.destroy()
+        cameras.destroy()
+        clouds.remove_node()
+        occluder.remove_node()
+        window.camLens.set_fov(fov)
+        window.camera.set_transform(transform)
+    assert clouds.is_empty()
+
+
 def test_split_cameras_keep_the_split_off_translucent_volumes(window):
     """A translucent volume the wanted split would cut moves it in front:
     blended twice where the cameras overlap, it would show a ring there."""

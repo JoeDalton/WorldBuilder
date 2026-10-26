@@ -110,6 +110,7 @@ from panda3d.core import (
 )
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
+from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.ocean import Sea
@@ -409,6 +410,8 @@ class TerrainDemo(ShowBase):
         )
         self.ocean.set_debug_mode(ocean_debug)
         self.depth = SplitDepthCameras(self, near=1.0)
+        self.half_res = None  # the clouds' half-resolution pass, if asked for
+        self._sync_half_res()
         self._debug = 0
         # Panda3D lights for anything not drawn by the world's own shaders
         # (models, ships): the sun and the sky as they are at the camera.
@@ -547,12 +550,15 @@ class TerrainDemo(ShowBase):
             )
         split, far = SplitDepthCameras.system_ranges(ranges)
         self.depth.update(split, far)
+        if self.half_res is not None:
+            self.half_res.update()
 
         self.atmospheres.update(self.cam_world)
         self.sky.update((0.0, 0.0, 0.0), far)
         if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
-            self.clouds.set_pixel_angle(fov / max(self.win.get_y_size(), 1))
+            scale = self.half_res.pixel_scale if self.half_res is not None else 1.0
+            self.clouds.set_pixel_angle(scale * fov / max(self.win.get_y_size(), 1))
             self.clouds.update(self.cam_world)
         self._update_sun()
         self.ocean.update(self.cam_world)
@@ -767,6 +773,21 @@ class TerrainDemo(ShowBase):
         )
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
+        if getattr(self, "half_res", None) is not None:
+            self.half_res.add(self.clouds.root)
+
+    def _sync_half_res(self) -> None:
+        """Build or remove the clouds' half-resolution pass as the settings
+        ask (CloudSettings.half_resolution)."""
+        wanted = self.world.clouds.half_resolution
+        if wanted and self.half_res is None:
+            self.half_res = HalfResClouds(self, self.depth)
+            self.half_res.exclude(self.sky.node)
+            if self.clouds is not None:
+                self.half_res.add(self.clouds.root)
+        elif not wanted and self.half_res is not None:
+            self.half_res.destroy()
+            self.half_res = None
 
     def _cycle_quality(self, section: str) -> None:
         """One part (a WorldSettings section) to its next preset."""
@@ -787,6 +808,7 @@ class TerrainDemo(ShowBase):
         world.apply(*self._terrains(), self.atmospheres, self.sky, self.ocean)
         if self.clouds is not None:
             world.apply(self.clouds)
+        self._sync_half_res()
 
     def set_debug_view(self, view: int) -> None:
         """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts (all bodies)."""
@@ -958,6 +980,11 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         "--workers", type=int, default=None, help="generation processes"
     )
     parser.add_argument("--no-clouds", action="store_true", help="no clouds")
+    parser.add_argument(
+        "--half-res-clouds",
+        action="store_true",
+        help="clouds at half resolution (CloudSettings.half_resolution)",
+    )
 
 
 def settings_from_args(args: argparse.Namespace) -> WorldSettings:
@@ -970,6 +997,8 @@ def settings_from_args(args: argparse.Namespace) -> WorldSettings:
             settings = settings.with_section_level(section, level)
     if args.workers is not None:
         settings = settings.with_value("terrain", "workers", args.workers)
+    if args.half_res_clouds:
+        settings = settings.with_value("clouds", "half_resolution", True)
     return settings
 
 

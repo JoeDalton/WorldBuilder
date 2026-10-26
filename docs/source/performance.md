@@ -784,6 +784,63 @@ same bytes (tested).
 | Update mean / p95 | 5.7 / 8.5 ms | 5.6 / 7.8 ms |
 | The clouds' upload in slow frames | +1.1 to +1.3 ms | +0.15 to +0.45 ms |
 
+### What `renderFrame` spends
+
+After the three changes above, Panda's `renderFrame` was the slow frames'
+largest part (+2.5-3 ms over median frames). Uploads and newly shown chunks
+explain little of it (frames with uploads render ~0.7 ms slower, correlation
+0.25). PStats (`want-pstats`, recorded as text by `text-stats -r`) shows the
+main thread's cull and draw growing in the slow frames: cull +1.3 ms (+0.9
+of it the reflection's), draw +2.6 (setting state +1.2, shader inputs +0.7,
+vertex buffer transfers +0.3), and less of it without clouds (their tiles
+add draw calls).
+
+**The low flight is CPU-bound.** At 2560×1440, 2.56 times the pixels, its
+frames take as long as at 1600×900 (12.5-12.7 ms mean). The GPU's own timer
+queries (`pstats-gpu-timing`) looked otherwise, the far pass "taking" 9.3 ms
+in median frames and 13.8 in slow ones, but they measure from one query to
+the next on the GPU's timeline, waits for the CPU's commands included. So
+what is left of the slow frames is CPU work per drawn node (state and
+shader inputs per chunk and per cloud tile), not GPU work; see the log of
+remaining paths in the [performance backlog](performance_backlog.md).
+
+### Half-resolution clouds (a setting, off by default)
+
+`CloudSettings.half_resolution` draws the clouds at half the view's
+resolution (`clouds.half_res`, see [Atmosphere, sky and planet
+clouds](atmosphere.md)). Their GPU cost is mostly per pixel: with clouds
+minus without, at 1600×900 and at 800×450 (a quarter of the pixels):
+
+| Pose | 1600×900 | 800×450 |
+|---|---|---|
+| Start (ground) | 3.6 ms | 1.6 ms |
+| Coast | 4.5 ms | 2.4 ms |
+| Inside the clouds | 4.6 ms | 1.9 ms |
+| Sunset | 4.5 ms | 1.6 ms |
+| 20 km up | 1.7 ms | 0.7 ms |
+
+The layers (one per split range) need the scene's depth, drawn again into
+each at half resolution (the terrain with a depth-only fragment stage).
+Frames GPU-synced (`terrain_shots.py`, CPU and GPU in series), full against
+half resolution, two runs each:
+
+| Pose | Full | Half |
+|---|---|---|
+| Start (ground) | 10.7 ms | 9.9 ms |
+| Coast | 11.9 ms | 10.4 ms |
+| Inside the clouds | 11.0 ms | 9.3 ms |
+| Sunset | 12.3 ms | 10.6 ms |
+| Beach | 14.9 ms | 13.5 ms |
+| 20 km up | 6.1 ms | 5.8 ms |
+
+But the two layer cameras cull and draw the scene again on the main thread:
+about 1.2 ms a frame (cull 0.5 + 0.25 ms, draw 0.3 + 0.15 ms, and their
+state). The low flight here is CPU-bound, so there it loses: mean 12.45 →
+13.2 ms, p95 16.35 → 17.15 ms, at 1600×900 and at 2560×1440 alike. It pays
+where the GPU is the limit (a weaker GPU, heavier GPU settings), which is
+why it is a setting, off in every preset. The images match but for softer
+cloud edges against the ground's silhouettes (up to a pixel).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the
