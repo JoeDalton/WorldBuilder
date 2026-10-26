@@ -539,6 +539,69 @@ def test_terrain_settings(terrain):
     assert tuple(terrain._frame_inputs["uSunDir"][0]) == (0.0, 0.0, 1.0)
 
 
+def test_the_gpu_reads_each_chunks_values(window, terrain):
+    """The chunk table, as the GPU fetches it: each uploaded chunk's slot
+    holds its centre and swell band, uv origin, step and skirt depth, level
+    and face, in that channel order (Panda keeps RGBA as BGRA in RAM)."""
+    from panda3d.core import CardMaker, FrameBufferProperties, Shader
+
+    camera = np.array([0.0, 0.0, terrain.radius + 3000.0])
+    for _ in range(6):
+        terrain.update(camera)
+    assert terrain.nodes
+    slots = sorted(terrain._slots.values())
+    width = max(slots) + 1
+    props = FrameBufferProperties()
+    props.set_rgba_bits(32, 32, 32, 32)
+    props.set_float_color(True)
+    texture = Texture("chunk_table_check")
+    buffer = window.win.make_texture_buffer(
+        "chunk_table_check", width, 3, texture, True, props
+    )
+    maker = CardMaker("copy")
+    maker.set_frame(-1, 1, -1, 1)
+    card = NodePath(maker.generate())
+    card.set_shader(
+        Shader.make(
+            Shader.SL_GLSL,
+            vertex="#version 330\nin vec4 p3d_Vertex;\n"
+            "void main() { gl_Position = vec4(p3d_Vertex.x, p3d_Vertex.z, 0, 1); }",
+            fragment="#version 330\nuniform sampler2D uChunkTable;\n"
+            "out vec4 o;\nvoid main() { o = texelFetch(uChunkTable,"
+            " ivec2(gl_FragCoord.xy), 0); }",
+        )
+    )
+    card.set_shader_input("uChunkTable", terrain._chunk_texture)
+    card.set_depth_test(False)
+    try:
+        cam = window.makeCamera(buffer)
+        cam.node().set_scene(card)
+        window.graphicsEngine.render_frame()
+        window.graphicsEngine.render_frame()
+        ram = np.frombuffer(texture.get_ram_image_as("RGBA").get_data(), np.float32)
+        got = ram.reshape(3, width, 4)
+        for key, slot in terrain._slots.items():
+            chunk = terrain.store[key]
+            u0, v0 = terrain.grid.uv_origin(key)
+            expected = np.array(
+                [
+                    [*chunk.centre, 0.25 / terrain.grid.spacing(key[0])],
+                    [u0, v0, (1 << key[0]) * terrain.grid.uv_unit, chunk.skirt_depth],
+                    [key[0], key[1], 0.0, 0.0],
+                ],
+                dtype=np.float32,
+            )
+            np.testing.assert_array_equal(got[:, slot], expected)
+            # Every vertex of the chunk's node names the slot.
+            vdata = terrain.nodes[key].node().get_geom(0).get_vertex_data()
+            rows = np.frombuffer(memoryview(vdata.get_array(0)).cast("B"), np.uint8)
+            rows = rows.reshape(-1, 36).astype(np.int64)
+            assert np.all(rows[:, 34] + 256 * (rows[:, 35] & 127) == slot)
+            assert np.all(rows[-256:, 35] >= 128) and np.all(rows[:-256, 35] < 128)
+    finally:
+        window.graphicsEngine.remove_window(buffer)
+
+
 def test_terrain_frames(terrain):
     point = np.array([1.0, 2.0, R])
     np.testing.assert_array_equal(terrain.to_planet(point), point - terrain.position)

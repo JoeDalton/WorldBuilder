@@ -841,6 +841,36 @@ where the GPU is the limit (a weaker GPU, heavier GPU settings), which is
 why it is a setting, off in every preset. The images match but for softer
 cloud edges against the ground's silhouettes (up to a pixel).
 
+### One state for every chunk
+
+Every chunk node carried four shader inputs of its own (its centre and
+swell band, uv origin and step, skirt depth, level, face), so Panda drew
+each in a state of its own: binding its inputs, changing state. Setting the
+four once on the terrain's root instead (wrong images, to measure) cut the
+low flight's mean frame by 2.4 ms and its p95 by 3.
+
+The values now live in a table: a float texture on the terrain's root, one
+slot per uploaded chunk, three texels each (`Terrain._make_chunk_table`). Each
+vertex names its chunk's slot in `biome_b`'s two spare bytes, written at
+upload (the skirt flag moved to the top bit), and `terrain.vert` fetches
+the values (`texelFetch`); the fragment stage gets the level and the step
+as flat varyings. They are the same float32 values, so the images are the
+same (the ground identical pixel for pixel; a test reads the table back
+from the GPU). Panda keeps an RGBA texture's RAM image as BGRA: written in
+RGBA, every value came out with x and z swapped.
+
+| Low flight | Before (2 runs) | Chunk table (4 runs) |
+|---|---|---|
+| Frame mean | 12.4-12.5 ms | 10.5-10.6 ms (11.4 in one run) |
+| Frame p95 | 15.9-16.2 ms | 14.1-14.2 ms (16.4 in one run) |
+| Frame max | 26 ms | 23-28 ms (108 once) |
+| Refinement lag (median) | 183-196 ms | 141-192 ms |
+
+One run of four had a 108 ms frame and a higher p95; the three others did
+not. A frame with uploads renders 0.6-0.8 ms slower than one without (its
+new chunks' vertex buffers, and the whole table re-sent: Panda 1.10 has no
+partial texture update).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

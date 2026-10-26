@@ -49,11 +49,12 @@ from panda3d.core import (
     BitMask32,
     CullBinManager,
     LVecBase3f,
-    LVecBase4f,
     NodePath,
     PTA_float,
     PTA_LVecBase3f,
+    SamplerState,
     Shader,
+    Texture,
     Vec3,
 )
 
@@ -119,6 +120,9 @@ ORIGIN_SNAP = 4096.0
 #: cells, not every chunk (it took 5-13 ms over ~1,500 nodes). The coarser
 #: chunks, drawn only far away, hang under one cell at the planet's centre.
 CELL_SIZE = 32_000.0
+#: Slots the chunk table starts with (it doubles when they run out). A slot
+#: holds one uploaded chunk's own shader values; the vertices name theirs.
+CHUNK_TABLE_SLOTS = 2048
 LOGGER = logging.getLogger(__name__)
 #: The chunks' cull bin: front to back, before the opaque bin (20), so near
 #: ground hides what lies behind it before that is shaded (early depth test).
@@ -499,6 +503,8 @@ class Terrain:
         for node in self.nodes.values():
             node.remove_node()
         self.nodes.clear()
+        self._slots = {}
+        self._free_slots = list(range(len(self._chunk_values[0]) - 1, -1, -1))
         for cell, _ in self._cells.values():
             cell.remove_node()
         self._cells.clear()
@@ -802,11 +808,8 @@ class Terrain:
         root.set_shader_input("uBlendDepth", self.blend_depth)
         root.set_shader_input("uExposure", float(exposure))
         root.set_shader_input("uDebugMode", 0)
-        root.set_shader_input("uLevel", 0)
         root.set_shader_input("uMaxLevel", 0)
-        root.set_shader_input("uFace", 0)
-        root.set_shader_input("uChunk", LVecBase4f(0.0, 0.0, 1.0, 0.0))
-        root.set_shader_input("uChunkCentre", LVecBase4f(0.0, 0.0, 0.0, 0.0))
+        self._make_chunk_table(CHUNK_TABLE_SLOTS)
         # Inputs that change every frame are arrays bound once and written in
         # place: setting a new value on the root would make a new render
         # state per input per frame, for Panda to compose and collect.
@@ -904,8 +907,7 @@ class Terrain:
             del self._bounds[old]
             self.selector.set_bounds(old, None)
             if old in self.nodes:
-                self.nodes.pop(old).remove_node()
-                self.selector.set_ready(old, False)
+                self._drop_node(old)
             excess -= 1
 
     def _upload(self) -> int:
@@ -920,35 +922,82 @@ class Terrain:
             if chunk is None or key in self.nodes:
                 continue
             wet = bool(self.spec.has_ocean and chunk.h_min < 0.0)
-            node = NodePath(build_chunk_node(chunk, self.sea_swell if wet else 0.0))
+            slot = self._take_slot(key, chunk)
+            node = NodePath(
+                build_chunk_node(chunk, self.sea_swell if wet else 0.0, slot)
+            )
             node.set_python_tag("wet", wet)
             if wet and chunk.h_max < 0.0:
                 # All water: the reflection clips every vertex of it (its
                 # surface is not in its own mirror). Its bounds reach above
                 # the mirror plane, so the clip plane would not cull it.
                 node.hide(REFLECTION_CAMERA_MASK)
-            node.set_shader_input(
-                "uChunkCentre",
-                LVecBase4f(*chunk.centre, 0.25 / self.grid.spacing(key[0])),
-            )
-            u0, v0 = self.grid.uv_origin(key)
-            node.set_shader_input("uLevel", key[0])
-            node.set_shader_input("uFace", key[1])
-            node.set_shader_input(
-                "uChunk",
-                LVecBase4f(
-                    u0, v0, (1 << key[0]) * self.grid.uv_unit, chunk.skirt_depth
-                ),
-            )
             node.set_pos(*(chunk.centre - self._cell(key, wet)[1]))
             self.nodes[key] = node
             self.selector.set_ready(key, True)
             count += 1
         if count:
+            self._write_chunk_table()
             per_chunk = (time.perf_counter() - start) * 1e3 / count
             self.stats["upload_ms"] = 0.8 * self.stats["upload_ms"] + 0.2 * per_chunk
         self._evict_nodes()
         return count
+
+    def _make_chunk_table(self, slots: int) -> None:
+        """The chunk table: per slot, an uploaded chunk's own shader values,
+        three float texels (terrain.vert: centre and swell band; uv origin,
+        uv step and skirt depth; level and face). One texture for every
+        chunk instead of inputs per chunk node, so Panda draws them all in
+        one state (per-chunk inputs cost ~2.5 ms a frame low over the
+        planet). Kept rows (old values) when it grows."""
+        old = getattr(self, "_chunk_values", None)
+        values = np.zeros((4, slots, 4), dtype=np.float32)  # 4 rows: a power of two
+        if old is not None:
+            values[:, : old.shape[1]] = old
+        self._chunk_values = values
+        texture = Texture("terrain_chunks")
+        texture.setup_2d_texture(slots, 4, Texture.T_float, Texture.F_rgba32)
+        texture.set_compression(Texture.CM_off)
+        texture.set_minfilter(SamplerState.FT_nearest)
+        texture.set_magfilter(SamplerState.FT_nearest)
+        texture.set_wrap_u(SamplerState.WM_clamp)
+        texture.set_wrap_v(SamplerState.WM_clamp)
+        self._chunk_texture = texture
+        self._write_chunk_table()
+        self.root.set_shader_input("uChunkTable", texture)
+        if old is None:
+            self._slots: dict[tuple, int] = {}
+            self._free_slots = list(range(slots - 1, -1, -1))
+        else:
+            self._free_slots = list(range(slots - 1, old.shape[1] - 1, -1)) + (
+                self._free_slots
+            )
+
+    def _write_chunk_table(self) -> None:
+        # Panda keeps an RGBA texture's RAM image as BGRA.
+        bgra = self._chunk_values[..., [2, 1, 0, 3]]
+        memoryview(self._chunk_texture.modify_ram_image())[:] = bgra.tobytes()
+
+    def _take_slot(self, key, chunk: ChunkData) -> int:
+        """A free slot of the chunk table, filled with the chunk's values
+        (written to the texture once per upload pass)."""
+        if not self._free_slots:
+            self._make_chunk_table(2 * self._chunk_values.shape[1])
+        slot = self._free_slots.pop()
+        self._slots[key] = slot
+        level, face = key[0], key[1]
+        u0, v0 = self.grid.uv_origin(key)
+        values = self._chunk_values
+        values[0, slot] = (*chunk.centre, 0.25 / self.grid.spacing(level))
+        values[1, slot] = (u0, v0, (1 << level) * self.grid.uv_unit, chunk.skirt_depth)
+        values[2, slot] = (level, face, 0.0, 0.0)
+        return slot
+
+    def _drop_node(self, key) -> None:
+        """Remove an uploaded chunk's node and free its slot."""
+        self.nodes.pop(key).remove_node()
+        self._free_slots.append(self._slots.pop(key))
+        self.selector.set_ready(key, False)
 
     def _evict_nodes(self) -> None:
         cap = min(self._settings.node_cache_size, self._settings.store_size)
@@ -961,8 +1010,7 @@ class Terrain:
             if excess <= 0:
                 break
             if key not in self._keep and key not in wanted:
-                self.nodes.pop(key).remove_node()
-                self.selector.set_ready(key, False)
+                self._drop_node(key)
                 excess -= 1
 
     def _select(self, cam: np.ndarray) -> None:

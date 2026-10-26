@@ -8,7 +8,8 @@ in vec4 p3d_Vertex;     // relative to the chunk centre, planet axes (metres)
 in vec3 p3d_Normal;
 in float height;        // metres above sea level (a skirt's own, below its edge)
 in vec4 biome_a;        // snow, rock, grass, forest
-in vec4 biome_b;        // desert, beach, -, skirt flag
+in vec4 biome_b;        // desert, beach, then the chunk's slot (low byte; high
+                        // 7 bits) with the skirt flag (top bit), set at upload
 
 #pragma include "../../ocean/shaders/swell.glsl"
 
@@ -21,12 +22,14 @@ uniform vec3  uCamPos;          // MAIN camera in the render frame (also in the 
 uniform vec3  uPlanetCentre;    // planet centre in the render frame
 uniform int   uSeaSurface;      // 1: the planet has a sea: the seabed is lifted
                                 // to it and shaded as water
-uniform vec4  uChunk;           // first vertex's uv (wrapped), uv metres per vertex
-                                // step, skirt depth
-uniform int   uFace;            // cube face, for the texture tangents
-uniform vec4  uChunkCentre;     // the chunk's centre, planet frame (the swell's
-                                // point), and 1 / (4 vertex spacing): the finest
-                                // swell it draws
+// Each chunk's own values, by its slot (Terrain's chunk table; one texture
+// for all chunks rather than inputs per chunk, which made Panda set every
+// chunk's state apart: ~2.5 ms a frame). Per slot, three texels:
+//   0: the chunk's centre, planet frame (the swell's point), and
+//      1 / (4 vertex spacing): the finest swell it draws;
+//   1: its first vertex's uv (wrapped), uv metres per vertex step, skirt depth;
+//   2: its level and cube face.
+uniform sampler2D uChunkTable;
 
 out vec3 vRelPos;     // position relative to the camera, render frame
 out vec2 vUv;         // ground-anchored texture coordinate, metres
@@ -38,6 +41,8 @@ out vec4 vBiomeA;
 out vec4 vBiomeB;
 out vec4 vSwell;     // the swell: gradient per metre (planet axes), field
 flat out int vFace;
+flat out int vLevel;
+flat out float vStep;  // uv metres per vertex step (about the vertex spacing)
 
 const int QUADS = 64;
 const int VERTS = QUADS + 1;
@@ -64,7 +69,12 @@ void main() {
     vec3 world = (p3d_ModelMatrix * local).xyz;
     vec3 up = normalize(world - uPlanetCentre);
     vec3 N = normalize(rotation * p3d_Normal);
-    bool skirt = biome_b.a > 0.5;
+    int high = int(biome_b.a * 255.0 + 0.5);
+    int slot = int(biome_b.b * 255.0 + 0.5) + 256 * (high & 127);
+    bool skirt = high >= 128;
+    vec4 uChunkCentre = texelFetch(uChunkTable, ivec2(slot, 0), 0);
+    vec4 uChunk = texelFetch(uChunkTable, ivec2(slot, 1), 0);
+    vec4 ids = texelFetch(uChunkTable, ivec2(slot, 2), 0);
     float ground = skirt ? height + uChunk.w : height;  // the (edge) ground height
     float drawn = height;
     vSwell = vec4(0.0, 0.0, 0.0, SWELL_MEAN);
@@ -110,5 +120,7 @@ void main() {
     vUp = up;
     vBiomeA = biome_a;
     vBiomeB = biome_b;
-    vFace = uFace;
+    vFace = int(ids.y + 0.5);
+    vLevel = int(ids.x + 0.5);
+    vStep = uChunk.z;
 }

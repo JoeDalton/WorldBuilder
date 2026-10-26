@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import functools
 
+import numpy as np
 from panda3d.core import (
     BitMask32,
     BoundingBox,
@@ -31,6 +32,7 @@ from panda3d.core import (
 )
 
 from world_builder.terrain.chunkgen import VERTEX_DTYPE, ChunkData, triangle_indices
+from world_builder.terrain.cubesphere import VERTS
 
 
 @functools.cache
@@ -64,18 +66,34 @@ def shared_triangles() -> GeomTriangles:
     return tris
 
 
-def build_chunk_node(chunk: ChunkData, margin: float = 0.0) -> GeomNode:
+def build_chunk_node(
+    chunk: ChunkData, margin: float = 0.0, slot: int | None = None
+) -> GeomNode:
     """A GeomNode for one chunk, relative to its centre (:attr:`ChunkData.centre`).
 
     :param chunk: generated chunk data
     :param margin: metres to widen its bounds by on every side (what the
         shader moves its vertices by: the sea's swell)
+    :param slot: the chunk's slot in its terrain's chunk table, written into
+        every vertex (``biome_b``'s last two bytes: the slot's low byte, then
+        its high bits under the skirt flag); None leaves them as generated
     :returns: the node, bounds final
     """
     vdata = GeomVertexData(f"terrain{chunk.key}", vertex_format(), Geom.UH_static)
     rows = len(chunk.vertex_bytes) // VERTEX_DTYPE.itemsize
     vdata.unclean_set_num_rows(rows)
-    memoryview(vdata.modify_array(0)).cast("B")[:] = chunk.vertex_bytes
+    buffer = memoryview(vdata.modify_array(0)).cast("B")
+    buffer[:] = chunk.vertex_bytes
+    if slot is not None:
+        if not 0 <= slot < 1 << 15:
+            raise ValueError(f"chunk slot {slot} out of range")
+        rows_view = np.frombuffer(buffer, np.uint8).reshape(rows, VERTEX_DTYPE.itemsize)
+        b = VERTEX_DTYPE.fields["biome_b"][1]
+        grid = VERTS * VERTS
+        rows_view[:, b + 2] = slot & 0xFF
+        rows_view[:grid, b + 3] = slot >> 8
+        rows_view[grid:, b + 3] = (slot >> 8) | 0x80  # the skirt flag
+    del buffer
     bounds = BoundingBox(
         Point3(*(chunk.aabb_min - margin)), Point3(*(chunk.aabb_max + margin))
     )

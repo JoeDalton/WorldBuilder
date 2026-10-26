@@ -93,6 +93,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gives the world the split cameras it needs). 1-1.7 ms less GPU time low
   over the planet, ~1.2 ms more main-thread time: for GPU-limited setups.
   The demos take `--half-res-clouds`. (#20)
+- The terrain's chunks share one render state: their own shader values are
+  in a chunk table instead of inputs per chunk node, which made Panda draw
+  each chunk in a state of its own. Low flight: mean frame 12.45 → 10.55 ms,
+  p95 16 → 14.1 ms, refinement lag ~190 → ~150 ms (median); the images are
+  unchanged (#20):
+  - The table is a float texture on the terrain's root (`uChunkTable`), one
+    slot per uploaded chunk, three texels each: centre and swell band; uv
+    origin, uv step and skirt depth; level and face. Slots are freed when
+    chunks are evicted, and the table doubles when it runs out.
+  - Every vertex names its chunk's slot in `biome_b`'s last two bytes,
+    written at upload (`mesh.build_chunk_node(chunk, margin, slot)`). The
+    skirt flag is now `biome_b`'s top bit (the alpha byte >= 128); the
+    generated chunk data keep 255 there.
+  - The chunk nodes' `uChunk`, `uChunkCentre`, `uLevel` and `uFace` inputs
+    are gone; `terrain.vert` fetches the values and hands the level and the
+    vertex step to the fragment stage as flat varyings.
 
 ### Removed
 

@@ -265,6 +265,12 @@ planet's surface by day the moon is a pale disc in a blue sky (see
 - **Draw order.** The chunks draw front to back in their own cull bin
   (`terrain.TERRAIN_BIN`, before the opaque bin), so near ground and water
   hide what lies behind them before it is shaded.
+- **One state for every chunk.** A chunk's own shader values (centre and
+  swell band, uv origin and step, skirt depth, level, face) are in the
+  terrain's chunk table, a float texture with one slot per uploaded chunk;
+  each vertex names its slot (`biome_b`'s last two bytes, written at upload,
+  the skirt flag in the top bit). Inputs per chunk node made Panda draw each
+  chunk in a state of its own: ~2 ms a frame low over the planet.
 - **The terrain is reflected by the sea.** The sea's reflection camera
   draws the scene a second time; `TerrainSettings.reflected` off (LOW's)
   hides the terrain from it by `depth.REFLECTION_CAMERA_MASK`. Its clip

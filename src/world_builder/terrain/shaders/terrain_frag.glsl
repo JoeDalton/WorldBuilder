@@ -22,9 +22,11 @@ in float vSeabed;
 in vec3 vNormal;
 in vec3 vUp;
 in vec4 vBiomeA;   // snow, rock, grass, forest
-in vec4 vBiomeB;   // desert, beach, -, skirt flag
+in vec4 vBiomeB;   // desert, beach, the chunk's slot; skirt flag (a >= 0.5)
 in vec4 vSwell;    // the swell: gradient per metre (planet axes), field
 flat in int vFace;
+flat in int vLevel;    // the chunk's level
+flat in float vStep;   // its vertex spacing (uv metres per step), metres
 
 uniform sampler2DArray uAlbedoH;  // sRGB albedo + height
 uniform sampler2DArray uNormRA;   // normal xy, roughness, ao
@@ -46,10 +48,8 @@ uniform int   uOwnAtmosphere;     // this planet's atmosphere index, -1 = airles
 uniform int   uSeaSurface;
 uniform vec3  uShallowWater;      // the sea surface's shallow tint, linear
 uniform float uShallowDepth;      // and its e-folding depth, metres
-uniform vec4  uChunk;             // its z: the chunk's vertex spacing, metres
 
 uniform int   uDebugMode;  // 0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts
-uniform int   uLevel;      // per chunk
 uniform int   uMaxLevel;
 
 out vec4 fragColor;
@@ -117,7 +117,7 @@ void main() {
         bool raw;
         vec3 near = seaShade(uCamPos + vRelPos, vSwell,
                              vRelPos / max(dist, 1e-3), dist,
-                             -vSeabed, uChunk.z, raw);
+                             -vSeabed, vStep, raw);
         if (!raw) {
             near = aces_tonemap(applyAtmospheres(near, vRelPos / max(dist, 1e-3), dist, L)
                                 * uExposure);
@@ -147,7 +147,7 @@ void main() {
     }
 
     if (uDebugMode == 1) {
-        fragColor = vec4(hue(float(uLevel) / float(uMaxLevel + 1)) * (0.55 + 0.45 * upN), 1.0);
+        fragColor = vec4(hue(float(vLevel) / float(uMaxLevel + 1)) * (0.55 + 0.45 * upN), 1.0);
         return;
     }
     if (uDebugMode == 3) {
@@ -281,7 +281,7 @@ void main() {
             bool raw;
             vec3 near = seaShade(uCamPos + vRelPos, vSwell,
                              vRelPos / max(dist, 1e-3), dist,
-                                 -vSeabed, uChunk.z, raw);
+                                 -vSeabed, vStep, raw);
             if (raw) {
                 fragColor = vec4(near, 1.0);
                 return;
@@ -292,7 +292,7 @@ void main() {
     }
 
     if (uDebugMode == 5) {
-        C = mix(C, hue(float(uLevel) / float(uMaxLevel + 1)), 0.5);
+        C = mix(C, hue(float(vLevel) / float(uMaxLevel + 1)), 0.5);
     }
     // Aerial perspective: the air between the camera and the ground, of
     // every atmosphere the sight line crosses.
