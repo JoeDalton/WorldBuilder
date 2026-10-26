@@ -5,20 +5,24 @@ drawn this frame at which level of detail. Pure numpy (the Panda side is
 
 - **Ranges.** A rock of radius r is drawn while its diameter covers at least
   ``min_pixels`` on screen: out to ``2 r * pixels_per_radian / min_pixels``.
-  Each size class keeps the cells within its largest rock's range (a box of
-  cells around the camera, clipped to the field): small rocks near, big ones
-  far.
+  Each size class keeps the cells within its largest rock's range: a box of
+  cells around the camera (its **window**), clipped to the field. Small rocks
+  are kept near, big ones far.
+- **Windows move by their difference.** When the camera crosses a cell, only
+  the cells entering the window are scattered, and the rocks of the cells
+  leaving it are freed. A window grows toward its range by whole layers of
+  cells, at most about :data:`CELLS_PER_FRAME` new cells per frame (each
+  class at least one layer), so a first frame in a ring 20,000 km wide, or a
+  budget's step, is spread over frames. :attr:`Population.settled` tells
+  when every window has reached its range.
 - **Slots.** Each rock of those cells holds a slot (a row of the instance
-  table) until its cell leaves the range. Slots are reused; the table only
+  table) until its cell leaves the window. Slots are reused; the table only
   grows.
 - **Visible pass.** Per frame, over the rocks in slots: big enough on
   screen, inside some camera's view (the main one, a rear-view mirror), and
   at the coarsest level of detail whose error stays under
   ``lod_error_px`` pixels (with 15 % hysteresis against flicker). The result
   is the slots grouped by (prototype, level): one draw each.
-
-Cells are keyed by their three indices packed into one int64 (21 bits each),
-so cell sets are sorted integer arrays.
 """
 
 from __future__ import annotations
@@ -30,36 +34,13 @@ import numpy as np
 from world_builder.asteroids.motion import orientation
 from world_builder.asteroids.scatter import ROCK_DTYPE, Scatter
 
-#: Cell indices must stay within +-2^20 per axis (keys pack 21 bits each).
-_KEY_BITS = 21
-_KEY_OFFSET = 1 << (_KEY_BITS - 1)
+#: New cells scattered per frame, shared by the classes (each always adds a
+#: layer): about 7 ms of native scatter.
+CELLS_PER_FRAME = 30_000
 #: A coarser level needs its error this much under the limit to be taken.
 LOD_HYSTERESIS = 1.15
 #: The table's floats per slot: 4 RGBA texels.
 SLOT_FLOATS = 16
-
-
-def cell_keys(cells: np.ndarray) -> np.ndarray:
-    """:returns: (n,) int64 keys of (n, 3) cell indices"""
-    cells = np.asarray(cells, dtype=np.int64).reshape(-1, 3)
-    if np.any(np.abs(cells) >= _KEY_OFFSET):
-        raise ValueError("cell index out of range for the key packing")
-    shifted = cells + _KEY_OFFSET
-    return (
-        (shifted[:, 0] << (2 * _KEY_BITS))
-        | (shifted[:, 1] << _KEY_BITS)
-        | shifted[:, 2]
-    )
-
-
-def key_cells(keys: np.ndarray) -> np.ndarray:
-    """:returns: (n, 3) cell indices of :func:`cell_keys` keys"""
-    keys = np.asarray(keys, dtype=np.int64)
-    mask = (1 << _KEY_BITS) - 1
-    cells = np.stack(
-        (keys >> (2 * _KEY_BITS), (keys >> _KEY_BITS) & mask, keys & mask), 1
-    )
-    return cells - _KEY_OFFSET
 
 
 @dataclass
@@ -89,14 +70,15 @@ class Population:
         self.capacity = 0
         self.live = np.zeros(0, dtype=bool)
         self.rocks = np.zeros(0, dtype=ROCK_DTYPE)
-        self.keys = np.zeros(0, dtype=np.int64)
+        self.cells = np.zeros((0, 3), dtype=np.int64)
         self.lod = np.zeros(0, dtype=np.int8)
         self._free: list[int] = []
         self._grow(capacity)
         classes = len(scatter.classes)
-        #: per class: the sorted keys of the cells held, and their window
-        self._cells = [np.zeros(0, dtype=np.int64) for _ in range(classes)]
-        self._windows: list[tuple | None] = [None] * classes
+        #: per class: the cells held, (first, last) cell indices; None = none
+        self._windows: list[_Window | None] = [None] * classes
+        #: whether every window has reached its range
+        self.settled = False
 
     # ── slots ─────────────────────────────────────────────────────────────
 
@@ -106,8 +88,8 @@ class Population:
         self.rocks = np.concatenate(
             (self.rocks, np.zeros(capacity - old, dtype=ROCK_DTYPE))
         )
-        self.keys = np.concatenate(
-            (self.keys, np.zeros(capacity - old, dtype=np.int64))
+        self.cells = np.concatenate(
+            (self.cells, np.zeros((capacity - old, 3), dtype=np.int64))
         )
         self.lod = np.concatenate(
             (self.lod, np.full(capacity - old, -1, dtype=np.int8))
@@ -143,58 +125,67 @@ class Population:
         return np.minimum(reach, far) + hi
 
     def update(
-        self, camera: np.ndarray, ranges: np.ndarray
+        self,
+        camera: np.ndarray,
+        ranges: np.ndarray,
+        cells_per_frame: int = CELLS_PER_FRAME,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Hold the cells within each class's range of the camera.
+        """Move each class's window toward the cells within its range of the
+        camera.
 
         :param camera: (3,) the camera, field frame
         :param ranges: (classes,) from :meth:`ranges`
+        :param cells_per_frame: new cells, at most, shared by the classes
+            (each adds at least one layer of its window)
         :returns: the slots filled and the slots freed
         """
         camera = np.asarray(camera, dtype=np.float64)
         b_lo, b_hi = self.scatter.spec.shape.bounds()
         added, removed = [], []
+        settled = True
+        quota = max(1, cells_per_frame // len(self.scatter.classes))
         for cls, c in enumerate(self.scatter.classes):
             lo = np.maximum(camera - ranges[cls], b_lo)
             hi = np.minimum(camera + ranges[cls], b_hi)
-            if np.any(hi < lo):
-                window = None
-            else:
-                window = (
-                    tuple(np.floor(lo / c.cell).astype(np.int64)),
-                    tuple(np.floor(hi / c.cell).astype(np.int64)),
+            target = (
+                None
+                if np.any(hi < lo)
+                else _Window(
+                    np.floor(lo / c.cell).astype(np.int64),
+                    np.floor(hi / c.cell).astype(np.int64),
                 )
-            if window == self._windows[cls]:
+            )
+            old = self._windows[cls]
+            home = np.floor(camera / c.cell).astype(np.int64)
+            window = _toward(old, target, home, quota)
+            settled &= window == target
+            if window == old:
                 continue
             self._windows[cls] = window
-            if window is None:
-                keys = np.zeros(0, dtype=np.int64)
-            else:
-                axes = [np.arange(a, b + 1) for a, b in zip(*window)]
-                grid = np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(
-                    -1, 3
-                )
-                keys = np.sort(cell_keys(grid))
-            old = self._cells[cls]
-            gone = np.setdiff1d(old, keys, assume_unique=True)
-            new = np.setdiff1d(keys, old, assume_unique=True)
-            self._cells[cls] = keys
-            if len(gone):
-                held = np.flatnonzero(self.live & (self.rocks["cls"] == cls))
-                free = held[np.isin(self.keys[held], gone)]
-                self.live[free] = False
-                self.lod[free] = -1
-                self._free.extend(free.tolist())
-                removed.append(free)
+            # Only a window that lost cells frees rocks
+            grew = old is not None and window is not None and window.meet(old) == old
+            held = (
+                np.zeros(0, dtype=np.int64)
+                if grew
+                else np.flatnonzero(self.live & (self.rocks["cls"] == cls))
+            )
+            if len(held):
+                free = held[~_inside(self.cells[held], window)]
+                if len(free):
+                    self.live[free] = False
+                    self.lod[free] = -1
+                    self._free.extend(free.tolist())
+                    removed.append(free)
+            new = _difference(window, old)
             if len(new):
-                rocks = self.scatter.rocks_in_cells(cls, key_cells(new))
+                rocks = self.scatter.rocks_in_cells(cls, new)
                 slots = self._allocate(len(rocks))
                 self.rocks[slots] = rocks
-                own = np.floor(rocks["centre"] / c.cell).astype(np.int64)
-                self.keys[slots] = cell_keys(own)
+                self.cells[slots] = np.floor(rocks["centre"] / c.cell).astype(np.int64)
                 self.live[slots] = True
                 self.lod[slots] = -1
                 added.append(slots)
+        self.settled = settled
         empty = np.zeros(0, dtype=np.int64)
         return (
             np.concatenate(added) if added else empty,
@@ -264,10 +255,9 @@ class Population:
         """
         prototypes, levels = errors.shape
         slots = np.flatnonzero(self.live if ready is None else self.live & ready)
-        rocks = self.rocks[slots]
-        rel = rocks["centre"] - camera
-        dist = np.sqrt(np.sum(rel * rel, axis=1))
-        radius = rocks["radius"]
+        rel = self.rocks["centre"][slots] - camera
+        dist = np.sqrt(np.einsum("ij,ij->i", rel, rel))
+        radius = self.rocks["radius"][slots]
         scale = (
             radius * pixels_per_radian / np.maximum(dist, 1e-6)
         )  # px per unit radius
@@ -295,3 +285,94 @@ class Population:
         order = np.argsort(bucket, kind="stable")
         counts = np.bincount(bucket, minlength=prototypes * levels)
         return Visible(slots=slots[order], counts=counts, in_range=in_range)
+
+
+# ── windows ─────────────────────────────────────────────────────────────────
+
+
+class _Window:
+    """A box of cells: indices *first* to *last*, inclusive, per axis."""
+
+    __slots__ = ("first", "last")
+
+    def __init__(self, first: np.ndarray, last: np.ndarray):
+        self.first = np.asarray(first, dtype=np.int64)
+        self.last = np.asarray(last, dtype=np.int64)
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, _Window)
+            and np.array_equal(self.first, other.first)
+            and np.array_equal(self.last, other.last)
+        )
+
+    @property
+    def cells(self) -> int:
+        return int(np.prod(np.maximum(self.last - self.first + 1, 0)))
+
+    def meet(self, other: _Window | None) -> _Window | None:
+        """:returns: the cells in both, or None"""
+        if other is None:
+            return None
+        first = np.maximum(self.first, other.first)
+        last = np.minimum(self.last, other.last)
+        return None if np.any(last < first) else _Window(first, last)
+
+    def grid(self) -> np.ndarray:
+        """:returns: (n, 3) its cells"""
+        axes = [np.arange(a, b + 1) for a, b in zip(self.first, self.last)]
+        return np.stack(np.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
+
+
+def _toward(
+    old: _Window | None, target: _Window | None, home: np.ndarray, budget: int
+) -> _Window | None:
+    """The window this frame: what of *old* is still in *target*, grown
+    toward it by whole layers while the new cells stay within *budget* (at
+    least one layer). With nothing of *old* in it, it starts from the cell of
+    *target* nearest the camera's (*home*)."""
+    if target is None:
+        return None
+    start = np.clip(home, target.first, target.last)
+    window = target.meet(old)
+    added = 0
+    if window is None or not _inside(start[None, :], window)[0]:
+        window, added = _Window(start, start), 1
+    while window != target:
+        grown = target.meet(_Window(window.first - 1, window.last + 1))
+        more = grown.cells - window.cells
+        if added and added + more > budget:
+            break
+        window, added = grown, added + more
+    return window
+
+
+def _inside(cells: np.ndarray, window: _Window | None) -> np.ndarray:
+    """:returns: (n,) whether each of *cells* (n, 3) is in *window*"""
+    if window is None:
+        return np.zeros(len(cells), dtype=bool)
+    return np.all((cells >= window.first) & (cells <= window.last), axis=1)
+
+
+def _difference(new: _Window | None, old: _Window | None) -> np.ndarray:
+    """:returns: (n, 3) the cells of *new* not in *old*: up to six slabs"""
+    if new is None:
+        return np.zeros((0, 3), dtype=np.int64)
+    common = new.meet(old)
+    if common is None:
+        return new.grid()
+    slabs = []
+    first, last = new.first.copy(), new.last.copy()
+    for axis in range(3):
+        if first[axis] < common.first[axis]:
+            lo, hi = first.copy(), last.copy()
+            hi[axis] = common.first[axis] - 1
+            slabs.append(_Window(lo, hi).grid())
+        if common.last[axis] < last[axis]:
+            lo, hi = first.copy(), last.copy()
+            lo[axis] = common.last[axis] + 1
+            slabs.append(_Window(lo, hi).grid())
+        first[axis], last[axis] = common.first[axis], common.last[axis]
+    if not slabs:
+        return np.zeros((0, 3), dtype=np.int64)
+    return np.concatenate(slabs)

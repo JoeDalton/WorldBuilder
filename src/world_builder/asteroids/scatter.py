@@ -44,6 +44,7 @@ from scipy.spatial import cKDTree
 from world_builder.asteroids.distributions import TABLE_SIZE, interpolate
 from world_builder.asteroids.motion import quat_multiply
 from world_builder.asteroids.spec import (
+    Annulus,
     AroundAxis,
     Box,
     FieldSpec,
@@ -263,24 +264,7 @@ class _Tables:
 
     def profile(self, p: np.ndarray) -> np.ndarray:
         """:returns: the shape's density profile at field-frame points (n, 3)"""
-        shape = self.spec.shape
-        x, y, z = p[:, 0], p[:, 1], p[:, 2]
-        if isinstance(shape, Box):
-            hx, hy, hz = shape.half_size
-            if shape.edge > 0.0:
-                e = shape.edge
-                sx = _smoothstep01((hx - np.abs(x)) / e)
-                sy = _smoothstep01((hy - np.abs(y)) / e)
-                sz = _smoothstep01((hz - np.abs(z)) / e)
-                return sx * sy * sz
-            inside = (np.abs(x) <= hx) & (np.abs(y) <= hy) & (np.abs(z) <= hz)
-            return inside.astype(np.float64)
-        if isinstance(shape, Sphere):
-            d = np.sqrt(x * x + y * y + z * z)
-            if shape.edge > 0.0:
-                return _smoothstep01((shape.radius - d) / shape.edge)
-            return (d <= shape.radius).astype(np.float64)
-        raise TypeError(f"unknown field shape {shape!r}")
+        return self.spec.shape.profile(p)
 
     def clump(self, p: np.ndarray) -> np.ndarray:
         """:returns: the clumping factor at field-frame points (n, 3)"""
@@ -534,6 +518,9 @@ class _WbScatter(ctypes.Structure):
         ("tumble_fraction", ctypes.c_double),
         ("keep_outs", ctypes.c_int32),
         ("keep_out", ctypes.c_void_p),
+        ("radial_edge", ctypes.c_double),
+        ("profile_n", ctypes.c_int32),
+        ("profile", ctypes.c_void_p),
     ]
 
 
@@ -629,9 +616,18 @@ class Scatter:
         if isinstance(shape, Box):
             s.shape = 0
             s.half[:] = shape.half_size
-        else:
+        elif isinstance(shape, Sphere):
             s.shape = 1
             s.half[:] = (shape.radius, 0.0, 0.0)
+        elif isinstance(shape, Annulus):
+            s.shape = 2
+            s.half[:] = (shape.inner, shape.outer, 0.5 * shape.thickness)
+            s.radial_edge = shape.radial_edge
+            s.profile_n = len(shape.radial_profile)
+            if shape.radial_profile:
+                s.profile = ptr(shape.radial_profile)
+        else:
+            raise TypeError(f"unknown field shape {shape!r}")
         s.edge = shape.edge
         s.classes = len(t.classes)
         s.poisson_max = t.poisson_max

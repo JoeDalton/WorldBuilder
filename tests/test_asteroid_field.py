@@ -12,8 +12,6 @@ from world_builder.asteroids.motion import orientation
 from world_builder.asteroids.population import (
     LOD_HYSTERESIS,
     Population,
-    cell_keys,
-    key_cells,
 )
 from world_builder.asteroids.scatter import Scatter
 from world_builder.asteroids.spec import (
@@ -21,6 +19,7 @@ from world_builder.asteroids.spec import (
     Box,
     Density,
     FieldSpec,
+    MaterialSpec,
     ShapeSpec,
     SpinSpec,
     Tumble,
@@ -57,12 +56,66 @@ def _small_field(**kwargs) -> FieldSpec:
     )
 
 
-def test_cell_keys_round_trip():
-    cells = np.array([[0, 0, 0], [-1, 2, -3], [1000, -999999, 12345]])
-    np.testing.assert_array_equal(key_cells(cell_keys(cells)), cells)
-    assert len(set(cell_keys(cells).tolist())) == 3
-    with pytest.raises(ValueError):
-        cell_keys([[1 << 21, 0, 0]])
+def test_a_window_adds_only_its_new_cells():
+    from world_builder.asteroids.population import _difference, _Window
+
+    old = _Window([0, 0, 0], [4, 4, 4])
+    for new in (
+        _Window([1, 0, -1], [5, 4, 3]),  # moved a cell, clipped
+        _Window([-2, -2, -2], [6, 6, 6]),  # grown
+        _Window([10, 10, 10], [11, 12, 13]),  # elsewhere
+        _Window([1, 1, 1], [3, 3, 3]),  # shrunk: nothing new
+    ):
+        cells = {tuple(c) for c in _difference(new, old).tolist()}
+        expected = {tuple(c) for c in new.grid().tolist()} - {
+            tuple(c) for c in old.grid().tolist()
+        }
+        assert cells == expected
+        assert len(cells) == len(_difference(new, old))  # each once
+
+
+def test_windows_grow_by_layers_within_the_quota():
+    from world_builder.asteroids.population import _toward, _Window
+
+    target = _Window([-20, -20, -2], [20, 20, 2])
+    home = np.array([3, -4, 0])
+    window, frames = None, 0
+    while window != target:
+        before = 0 if window is None else window.cells
+        window = _toward(window, target, home, 2000)
+        frames += 1
+        # within the quota once past the first layer; the camera's cell held
+        assert window.cells - before <= max(2000, 27 * 5)
+        assert np.all((window.first <= home) & (home <= window.last))
+    assert frames > 3
+    # moved a cell: the window follows the target at once
+    moved = _Window(target.first + [1, 0, 0], target.last + [1, 0, 0])
+    assert _toward(target, moved, home, 2000) == moved
+    # teleported: it restarts around the camera
+    far = _Window([500, 500, -2], [540, 540, 2])
+    restart = _toward(target, far, np.array([520, 520, 0]), 2000)
+    assert restart.cells < far.cells
+    assert np.all((restart.first <= [520, 520, 0]) & ([520, 520, 0] <= restart.last))
+
+
+def test_a_gradual_fill_holds_the_same_rocks():
+    scatter = Scatter(_small_field())
+    camera = np.array([100.0, -200.0, 50.0])
+    ranges = np.full(len(scatter.classes), 1500.0)
+    whole = Population(scatter)
+    whole.update(camera, ranges, cells_per_frame=10**9)
+    assert whole.settled
+    gradual = Population(scatter)
+    frames = 0
+    while True:
+        gradual.update(camera, ranges, cells_per_frame=len(scatter.classes) * 30)
+        frames += 1
+        if gradual.settled:
+            break
+    assert frames > 2
+    assert sorted(gradual.rocks[gradual.live]["id"]) == sorted(
+        whole.rocks[whole.live]["id"]
+    )
 
 
 def test_the_population_holds_the_rocks_in_range():
@@ -266,6 +319,7 @@ def built_field(window):
         sizes=Distribution.uniform(80.0, 150.0),
         shapes=ShapeSpec(prototypes=2),
         spin=SpinSpec(Distribution.constant(0.3), size_exponent=0.0),
+        material=MaterialSpec(Distribution.constant(0.1)),
     )
     field = AsteroidField(
         window,
@@ -336,3 +390,26 @@ def test_the_rocks_turn_with_the_given_clock_only(window, built_field):
     c = _frame(window, field, camera)
     assert not np.array_equal(a, c)
     clock["t"] = 0.0
+
+
+def test_far_rocks_keep_their_textured_colour(window, built_field):
+    """Past the texture distance a rock is drawn in its textures' mean
+    colour: the colour its textures average to, not paler by its ice (the
+    mean colours mixed by weight made rocks of 10 % ice 1.5 times brighter
+    and grey)."""
+    field, _ = built_field
+    window.set_background_color(0, 0, 0, 1)
+    field.set_sun((0.0, -1.0, 0.3), (2.4, 2.25, 2.0), (0.03, 0.03, 0.035))
+    camera = _look_at_rock(window, field)
+    try:
+        field.root.set_shader_input("uDetailFar", 1.0e7)
+        textured = _frame(window, field, camera)
+        field.root.set_shader_input("uDetailFar", 1.0)
+        flat = _frame(window, field, camera)
+    finally:
+        field.root.set_shader_input("uDetailFar", float(field.settings.detail_far))
+    rock = (textured.sum(axis=2) > 0) & (flat.sum(axis=2) > 0)
+    assert rock.sum() > 50
+    a, b = textured[rock].mean(axis=0), flat[rock].mean(axis=0)
+    np.testing.assert_allclose(b, a, rtol=0.15)
+    assert b.std() > 3  # brown, not grey

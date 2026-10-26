@@ -5,6 +5,7 @@
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "../../ocean/shaders/water.glsl"
+#pragma include "cube_faces.glsl"
 #pragma include "terrain_material.glsl"
 #pragma include "object_light.glsl"
 
@@ -28,6 +29,8 @@ in vec4 vBiomeA;   // snow, rock, grass, forest
 in vec4 vBiomeB;   // desert, beach, the chunk's slot; skirt flag (a >= 0.5)
 in vec4 vSwell;    // the swell: gradient per metre (planet axes), field
 flat in int vFace;
+flat in vec3 vFaceU;   // the face's texture axes, render frame
+flat in vec3 vFaceV;
 flat in int vLevel;    // the chunk's level
 flat in float vStep;   // its vertex spacing (uv metres per step), metres
 
@@ -42,6 +45,10 @@ uniform vec3  uSunDir;            // toward the sun, render frame
 uniform vec3  uSunColor;          // sunlight above any air
 uniform vec3  uAmbient;           // sky light (near none on an airless body)
 uniform float uExposure;
+uniform int   uTonemap;           // 1: aces_tonemap, 0: a plain display encoding
+uniform int   uRadialLight;       // 1: a planet's day and night, by its vertical;
+                                  // 0: an object's (a rock): each face as it
+                                  // faces the sun, the sky light from all round
 uniform int   uOwnAtmosphere;     // this planet's atmosphere index, -1 = airless
 uniform int   uSeaSurface;
 uniform vec3  uShallowWater;      // the sea surface's shallow tint, linear
@@ -75,7 +82,7 @@ void main() {
     // Planet-scale day factor: past the terminator the sun does not light the
     // ground, whatever the local slope says. Used on an airless body only;
     // through an atmosphere, atmoSunlight below also does the reddening.
-    float day = smoothstep(-0.12, 0.08, dot(up, L));
+    float day = uRadialLight == 1 ? smoothstep(-0.12, 0.08, dot(up, L)) : 1.0;
 
 #ifdef SEA_NEAR
     // Water wholly in its near look: none of the land's or the far water's
@@ -142,8 +149,8 @@ void main() {
     float roughness = 0.85;
     float ao = 1.0;
     float far = smoothstep(0.6 * uDetailFar, uDetailFar, dist);
-    vec3 Tu = normalize(FACE_U[vFace] - up * dot(up, FACE_U[vFace]));
-    vec3 Tv = normalize(FACE_V[vFace] - up * dot(up, FACE_V[vFace]));
+    vec3 Tu = normalize(vFaceU - up * dot(up, vFaceU));
+    vec3 Tv = normalize(vFaceV - up * dot(up, vFaceV));
     bool water = uSeaSurface == 1 && vSeabed < 0.0;
 
     if (water) {
@@ -173,8 +180,10 @@ void main() {
         sunDay = 1.0;
     }
     // Sky light fades through twilight.
-    vec3 skylight = uAmbient * smoothstep(-0.2, 0.2, dot(up, L));
-    vec3 C = objectLight(albedo, surfaceN, roughness, ao, up, L, V, sunlight, sunDay, skylight);
+    vec3 skylight = uRadialLight == 1 ? uAmbient * smoothstep(-0.2, 0.2, dot(up, L))
+                                      : uAmbient;
+    vec3 C = objectLight(albedo, surfaceN, roughness, ao,
+                         uRadialLight == 1 ? up : surfaceN, L, V, sunlight, sunDay, skylight);
     if (water) {
         // Sky reflected at grazing angles (Schlick).
         float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(surfaceN, V), 0.0), 5.0);
@@ -201,5 +210,7 @@ void main() {
     // Aerial perspective: the air between the camera and the ground, of
     // every atmosphere the sight line crosses.
     C = applyAtmospheres(C, vRelPos / max(dist, 1e-3), dist, L);
-    fragColor = vec4(aces_tonemap(C * uExposure), 1.0);
+    C *= uExposure;
+    fragColor = vec4(uTonemap == 1 ? aces_tonemap(C)
+                                   : pow(clamp(C, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
 }

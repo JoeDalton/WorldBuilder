@@ -5,7 +5,10 @@ A field's rocks and statistics, rendered offline to PNG: tune a spec with no
 Per field, a sheet of two maps, looking down the z axis and along the y axis:
 every rock as a disc of its radius (grey rock to pale blue ice), over the
 density at the map's middle plane (dark: none, lighter: denser), keep-outs
-outlined. With matplotlib installed (a development dependency), a second
+outlined. A field too big to scatter whole (more than
+:data:`MAX_ROCKS` rocks: a ring) is mapped on a patch of :data:`PATCH_M`
+around a point of it, beside a top view of its density alone. With
+matplotlib installed (a development dependency), a second
 sheet: the rocks' sizes, spin rates, spin axes and ice, each against the
 spec's distribution::
 
@@ -28,12 +31,30 @@ from pathlib import Path
 import numpy as np
 
 from world_builder.asteroids.scatter import Scatter
-from world_builder.asteroids.spec import PRESETS, AroundAxis, FieldSpec
+from world_builder.asteroids.spec import PRESETS, Annulus, AroundAxis, FieldSpec
 from world_builder.terrain.pngio import write_png
 
+#: Fields with more rocks than this are mapped on a patch.
+MAX_ROCKS = 300_000
+#: The patch's side, metres.
+PATCH_M = 40_000.0
 _ROCK = np.array([0.55, 0.52, 0.48])
 _ICE = np.array([0.75, 0.88, 1.0])
 _KEEP_OUT = np.array([1.0, 0.35, 0.2])
+
+
+def _region(spec: FieldSpec) -> tuple[np.ndarray, np.ndarray]:
+    """:returns: what is mapped: the whole field, or a patch of a big one
+    (in a ring, half way across it)"""
+    lo, hi = spec.shape.bounds()
+    if spec.summary()["expected_count"] <= MAX_ROCKS:
+        return lo, hi
+    shape = spec.shape
+    centre = np.zeros(3)
+    if isinstance(shape, Annulus):
+        centre[1] = 0.5 * (shape.inner + shape.outer)
+    half = np.minimum(0.5 * PATCH_M, 0.5 * (hi - lo))
+    return np.maximum(centre - half, lo), np.minimum(centre + half, hi)
 
 
 def _map(
@@ -42,9 +63,11 @@ def _map(
     axes: tuple[int, int],
     size: int,
     slab: float | None,
+    region: tuple[np.ndarray, np.ndarray],
 ) -> np.ndarray:
-    """:returns: (size, size, 3) uint8: the rocks seen along the third axis"""
-    lo, hi = scatter.spec.shape.bounds()
+    """:returns: (size, size, 3) uint8: the rocks of *region* seen along the
+    third axis"""
+    lo, hi = region
     extent = float(np.max(hi - lo)) * 1.05
     centre = 0.5 * (lo + hi)
     a, b = axes
@@ -55,7 +78,13 @@ def _map(
     u, v = np.meshgrid(pixels + centre[a], pixels[::-1] + centre[b])
     points = np.zeros((size * size, 3))
     points[:, a], points[:, b], points[:, depth] = u.ravel(), v.ravel(), centre[depth]
-    density = scatter.density(points).reshape(size, size)
+    clumping = scatter.spec.density.clumping
+    if clumping is not None and extent / size > clumping.scale:
+        # pixels wider than the clumps: their mean
+        density = scatter.spec.shape.profile(points) * clumping.coverage
+    else:
+        density = scatter.density(points)
+    density = density.reshape(size, size)
     image = (0.04 + 0.16 * density)[:, :, None] * np.ones(3)
     if slab is not None:
         rocks = rocks[np.abs(rocks["centre"][:, depth] - centre[depth]) < slab]
@@ -162,13 +191,18 @@ def main() -> None:
         spec = PRESETS[name]
         scatter = Scatter(spec)
         start = time.perf_counter()
-        lo, hi = spec.shape.bounds()
-        rocks = scatter.rocks_in_box(lo - 1.0, hi + 1.0)
+        region = _region(spec)
+        rocks = scatter.rocks_in_box(region[0] - 1.0, region[1] + 1.0)
         elapsed = (time.perf_counter() - start) * 1e3
-        top = _map(scatter, rocks, (0, 1), args.size, args.slab)
-        side = _map(scatter, rocks, (0, 2), args.size, args.slab)
+        top = _map(scatter, rocks, (0, 1), args.size, args.slab, region)
+        side = _map(scatter, rocks, (0, 2), args.size, args.slab, region)
         gap = np.full((args.size, 8, 3), 255, dtype=np.uint8)
-        write_png(args.out / f"{name}_maps.png", np.hstack((top, gap, side)))
+        maps = [top, gap, side]
+        whole = spec.shape.bounds()
+        if not all(np.array_equal(a, b) for a, b in zip(region, whole)):
+            empty = rocks[:0]
+            maps += [gap, _map(scatter, empty, (0, 1), args.size, None, whole)]
+        write_png(args.out / f"{name}_maps.png", np.hstack(maps))
         stats = _statistics(spec, rocks, args.out / f"{name}_stats.png")
         summary = ", ".join(f"{k} {v:.4g}" for k, v in spec.summary().items())
         print(

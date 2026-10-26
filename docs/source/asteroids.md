@@ -8,15 +8,17 @@ be as large as a ring, drawn and collided with only around the camera.
 
 ```
 python scripts/demo_asteroids.py            # fly through a field (controls in the script)
+python scripts/demo_asteroids.py --preset ring   # a planet ring; Home for the view from afar
 python -m world_builder.asteroids.preview   # each preset's rocks from above and the side, and their statistics, to PNG
 python scripts/asteroid_gallery.py          # rock prototypes at each level of detail, to PNG
 python scripts/asteroid_bench.py --field cube --offscreen   # frame times in fixed flights
 pytest tests/test_asteroid_*.py
 ```
 
-What exists so far is the field's definition, its rocks, their shapes, their
-drawing and their collision (phases 1 to 4 of the plan); see
-[Phases](#phases). Improvements found but not made are in the
+The field's definition, its rocks, their shapes, their drawing and
+collision, big rocks drawn as terrain near the camera, rings and the haze of
+the rocks not drawn are all built (the plan's phases 1 to 7, see
+[Phases](#phases)). Improvements found but not made are in the
 [backlog](asteroids_backlog.md).
 
 ## A field
@@ -27,8 +29,8 @@ frame**: the field's own centre and axes.
 
 | Part | Class | What it sets |
 |---|---|---|
-| Extent | `Box(half_size, edge)`, `Sphere(radius, edge)` | Where rocks are. The density fades to nothing over `edge` inside the surface. |
-| Density | `Density(count_per_km3, clumping)` | Rocks per km³ where densest. |
+| Extent | `Box(half_size, edge)`, `Sphere(radius, edge)`, `Annulus(inner, outer, thickness, edge, radial_edge, radial_profile)` | Where rocks are. The density fades to nothing over `edge` inside the surface. See [Rings](#rings). |
+| Density | `Density(count_per_km3, clumping, dust)` | Rocks per km³ where densest; dust only seen as [haze](#haze). |
 | Clumping | `Clumping(scale, coverage, softness, octaves)` | Patchiness: rocks gather where a 3D noise is high. |
 | Sizes | a `Distribution` | The rocks' bounding radii. |
 | Spin | `SpinSpec(rate, axis, size_exponent, tumble)` | How they turn. |
@@ -40,10 +42,12 @@ frame**: the field's own centre and axes.
 the mean spacing and the share of volume filled where densest, and the
 median, mean and largest radius.
 
-`spec.PRESETS` has two examples. `cube` is SpaceFlight's missions 1 and 2
+`spec.PRESETS` has three examples. `cube` is SpaceFlight's missions 1 and 2
 setting: a 15 km cube of rock, power-law sizes from 50 m to 2 km, patchy,
 with a 300 m corridor through it. `icy_ball` is a 10 km ball of rock and ice
-spinning about one axis, some of it tumbling.
+spinning about one axis, some of it tumbling. `ring` is a planet's ring of
+icy rocks, 90,000 to 110,000 km from its axis and 4 km thick, about
+3 × 10¹⁰ rocks.
 
 ### Sizes and other variables
 
@@ -194,19 +198,24 @@ sits at `position` with `orientation` (world from field) in the world.
   when the field is made: about 2.5 s for 32. `loading` is True until they
   are all in; nothing is drawn before. A game's loading phase waits for it.
 - **Rocks in range** (`asteroids/population.py`). A rock is drawn while its
-  diameter covers `min_pixels` on screen. Each size class holds the cells
-  within its largest rock's drawing distance: small rocks near the camera,
-  big ones far. Each rock in those cells holds a slot of the instance table
-  until its cell leaves the range.
+  diameter covers `min_pixels` on screen. Each size class holds a box of
+  cells (its window) out to its largest rock's drawing distance: small
+  rocks near the camera, big ones far. Each rock in those cells holds a slot
+  of the instance table until its cell leaves the window. A window moves by
+  its difference: when the camera crosses a cell, only the cells entering it
+  are scattered, and the rocks of those leaving it freed. It grows toward its
+  range by whole layers, about 30,000 new cells a frame at most over all
+  classes, so entering a ring is spread over frames; `loading` stays True
+  until every window has reached its range.
 - **The instance table** is a float texture of four texels per slot: the
   rock's centre relative to its cell's corner, its radius, its orientation at
   an epoch, its precession and spin, its cell and its class, prototype and
   ice. The camera is given per class the same way (its cell, its offset in
   it), so a rock's position relative to the camera is a difference of small
-  numbers: float32 holds at any distance from the field's centre. Rows are
-  uploaded at most every three frames; a rock is drawn once its row is on
-  the GPU (new ones are at the edge of their range, a few frames late is
-  unseen).
+  numbers: float32 holds at any distance from the field's centre. New rows
+  are written into the texture's RAM image (only those) and uploaded at most
+  every three frames; a rock is drawn once its row is on the GPU (new ones
+  are at the edge of their range, a few frames late is unseen).
 - **The visible pass**, per frame: big enough on screen, inside some
   camera's view (`cameras=`: the main one, and a rear-view mirror), at the
   coarsest level of detail whose error stays under `lod_error_px` pixels,
@@ -215,6 +224,7 @@ sits at `position` with `orientation` (world from field) in the world.
   `set_instance_count`. Nothing per rock goes through the scene graph.
 - **Budget.** Past `instance_budget` rocks in range, the smallest size drawn
   grows by 10 % a frame until they fit, and shrinks back when well under.
+  The haze takes the rocks it drops.
 - **Spin** is computed in the vertex shader at the game's time (`clock=`,
   never Panda's): q(t) as in `motion.py`, from the table's orientation at
   the epoch. The epoch moves every 1,024 s, rewriting the table, so float32
@@ -284,6 +294,126 @@ of their sensors, 300 lasers within 5 km of the camera) takes 2.4 ms over
 the `cube` preset's 3,400 rocks, against 32 ms for the legacy field's 2,520
 collision spheres (`scripts/asteroid_bench.py --collision`).
 
+## Rocks as terrain
+
+Up close, a big rock is drawn by a real `Terrain`, with the terrain's level
+of detail and collision, instead of its instanced mesh
+(`asteroids/promotion.py`, `asteroids/rock.py`).
+
+- **The body.** A `RockSpec` names the rock: its field's shapes and seed, its
+  prototype, radius and ice, and a seed of its own. Its `RockBody` is the
+  prototype's radius function times the radius, plus metre-scale detail of
+  its own, band-limited as a planet is: the instanced meshes are the same
+  rock, coarser. See [Terrain: other bodies](terrain.md#other-bodies).
+- **When.** An instance shows its prototype's full detail through its normal
+  map, down to about pi R / `normal_size`. The terrain at a distance d is
+  band-limited to about d / 32. So the terrain is the finer only within
+  16 × 2 × pi R / `normal_size` of the surface: 0.8 R at HIGH (a 2 km rock
+  within 1.6 km of it, a 200 m rock within 160 m).
+- **Which.** Rocks of at least `terrain_min_radius` (200 m), nearest first,
+  at most `max_terrain_rocks` (8 at HIGH, none at LOW). A rock's terrain
+  loads, hidden, from twice that distance. It takes over within it once
+  its ground for the camera is drawn: the instance is hidden and its
+  collision passes to the terrain's own solid (same node name, mask and
+  owner tag). It hands back 15 % farther out, and is released past the
+  preload distance.
+- **Pool.** The terrains are reused (`set_spec`), all on the field's worker
+  pool and texture arrays, each keeping at most a few hundred chunks.
+- **Motion.** Every frame each terrain sits at its rock's centre and turns
+  as the rock does at the field's time (the terrain's orientation).
+- **Look.** Lit as the instances are (as an object, no day and night by
+  the vertical), the same textures laid out the same way (whole 128 m
+  periods along each face), the same tonemap or display encoding.
+
+**Cost** (`scripts/asteroid_bench.py --flight approach`): flying from 6 to
+1.3 radii of the `cube` preset's biggest rock (834 m), which turns into
+terrain on the way: median 2.0 ms, p95 5.5 ms, the worst frame 15 ms (the
+first terrain made). Without terrain rocks (`--terrain-rocks 0`), median
+1.8 ms and p95 2.1-2.5 ms. See the backlog.
+
+## Rings
+
+`Annulus(inner, outer, thickness, edge, radial_edge, radial_profile)` is a
+ring around the field's z axis: its density fades over `edge` inside its
+faces and over `radial_edge` inside its rims, times `radial_profile`, values
+evenly spaced from the inner rim to the outer (ringlets, gaps), linearly
+interpolated. The native scatter has it too (interface 11). A field's
+`orientation` tilts it.
+
+Nothing in a field depends on its size: a ring is scattered like a cube, only
+around the camera. Two things scale with it:
+
+- **Windows** in a 4 km sheet hold up to millions of cells (most of them
+  empty) when `min_pixels` is small: they move by their difference and grow
+  over frames (see [Drawing](#drawing)). Moving through the `ring` preset
+  with 180,000 rocks held cost 230 ms a cell crossed when windows were
+  rebuilt whole; now 5 ms.
+- **The budget** holds them: in the ring at HIGH, the smallest size drawn
+  rises from 2 to about 12 pixels to keep 20,000 rocks in range; the haze
+  takes the others.
+
+`python -m world_builder.asteroids.preview --preset ring` maps a 40 km patch
+of a field too big to scatter whole, beside the density of the whole ring.
+
+## Haze
+
+The rocks too small or too far to be drawn are not gone: the haze
+(`asteroids/haze.py`, `shaders/haze.frag`) integrates them along each
+pixel's ray. From afar a ring is a band of light with its ringlets and gaps;
+approaching, rocks appear out of it while it thins by as much.
+
+- **What is missing.** At a distance t, the rocks under r_cut = t ×
+  1.125 `min_pixels` / (2 pixels per radian) (the middle of the drawn rocks'
+  fade), and all of them past the field's `far`. Their cross-section per
+  metre is the density there (the shape's profile, the peak density, the
+  clumping's coverage: clumps averaged) times the mean of π r² over the
+  rocks under r_cut, each size weighted by the share the hard core keeps
+  (Matérn II: exp of minus the density times the volume within reach of a
+  larger candidate), times a rock's projected area over its bounding disc's
+  (a quarter of its prototype's surface, about 0.59). Tested against the
+  scatter's own rocks: the haze under any cut plus the rocks over it add up
+  to the same cross-section within 1 %.
+- **Dust.** `Density(dust=)`, an optical depth per km at full profile, of
+  particles under the smallest rock: never drawn nor solid, only haze. A
+  thin ring bright from afar needs an optical depth of a few tenths across
+  it; rocks alone would make it a wall up close. The `ring` preset has 0.03
+  per km: about 0.2 across it, with its rocks.
+- **The integral.** For each pixel where a ray leaves the field's hull, over
+  the interval that ends there (a ring's annulus cuts a ray into two), by
+  32 midpoints spaced geometrically from where something is missing.
+  `haze.optical_depth` is the same quadrature in numpy; the shader's pixels
+  match it within 4 levels of 255.
+- **Light.** Lambert spheres of the rocks' mean far colour: full with the
+  sun behind the camera, dark against it, plus the sky light; then the
+  field's exposure and tonemap. No shadows, not even a planet's on its ring.
+- **Drawing.** A hull around the shape (1,024 segments for a ring), drawn on
+  both sides with depth test and no depth write, after the sky and clouds:
+  a planet in front hides it. Hull points beyond the far plane are pulled
+  onto it, so a ring across the sky is drawn whole without pushing the far
+  plane out. Only the far camera of a split draws it, from its near plane
+  (read from its projection): nearer than the split every rock is drawn, so
+  nothing but a little dust is lost there.
+- `AsteroidField(haze=False)` leaves it out. In a 15 km field it costs
+  nothing seen: nothing is missing nearer than about 57 km.
+
+## In a world
+
+`World(fields=[FieldLook(name, spec, position=, orientation=, ...)])`
+builds fields beside the bodies: on the world's worker pool, with its
+`asteroids` settings, its sun and clock (the rocks turn with the game's
+time), and the bodies' textures. They are part of `World.loading`,
+`update`, `set_sun`, `set_settings` and `destroy`; `World.field(name)`
+finds one (to make it solid, find clear spots...). `scripts/demo_asteroids.py`
+is built this way.
+
+### Ring costs
+
+`scripts/asteroid_bench.py --field ring --offscreen` (HIGH, 1600×900, in the
+ring's dense band, October 2026): frames 11.1–11.7 ms median, p95
+12.1–17.2 ms; about 47,000 rocks held, at most 18,000 in range (budget
+20,000), smallest drawn 12 pixels; the field's own update 6.2 ms median,
+3 ms of it the visible pass in numpy.
+
 ## Phases
 
 The design (issue #14) builds the rest on this:
@@ -296,8 +426,8 @@ The design (issue #14) builds the rest on this:
    (`terrain_material.glsl`, `object_light.glsl`). Done.
 4. Collision: a native Panda collision solid for the rocks near the camera,
    on the drawn shapes. Done.
-5. SpaceFlight's missions 1 and 2 on a field.
+5. SpaceFlight's missions 1 and 2 on a field. Done.
 6. Rocks above 200 m (`terrain_min_radius`) turn into real terrain bodies
-   near the camera, with the terrain's level of detail.
-7. Rings: an annulus with a radial profile, and a far band for the rocks too
-   small to draw.
+   near the camera, with the terrain's level of detail. Done.
+7. Rings: an annulus with a radial profile, and a haze for the rocks too
+   small or too far to draw; fields in a `World`. Done.

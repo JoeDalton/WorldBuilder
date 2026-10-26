@@ -281,8 +281,8 @@ class CubeGrid:
         return face, i, j, fu, fv
 
 
-@functools.lru_cache(maxsize=16)
-def grid_for(radius: float) -> CubeGrid:
+@functools.lru_cache(maxsize=64)
+def grid_for(radius: float, uv_period: float = UV_PERIOD) -> CubeGrid:
     """The grid for a planet radius.
 
     The level count is picked so the level-0 spacing is as near
@@ -290,19 +290,26 @@ def grid_for(radius: float) -> CubeGrid:
     levels), 2.4 m at 6371 km (17 levels).
 
     :param radius: metres
+    :param uv_period: a face edge spans a whole number of this many texture
+        metres (at least one): a small body whose textures tile finely takes
+        a shorter period, so its textures are not stretched (the default
+        suits every biome's tiling on a planet). It must divide
+        :data:`UV_PERIOD`
     :returns: the (cached) grid
     """
     arc = math.pi * radius / 2.0
     max_level = max(0, round(math.log2(arc / (QUADS * TARGET_SPACING))))
     n0 = QUADS << max_level
     spacing0 = arc / n0
-    periods = max(1, round(arc / UV_PERIOD))
+    if UV_PERIOD % uv_period != 0:
+        raise ValueError(f"uv_period {uv_period} must divide {UV_PERIOD}")
+    periods = max(1, round(arc / uv_period))
     return CubeGrid(
         radius=float(radius),
         max_level=max_level,
         n0=n0,
         spacing0=spacing0,
-        uv_unit=periods * UV_PERIOD / n0,
+        uv_unit=periods * uv_period / n0,
     )
 
 

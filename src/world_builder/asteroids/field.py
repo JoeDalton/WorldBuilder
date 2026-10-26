@@ -8,8 +8,8 @@ instancing.
   they have all arrived.
 - **Rocks** (:mod:`population`) hold slots in the instance table, a float
   texture of four texels per slot (``asteroid.vert``), written when they come
-  into range and uploaded at most every few frames. A rock is drawn only once
-  its row is on the GPU.
+  into range and uploaded at most every few frames (only the new rows are
+  written on the CPU). A rock is drawn only once its row is on the GPU.
 - **Per frame**, the visible pass picks the rocks drawn and their level of
   detail; their slots go into the index texture, grouped per draw, and each
   draw gets its count (``set_instance_count``) and offset. Nothing per rock
@@ -20,6 +20,9 @@ instancing.
 - **Frames.** The field sits at ``position`` with ``orientation`` (world from
   field) in the world. It hangs under render and is placed relative to the
   camera, as the terrain is: render's axes are the world's.
+- **Haze.** The rocks too small or too far to be drawn are integrated along
+  each pixel's ray instead (:mod:`haze`): a ring is a band of light from
+  afar, rocks appear out of it on approach.
 - **Light.** The terrain's materials (its rock and snow layers) and lighting
   (``object_light.glsl``), then the world's tonemap, or a plain display
   encoding next to models lit by Panda's own lights (``tonemap=False``).
@@ -50,10 +53,13 @@ from panda3d.core import (
     Texture,
 )
 
+from world_builder.asteroids.haze import FieldHaze, mean_projected_cover
 from world_builder.asteroids.mesh import build_geom, normal_map_texture
 from world_builder.asteroids.motion import rotate
 from world_builder.asteroids.population import SLOT_FLOATS, Population
+from world_builder.asteroids.promotion import TerrainRocks
 from world_builder.asteroids.prototype import PrototypeJob, generate_prototype
+from world_builder.asteroids.rock import ROCK_UV_PERIOD
 from world_builder.asteroids.scatter import Scatter
 from world_builder.asteroids.settings import AsteroidSettings
 from world_builder.asteroids.spec import FieldSpec, KeepOut
@@ -82,6 +88,8 @@ HEADLESS_PIXELS_PER_RADIAN = 900.0 / math.radians(40.0)
 BUDGET_STEP = 1.1
 
 _LODS = {16: (4, 8, 16), 32: (4, 8, 16, 32), 64: (4, 8, 16, 32, 64)}
+#: A slot's floats as Panda keeps an RGBA texture's RAM image: BGRA texels.
+_BGRA = (np.arange(4)[:, None] * 4 + np.array([2, 1, 0, 3])).ravel()
 
 
 def _rotation(quat: ArrayLike) -> np.ndarray:
@@ -122,6 +130,7 @@ class AsteroidField:
         parent: NodePath | None = None,
         far: float = 600_000.0,
         name: str = "asteroids",
+        haze: bool = True,
     ):
         """
         :param app: the ShowBase (``win``, ``cam`` for the default view)
@@ -146,6 +155,7 @@ class AsteroidField:
             by large distances)
         :param far: rocks beyond this are never drawn (the camera's far)
         :param name: the root's name, and the executor channel's
+        :param haze: draw the rocks not drawn as a haze (:mod:`haze`)
         """
         self.app = app
         self.spec = spec
@@ -182,12 +192,19 @@ class AsteroidField:
         self._errors = None
         self._last_visible = None
         self.collision = None
+        #: per prototype, its finest mesh's error to the full detail (None
+        #: until built): how near a rock must be to be drawn as terrain
+        self.full_errors: np.ndarray | None = None
+        self.tonemap = bool(tonemap)
+        self.exposure = float(exposure)
         self.stats: dict[str, float] = {}
         self._set_inputs(
             sun_direction, sun_color, ambient, exposure, tonemap, materials
         )
         self._make_table(self.population.capacity)
         self._make_index(1024)
+        self.haze = FieldHaze(self, SHADER_PATH) if haze else None
+        self.terrain_rocks = TerrainRocks(self)
         self._request_prototypes()
 
     # ── public ────────────────────────────────────────────────────────────
@@ -198,8 +215,10 @@ class AsteroidField:
 
     @property
     def loading(self) -> bool:
-        """True until every prototype is built (nothing is drawn before)."""
-        return self._errors is None
+        """True until every prototype is built (nothing is drawn before) and
+        the rocks in range are all held (a big field fills over frames, see
+        :mod:`population`)."""
+        return self._errors is None or not self.population.settled
 
     def set_settings(self, settings: AsteroidSettings) -> None:
         """Apply new settings: the meshes and normal maps are rebuilt if
@@ -224,6 +243,9 @@ class AsteroidField:
         self._frame["uSunDir"][0] = LVecBase3f(*d)
         self._frame["uSunColor"][0] = LVecBase3f(*color)
         self._frame["uAmbient"][0] = LVecBase3f(*ambient)
+        self.sun = (tuple(d), tuple(color), tuple(ambient))
+        if getattr(self, "terrain_rocks", None) is not None:
+            self.terrain_rocks.set_sun(*self.sun)
 
     def set_frame(self, position: ArrayLike, orientation: ArrayLike) -> None:
         """Move the field: its centre (world) and orientation (world from
@@ -273,6 +295,8 @@ class AsteroidField:
         )
         if self._errors is not None:
             self.collision.set_prototypes(self._prototype_list())
+        # The rocks drawn as terrain are solid as their terrain
+        self.terrain_rocks.enable_collision(into_mask, name, owner_tag, max_distance)
         return self.collision.node
 
     def disable_collision(self) -> None:
@@ -280,6 +304,7 @@ class AsteroidField:
         if self.collision is not None:
             self.collision.destroy()
             self.collision = None
+            self.terrain_rocks.disable_collision()
 
     def update(
         self,
@@ -327,8 +352,7 @@ class AsteroidField:
                 self.population.live & self._ready[: self.population.capacity]
             )
             self._table_values[live] = self.population.table_rows(live, epoch)
-            self._frames_since_upload = UPLOAD_EVERY
-            self._pending.append(np.zeros(0, dtype=np.int64))
+            self._write_rows(live)
         self._upload_table()
         frame = self._frame
         frame["uTime"][0] = now - self._epoch
@@ -339,9 +363,19 @@ class AsteroidField:
             cell = np.floor(camera / c.cell)
             frame["uCamCell"][k] = LVecBase3f(*cell)
             frame["uCamLocal"][k] = LVecBase3f(*(camera - cell * c.cell))
+        if self.haze is not None:
+            self.haze.update(camera, self.far)
         visible_ms = 0.0
+        # Big rocks near the camera drawn as terrain (hidden as instances,
+        # solid as terrain)
+        promoted = self.terrain_rocks.update(
+            camera,
+            np.asarray(camera_world, dtype=np.float64),
+            camera_render,
+            now,
+        )[: self.population.capacity]
         if self._errors is not None and self.collision is not None:
-            self.collision.update(camera, camera_render, now)
+            self.collision.update(camera, camera_render, now, exclude=promoted)
         if self._errors is not None and cameras:
             t = time.perf_counter()
             planes = np.array([self._planes(view) for view in cameras])
@@ -352,7 +386,7 @@ class AsteroidField:
                 self._min_pixels,
                 self._settings.lod_error_px,
                 self._errors,
-                self._ready[: self.population.capacity],
+                self._ready[: self.population.capacity] & ~promoted,
             )
             self._draw(visible)
             self._budget(visible.in_range)
@@ -365,6 +399,7 @@ class AsteroidField:
             if self._last_visible is None
             else self._last_visible.in_range,
             "min_pixels": self._min_pixels,
+            "terrain_rocks": int(np.count_nonzero(promoted)),
             "visible_ms": visible_ms,
             "update_ms": (time.perf_counter() - start) * 1e3,
         }
@@ -372,6 +407,7 @@ class AsteroidField:
     def destroy(self) -> None:
         """Remove the field's nodes; shut its own pool down."""
         self.disable_collision()
+        self.terrain_rocks.destroy()
         self.executor.set_spec(None, self._channel)
         if self._owns_executor:
             self.executor.shutdown()
@@ -386,6 +422,7 @@ class AsteroidField:
         )
         self._prototypes = {}
         self._errors = None
+        self.full_errors = None
         self.executor.set_spec(job, self._channel, generator=generate_prototype)
         self.executor.request(list(range(self.spec.shapes.prototypes)), self._channel)
 
@@ -404,6 +441,10 @@ class AsteroidField:
             return
         prototypes = self._prototype_list()
         self.root.set_shader_input("uRockNormals", normal_map_texture(prototypes))
+        self.full_errors = np.array([p.meshes[-1].error for p in prototypes])
+        self.lowest = np.array([p.lowest for p in prototypes])
+        if self.haze is not None:
+            self.haze.set_cover(mean_projected_cover(prototypes))
         if self.collision is not None:
             self.collision.set_prototypes(prototypes)
         levels = len(prototypes[0].meshes)
@@ -497,8 +538,16 @@ class AsteroidField:
             ready[: len(self._ready)] = self._ready
         self._ready = ready
         self._table = texture
+        texture.set_ram_image(self._table_values[:, _BGRA].tobytes())
         self.root.set_shader_input("uInstances", texture)
-        self._frames_since_upload = UPLOAD_EVERY  # upload it whole now
+
+    def _write_rows(self, slots: np.ndarray) -> None:
+        """Copy rows of the table into the texture's RAM image, which marks
+        it for upload: only those rows are written on the CPU."""
+        if len(slots) == 0:
+            return
+        ram = np.frombuffer(self._table.modify_ram_image(), dtype=np.float32)
+        ram.reshape(-1, SLOT_FLOATS)[slots] = self._table_values[slots][:, _BGRA]
 
     def _upload_table(self) -> None:
         self._frames_since_upload += 1
@@ -509,9 +558,7 @@ class AsteroidField:
         self._pending = []
         if len(slots):
             self._table_values[slots] = self.population.table_rows(slots, self._epoch)
-        # Panda keeps an RGBA texture's RAM image as BGRA.
-        texels = self._table_values.reshape(-1, 4)[:, [2, 1, 0, 3]]
-        self._table.set_ram_image(np.ascontiguousarray(texels).tobytes())
+            self._write_rows(slots)
         self._ready[slots] = True
         self._frames_since_upload = 0
 
@@ -538,25 +585,31 @@ class AsteroidField:
             if materials is not None
             else load_materials(max_size=s.texture_size)
         )
-        # Snow and rock, the two first biome layers.
-        root.set_shader_input(
-            "uAlbedoH", make_texture_array("rock_albedo_h", m.albedo_height[:2], True)
-        )
-        root.set_shader_input(
-            "uNormRA",
+        # Snow and rock, the two first biome layers: shared with the rocks
+        # drawn as terrain (their only biomes)
+        self.materials = m
+        self.rock_textures = (
+            make_texture_array("rock_albedo_h", m.albedo_height[:2], True),
             make_texture_array("rock_normal_ra", m.normal_rough_ao[:2], False),
         )
+        root.set_shader_input("uAlbedoH", self.rock_textures[0])
+        root.set_shader_input("uNormRA", self.rock_textures[1])
         tile = PTA_float.empty_array(6)
         mean = PTA_LVecBase3f.empty_array(6)
+        mean_height = PTA_float.empty_array(6)
+        heights = m.albedo_height[:2, ..., 3].reshape(2, -1).mean(axis=1) / 255.0
         for i in range(6):
             tile[i] = float(m.tile_m[min(i, 1)])
             mean[i] = LVecBase3f(*m.mean_albedo[min(i, 1)])
+            mean_height[i] = float(heights[min(i, 1)])
         root.set_shader_input("uTileM", tile)
         root.set_shader_input("uMeanAlbedo", mean)
+        root.set_shader_input("uMeanHeight", mean_height)
         root.set_shader_input("uBlendDepth", 0.3)
         root.set_shader_input("uDetailFar", float(s.detail_far))
         root.set_shader_input("uExposure", float(exposure))
         root.set_shader_input("uTonemap", 1 if tonemap else 0)
+        root.set_shader_input("uRockUvPeriod", ROCK_UV_PERIOD)
         cells = PTA_float.empty_array(MAX_CLASSES)
         for k, c in enumerate(self.scatter.classes):
             cells[k] = c.cell

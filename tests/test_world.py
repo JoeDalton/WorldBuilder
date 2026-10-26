@@ -14,6 +14,9 @@ import numpy as np
 import pytest
 from panda3d.core import LPoint3f
 
+from world_builder.asteroids.distributions import Distribution
+from world_builder.asteroids.field import AsteroidField
+from world_builder.asteroids.spec import Annulus, Density, FieldSpec, ShapeSpec
 from world_builder.atmosphere import AtmosphereParams
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import (
@@ -25,12 +28,13 @@ from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
 from world_builder.sky import Sky
 from world_builder.terrain.chart import TangentFrame
-from world_builder.terrain.planet import PRESETS
+from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.world import (
     Body,
     BodyLook,
     CloudLook,
+    FieldLook,
     OceanLook,
     SkyLook,
     SunLook,
@@ -39,6 +43,13 @@ from world_builder.world import (
 
 R = 600e3
 EARTHLIKE = PRESETS["earthlike"]
+#: A small icy ring around the world's origin.
+RING = FieldSpec(
+    shape=Annulus(2.0e6, 3.0e6, 2000.0, edge=300.0),
+    density=Density(5.0),
+    sizes=Distribution.power_law(3.0, 50.0, 2000.0),
+    shapes=ShapeSpec(prototypes=2),
+)
 MOON = replace(PRESETS["moon"], seed=7)
 
 
@@ -66,6 +77,7 @@ def _same(a, b) -> bool:
         (CloudLook, SphericalClouds.__init__, ()),
         (OceanLook, Sea.__init__, OceanLook.WORLD_FIELDS),
         (SkyLook, Sky.__init__, ("stars",)),
+        (FieldLook, AsteroidField.__init__, ("name", "spec", "ambient")),
     ],
 )
 def test_looks_are_their_parts_arguments(look, part, own):
@@ -101,12 +113,42 @@ def test_a_world_refuses_what_it_cannot_build(bodies, message):
         World(None, bodies)
 
 
+def test_a_world_refuses_two_fields_of_one_name():
+    with pytest.raises(ValueError, match="must differ"):
+        World(None, [], fields=[FieldLook("a", RING), FieldLook("a", RING)])
+
+
+def test_fields_follow_the_camera_the_sun_and_the_loading():
+    """Each field: updated around the camera, lit by the bare sun and its
+    own ambient (or the space's), part of the loading, found by name."""
+    world = _world(camera_render=(1.0, 2.0, 3.0))
+    ring = _field(world)
+    belt = _field(world, "belt", ambient=(0.5, 0.5, 0.5), loading=True)
+    origin = np.array([2.5e6, 0.0, 0.0])
+    world.update(origin)
+    (camera, render), _ = ring.update.call_args
+    np.testing.assert_allclose(camera, origin + [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(render, [1.0, 2.0, 3.0])
+    assert world.loading  # the belt
+    belt.loading = False
+    assert not world.loading
+    world.set_sun((0.0, 1.0, 0.0))
+    _, color, ambient = ring.set_sun.call_args[0]
+    np.testing.assert_allclose(color, [2.0, 2.0, 2.0])
+    np.testing.assert_allclose(ambient, [0.1, 0.2, 0.3])  # the space's
+    np.testing.assert_allclose(belt.set_sun.call_args[0][2], [0.5, 0.5, 0.5])
+    assert world.field("belt") is belt
+    with pytest.raises(KeyError):
+        world.field("rings")
+
+
 # ── stand-ins ──────────────────────────────────────────────────────────────────
 
 
 def _body(name="planet", spec=EARTHLIKE, position=(0.0, 0.0, 0.0), mass=1.0, **look):
     terrain = MagicMock(position=np.array(position, float), radius=spec.radius)
     terrain.loading = False
+    terrain.planet.height_bounds = PLANET_HEIGHT_BOUNDS
     return Body(look=BodyLook(name, spec, position, mass=mass, **look), terrain=terrain)
 
 
@@ -124,7 +166,17 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world._sun = np.array([0.0, 0.0, 1.0])
     world._sun_color = np.array([2.0, 2.0, 2.0])
     world._space_ambient = np.array([0.1, 0.2, 0.3])
+    world.fields = []
+    world._field_looks = []
     return world
+
+
+def _field(world, name="ring", ambient=None, loading=False):
+    """A stand-in field added to a stand-in world."""
+    field = MagicMock(loading=loading)
+    world.fields.append(field)
+    world._field_looks.append(FieldLook(name, RING, ambient=ambient))
+    return field
 
 
 # ── frames, ranges, light ──────────────────────────────────────────────────────
@@ -439,3 +491,36 @@ def test_open_space_builds_and_draws(window):
     finally:
         world.destroy()
     assert world.sky is None or world.sky.node.is_empty()
+
+
+def test_a_ring_in_open_space(window):
+    """A world of a ring alone: built on the world's pool and settings,
+    loaded, drawn (rocks and haze), set, and gone after destroy."""
+    world = World(
+        window,
+        bodies=[],
+        sun=SunLook(direction=(0.3, -0.8, 0.5)),
+        settings=WorldSettings.preset("low"),
+        backend="inline",
+        clock=lambda: 4.0,
+        fields=[FieldLook("ring", RING, far=200_000.0)],
+    )
+    try:
+        ring = world.field("ring")
+        assert ring.executor is world.executor
+        assert ring.settings == world.settings.asteroids
+        assert ring.far == 200_000.0
+        origin = np.array([2.5e6, 0.0, 5000.0])
+        for _ in range(300):
+            world.update(origin, far=1e6)
+            window.graphicsEngine.render_frame()
+            if not world.loading:
+                break
+        assert not world.loading
+        assert ring.population.count > 0
+        high = WorldSettings.preset("high")
+        world.set_settings(high)
+        assert ring.settings == high.asteroids
+    finally:
+        world.destroy()
+    assert world.fields == [] and ring.root.is_empty()

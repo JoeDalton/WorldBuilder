@@ -56,10 +56,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/compare_shots.py`: compares two folders of screenshots pixel by
   pixel, for shader changes meant to change nothing. (#14)
 
+- Big rocks near the camera drawn as terrain (`asteroids.promotion`,
+  `asteroids.rock.RockSpec`): the terrain's level of detail and collision
+  within ~0.8 radii of their surface, turning with the field's time; pooled
+  `Terrain`s on the field's workers and textures. `AsteroidSettings` gains
+  `terrain_min_radius` and `max_terrain_rocks`.
+  `scripts/asteroid_bench.py --flight approach` flies into one, and
+  `--terrain-rocks N` overrides their number. (#14)
+- Far asteroids keep the colour their textures average to (the rock/snow
+  height blend of the layers' mean colours and heights): rocks with a little
+  ice no longer turn pale grey past 0.6 × `detail_far`. (#14)
+- The terrain draws any body (`spec.evaluator()`; a `Planet` or a rock), with
+  per-body height bounds for the LOD pass (a small body was mostly culled
+  by the planets' -7 km), a texture period per grid (`grid_for(radius,
+  uv_period)`: no stretched textures on small bodies), an orientation
+  (`Terrain(orientation=)`, `set_orientation`: a turning body), lighting as
+  an object (`spec.radial_light`), a plain display encoding
+  (`Terrain(tonemap=False)`) and shared texture arrays (`Terrain(textures=)`).
+  (#14)
 - `World` takes no body for open space: the sky, the sun and the lights
   alone, `space_ambient` the sky light away from any body. (#14)
+- Planet rings: `asteroids.spec.Annulus` (inner and outer radius,
+  thickness, soft faces and rims, a radial profile of ringlets and gaps),
+  in the numpy and native scatter (native interface 11), and a `ring`
+  preset 220,000 km across. (#14)
+- The haze of the rocks not drawn (`asteroids.haze`, `shaders/haze.frag`):
+  along each pixel's ray, the cross-section of the rocks under the drawn
+  size (the hard core's thinning included) and past the field's `far`, plus
+  `Density(dust=)`, lit as Lambert spheres. A ring is a band of light from
+  afar; rocks appear out of it on approach. Drawn by the far camera of a
+  split from its near plane, on a hull pulled inside the far plane.
+  `AsteroidField(haze=)`. (#14)
+- `World(fields=[FieldLook(...)])` and `World.field(name)`: asteroid fields
+  and rings in a world, on its pool, settings, sun and clock, part of its
+  loading. `scripts/demo_asteroids.py` is built on it (split depth, the sky,
+  render's origin at the camera) and gains `--preset ring` and a far view
+  (Home). (#14)
 
 ### Changed
+
+- An asteroid field's windows of cells move by their difference and grow
+  over frames (about 30,000 new cells a frame), and `AsteroidField.loading`
+  waits for them: crossing a cell in a ring cost 230 ms, now about 5 ms.
+  Only new rows of the instance table are written on the CPU (an upload cost
+  11 ms with 45,000 rocks). Big-rock promotion sorts only the rocks near
+  enough. `asteroid_bench.py` flies a ring (`--field ring`) and reports
+  rocks held and in range against the budget. (#14)
 
 - The terrain's fragment shader is split into includes other shaders can
   share, with no pixel changed: `terrain_material.glsl` (the biome texture

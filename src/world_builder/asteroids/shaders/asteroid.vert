@@ -39,12 +39,9 @@ flat out vec3 vTv;
 flat out vec4 vQuat;  // body to field frame
 flat out vec4 vRock;  // radius, ice, prototype, fade (1 = whole)
 
+#pragma include "../../terrain/shaders/cube_faces.glsl"
+
 const int TABLE_WIDTH = 4096;
-// cubesphere.FACE_FRAMES' u and v axes
-const vec3 FACE_U[6] = vec3[6](
-    vec3(0, 1, 0), vec3(0, -1, 0), vec3(-1, 0, 0), vec3(1, 0, 0), vec3(0, 1, 0), vec3(0, 1, 0));
-const vec3 FACE_V[6] = vec3[6](
-    vec3(0, 0, 1), vec3(0, 0, 1), vec3(0, 0, 1), vec3(0, 0, 1), vec3(-1, 0, 0), vec3(1, 0, 0));
 
 vec4 fetch(sampler2D table, int i) {
     return texelFetch(table, ivec2(i % TABLE_WIDTH, i / TABLE_WIDTH), 0);

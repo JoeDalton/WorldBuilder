@@ -12,10 +12,11 @@ in vec4 biome_b;        // desert, beach, then the chunk's slot (low byte; high
                         // 7 bits) with the skirt flag (top bit), set at upload
 
 #pragma include "../../ocean/shaders/swell.glsl"
+#pragma include "cube_faces.glsl"
 
 uniform mat4 p3d_ModelViewProjectionMatrix;
 uniform mat4 p3d_ModelViewMatrix;
-uniform mat4 p3d_ModelMatrix;   // chunk -> render; a translation (rotation-safe)
+uniform mat4 p3d_ModelMatrix;   // chunk -> render: the body's orientation, then a translation
 uniform vec4 p3d_ClipPlane[1];  // reflection pass only (view space)
 
 uniform vec3  uCamPos;          // MAIN camera in the render frame (also in the mirror pass)
@@ -41,6 +42,8 @@ out vec4 vBiomeA;
 out vec4 vBiomeB;
 out vec4 vSwell;     // the swell: gradient per metre (planet axes), field
 flat out int vFace;
+flat out vec3 vFaceU;  // the face's texture axes, render frame (the body turns)
+flat out vec3 vFaceV;
 flat out int vLevel;
 flat out float vStep;  // uv metres per vertex step (about the vertex spacing)
 
@@ -121,6 +124,8 @@ void main() {
     vBiomeA = biome_a;
     vBiomeB = biome_b;
     vFace = int(ids.y + 0.5);
+    vFaceU = rotation * FACE_U[vFace];
+    vFaceV = rotation * FACE_V[vFace];
     vLevel = int(ids.x + 0.5);
     vStep = uChunk.z;
 }

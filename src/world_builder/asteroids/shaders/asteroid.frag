@@ -15,12 +15,14 @@
 uniform sampler2DArray uRockNormals;  // six layers per prototype
 uniform mat3 uFieldRot;
 uniform vec3 uMeanAlbedo[6];          // linear; drawn instead of textures far away
+uniform float uMeanHeight[6];         // the textures' mean height
 uniform float uDetailFar;             // textures fade to the mean colour by here
 uniform vec3 uSunDir;                 // toward the sun, render frame
 uniform vec3 uSunColor;
 uniform vec3 uAmbient;
 uniform float uExposure;
 uniform int uTonemap;                 // 1: aces_tonemap, 0: plain encoding
+uniform float uRockUvPeriod;          // rock.ROCK_UV_PERIOD
 
 in vec3 vRelPos;
 in vec3 vNormal;
@@ -64,15 +66,17 @@ void main() {
 
     // Rock and snow, the two first layers (biomes.BIOMES).
     float w[6] = float[6](ice, 1.0 - ice, 0.0, 0.0, 0.0, 0.0);
-    vec3 meanAlbedo = mix(uMeanAlbedo[1], uMeanAlbedo[0], ice);
+    vec3 meanAlbedo = meanLayeredAlbedo(w, uMeanAlbedo, uMeanHeight);
     float far = smoothstep(0.6 * uDetailFar, uDetailFar, dist);
     vec3 albedo = meanAlbedo;
     vec3 surfaceN = N;
     float roughness = 0.85;
     float ao = 1.0;
     if (far < 1.0) {
-        // Texture coordinates in metres along the face's arcs.
-        vec2 uv = vFaceUv.xy * (0.25 * PI * radius);
+        // Texture metres along the face, as the rock's terrain lays them
+        // (cubesphere.grid_for): a whole number of periods across a face
+        float span = max(1.0, floor(0.5 * PI * radius / uRockUvPeriod + 0.5)) * uRockUvPeriod;
+        vec2 uv = (vFaceUv.xy + 1.0) * (0.5 * span);
         vec3 Tu = normalize(vTu - up * dot(up, vTu));
         vec3 Tv = normalize(vTv - up * dot(up, vTv));
         layeredMaterial(w, uv, vHeight, N, Tu, Tv, dot(N, up), dist, meanAlbedo, far,

@@ -13,11 +13,13 @@ fixed-function lights as the game does::
     python scripts/asteroid_bench.py (--field PRESET | --legacy PATH)
         [--flight cruise sweep outside] [--quality LEVEL]
         [--seconds S] [--size "1600 900"] [--offscreen] [--fov DEG] [--profile]
-        [--shots DIR] [--collision]
+        [--shots DIR] [--collision] [--terrain-rocks N]
 
     --field     the field preset drawn
     --legacy    the rock model of SpaceFlight's field
     --quality   the field's AsteroidSettings preset (default high)
+    --terrain-rocks  override the preset's max_terrain_rocks (0: no rock
+                drawn as terrain)
     --flight    the flights to run, in order (default: all three)
     --seconds   each flight's length (default 10)
     --size      window or buffer size (default "1600 900")
@@ -42,6 +44,14 @@ Flights:
     cruise   along the field's middle at 250 m/s, 500 m up, heading +Y
     sweep    still at the field's centre, turning 24 degrees a second
     outside  20 km out, the whole field in view, turning slowly
+    approach (--field only) at the field's biggest rock, from 6 radii to 1.3
+             from its centre over the flight: it turns into terrain on the way
+
+A field too big for these flights (``--field ring``) is placed so that a
+point of it (:data:`ORIGINS`: in the ring's dense band) is at the world's
+origin: the flights happen there. After each flight of a field, a line of
+its counts: rocks held, rocks in range against the instance budget, the
+smallest size drawn, the field's update time.
 
 Each frame waits for the GPU (a one-pixel read back), so a frame's time is
 the CPU's and the GPU's work in series, as in ``terrain_shots.py``. Per
@@ -57,6 +67,7 @@ import math
 import pstats
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -91,7 +102,8 @@ CRUISE_SPEED = 250.0
 SWEEP_RATE = 24.0
 OUTSIDE_DISTANCE = 20_000.0
 OUTSIDE_RATE = 3.0
-FLIGHTS = ("cruise", "sweep", "outside")
+FLIGHTS = ("cruise", "sweep", "outside", "approach")
+APPROACH_RADII = (6.0, 1.3)
 
 
 class LegacyField:
@@ -152,24 +164,35 @@ class LegacyField:
             node.set_quat(Quat(*row))
 
 
+#: Where a preset's flights happen, field frame (the field is placed so that
+#: this point is at the world's origin); the field's centre otherwise.
+ORIGINS = {"ring": (0.0, 1.01e8, 0.0)}
+
+
 class InstancedField:
     """A ``world_builder.asteroids`` field, flown like the legacy one."""
 
-    def __init__(self, base, preset: str, quality: str):
+    def __init__(self, base, preset: str, quality: str, terrain_rocks=None):
         from world_builder.asteroids.field import AsteroidField
         from world_builder.asteroids.settings import AsteroidSettings
         from world_builder.asteroids.spec import PRESETS
 
         self.base = base
         self.t = 0.0
+        settings = AsteroidSettings.preset(quality)
+        if terrain_rocks is not None:
+            settings = replace(settings, max_terrain_rocks=terrain_rocks)
         self.field = AsteroidField(
             base,
             PRESETS[preset],
             clock=lambda: self.t,
-            settings=AsteroidSettings.preset(quality),
+            settings=settings,
             sun_direction=-np.array(_SUN_TOWARD),
             far=CAMERA_FAR_M,
+            position=-np.array(ORIGINS.get(preset, (0.0, 0.0, 0.0))),
         )
+        self.updates: list[float] = []
+        self.in_range: list[int] = []
 
     @property
     def count(self) -> int:
@@ -187,6 +210,29 @@ class InstancedField:
         self.t = t
         pos = self.base.camera.get_pos(self.base.render)
         self.field.update(np.array(pos), np.array(pos))
+        self.updates.append(self.field.stats.get("update_ms", 0.0))
+        self.in_range.append(self.field.stats.get("in_range", 0))
+
+    def report(self) -> str:
+        """:returns: the counts since the last report, and resets them"""
+        s, ms = self.field.stats, np.array(self.updates or [0.0])
+        in_range = max(self.in_range or [0])
+        line = (
+            f"{'':8} rocks {s.get('rocks', 0)}  in range max {in_range}"
+            f" (budget {self.field.settings.instance_budget})  smallest "
+            f"{s.get('min_pixels', 0):.1f} px  update ms median {np.median(ms):.2f}"
+            f" p95 {np.percentile(ms, 95):.2f}"
+        )
+        self.updates, self.in_range = [], []
+        return line
+
+    def biggest_rock(self) -> tuple[np.ndarray, float]:
+        """:returns: the centre (world) and radius of the biggest rock held
+        (the field is not turned here)"""
+        pop = self.field.population
+        live = np.flatnonzero(pop.live)
+        rock = pop.rocks[live[np.argmax(pop.rocks["radius"][live])]]
+        return rock["centre"] + self.field.position, float(rock["radius"])
 
     def destroy(self) -> None:
         self.field.destroy()
@@ -266,6 +312,20 @@ def _light(render: NodePath) -> None:
     render.set_light(render.attach_new_node(ambient))
 
 
+def _place(camera, field, flight: str, t: float, seconds: float) -> None:
+    """Put the camera where the flight is at *t* seconds."""
+    if flight == "approach":
+        centre, radius = field.biggest_rock()
+        near, far = APPROACH_RADII[1], APPROACH_RADII[0]
+        d = radius * far * (near / far) ** min(t / seconds, 1.0)
+        side = np.array([0.3, -1.0, 0.25]) / np.linalg.norm([0.3, -1.0, 0.25])
+        camera.set_pos(*(centre + side * d))
+        camera.look_at(*centre)
+        return
+    pos, h, p = _pose(flight, t)
+    camera.set_pos_hpr(*pos, h, p, 0)
+
+
 def _pose(flight: str, t: float) -> tuple[tuple[float, float, float], float, float]:
     """:returns: the camera's (position, heading, pitch) at *t* seconds"""
     if flight == "cruise":
@@ -293,11 +353,12 @@ def _fly(
     t = 0.0
     dt = 1.0 / 60.0  # the flight's own time: the same path whatever the frame rate
     for warm in range(30):
-        pos, h, p = _pose(flight, 0.0)
-        camera.set_pos_hpr(*pos, h, p, 0)
+        _place(camera, field, flight, 0.0, seconds)
         field.update(0.0)
         base.taskMgr.step()
         probe.get_screenshot()
+    if isinstance(field, InstancedField):
+        field.report()  # drop the warm-up's counts
     if shots is not None:
         path = shots / f"{flight}.png"
         base.win.save_screenshot(Filename.from_os_specific(str(path)))
@@ -305,8 +366,7 @@ def _fly(
         profiler.enable()
     while t < seconds:
         start = time.perf_counter()
-        pos, h, p = _pose(flight, t)
-        camera.set_pos_hpr(*pos, h, p, 0)
+        _place(camera, field, flight, t, seconds)
         field.update(t)
         base.taskMgr.step()
         probe.get_screenshot()  # waits for the GPU
@@ -320,6 +380,8 @@ def _fly(
         f"median {np.median(f):6.2f} p95 {np.percentile(f, 95):6.2f} "
         f"max {f.max():6.2f}"
     )
+    if isinstance(field, InstancedField):
+        print(field.report())
     if profiler:
         out = io.StringIO()
         pstats.Stats(profiler, stream=out).sort_stats("cumulative").print_stats(20)
@@ -342,6 +404,7 @@ def main() -> None:
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--shots", type=Path, default=None)
     parser.add_argument("--collision", action="store_true")
+    parser.add_argument("--terrain-rocks", type=int, default=None)
     args = parser.parse_args()
 
     window_config("asteroid bench", args.size, args.offscreen, vsync=False)
@@ -363,7 +426,7 @@ def main() -> None:
         field = LegacyField(base.render, base.loader.load_model(path))
         print(describe_window(base), f"legacy field: {field.count} rocks")
     else:
-        field = InstancedField(base, args.field, args.quality)
+        field = InstancedField(base, args.field, args.quality, args.terrain_rocks)
     try:
         if args.legacy is None:
             waited = field.wait()
@@ -379,6 +442,8 @@ def main() -> None:
             return
         if args.shots is not None:
             args.shots.mkdir(parents=True, exist_ok=True)
+        if args.legacy is not None and "approach" in args.flight:
+            args.flight.remove("approach")  # the instanced field's flight
         for flight in args.flight:
             _fly(base, field, probe, flight, args.seconds, args.profile, args.shots)
             stats = getattr(getattr(field, "field", None), "stats", None)

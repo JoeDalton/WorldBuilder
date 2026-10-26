@@ -136,13 +136,20 @@ class AsteroidCollision:
             mesh = prototype.meshes[-1]
             self.native.set_prototype(prototype.key, mesh.quads, mesh.vertices)
 
-    def update(self, camera: np.ndarray, camera_render: ArrayLike, time: float) -> None:
+    def update(
+        self,
+        camera: np.ndarray,
+        camera_render: ArrayLike,
+        time: float,
+        exclude: np.ndarray | None = None,
+    ) -> None:
         """Per frame, after the field's: the rocks within reach, the field's
         time, and the node at the camera.
 
         :param camera: (3,) the camera, field frame
         :param camera_render: the camera in render
         :param time: the time the rocks were drawn at
+        :param exclude: per slot, rocks solid otherwise (drawn as terrain)
         """
         field = self._field()
         pop = field.population
@@ -154,6 +161,8 @@ class AsteroidCollision:
         rel = pop.rocks["centre"] - camera
         reach = self.max_distance + pop.rocks["radius"]
         wanted = live & (np.sum(rel * rel, axis=1) < reach * reach)
+        if exclude is not None:
+            wanted[: len(exclude)] &= ~exclude[: len(wanted)]
         gone = np.flatnonzero(self._registered & ~wanted)
         new = np.flatnonzero(wanted & ~self._registered)
         if len(gone):

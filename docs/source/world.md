@@ -78,6 +78,14 @@ parts.
   - `tuned_elevation`: the sun elevation the water colour was tuned in;
   - `haze_color` and `haze_distance`: ignored (the atmosphere hazes the
     sea), kept so older looks still build.
+- **`FieldLook`**: an asteroid field or a planet's ring
+  (`AsteroidField`'s arguments, see [Asteroid fields](asteroids.md)):
+  `name` (what `World.field(name)` finds it by), `spec`, `position`,
+  `orientation` (a ring lies in its field's xy plane), `keep_outs`,
+  `exposure`, `far`, `haze`. Its `ambient` defaults to the world's
+  `space_ambient`. Given as `World(fields=[...])`; it takes the world's pool,
+  `asteroids` settings, sun, clock (the rocks turn with the game's time) and
+  the bodies' textures. Its rocks are massless.
 - **`SunLook`**: the direction toward the sun and its colour above any air.
 - **`SkyLook`**: `Sky`'s arguments: stars, nebula, sun disc, exposure.
 
@@ -107,7 +115,8 @@ distance this frame; the sky is drawn just inside it. It defaults to
 
 In order, it updates:
 1. each body's terrain, placed and detailed around the camera, its collision
-   node following;
+   node following, then each asteroid field (its rocks in range, drawn and
+   solid, its haze);
 2. the air (`Atmospheres.update`);
 3. the sky;
 4. each body's clouds, with the angle one pixel spans, taken from the
@@ -157,13 +166,15 @@ band (see `world_builder.depth`).
   (`BodyLook.mass`, keyword only); `acceleration(points)` is the raw vector
   for N points at once (numpy, or native: 4-9x faster), `-g` is "up". The
   field is capped inside a body, at its surface value.
-- **`loading`**: True while any terrain waits for ground or any clouds for
-  tiles. Wait for it to stay False for a moment before trusting the ground
+- **`loading`**: True while any terrain waits for ground, any clouds for
+  tiles, or any field for its prototypes and the rocks in range. Wait for it to stay False for a moment before trusting the ground
   (see the terrain's loading phase in [Terrain](terrain.md)).
 - **`enable_collision(into_mask, bodies=None, **kw)`**: makes bodies' drawn
   terrain solid to the game's collision traverser.
 - **`set_sun(direction)`**: moves the sun; every part follows.
 - **`body(name)`**: a body's terrain, clouds and sea, for tools and debug
   views.
+- **`field(name)`**: an asteroid field, to make it solid
+  (`enable_collision`) or find clear spots (`scatter.find_clear`).
 - **`destroy()`**: removes every part and the lights, and stops the worker
   pool.

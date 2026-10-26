@@ -48,6 +48,8 @@ from numpy.typing import ArrayLike
 from panda3d.core import (
     BitMask32,
     CullBinManager,
+    LPoint3f,
+    LQuaternionf,
     LVecBase3f,
     NodePath,
     PTA_float,
@@ -76,7 +78,6 @@ from world_builder.terrain.materials import (
 from world_builder.terrain.mesh import build_chunk_node
 from world_builder.terrain.planet import Planet, PlanetSpec
 from world_builder.terrain.quadtree import (
-    UNKNOWN_BOUNDS,
     LodSelector,
     NativeLodSelector,
     make_selector,
@@ -340,7 +341,10 @@ class Terrain:
         ambient: ArrayLike = (0.35, 0.45, 0.65),
         exposure: float = 0.9,
         materials: MaterialSet | None = None,
+        textures: tuple[Texture, Texture] | None = None,
+        tonemap: bool = True,
         position: ArrayLike = (0.0, 0.0, 0.0),
+        orientation: ArrayLike = (1.0, 0.0, 0.0, 0.0),
         executor: ChunkExecutor | None = None,
         settings: TerrainSettings | None = None,
     ):
@@ -364,8 +368,16 @@ class Terrain:
         :param exposure: pre-tonemap exposure, as the ocean's
         :param materials: biome textures; loaded from the textures folder if
             None (at ``settings.texture_size``)
+        :param textures: the biome texture arrays already on the GPU (albedo
+            and height, normal-roughness-ao: as ``make_texture_array`` makes
+            them from *materials*), shared with other terrains; None = made
+            here
+        :param tonemap: the ACES tonemap (True), or a plain display encoding,
+            next to models lit by Panda3D's fixed-function lights
         :param position: the planet centre in the world frame, metres
             (float64; settable later through :attr:`position`)
+        :param orientation: world from planet frame, a unit quaternion (w, x,
+            y, z) (:meth:`set_orientation`): a body that turns
         :param executor: a generation pool shared with other terrains (this
             terrain takes its own channel and does not shut it down); None
             creates a private one from *backend* and ``settings.workers``
@@ -391,7 +403,8 @@ class Terrain:
         self.materials = materials or load_materials(max_size=settings.texture_size)
         self.blend_depth = DEFAULT_BLEND_DEPTH
         self.min_level = settings.min_level
-        self._set_static_inputs(sun_direction, sun_color, ambient, exposure)
+        self._set_static_inputs(sun_direction, sun_color, ambient, exposure, textures)
+        self.root.set_shader_input("uTonemap", int(tonemap))
         bind_defaults(self.root)
         if atmospheres is not None:
             atmospheres.bind(self.root)
@@ -400,6 +413,7 @@ class Terrain:
         )
 
         self.position = np.asarray(position, dtype=np.float64)
+        self.set_orientation(orientation)
         self._owns_executor = executor is None
         self.executor = executor or ChunkExecutor(
             backend=backend, workers=settings.workers or None
@@ -495,11 +509,16 @@ class Terrain:
         """
         version = self.executor.set_spec(spec, self._channel)
         self.version = version
-        self.planet = Planet(spec)
+        self.planet = spec.evaluator()
         self.spec = self.planet.spec
         self.grid = self.planet.grid
         self.root.set_shader_input("uMaxLevel", self.grid.max_level)
         self.root.set_shader_input("uSeaSurface", int(self.spec.has_ocean))
+        # A planet's day and night follow its vertical; a rock is lit as an
+        # object, each face as it faces the sun (RockSpec.radial_light)
+        self.root.set_shader_input(
+            "uRadialLight", int(getattr(self.spec, "radial_light", True))
+        )
         for node in self.nodes.values():
             node.remove_node()
         self.nodes.clear()
@@ -521,7 +540,8 @@ class Terrain:
         self.selector = make_selector(
             self.grid,
             max_distance=self.max_distance,
-            horizon_floor=0.0 if self.spec.has_ocean else UNKNOWN_BOUNDS[0],
+            horizon_floor=0.0 if self.spec.has_ocean else self.planet.height_bounds[0],
+            unknown_bounds=self.planet.height_bounds,
             min_level=self.min_level,
             split_factor=self._settings.split_factor,
         )
@@ -605,10 +625,12 @@ class Terrain:
             view is generated before ground behind; None = no preference
         """
         self._frame += 1
-        cam = np.asarray(camera_world, dtype=np.float64) - self.position
+        cam = self.to_planet(camera_world)
         render_cam = np.asarray(camera_render, dtype=np.float64)
         self._camera = cam.copy()
         self._render_camera = render_cam.copy()
+        if camera_forward is not None and self._rotated:
+            camera_forward = self._rotation.T @ np.asarray(camera_forward, dtype=float)
         self._forward = camera_forward
         self._rebase(cam, render_cam)
 
@@ -653,7 +675,7 @@ class Terrain:
 
         frame = self._frame_inputs
         frame["uCamPos"][0] = LVecBase3f(*render_cam)
-        frame["uPlanetCentre"][0] = LVecBase3f(*(render_cam - cam))
+        frame["uPlanetCentre"][0] = LVecBase3f(*(render_cam - self._rotation @ cam))
         self.stats.update(
             shown=len(self.shown),
             stored=len(self.store),
@@ -680,9 +702,32 @@ class Terrain:
         """Sea-level radius, metres."""
         return self.spec.radius
 
+    def set_orientation(self, orientation: ArrayLike) -> None:
+        """Turn the body: world from planet frame, a unit quaternion (w, x, y,
+        z). A turning body (an asteroid) sets it every frame; chunks, queries
+        and collision stay in the planet frame."""
+        q = np.asarray(orientation, dtype=np.float64)
+        q = q / np.linalg.norm(q)
+        self.orientation = q
+        w, x, y, z = q
+        self._rotation = np.array(
+            [
+                [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+            ]
+        )
+        self._rotated = not np.array_equal(q, [1.0, 0.0, 0.0, 0.0])
+
+    @property
+    def rotation(self) -> np.ndarray:
+        """(3, 3) world from planet frame"""
+        return self._rotation
+
     def to_planet(self, point_world: ArrayLike) -> np.ndarray:
         """:returns: a world-frame point in this planet's frame (float64)"""
-        return np.asarray(point_world, dtype=np.float64) - self.position
+        offset = np.asarray(point_world, dtype=np.float64) - self.position
+        return offset @ self._rotation if self._rotated else offset
 
     def altitude(self, camera_planet: ArrayLike) -> float:
         """:returns: metres above sea level of a planet-frame position"""
@@ -697,11 +742,10 @@ class Terrain:
         :param point_planet: (3,) or (N, 3) metres
         :returns: same shape, render-frame metres
         """
-        return (
-            np.asarray(point_planet, dtype=np.float64)
-            - self._camera
-            + self._render_camera
-        )
+        relative = np.asarray(point_planet, dtype=np.float64) - self._camera
+        if self._rotated:
+            relative = relative @ self._rotation.T
+        return relative + self._render_camera
 
     def set_swell(self, swell: Swell | None) -> None:
         """The sea's swell now (a :class:`world_builder.ocean.Sea` gives it
@@ -784,12 +828,16 @@ class Terrain:
 
     # ── internals ──────────────────────────────────────────────────────────────
 
-    def _set_static_inputs(self, sun_direction, sun_color, ambient, exposure):
+    def _set_static_inputs(self, sun_direction, sun_color, ambient, exposure, textures):
         root = self.root
         m = self.materials
-        albedo = make_texture_array("terrain_albedo_h", m.albedo_height, True)
-        normal = make_texture_array("terrain_normal_ra", m.normal_rough_ao, False)
-        self._textures = (albedo, normal)  # their anisotropy is a setting
+        if textures is not None:
+            albedo, normal = textures
+            self._textures = ()  # their owner sets their filtering
+        else:
+            albedo = make_texture_array("terrain_albedo_h", m.albedo_height, True)
+            normal = make_texture_array("terrain_normal_ra", m.normal_rough_ao, False)
+            self._textures = (albedo, normal)  # their anisotropy is a setting
         root.set_shader_input("uAlbedoH", albedo)
         root.set_shader_input("uNormRA", normal)
         root.set_shader_input("uNoise", make_noise_texture())
@@ -849,7 +897,13 @@ class Terrain:
                     del self._cells[name]
                 else:
                     cell.set_pos(*(centre - origin))
-        self.root.set_pos(*(render_cam - (cam - origin)))
+        if self._rotated:
+            self.root.set_pos_quat(
+                LPoint3f(*(render_cam - self._rotation @ (cam - origin))),
+                LQuaternionf(*self.orientation),
+            )
+        else:
+            self.root.set_pos(*(render_cam - (cam - origin)))
         if self.collision is not None:
             self.collision.follow(self.root, origin, rebased)
 

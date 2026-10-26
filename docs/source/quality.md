@@ -205,6 +205,8 @@ labels and ranges below are what the schema gives.
 | `instance_budget` | Rocks drawn | live | 1000 to 200000 | 5000 | 10000 | 20000 | 50000 |
 | `detail_far` | Rock texture distance | live | 500 to 10000 m | 1000 | 2000 | 3000 | 5000 |
 | `texture_size` | Rock texture size | restart | 256, 512, 1024, 2048 px | 256 | 512 | 1024 | 2048 |
+| `terrain_min_radius` (advanced) | Detailed rocks from | live | 50 to 5000 m | 200 | 200 | 200 | 200 |
+| `max_terrain_rocks` | Detailed rocks | live | 0 to 32 | 0 | 4 | 8 | 16 |
 
 ## Notes
 

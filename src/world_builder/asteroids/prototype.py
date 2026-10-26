@@ -103,6 +103,8 @@ class Prototype:
         [face, row (v), column (u)]
     :ivar normal_map: (6, size, size, 3) uint8 body-frame normals,
         (n + 1) / 2 * 255 [face, row (v), column (u)]
+    :ivar lowest: the full-detail shape's smallest radius (on the normal
+        map's samples), in units of the bounding radius
     :ivar gen_ms: generation time
     """
 
@@ -112,6 +114,7 @@ class Prototype:
     meshes: list[PrototypeMesh]
     radius_grid: np.ndarray
     normal_map: np.ndarray
+    lowest: float
     gen_ms: float
 
 
@@ -277,5 +280,6 @@ def generate_prototype(job: PrototypeJob, key: int, version: int = 0) -> Prototy
         meshes=meshes,
         radius_grid=radius_grid,
         normal_map=normal_map,
+        lowest=float(full.min()),
         gen_ms=(time.perf_counter() - start) * 1e3,
     )

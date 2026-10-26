@@ -27,6 +27,10 @@ class AsteroidSettings(QualitySettings):
     :ivar detail_far: textures fade to the materials' mean colours by this
         distance, metres
     :ivar texture_size: the rock and ice textures' size, texels
+    :ivar terrain_min_radius: rocks this big and more turn into terrain near
+        the camera (the terrain's level of detail), metres
+    :ivar max_terrain_rocks: rocks drawn as terrain at once, at most (0:
+        none)
     """
 
     min_pixels: float = knob(
@@ -82,6 +86,21 @@ class AsteroidSettings(QualitySettings):
         help="Rock and ice texture resolution (video memory, load time).",
     )
 
+    terrain_min_radius: float = knob(
+        200.0,
+        "Detailed rocks from",
+        unit="m",
+        range=(50.0, 5000.0),
+        advanced=True,
+        help="Rocks this big and more get the terrain's detail up close.",
+    )
+    max_terrain_rocks: int = knob(
+        8,
+        "Detailed rocks",
+        range=(0, 32),
+        help="Rocks drawn with the terrain's detail at once (0: none).",
+    )
+
     LABEL: ClassVar = "Asteroids"
     PRESETS: ClassVar = {
         QualityLevel.LOW: {
@@ -92,6 +111,7 @@ class AsteroidSettings(QualitySettings):
             "instance_budget": 5000,
             "detail_far": 1000.0,
             "texture_size": 256,
+            "max_terrain_rocks": 0,
         },
         QualityLevel.MID: {
             "min_pixels": 3.0,
@@ -99,6 +119,7 @@ class AsteroidSettings(QualitySettings):
             "instance_budget": 10_000,
             "detail_far": 2000.0,
             "texture_size": 512,
+            "max_terrain_rocks": 4,
         },
         QualityLevel.ULTRA: {
             "min_pixels": 1.5,
@@ -108,5 +129,6 @@ class AsteroidSettings(QualitySettings):
             "instance_budget": 50_000,
             "detail_far": 5000.0,
             "texture_size": 2048,
+            "max_terrain_rocks": 16,
         },
     }

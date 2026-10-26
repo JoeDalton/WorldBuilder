@@ -48,17 +48,92 @@ Ways to make them better:
 
 - **A native visible pass.** The per-frame pass (size on screen, frusta,
   level of detail, grouping) is numpy: about 0.75 ms for the `cube`
-  preset's 3,400 rocks, and it grows with the rocks in range. A ring at
-  tens of thousands of rocks wants it in C (`native/field.c`, as the plan
-  had it), or the pass every other frame for the far classes.
-- **Partial table uploads.** A change uploads the whole instance table
-  (64 bytes a slot): nothing in the `cube` preset, where the whole field is
-  in range, but a ring streams cells in as the camera flies. Panda 1.10 has
-  no sub-image upload; one texture per size class, or a ring of row blocks,
-  would bound each upload.
+  preset's 3,400 rocks, 3 ms for the 47,000 rocks a ring holds (half the
+  field's update there). It wants C (`native/field.c`, as the plan had it),
+  or the pass every other frame for the far classes.
+- **Whole table uploads.** Only new rows are written on the CPU, but Panda
+  1.10 uploads the whole texture (64 bytes a slot, 4 MB for a ring's
+  rocks) each time some changed: about a millisecond of the bus, every
+  third frame while flying through a ring. One texture per size class, or a
+  ring of row blocks, would bound it.
 - **Box windows.** Each class holds a box of cells around the camera, about
   twice the cells of the sphere of its range. Holding only the cells the
-  sphere touches halves the rocks held in an open field.
+  sphere touches halves the rocks held in an open field (a ring holds
+  47,000 for 18,000 in range).
+- **The budget in a ring.** Past 20,000 rocks in range, the smallest size
+  drawn rises to about 12 pixels in the `ring` preset: the haze then takes
+  rocks a dozen pixels wide, a soft glow where a scatter of points would
+  read better. A budget counted in the view (not every direction), or
+  points for the rocks between a few pixels and the cut, would keep them.
 - **Texture seams.** Textures follow each cube face's grid, so their
   pattern turns at the face edges of every rock; triplanar mapping in the
   body frame would hide it (needed anyway for hero rocks).
+
+- **Ice in patches, not blended.** A rock's ice fraction now weights a
+  rock/snow blend over its whole surface: a uniform beige at low fractions,
+  with artefacts where the two textures meet, and a far colour that was
+  hard to match. Instead, lay out separate patches: a mostly-rock body gets
+  a few patches of ice, a mostly-ice body a few patches of rock, the
+  fraction setting how much of the surface each covers. This gives
+  contrast and variety rather than a blend.
+  - The patches come from a noise of the direction, thresholded at the
+    fraction's quantile (as the field's clumping coverage is). Per
+    prototype, the patches go in a fourth channel of the normal map (RGB8
+    today, RGBA8 then), so the instance shader reads them in the same
+    fetch. The rock's terrain
+    (`RockBody.weights`) uses the same function, so the swap does not
+    change them.
+  - The far colour becomes each patch's mean colour: the pixels' share,
+    not the weights' blend.
+  - The same idea fits planets' biome borders.
+
+## Haze
+
+- **Shadows.** The haze and the rocks take no shadows: a planet's shadow
+  across its ring, the ring's on the planet, the rocks' on each other are
+  for the shadows issue.
+- **Grazing rays.** 32 midpoints along a ray within a ring's plane span
+  thousands of kilometres: its ringlets alias into faint dashes on the far
+  rim. More samples where the ray is long, or a per-pixel jitter, would
+  smooth them.
+- **Clumps.** The haze averages the clumping (its coverage): from afar a
+  patchy field is an even glow. A coarse 3D texture of the clumping's mean
+  would keep the patches.
+- **Dust near the camera.** The far camera of a split draws the haze from
+  the split on: the dust nearer is lost (0.06 of optical depth for the
+  `ring` preset's 2 km split). The near camera could draw the dust alone.
+- **Forward scattering.** Rocks are Lambert spheres, dark against the sun;
+  fine dust scatters forward and glows there (Saturn's rings seen against
+  the sun). A phase term for the dust would add it.
+
+## Rocks as terrain
+
+- **A turning rock's surface speed.** A rock drawn as terrain is solid
+  through the terrain's `TerrainSurface`, which has no `velocity_at`: a
+  game's handlers see its surface as still (a big rock turns slowly, about
+  1 m/s at its surface at the default rates).
+- **Normal detail on the terrain.** The terrain only beats the instance's
+  normal map within 0.8 R of the surface, because its chunks carry no
+  normal map of their own. Chunk normal maps of the finer detail (as the
+  instances have) would let the swap happen farther, and look finer on the
+  way.
+- **What terrain rocks cost.** The detail they add up close is modest for
+  scattered rocks; they stay mostly for hero rocks. Measured with
+  `scripts/asteroid_bench.py --field cube --flight approach --offscreen
+  --terrain-rocks N` (HIGH, 1600×900, two runs each, frame ms):
+
+  | `max_terrain_rocks` | Mean | Median | p95 | Max |
+  |---|---|---|---|---|
+  | 0 | 1.82-1.93 | 1.78-1.83 | 2.06-2.51 | 3.1-3.2 |
+  | 8 | 2.63-2.96 | 1.97-2.07 | 5.45-5.46 | 15-159 |
+
+  p95 is more than twice as high, and the first terrain made costs a
+  15 ms frame (159 ms in one run, likely a cold shader compile). To try:
+  - make one terrain at the field's start, hidden, so its shader and
+    inputs are ready;
+  - load fewer chunks per frame while the terrain is still hidden;
+  - make LOW and MID default to 0 terrain rocks, and keep terrain for hero
+    rocks only.
+- **Textures.** This checkout has no biome texture sets
+  (`terrain/textures/<biome>/`), so rocks show the procedural placeholder,
+  whose tiling reads as a knitted pattern up close.

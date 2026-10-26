@@ -37,9 +37,10 @@ enum {
 
 /* scatter._WbScatter */
 typedef struct {
-  int32_t shape; /* 0 box, 1 sphere */
+  int32_t shape; /* 0 box, 1 sphere, 2 annulus */
   int32_t classes;
-  double half[3]; /* box half sizes; sphere radius in [0] */
+  double half[3]; /* box half sizes; sphere radius in [0]; annulus inner,
+                     outer, half thickness */
   double edge;
   int32_t clump_octaves; /* 0 = no clumping */
   int32_t poisson_max;
@@ -60,6 +61,9 @@ typedef struct {
   double tumble_fraction;
   int32_t keep_outs;
   const double *keep_out; /* (keep_outs, 7): a, b, clearance */
+  double radial_edge;      /* annulus */
+  int32_t profile_n;       /* annulus: 0 = even */
+  const double *profile;
 } WbScatter;
 
 /* scatter.ROCK_DTYPE */
@@ -124,12 +128,32 @@ static double density(const WbScatter *s, const double *p) {
                     ? 1.0
                     : 0.0;
     }
-  } else {
+  } else if (s->shape == 1) {
     double d = sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
     if (s->edge > 0.0)
       profile = smoothstep01((s->half[0] - d) / s->edge);
     else
       profile = d <= s->half[0] ? 1.0 : 0.0;
+  } else {
+    /* spec.Annulus.vertical * spec.Annulus.radial */
+    double rho = sqrt(p[0] * p[0] + p[1] * p[1]);
+    double vertical, radial;
+    if (s->edge > 0.0)
+      vertical = smoothstep01((s->half[2] - fabs(p[2])) / s->edge);
+    else
+      vertical = fabs(p[2]) <= s->half[2] ? 1.0 : 0.0;
+    if (s->radial_edge > 0.0)
+      radial = smoothstep01((rho - s->half[0]) / s->radial_edge) *
+               smoothstep01((s->half[1] - rho) / s->radial_edge);
+    else
+      radial = (rho >= s->half[0] && rho <= s->half[1]) ? 1.0 : 0.0;
+    if (s->profile_n > 0) {
+      double u = (rho - s->half[0]) / (s->half[1] - s->half[0]);
+      if (u < 0.0) u = 0.0;
+      if (u > 1.0) u = 1.0;
+      radial = radial * table_lerp(s->profile, s->profile_n, u);
+    }
+    profile = vertical * radial;
   }
   if (s->clump_octaves > 0 && profile > 0.0) {
     double v = wb_fbm_point(p, s->clump_octaves, s->clump_frames,

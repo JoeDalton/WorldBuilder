@@ -145,8 +145,10 @@ def triangle_indices() -> np.ndarray:
 
 @functools.lru_cache(maxsize=4)
 def planet_for(spec: PlanetSpec) -> Planet:
-    """:returns: a cached :class:`Planet` (one per worker process and spec)"""
-    return Planet(spec)
+    """:returns: the spec's cached evaluator (one per worker process and
+    spec): a :class:`Planet`, or another body (see the body protocol in
+    :class:`Planet`)"""
+    return spec.evaluator()
 
 
 def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
@@ -190,14 +192,17 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         slope = biomes.slope_from_normals(
             _grid_normals(points, border, step), dirs[inner]
         )
-    w = biomes.weights(
-        sample.temperature[inner],
-        sample.humidity[inner],
-        elevation,
-        slope,
-        spec.has_ocean,
-        spec.has_vegetation,
-    )
+    if sample.weights is not None:  # a body that sets them itself
+        w = sample.weights[inner].reshape(-1, len(biomes.BIOMES))
+    else:
+        w = biomes.weights(
+            sample.temperature[inner],
+            sample.humidity[inner],
+            elevation,
+            slope,
+            spec.has_ocean,
+            spec.has_vegetation,
+        )
     inner_dirs = dirs[inner].reshape(-1, 3)
     for paint in spec.paints:
         w = paint.apply(inner_dirs, w, radius)

@@ -59,6 +59,7 @@ COST_FIELDS = {
         "instance_budget",
         "detail_far",
         "texture_size",
+        "max_terrain_rocks",
     ],
 }
 

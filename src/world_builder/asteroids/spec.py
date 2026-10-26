@@ -18,10 +18,16 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
+from numpy.typing import ArrayLike
 
-from world_builder.asteroids.distributions import Distribution
+from world_builder.asteroids.distributions import Distribution, interpolate
 
 # ── extent ────────────────────────────────────────────────────────────────
+
+
+def _smoothstep01(t: np.ndarray) -> np.ndarray:
+    t = np.clip(t, 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,20 @@ class Box:
         """:returns: the (min, max) corners of where rock centres can be"""
         half = np.asarray(self.half_size, dtype=np.float64)
         return -half, half
+
+    def profile(self, p: np.ndarray) -> np.ndarray:
+        """:returns: the density profile at field-frame points (n, 3), 0-1
+        (scatter.c's arithmetic)"""
+        hx, hy, hz = self.half_size
+        x, y, z = p[:, 0], p[:, 1], p[:, 2]
+        if self.edge > 0.0:
+            e = self.edge
+            sx = _smoothstep01((hx - np.abs(x)) / e)
+            sy = _smoothstep01((hy - np.abs(y)) / e)
+            sz = _smoothstep01((hz - np.abs(z)) / e)
+            return sx * sy * sz
+        inside = (np.abs(x) <= hx) & (np.abs(y) <= hy) & (np.abs(z) <= hz)
+        return inside.astype(np.float64)
 
     def volume(self) -> float:
         """:returns: the integral of the profile, cubic metres"""
@@ -60,6 +80,13 @@ class Sphere:
     def bounds(self) -> tuple[np.ndarray, np.ndarray]:
         return np.full(3, -self.radius), np.full(3, self.radius)
 
+    def profile(self, p: np.ndarray) -> np.ndarray:
+        x, y, z = p[:, 0], p[:, 1], p[:, 2]
+        d = np.sqrt(x * x + y * y + z * z)
+        if self.edge > 0.0:
+            return _smoothstep01((self.radius - d) / self.edge)
+        return (d <= self.radius).astype(np.float64)
+
     def volume(self) -> float:
         r = np.linspace(0.0, self.radius, 4097)
         t = np.clip((self.radius - r) / max(self.edge, 1e-300), 0.0, 1.0)
@@ -67,7 +94,76 @@ class Sphere:
         return float(np.trapezoid(4.0 * math.pi * r * r * profile, r))
 
 
-FieldShape = Box | Sphere
+@dataclass(frozen=True)
+class Annulus:
+    """A ring around the field's z axis: planet rings.
+
+    :ivar inner: its inner radius, from the axis
+    :ivar outer: its outer radius
+    :ivar thickness: its full thickness, along z, centred on z = 0
+    :ivar edge: depth over which the density fades inside its faces (z)
+    :ivar radial_edge: depth over which it fades inside its rims
+    :ivar radial_profile: the density across the ring (ringlets and gaps): values
+        in [0, 1] evenly spaced from the inner rim to the outer, linearly
+        interpolated; empty = even
+    """
+
+    inner: float
+    outer: float
+    thickness: float
+    edge: float = 0.0
+    radial_edge: float = 0.0
+    radial_profile: tuple[float, ...] = ()
+
+    def __post_init__(self):
+        if not 0.0 <= self.inner < self.outer:
+            raise ValueError("an annulus needs 0 <= inner < outer")
+        if len(self.radial_profile) == 1:
+            raise ValueError("a radial profile needs at least two values")
+
+    def bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        h = 0.5 * self.thickness
+        return (
+            np.array([-self.outer, -self.outer, -h]),
+            np.array([self.outer, self.outer, h]),
+        )
+
+    def profile(self, p: np.ndarray) -> np.ndarray:
+        x, y = p[:, 0], p[:, 1]
+        return self.vertical(p[:, 2]) * self.radial(np.sqrt(x * x + y * y))
+
+    def radial(self, rho: ArrayLike) -> np.ndarray:
+        """:returns: the density across the ring at distances *rho* from the
+        axis (rims and profile; scatter.c's arithmetic)"""
+        rho = np.asarray(rho, dtype=np.float64)
+        if self.radial_edge > 0.0:
+            e = self.radial_edge
+            r = _smoothstep01((rho - self.inner) / e) * _smoothstep01(
+                (self.outer - rho) / e
+            )
+        else:
+            r = ((rho >= self.inner) & (rho <= self.outer)).astype(np.float64)
+        if self.radial_profile:
+            u = np.clip((rho - self.inner) / (self.outer - self.inner), 0.0, 1.0)
+            r = r * interpolate(np.asarray(self.radial_profile, dtype=np.float64), u)
+        return r
+
+    def vertical(self, z: ArrayLike) -> np.ndarray:
+        """:returns: the density across the ring's thickness at heights *z*"""
+        z = np.asarray(z, dtype=np.float64)
+        h = 0.5 * self.thickness
+        if self.edge > 0.0:
+            return _smoothstep01((h - np.abs(z)) / self.edge)
+        return (np.abs(z) <= h).astype(np.float64)
+
+    def volume(self) -> float:
+        rho = np.linspace(self.inner, self.outer, 8193)
+        area = float(np.trapezoid(2.0 * math.pi * rho * self.radial(rho), rho))
+        return area * (self.thickness - self.edge)
+
+
+FieldShape = Box | Sphere | Annulus
+
 
 # ── density ───────────────────────────────────────────────────────────────
 
@@ -96,10 +192,15 @@ class Density:
     """:ivar count_per_km3: rocks per cubic kilometre where the field is
         densest (at full profile and full clumping), before rocks too close
         to a bigger one are removed
-    :ivar clumping: patchiness; None = uniform"""
+    :ivar clumping: patchiness; None = uniform
+    :ivar dust: optical depth per kilometre, at full profile, of the dust
+        and gravel under the smallest rock: never drawn nor solid, only part
+        of the haze (:mod:`world_builder.asteroids.haze`). What makes a thin
+        ring bright from afar without crowding it with rocks"""
 
     count_per_km3: float
     clumping: Clumping | None = None
+    dust: float = 0.0
 
 
 # ── spin ──────────────────────────────────────────────────────────────────
@@ -277,6 +378,17 @@ class FieldSpec:
         }
 
 
+def _ringlets() -> tuple[float, ...]:
+    """A ring's radial profile: ringlets on a fainter sheet, two gaps and a
+    dense band (129 values, inner rim to outer)."""
+    x = np.linspace(0.0, 1.0, 129)
+    p = 0.7 + 0.2 * np.sin(2.0 * math.pi * 9.0 * x) * np.sin(2.0 * math.pi * 2.0 * x)
+    p[(x > 0.30) & (x < 0.34)] = 0.03
+    p[(x > 0.71) & (x < 0.72)] = 0.1
+    p[(x > 0.50) & (x < 0.60)] = 1.0
+    return tuple(round(float(v), 4) for v in np.clip(p, 0.0, 1.0))
+
+
 #: Example fields, for the demos and the preview.
 PRESETS: dict[str, FieldSpec] = {
     # SpaceFlight's missions 1-2 setting: a 15 km cube, with a corridor along
@@ -301,5 +413,27 @@ PRESETS: dict[str, FieldSpec] = {
             ),
         ),
         material=MaterialSpec(Distribution.u_shaped(0.4, 0.0, 1.0, log=False)),
+    ),
+    # A planet ring: 90,000 to 110,000 km from its axis, 4 km thick, icy
+    # rocks turning with the orbit, in a sheen of dust.
+    "ring": FieldSpec(
+        shape=Annulus(
+            9.0e7,
+            1.1e8,
+            4000.0,
+            edge=1000.0,
+            radial_edge=2.0e6,
+            radial_profile=_ringlets(),
+        ),
+        density=Density(
+            2.0, Clumping(scale=20_000.0, coverage=0.7, softness=0.15), dust=0.03
+        ),
+        sizes=Distribution.power_law(3.0, 50.0, 2000.0),
+        spin=SpinSpec(
+            Distribution.lognormal(0.03, 0.6, 0.003, 0.3),
+            axis=AroundAxis((0.0, 0.0, 1.0), 10.0),
+        ),
+        material=MaterialSpec(Distribution.uniform(0.6, 1.0)),
+        seed=3,
     ),
 }

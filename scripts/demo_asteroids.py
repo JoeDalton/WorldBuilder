@@ -1,17 +1,21 @@
 """
-Fly through an asteroid field (``world_builder.asteroids``)::
+Fly through an asteroid field or a ring (``world_builder.asteroids``), drawn
+by a :class:`~world_builder.world.World` of open space as a game would have
+it: split depth cameras, the sky, the render origin kept at the camera::
 
     python scripts/demo_asteroids.py [--preset NAME] [--quality LEVEL]
         [--backend process|thread|inline] [--size "1600 900"]
 
-    --preset   the field (spec.PRESETS; default cube, missions 1-2's 15 km)
-    --quality  its AsteroidSettings preset at start (default high)
+    --preset   the field (spec.PRESETS; default cube, missions 1-2's 15 km;
+               ring: a planet ring 220,000 km across)
+    --quality  the world's settings preset at start (default high)
     --backend  where the rock prototypes are built (default process)
 
 Controls (AZERTY, as demo_terrain.py): arrows forward / back and slide, W / X
 up / down, Z / S pitch, Q / D roll, A / E yaw, Shift 5x, PgUp / PgDn speed.
-P pauses the field's clock (the rocks stop turning, the camera still flies),
-F1 cycles the quality preset, End returns to the start.
+P pauses the world's clock (the rocks stop turning, the camera still flies),
+F1 cycles the quality preset, End returns to the start, Home goes to the
+preset's far view (a ring seen from afar) and back.
 
 The rocks turn with the demo's own clock, never Panda's: what a game's
 pausable clock does. The default backend builds prototypes in spawned worker
@@ -32,17 +36,34 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import describe_window, window_config  # noqa: E402
 
-from world_builder.asteroids.field import AsteroidField  # noqa: E402
-from world_builder.asteroids.settings import AsteroidSettings  # noqa: E402
 from world_builder.asteroids.spec import PRESETS  # noqa: E402
+from world_builder.depth import SplitDepthCameras  # noqa: E402
 from world_builder.quality import QualityLevel  # noqa: E402
+from world_builder.settings import WorldSettings  # noqa: E402
+from world_builder.world import FieldLook, SkyLook, SunLook, World  # noqa: E402
 
-START = (0.0, -9000.0, 500.0)
-SPEED = 250.0
+#: Per preset: where the camera starts (position, heading, pitch), the far
+#: view (Home), and the speed, m/s
+VIEWS = {
+    "cube": (
+        ((0.0, -9000.0, 500.0), 0.0, 0.0),
+        ((0.0, -60_000.0, 8000.0), 0.0, -7.0),
+        250.0,
+    ),
+    "icy_ball": (
+        ((0.0, -16_000.0, 0.0), 0.0, 0.0),
+        ((0.0, -80_000.0, 0.0), 0.0, 0.0),
+        250.0,
+    ),
+    # inside the ring's dense band, looking along it; from afar, its whole
+    "ring": (
+        ((0.0, 1.01e8, 0.0), -90.0, 0.0),
+        ((0.0, -2.6e8, 7.0e7), 0.0, -15.0),
+        2000.0,
+    ),
+}
 BOOST = 5.0
-FAR_M = 600_000.0
-SUN_TOWARD = (-0.45, -0.85, 0.3)
-SUN_COLOR = (2.6, 2.5, 2.35)
+SUN = SunLook(direction=(-0.45, -0.85, 0.3), color=(2.6, 2.5, 2.35))
 AMBIENT = (0.03, 0.03, 0.04)
 HUD_PERIOD = 0.25
 
@@ -68,23 +89,32 @@ def main() -> None:
 
     base = ShowBase()
     base.disable_mouse()
-    base.set_background_color(0.01, 0.01, 0.02, 1)
+    base.set_background_color(0.0, 0.0, 0.0, 1)
     base.setFrameRateMeter(True)
-    base.cam.node().get_lens().set_near_far(1.0, FAR_M)
     level = QualityLevel.parse(args.quality)
-    state = {"t": 0.0, "paused": False, "speed": SPEED, "level": level}
-    field = AsteroidField(
+    start, far_view, speed = VIEWS.get(args.preset, VIEWS["cube"])
+    state = {"t": 0.0, "paused": False, "speed": speed, "level": level, "far": False}
+    world = World(
         base,
-        PRESETS[args.preset],
+        bodies=[],
+        sun=SUN,
+        sky=SkyLook(),
+        settings=WorldSettings.preset(level),
         clock=lambda: state["t"],
-        settings=AsteroidSettings.preset(level),
         backend=args.backend,
-        sun_direction=SUN_TOWARD,
-        sun_color=SUN_COLOR,
-        ambient=AMBIENT,
-        far=FAR_M,
+        space_ambient=AMBIENT,
+        fields=[FieldLook(args.preset, PRESETS[args.preset])],
     )
-    base.camera.set_pos(*START)
+    field = world.field(args.preset)
+    depth = SplitDepthCameras(base)
+    # The camera stays at render's origin; its world position is float64.
+    position = np.array(start[0], dtype=np.float64)
+
+    def go(view):
+        position[:] = view[0]
+        base.camera.set_pos_hpr(0, 0, 0, view[1], view[2], 0)
+
+    go(start)
     keys: set[str] = set()
     for key in {k for row in (*_ROTATIONS, *_TRANSLATIONS) for k in row[:2]} | {
         "shift"
@@ -98,13 +128,18 @@ def main() -> None:
     def cycle_quality():
         levels = list(QualityLevel)
         state["level"] = levels[(levels.index(state["level"]) + 1) % len(levels)]
-        field.set_settings(AsteroidSettings.preset(state["level"]))
+        world.set_settings(WorldSettings.preset(state["level"]))
+
+    def toggle_far():
+        state["far"] = not state["far"]
+        go(far_view if state["far"] else start)
 
     base.accept("p", toggle_pause)
     base.accept("f1", cycle_quality)
     base.accept("page_up", lambda: state.update(speed=state["speed"] * 2.0))
     base.accept("page_down", lambda: state.update(speed=state["speed"] / 2.0))
-    base.accept("end", lambda: base.camera.set_pos_hpr(*START, 0, 0, 0))
+    base.accept("end", lambda: go(start))
+    base.accept("home", toggle_far)
     hud = OnscreenText(
         text="",
         pos=(-1.3, 0.9),
@@ -130,13 +165,15 @@ def main() -> None:
         for plus, minus, axis in _TRANSLATIONS:
             move[axis] = (plus in keys) - (minus in keys)
         speed = state["speed"] * (BOOST if "shift" in keys else 1.0)
-        cam.set_pos(cam, move * speed * dt)
-        pos = np.array(cam.get_pos(base.render))
-        field.update(pos, pos)
+        step = cam.get_quat(base.render).xform(move * speed * dt)
+        position[:] += (step.x, step.y, step.z)
+        depth.update(*world.depth_ranges(position))
+        world.update(position, far=depth.far)
         hud_timer[0] -= dt
         if hud_timer[0] <= 0.0:
             hud_timer[0] = HUD_PERIOD
             s = field.stats
+            local = field.to_field(position)
             hud.setText(
                 f"{args.preset}  {state['level'].label}  "
                 f"{'loading' if field.loading else ''}"
@@ -144,7 +181,9 @@ def main() -> None:
                 f"rocks {s.get('rocks', 0)}  drawn {s.get('drawn', 0)}  "
                 f"smallest {s.get('min_pixels', 0):.1f} px  "
                 f"update {s.get('update_ms', 0):.2f} ms  "
-                f"speed {speed:.0f} m/s"
+                f"speed {speed:.0f} m/s\n"
+                f"axis {np.hypot(local[0], local[1]) / 1e3:,.0f} km  "
+                f"height {local[2] / 1e3:,.1f} km"
             )
         return task.cont
 
@@ -153,7 +192,8 @@ def main() -> None:
     try:
         base.run()
     finally:
-        field.destroy()
+        depth.destroy()
+        world.destroy()
 
 
 if __name__ == "__main__":

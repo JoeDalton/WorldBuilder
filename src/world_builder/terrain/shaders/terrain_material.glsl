@@ -13,17 +13,30 @@ uniform float uBlendDepth;        // biome transition softness: ~0.1 crisp
 const int ROCK = 1;
 const float MACRO_SCALE = 8.0;  // must match materials.MACRO_SCALE
 
-// Each cube face's u and v axes (cubesphere.FACE_FRAMES): the texture's
-// directions, once projected on the tangent plane.
-const vec3 FACE_U[6] = vec3[6](
-    vec3(0, 1, 0), vec3(0, -1, 0), vec3(-1, 0, 0), vec3(1, 0, 0), vec3(0, 1, 0), vec3(0, 1, 0));
-const vec3 FACE_V[6] = vec3[6](
-    vec3(0, 0, 1), vec3(0, 0, 1), vec3(0, 0, 1), vec3(0, 0, 1), vec3(-1, 0, 0), vec3(1, 0, 0));
-
 // Samples inside the per-layer branches below are in non-uniform control flow,
 // where implicit derivatives are undefined: pass them explicitly.
 vec4 sampleLayer(sampler2DArray s, vec2 uv, vec2 gx, vec2 gy, float scale, int layer) {
     return textureGrad(s, vec3(uv * scale, float(layer)), gx * scale, gy * scale);
+}
+
+// What layeredMaterial's albedo tends to as the textures average out with
+// distance (their coarsest mipmaps): its height blend of each layer's mean
+// colour (linear) at its mean height. Not the mean colours mixed by weight:
+// a rock with a tenth of ice is drawn as rock (its texels stand higher than
+// the snow's by more than a tenth), not a tenth paler.
+vec3 meanLayeredAlbedo(float w[6], vec3 meanAlbedo[6], float meanHeight[6]) {
+    float best = -1.0;
+    for (int i = 0; i < 6; ++i)
+        if (w[i] >= 0.02) best = max(best, meanHeight[i] + w[i]);
+    float sum = 0.0;
+    vec3 color = vec3(0.0);
+    for (int i = 0; i < 6; ++i) {
+        if (w[i] < 0.02) continue;
+        float b = max(meanHeight[i] + w[i] - (best - uBlendDepth), 0.0) * w[i];
+        color += b * meanAlbedo[i];
+        sum += b;
+    }
+    return color / max(sum, 1e-5);
 }
 
 // The textured surface where the biome weights are w (summing to 1): uv are

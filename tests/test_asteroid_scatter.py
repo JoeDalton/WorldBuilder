@@ -15,6 +15,7 @@ from world_builder.asteroids.motion import rotate
 from world_builder.asteroids.scatter import ROCK_DTYPE, Scatter, fbm_quantile
 from world_builder.asteroids.spec import (
     PRESETS,
+    Annulus,
     AroundAxis,
     Box,
     Clumping,
@@ -345,3 +346,72 @@ def test_numpy_noise_gives_nearly_the_same_field(native, monkeypatch):
     without = Scatter(spec, native=False).rocks_in_box(lo, hi)
     a, b = set(with_native["id"].tolist()), set(without["id"].tolist())
     assert len(a ^ b) <= max(2, len(a) // 1000)
+
+
+# ── rings ───────────────────────────────────────────────────────────────────
+
+
+def test_an_annulus_profile():
+    ring = Annulus(
+        1000.0,
+        2000.0,
+        100.0,
+        edge=20.0,
+        radial_edge=50.0,
+        radial_profile=(1.0, 0.0, 1.0),
+    )
+    rho = np.array([900.0, 1025.0, 1100.0, 1500.0, 1750.0, 1990.0, 2100.0])
+    radial = ring.radial(rho)
+    assert radial[0] == 0.0 and radial[-1] == 0.0  # the hole, outside
+    assert radial[3] == pytest.approx(0.0)  # the profile's gap
+    assert radial[4] == pytest.approx(0.5)  # half way back up
+    assert 0.0 < radial[1] < radial[2]  # the inner rim's fade
+    assert 0.0 < radial[5] < 1.0
+    np.testing.assert_allclose(
+        ring.vertical([0.0, 30.0, 45.0, 50.0, 60.0]), [1.0, 1.0, 0.15625, 0.0, 0.0]
+    )
+    points = np.stack([rho, np.zeros_like(rho), np.full_like(rho, 45.0)], axis=1)
+    np.testing.assert_allclose(ring.profile(points), radial * 0.15625)
+    # a plain annulus's volume
+    plain = Annulus(1000.0, 2000.0, 100.0)
+    assert plain.volume() == pytest.approx(
+        math.pi * (2000.0**2 - 1000.0**2) * 100.0, rel=1e-6
+    )
+    with pytest.raises(ValueError):
+        Annulus(2000.0, 1000.0, 100.0)
+
+
+def test_a_ring_holds_its_density():
+    """Rocks in a patch of a ring, where its profile is even: as many as
+    its density says (the hard core removes few at this spacing)."""
+    spec = FieldSpec(
+        shape=Annulus(1.0e6, 2.0e6, 2000.0, radial_profile=(1.0, 0.5)),
+        density=Density(30.0),
+        sizes=Distribution.uniform(40.0, 60.0),
+    )
+    scatter = Scatter(spec)
+    centre = np.array([0.0, 1.25e6, 0.0])
+    half = np.array([3000.0, 3000.0, 1000.0])
+    rocks = scatter.rocks_in_box(centre - half, centre + half)
+    expected = 30.0 * 6.0 * 6.0 * 2.0 * float(spec.shape.radial([1.25e6])[0])
+    assert abs(len(rocks) - expected) < 4.0 * math.sqrt(expected)
+    assert np.all(np.abs(rocks["centre"][:, 2]) <= 1000.0)
+    # none in the hole
+    assert len(scatter.rocks_in_box([-3000.0] * 3, [3000.0] * 3)) == 0
+
+
+def test_the_native_scatter_gives_numpys_ring(native):
+    spec = PRESETS["ring"]
+    fast = Scatter(spec, native=True)
+    slow = Scatter(spec, native=False)
+    # within the ring, across its dense band's edge
+    centre = np.array([0.0, 9.0e7 + 0.5 * 2.0e7, 0.0])
+    reach = np.array([2500.0, 2500.0, 1000.0])
+    for cls in range(len(fast.classes)):
+        cells = fast.cells_in_box(cls, centre - reach, centre + reach)
+        a = fast.rocks_in_cells(cls, cells)
+        b = slow.rocks_in_cells(cls, cells)
+        np.testing.assert_array_equal(a["id"], b["id"])
+        np.testing.assert_array_equal(a["centre"], b["centre"])
+        np.testing.assert_array_equal(a["radius"], b["radius"])
+    assert len(fast.rocks_in_box(centre - reach, centre + reach)) > 0
