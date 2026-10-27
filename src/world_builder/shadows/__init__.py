@@ -376,6 +376,33 @@ class Shadows:
             )
         return visible
 
+    def own_shadow(
+        self, points_world: ArrayLike, sun_direction: ArrayLike, body: int
+    ) -> np.ndarray:
+        """The share of the sun body *body* leaves points of its own: its
+        horizon, with the sun's penumbra (its limb a straight edge across
+        the sun's disc), none at or under its sea-level radius (a crater's
+        floor is not inside it). shadows.glsl's ownShadow on the CPU.
+
+        :param points_world: (..., 3) world frame, metres
+        :param sun_direction: toward the sun, world frame (any length)
+        :param body: the points' body, an index from :meth:`add`
+        :returns: (...) in [0, 1]
+        """
+        points = np.asarray(points_world, dtype=np.float64)
+        sun = np.asarray(sun_direction, dtype=np.float64)
+        sun = sun / np.linalg.norm(sun)
+        radius, position, _ = self._bodies[body]
+        offset = points - position
+        distance = np.linalg.norm(offset, axis=-1)
+        elevation = np.arcsin(np.clip(offset @ sun / distance, -1.0, 1.0))
+        dip = np.arctan2(
+            np.sqrt(np.maximum((distance - radius) * (distance + radius), 0.0)), radius
+        )
+        # How deep the limb cuts into the sun's disc, in its radii.
+        x = np.clip(-(elevation + dip) / self.sun_angular_radius, -1.0, 1.0)
+        return 0.5 - (x * np.sqrt(1.0 - x * x) + np.arcsin(x)) / math.pi
+
 
 def _body_coverage(
     centre: np.ndarray, radius: float, sun: np.ndarray, sun_radius: float

@@ -118,6 +118,26 @@ float eclipseVisibility(vec3 rel, vec3 L, int self) {
     return visible;
 }
 
+// The share of the sun body self leaves a point of its own (over its
+// ground, or on it), rel from the camera: its horizon, with the sun's
+// penumbra. Its limb is a straight edge across the sun's disc (discCoverage
+// cancels away in float32 for a disc half the sky wide): the sun's
+// elevation against the horizon's dip, none at or under the sea-level
+// radius (a crater's floor is not inside the body). For what no air
+// lights by day and night (atmoSunlight does through air).
+// Shadows.own_shadow on the CPU.
+float ownShadow(vec3 rel, vec3 L, int self) {
+    vec3 p = rel - uShadowBodies[self].xyz;  // from its centre
+    float d = length(p);
+    float R = uShadowBodies[self].w;
+    float elevation = asin(clamp(dot(p, L) / d, -1.0, 1.0));
+    float dip = atan(sqrt(max((d - R) * (d + R), 0.0)), R);
+    // How deep the limb cuts into the sun's disc, in its radii: the
+    // covered segment's share.
+    float x = clamp(-(elevation + dip) / uSunAngularRadius, -1.0, 1.0);
+    return 0.5 - (x * sqrt(1.0 - x * x) + asin(x)) / SHADOW_PI;
+}
+
 // The share of the sun the mountains leave a point of the body's frame,
 // planetDir (unit) from its centre, altitude metres above sea level: the
 // ray toward the sun clears the occluder that sets the ceiling by

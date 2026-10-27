@@ -20,6 +20,11 @@ Usage::
     points = origin_world + lights.positions()       # (n, 3), world frame
     direct, ambient = light_at_many(points)          # (n, 3) each
     lights.apply(direct, ambient, sun_direction)
+
+A node tracked with ``shader=True`` is drawn by the world's model shader
+(:mod:`world_builder.objects`) instead of Panda3D's fixed-function lighting:
+its owner gives it the shader's state every frame; its ambient light is the
+sky light the shader reads.
 """
 
 from __future__ import annotations
@@ -28,7 +33,14 @@ from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import ArrayLike
-from panda3d.core import AmbientLight, DirectionalLight, LightAttrib, NodePath, Vec3
+from panda3d.core import (
+    AmbientLight,
+    DirectionalLight,
+    LightAttrib,
+    NodePath,
+    ShaderAttrib,
+    Vec3,
+)
 
 
 @dataclass
@@ -38,6 +50,8 @@ class _Tracked:
     sun: NodePath
     ambient: NodePath
     before: LightAttrib | None  # the node's own light attrib, put back on untrack
+    shader: bool = False  # drawn by the world's model shader
+    shader_before: ShaderAttrib | None = None  # its own, put back
 
 
 class TrackedLights:
@@ -55,17 +69,25 @@ class TrackedLights:
         self._drop_removed()
         return len(self._tracked)
 
-    def track(self, node: NodePath, cast: bool = False) -> None:
+    def track(self, node: NodePath, cast: bool = False, shader: bool = False) -> None:
         """Light *node* (and its children) by the light at its own position:
         its own sun and ambient lights, the others off on it. Tracking a
-        node again only changes *cast*.
+        node again only changes *cast* and *shader*.
 
         :param cast: whether it casts shadows on the world (kept for the
             caster map, not drawn yet)
+        :param shader: drawn by the world's model shader (its owner applies
+            it, :attr:`shaded`); its own shader state is put back when no
+            longer
         """
         for tracked in self._tracked:
             if tracked.node == node:
                 tracked.cast = cast
+                if tracked.shader and not shader:
+                    self._release_shader(tracked)
+                elif shader and not tracked.shader:
+                    tracked.shader_before = self._shader_attrib(node)
+                tracked.shader = shader
                 return
         name = node.get_name() or "tracked"
         sun = self.render.attach_new_node(DirectionalLight(f"{name}_sun"))
@@ -74,7 +96,10 @@ class TrackedLights:
         node.set_light_off()  # every other light, the world's first
         node.set_light(sun)
         node.set_light(ambient)
-        self._tracked.append(_Tracked(node, cast, sun, ambient, before))
+        shader_before = self._shader_attrib(node) if shader else None
+        self._tracked.append(
+            _Tracked(node, cast, sun, ambient, before, shader, shader_before)
+        )
 
     def untrack(self, node: NodePath) -> None:
         """Back to the lights it had (the world's, inherited)."""
@@ -94,6 +119,13 @@ class TrackedLights:
             if tracked.node == node:
                 return tracked.cast
         raise KeyError(node)
+
+    @property
+    def shaded(self) -> list[bool]:
+        """Per node, in the order of :attr:`nodes`: whether the world's
+        model shader draws it."""
+        self._drop_removed()
+        return [tracked.shader for tracked in self._tracked]
 
     @property
     def nodes(self) -> list[NodePath]:
@@ -146,7 +178,22 @@ class TrackedLights:
         self._tracked = kept
 
     @staticmethod
-    def _release(tracked: _Tracked) -> None:
+    def _shader_attrib(node: NodePath) -> ShaderAttrib | None:
+        return node.get_attrib(ShaderAttrib) if node.has_attrib(ShaderAttrib) else None
+
+    @staticmethod
+    def _release_shader(tracked: _Tracked) -> None:
+        if not tracked.node.is_empty():
+            if tracked.shader_before is None:
+                tracked.node.clear_attrib(ShaderAttrib)
+            else:
+                tracked.node.set_attrib(tracked.shader_before)
+        tracked.shader_before = None
+
+    @classmethod
+    def _release(cls, tracked: _Tracked) -> None:
+        if tracked.shader:
+            cls._release_shader(tracked)
         if not tracked.node.is_empty():
             if tracked.before is None:
                 tracked.node.clear_attrib(LightAttrib)

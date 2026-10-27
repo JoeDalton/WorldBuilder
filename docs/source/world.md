@@ -134,6 +134,8 @@ In order, it updates:
    whose models use Panda3D's fixed-function lighting scales them down, since
    that lighting has no tone map and clips the physical noon sun (about 2.5)
    to white (see [Lighting on objects](object_lighting.md));
+   a model tracked with `shader=True` takes its nearest body's model shader
+   inputs instead (`Body.models`);
 6. each body's sea (`Sea.update`):
    - its swell, drifted to the game time and handed to the terrain, its
      query and its collision solid;
@@ -185,11 +187,15 @@ band (see `world_builder.depth`).
   eclipses, the clouds', the mountains': see [Shadows](shadows.md)).
   `lights_at(points, local=False)` leaves the clouds' and the mountains'
   out, for what a shader shades per pixel (the near sea).
-- **`track_light(node, cast=False)`, `untrack_light(node)`**: a model lit by
-  the light where it is, not at the camera: its own Panda3D sun and ambient
-  lights (the world's off on it), set at every `update` in one vectorised
-  call, times `light_scale`. Place the model before `update`. `cast` is kept
-  for the shadows models will cast.
+- **`track_light(node, cast=False, shader=False)`, `untrack_light(node)`**:
+  a model lit by the light where it is, not at the camera: its own Panda3D
+  sun and ambient lights (the world's off on it), set at every `update` in
+  one vectorised call, times `light_scale`. Place the model before
+  `update`. `cast` is kept for the shadows models will cast. With
+  `shader=True` the world's model shader draws it: lit and tonemapped as
+  the terrain, every world shadow per pixel, the air in front (see
+  [Lighting on objects](object_lighting.md)); `Body.models` holds its
+  inputs near each body.
 - **`body(name)`**: a body's terrain, clouds and sea, for tools and debug
   views.
 - **`field(name)`**: an asteroid field, to make it solid
