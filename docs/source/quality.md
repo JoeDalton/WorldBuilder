@@ -202,7 +202,8 @@ labels and ranges below are what the schema gives.
 | `lod_error_px` | Rock detail | live | 0.25 to 6 px | 3 | 2 | 1 | 0.5 |
 | `max_lod` | Finest rock mesh | rebuild | 16, 32, 64 | 16 | 32 | 32 | 64 |
 | `normal_size` | Rock detail maps | rebuild | 64, 128, 256 px | 64 | 128 | 128 | 256 |
-| `instance_budget` | Rocks drawn | live | 1000 to 200000 | 5000 | 10000 | 20000 | 50000 |
+| `instance_budget` | Rocks drawn (in view) | live | 1000 to 200000 | 15000 | 40000 | 80000 | 150000 |
+| `held_budget` (advanced) | Rocks kept (every direction, CPU) | live | 1000 to 2000000 | 80000 | 150000 | 300000 | 600000 |
 | `detail_far` | Rock texture distance | live | 500 to 10000 m | 1000 | 2000 | 3000 | 5000 |
 | `texture_size` | Rock texture size | restart | 256, 512, 1024, 2048 px | 256 | 512 | 1024 | 2048 |
 | `terrain_min_radius` (advanced) | Detailed rocks from | live | 50 to 5000 m | 200 | 200 | 200 | 200 |

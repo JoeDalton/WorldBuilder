@@ -13,13 +13,15 @@ fixed-function lights as the game does::
     python scripts/asteroid_bench.py (--field PRESET | --legacy PATH)
         [--flight cruise sweep outside] [--quality LEVEL]
         [--seconds S] [--size "1600 900"] [--offscreen] [--fov DEG] [--profile]
-        [--shots DIR] [--collision] [--terrain-rocks N]
+        [--shots DIR] [--collision] [--terrain-rocks N] [--setting NAME=VALUE ...]
 
     --field     the field preset drawn
     --legacy    the rock model of SpaceFlight's field
     --quality   the field's AsteroidSettings preset (default high)
     --terrain-rocks  override the preset's max_terrain_rocks (0: no rock
                 drawn as terrain)
+    --setting   override any AsteroidSettings knob (repeatable), e.g.
+                --setting instance_budget=40000
     --flight    the flights to run, in order (default: all three)
     --seconds   each flight's length (default 10)
     --size      window or buffer size (default "1600 900")
@@ -172,7 +174,9 @@ ORIGINS = {"ring": (0.0, 1.01e8, 0.0)}
 class InstancedField:
     """A ``world_builder.asteroids`` field, flown like the legacy one."""
 
-    def __init__(self, base, preset: str, quality: str, terrain_rocks=None):
+    def __init__(
+        self, base, preset: str, quality: str, terrain_rocks=None, overrides=()
+    ):
         from world_builder.asteroids.field import AsteroidField
         from world_builder.asteroids.settings import AsteroidSettings
         from world_builder.asteroids.spec import PRESETS
@@ -182,6 +186,10 @@ class InstancedField:
         settings = AsteroidSettings.preset(quality)
         if terrain_rocks is not None:
             settings = replace(settings, max_terrain_rocks=terrain_rocks)
+        for item in overrides:
+            name, value = item.split("=", 1)
+            kind = type(getattr(settings, name))
+            settings = replace(settings, **{name: kind(float(value))})
         self.field = AsteroidField(
             base,
             PRESETS[preset],
@@ -405,6 +413,7 @@ def main() -> None:
     parser.add_argument("--shots", type=Path, default=None)
     parser.add_argument("--collision", action="store_true")
     parser.add_argument("--terrain-rocks", type=int, default=None)
+    parser.add_argument("--setting", action="append", default=[])
     args = parser.parse_args()
 
     window_config("asteroid bench", args.size, args.offscreen, vsync=False)
@@ -426,7 +435,9 @@ def main() -> None:
         field = LegacyField(base.render, base.loader.load_model(path))
         print(describe_window(base), f"legacy field: {field.count} rocks")
     else:
-        field = InstancedField(base, args.field, args.quality, args.terrain_rocks)
+        field = InstancedField(
+            base, args.field, args.quality, args.terrain_rocks, args.setting
+        )
     try:
         if args.legacy is None:
             waited = field.wait()

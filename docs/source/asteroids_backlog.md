@@ -46,25 +46,20 @@ Ways to make them better:
 
 ## Drawing
 
-- **A native visible pass.** The per-frame pass (size on screen, frusta,
-  level of detail, grouping) is numpy: about 0.75 ms for the `cube`
-  preset's 3,400 rocks, 3 ms for the 47,000 rocks a ring holds (half the
-  field's update there). It wants C (`native/field.c`, as the plan had it),
-  or the pass every other frame for the far classes.
 - **Whole table uploads.** Only new rows are written on the CPU, but Panda
-  1.10 uploads the whole texture (64 bytes a slot, 4 MB for a ring's
-  rocks) each time some changed: about a millisecond of the bus, every
-  third frame while flying through a ring. One texture per size class, or a
-  ring of row blocks, would bound it.
-- **Box windows.** Each class holds a box of cells around the camera, about
-  twice the cells of the sphere of its range. Holding only the cells the
-  sphere touches halves the rocks held in an open field (a ring holds
-  47,000 for 18,000 in range).
-- **The budget in a ring.** Past 20,000 rocks in range, the smallest size
-  drawn rises to about 12 pixels in the `ring` preset: the haze then takes
-  rocks a dozen pixels wide, a soft glow where a scatter of points would
-  read better. A budget counted in the view (not every direction), or
-  points for the rocks between a few pixels and the cut, would keep them.
+  1.10 uploads the whole texture (64 bytes a slot, 20-30 MB for a ring's
+  rocks) each time some changed: every third frame while flying through a
+  ring. One texture per size class, or a ring of row blocks, would bound
+  it.
+- **Spikes in fast flight.** At 16 km/s through a ring, frames reach 20-40
+  ms when the big windows move (their new cells scattered, the rocks of the
+  old freed by a scan of the class) and the table uploads. Spreading a
+  move's new cells over frames (the class limit standing in), and a native
+  free pass, would flatten them.
+- **Rocks held in every direction.** The windows hold rocks all round the
+  camera (to turn freely): half a million in a ring for 15,000 drawn. The
+  held budget bounds the CPU's share; a window narrower behind the camera
+  (filling as it turns, the class limit standing in) would hold far fewer.
 - **Texture seams.** Textures follow each cube face's grid, so their
   pattern turns at the face edges of every rock; triplanar mapping in the
   body frame would hide it (needed anyway for hero rocks).
@@ -89,6 +84,24 @@ Ways to make them better:
 
 ## Haze
 
+- **A front is still visible** (reported 2026-10-27, flying the `ring`
+  demo after the thresholds were removed): rocks still appear or vanish
+  along a visible line. Not investigated yet. Suspects, in order:
+  - the far plane: in open space `World`'s far plane is 1,000 km, but at
+    2 pixels the biggest rocks are drawn out to about 2,600 km, so the far
+    plane cuts them hard (fix: `World.depth_ranges` reaching the fields'
+    reach, or the fields' `far` capped at it to fade them into the haze);
+  - the held budget's class limits: their fade band (the last fifth of a
+    limit) moves 3 % a frame while the budget adjusts, and the rocks there
+    are a few pixels wide, brighter than the haze that takes them;
+  - the clumps: the haze averages them, so where a pocket of rocks ends the
+    haze does not darken with it (see Clumps below);
+  - the size cut itself: a 2-pixel rock dithers out over a quarter of its
+    distance, a bright dot against a haze of the same mean but no texture.
+
+  To find it: shots of the same view with the far plane pushed out, with
+  the held budget off, and with uniform density (no clumps).
+
 - **Shadows.** The haze and the rocks take no shadows: a planet's shadow
   across its ring, the ring's on the planet, the rocks' on each other are
   for the shadows issue.
@@ -96,9 +109,16 @@ Ways to make them better:
   thousands of kilometres: its ringlets alias into faint dashes on the far
   rim. More samples where the ray is long, or a per-pixel jitter, would
   smooth them.
-- **Clumps.** The haze averages the clumping (its coverage): from afar a
-  patchy field is an even glow. A coarse 3D texture of the clumping's mean
-  would keep the patches.
+- **Clumps.** The haze averages the clumping (its coverage): an even glow
+  where the rocks drawn gather in pockets, so the two disagree where a
+  pocket's rocks thin out into the haze. The clumping function itself (the
+  scatter's fbm and smoothstep, computed natively) sampled on a few
+  camera-centred grids (a clipmap: 128² cells per level, each level twice
+  as wide, in the ring's plane; a 3D one for a box or a ball), recomputed on
+  the workers as the camera moves a cell, and read by the haze's samples in
+  place of the coverage, would put the pockets in the haze exactly where
+  the rocks are. A GLSL copy of the noise would not match the CPU's bits
+  (its 64-bit hash), so the pockets would sit beside the rocks'.
 - **Dust near the camera.** The far camera of a split draws the haze from
   the split on: the dust nearer is lost (0.06 of optical depth for the
   `ring` preset's 2 km split). The near camera could draw the dust alone.

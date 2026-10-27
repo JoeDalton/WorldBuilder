@@ -3,6 +3,8 @@ around the camera, the visible pass, the instance table, and the field
 rendered offscreen."""
 
 import math
+import os
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -56,46 +58,69 @@ def _small_field(**kwargs) -> FieldSpec:
     )
 
 
-def test_a_window_adds_only_its_new_cells():
-    from world_builder.asteroids.population import _difference, _Window
+def _brute_ball(ball):
+    """The ball's cells by its definition, cell by cell."""
+    reach = int(ball.radius // ball.cell) + 2
+    offsets = np.stack(
+        np.meshgrid(*[np.arange(-reach, reach + 1)] * 3, indexing="ij"), -1
+    ).reshape(-1, 3)
+    gap = np.maximum(np.abs(offsets) - 1, 0) * ball.cell
+    cells = ball.home + offsets[np.sum(gap * gap, axis=1) <= ball.radius**2]
+    inside = np.all((cells >= ball.first) & (cells <= ball.last), axis=1)
+    return {tuple(c) for c in cells[inside].tolist()}
 
-    old = _Window([0, 0, 0], [4, 4, 4])
+
+def test_a_window_is_the_ball_of_its_range_and_adds_only_new_cells():
+    from world_builder.asteroids.population import _Ball, _difference
+
+    first, last = np.array([-30, -30, -3]), np.array([30, 30, 3])
+    old = _Ball([0, 0, 0], 950.0, 100.0, first, last)
+    assert {tuple(c) for c in old.grid().tolist()} == _brute_ball(old)
     for new in (
-        _Window([1, 0, -1], [5, 4, 3]),  # moved a cell, clipped
-        _Window([-2, -2, -2], [6, 6, 6]),  # grown
-        _Window([10, 10, 10], [11, 12, 13]),  # elsewhere
-        _Window([1, 1, 1], [3, 3, 3]),  # shrunk: nothing new
+        _Ball([1, 0, -1], 950.0, 100.0, first, last),  # moved a cell
+        _Ball([0, 0, 0], 1700.0, 100.0, first, last),  # grown
+        _Ball([25, 28, 2], 600.0, 100.0, first, last),  # elsewhere, clipped
+        _Ball([0, 0, 0], 400.0, 100.0, first, last),  # shrunk: nothing new
     ):
-        cells = {tuple(c) for c in _difference(new, old).tolist()}
-        expected = {tuple(c) for c in new.grid().tolist()} - {
-            tuple(c) for c in old.grid().tolist()
-        }
-        assert cells == expected
-        assert len(cells) == len(_difference(new, old))  # each once
+        cells = _difference(new, old)
+        assert {tuple(c) for c in cells.tolist()} == _brute_ball(new) - _brute_ball(old)
+        assert len({tuple(c) for c in cells.tolist()}) == len(cells)  # each once
+        held = _brute_ball(new)
+        probe = np.array(sorted(held | _brute_ball(old)))
+        np.testing.assert_array_equal(
+            new.contains(probe), [tuple(c) in held for c in probe.tolist()]
+        )
 
 
-def test_windows_grow_by_layers_within_the_quota():
-    from world_builder.asteroids.population import _toward, _Window
+def test_windows_grow_within_the_quota():
+    from world_builder.asteroids.population import _Ball, _count, _toward
 
-    target = _Window([-20, -20, -2], [20, 20, 2])
+    first, last = np.array([-60, -60, -2]), np.array([60, 60, 2])
     home = np.array([3, -4, 0])
     window, frames = None, 0
-    while window != target:
-        before = 0 if window is None else window.cells
-        window = _toward(window, target, home, 2000)
+    while window is None or window.radius < 5000.0:
+        before = window
+        window = _toward(window, 5000.0, home, 100.0, first, last, 2000)
         frames += 1
-        # within the quota once past the first layer; the camera's cell held
-        assert window.cells - before <= max(2000, 27 * 5)
-        assert np.all((window.first <= home) & (home <= window.last))
+        assert _count(window, before) <= max(2000, 27 * 5)
+        assert window.contains(home[None, :])[0]
     assert frames > 3
-    # moved a cell: the window follows the target at once
-    moved = _Window(target.first + [1, 0, 0], target.last + [1, 0, 0])
-    assert _toward(target, moved, home, 2000) == moved
+    # moved a cell: the window follows at once, whatever it costs
+    moved = _toward(window, 5000.0, home + [1, 0, 0], 100.0, first, last, 10)
+    assert moved.radius == 5000.0
     # teleported: it restarts around the camera
-    far = _Window([500, 500, -2], [540, 540, 2])
-    restart = _toward(target, far, np.array([520, 520, 0]), 2000)
-    assert restart.cells < far.cells
-    assert np.all((restart.first <= [520, 520, 0]) & ([520, 520, 0] <= restart.last))
+    restart = _toward(window, 5000.0, np.array([55, 55, 0]), 100.0, first, last, 50)
+    assert restart.radius < 5000.0
+    assert restart.contains(np.array([[55, 55, 0]]))[0]
+    # every point within the range of the camera's cell is in a cell held
+    ball = _Ball(home, 777.0, 100.0, first, last)
+    rng = np.random.default_rng(1)
+    camera = (home + rng.uniform(0.0, 1.0, (200, 3))) * 100.0
+    points = camera + rng.normal(size=(200, 3)) * 300.0
+    near = np.linalg.norm(points - camera, axis=1) <= 777.0
+    cells = np.floor(points[near] / 100.0).astype(np.int64)
+    inside = np.all((cells >= first) & (cells <= last), axis=1)
+    assert np.all(ball.contains(cells[inside]))
 
 
 def test_a_gradual_fill_holds_the_same_rocks():
@@ -107,11 +132,11 @@ def test_a_gradual_fill_holds_the_same_rocks():
     assert whole.settled
     gradual = Population(scatter)
     frames = 0
-    while True:
+    while not np.array_equal(gradual.limits(), ranges):
         gradual.update(camera, ranges, cells_per_frame=len(scatter.classes) * 30)
         frames += 1
-        if gradual.settled:
-            break
+        # settled (loaded) once each window is within 10 % of its range
+        assert gradual.settled == bool(np.all(gradual.limits() >= 0.9 * ranges))
     assert frames > 2
     assert sorted(gradual.rocks[gradual.live]["id"]) == sorted(
         whole.rocks[whole.live]["id"]
@@ -189,6 +214,64 @@ def test_the_visible_pass_culls_behind_and_small():
     # rows not on the GPU yet are never drawn
     ready = np.zeros(pop.capacity, dtype=bool)
     assert len(pop.visible(np.zeros(3), both, PPR, 2.0, 1.0, errors, ready).slots) == 0
+
+
+def test_no_rock_is_drawn_past_far():
+    """The visible pass draws nothing past far (a sphere, whatever the
+    window's shape) nor counts it against the budget."""
+    pop = _one_class_population()
+    camera = np.zeros(3)
+    planes = np.zeros((0, 4, 3))  # no view: check the counts only
+    errors = np.zeros((1, 1))
+    every = pop.visible(camera, planes, PPR, 0.5, 1.0, errors)
+    held = pop.rocks[pop.live]
+    dist = np.linalg.norm(held["centre"], axis=1)
+    near = pop.visible(camera, planes, PPR, 0.5, 1.0, errors, far=3000.0)
+    assert every.in_range == len(held)
+    assert near.in_range == int(np.count_nonzero(dist <= 3000.0)) < every.in_range
+
+
+def test_the_native_visible_pass_is_numpys():
+    """visible.c against the numpy pass: the same slots, buckets, counts,
+    levels, rocks in range and big rocks near, frame after frame (the levels' hysteresis
+    carried over), with two views, a far and a window still growing."""
+    from world_builder.terrain import noise
+
+    if noise.native_library() is None:
+        if os.environ.get("WORLD_BUILDER_REQUIRE_NATIVE"):
+            pytest.fail("the native library is required but not built")
+        pytest.skip("native library not built")
+    scatter = Scatter(_small_field(shapes=ShapeSpec(prototypes=3)))
+    pops = [Population(scatter), Population(scatter)]
+    ranges = np.full(len(scatter.classes), 2500.0)
+    rng = np.random.default_rng(4)
+    errors = np.sort(rng.uniform(0.0, 0.2, (3, 4)), axis=1)[:, ::-1].copy()
+    errors[:, -1] = 0.0
+    for frame in range(6):
+        camera = np.array([100.0 * frame, -50.0 * frame, 20.0])
+        for pop in pops:
+            pop.update(camera, ranges, cells_per_frame=200 if frame < 3 else 10**9)
+        ready = rng.uniform(size=pops[0].capacity) < 0.9
+        planes = np.array(
+            [
+                [[0.8, 0.6, 0.0], [-0.8, 0.6, 0.0], [0.0, 0.6, 0.8], [0.0, 0.6, -0.8]],
+                [
+                    [0.6, -0.8, 0.0],
+                    [-0.6, -0.8, 0.0],
+                    [0.0, -0.8, 0.6],
+                    [0.0, -0.8, -0.6],
+                ],
+            ]
+        )
+        args = (camera, planes, PPR, 1.5, 0.4 + 0.3 * frame, errors, ready, 2200.0)
+        near = {"near_radius": 100.0, "near_factor": 8.0}
+        a = pops[0].visible(*args, native=True, **near)
+        b = pops[1].visible(*args, native=False, **near)
+        np.testing.assert_array_equal(a.near, b.near)
+        np.testing.assert_array_equal(a.slots, b.slots)
+        np.testing.assert_array_equal(a.counts, b.counts)
+        assert a.in_range == b.in_range > 0
+        np.testing.assert_array_equal(pops[0].lod, pops[1].lod)
 
 
 def test_nearer_rocks_get_finer_levels_with_hysteresis():
@@ -413,3 +496,34 @@ def test_far_rocks_keep_their_textured_colour(window, built_field):
     a, b = textured[rock].mean(axis=0), flat[rock].mean(axis=0)
     np.testing.assert_allclose(b, a, rtol=0.15)
     assert b.std() > 3  # brown, not grey
+
+
+def test_the_rocks_held_keep_to_their_budget(showbase):
+    """Past the held budget, the windows keep only bigger rocks: the rocks
+    held come down under it, the class limits with them (headless)."""
+    from world_builder.asteroids.field import AsteroidField
+    from world_builder.asteroids.settings import AsteroidSettings
+    from world_builder.terrain.workers import ChunkExecutor
+
+    executor = ChunkExecutor(backend="inline", inline_budget=8)
+    spec = _small_field(shapes=ShapeSpec(prototypes=2))
+    settings = AsteroidSettings(
+        max_lod=16, normal_size=64, texture_size=256, held_budget=20_000
+    )
+    field = AsteroidField(
+        showbase, spec, clock=lambda: 0.0, settings=settings, executor=executor
+    )
+    try:
+        for _ in range(10):
+            field.update(np.zeros(3), cameras=[])
+        unbounded = field.population.count
+        limits = field.population.limits().copy()
+        field.set_settings(replace(settings, held_budget=unbounded // 3))
+        for _ in range(200):
+            field.update(np.zeros(3), cameras=[])
+        assert field.population.count <= unbounded // 3
+        assert field.stats["held_pixels"] > settings.min_pixels
+        assert np.all(field.population.limits() <= limits)
+    finally:
+        field.destroy()
+        executor.shutdown()

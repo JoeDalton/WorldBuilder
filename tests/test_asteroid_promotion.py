@@ -176,9 +176,10 @@ def _fly(field, camera_field, frames=80):
     """Put the camera at a field-frame point and run frames until the rocks'
     terrains have settled."""
     world = field.position + field.rotation @ np.asarray(camera_field, dtype=float)
-    for _ in range(frames):
+    for i in range(frames):
         field.update(world, cameras=[])
-        if all(not t.loading for t in field.terrain_rocks.terrains):
+        # (the rocks near come from the last frame's visible pass)
+        if i > 1 and all(not t.loading for t in field.terrain_rocks.terrains):
             break
     field.update(world, cameras=[])
 

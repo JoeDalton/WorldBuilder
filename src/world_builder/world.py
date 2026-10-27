@@ -236,7 +236,8 @@ class FieldLook:
     :ivar ambient: the sky light on its rocks, linear; None = the world's
         ``space_ambient``
     :ivar exposure: its exposure (shared tonemap)
-    :ivar far: no rock farther is drawn (its haze shows them)
+    :ivar far: no rock farther is drawn (they fade into its haze); None =
+        as far as each is drawn by its size
     :ivar haze: draw the rocks not drawn as a haze
     """
 
@@ -247,7 +248,7 @@ class FieldLook:
     keep_outs: tuple[KeepOut, ...] = ()
     ambient: tuple[float, float, float] | None = None
     exposure: float = 0.9
-    far: float = 600_000.0
+    far: float | None = None
     haze: bool = True
 
 

@@ -86,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Density(dust=)`, lit as Lambert spheres. A ring is a band of light from
   afar; rocks appear out of it on approach. Drawn by the far camera of a
   split from its near plane, on a hull pulled inside the far plane.
-  `AsteroidField(haze=)`. (#14)
+  `AsteroidField(haze=)`. The haze averages the clumps (backlog). (#14)
 - `World(fields=[FieldLook(...)])` and `World.field(name)`: asteroid fields
   and rings in a world, on its pool, settings, sun and clock, part of its
   loading. `scripts/demo_asteroids.py` is built on it (split depth, the sky,
@@ -95,13 +95,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- An asteroid field's windows of cells move by their difference and grow
-  over frames (about 30,000 new cells a frame), and `AsteroidField.loading`
-  waits for them: crossing a cell in a ring cost 230 ms, now about 5 ms.
-  Only new rows of the instance table are written on the CPU (an upload cost
-  11 ms with 45,000 rocks). Big-rock promotion sorts only the rocks near
-  enough. `asteroid_bench.py` flies a ring (`--field ring`) and reports
-  rocks held and in range against the budget. (#14)
+- Asteroid fields without thresholds (#14):
+  - each size class holds a ball of cells around the camera (not a box),
+    moved by its difference and grown over frames (about 30,000 new cells a
+    frame); `AsteroidField.loading` waits for every window to be within 10 %
+    of its range. Crossing a cell in a ring cost 230 ms, now a few ms;
+  - `far` defaults to None (each rock as far as its size draws it); a far,
+    or a window still growing, fades its class's rocks out over its last
+    fifth, and the haze takes them in, class by class (no square, no
+    fronts);
+  - the haze between the camera and a rock veils it (`haze.glsl`, shared by
+    the haze and the rocks): far rocks melt into the haze they leave to;
+  - a native visible pass (`native/visible.c`, interface 12) over a compact
+    copy of the rocks held, which also lists the big rocks near for the
+    terrain rocks (they cost 19 ms a frame in a ring);
+  - `instance_budget` counts rocks drawn in view (HIGH 80,000), and a new
+    `held_budget` (HIGH 300,000) bounds the rocks held in every direction:
+    a ring is drawn down to 2 pixels (it was 12);
+  - a coarser mesh level (2 quads a face side) for rocks a few pixels wide;
+  - what the haze misses per metre is tabulated each frame (one lookup a
+    sample: the ring's frames 23 ms to 12);
+  - only new rows of the instance table are written on the CPU (an upload
+    cost 11 ms with 45,000 rocks);
+  - `asteroid_bench.py` flies a ring (`--field ring`), reports rocks held
+    and in range, and takes `--setting NAME=VALUE`.
 
 - The terrain's fragment shader is split into includes other shaders can
   share, with no pixel changed: `terrain_material.glsl` (the biome texture

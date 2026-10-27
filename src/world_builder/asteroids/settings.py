@@ -22,8 +22,11 @@ class AsteroidSettings(QualitySettings):
         stays below this many pixels
     :ivar max_lod: quads per face side of the finest level
     :ivar normal_size: texels per face side of the rocks' normal maps
-    :ivar instance_budget: rocks drawn at most: past it, the smallest drawn
-        size rises until it fits
+    :ivar instance_budget: rocks drawn (in view) at most: past it, the
+        smallest drawn size rises until it fits
+    :ivar held_budget: rocks kept around the camera (in every direction, on
+        the CPU) at most: past it, the windows keep only bigger rocks, the
+        others fading into the haze
     :ivar detail_far: textures fade to the materials' mean colours by this
         distance, metres
     :ivar texture_size: the rock and ice textures' size, texels
@@ -65,10 +68,18 @@ class AsteroidSettings(QualitySettings):
         help="The surface detail's resolution (video memory, load time).",
     )
     instance_budget: int = knob(
-        20_000,
+        80_000,
         "Rocks drawn",
         range=(1000, 200_000),
         help="At most this many: past it, smaller rocks are dropped first.",
+    )
+    held_budget: int = knob(
+        300_000,
+        "Rocks kept",
+        range=(1000, 2_000_000),
+        advanced=True,
+        help="Rocks kept around the camera in every direction (CPU time): "
+        "past it, far small rocks fade into the haze.",
     )
     detail_far: float = knob(
         3000.0,
@@ -108,7 +119,8 @@ class AsteroidSettings(QualitySettings):
             "lod_error_px": 3.0,
             "max_lod": 16,
             "normal_size": 64,
-            "instance_budget": 5000,
+            "instance_budget": 15_000,
+            "held_budget": 80_000,
             "detail_far": 1000.0,
             "texture_size": 256,
             "max_terrain_rocks": 0,
@@ -116,7 +128,8 @@ class AsteroidSettings(QualitySettings):
         QualityLevel.MID: {
             "min_pixels": 3.0,
             "lod_error_px": 2.0,
-            "instance_budget": 10_000,
+            "instance_budget": 40_000,
+            "held_budget": 150_000,
             "detail_far": 2000.0,
             "texture_size": 512,
             "max_terrain_rocks": 4,
@@ -126,7 +139,8 @@ class AsteroidSettings(QualitySettings):
             "lod_error_px": 0.5,
             "max_lod": 64,
             "normal_size": 256,
-            "instance_budget": 50_000,
+            "instance_budget": 150_000,
+            "held_budget": 600_000,
             "detail_far": 5000.0,
             "texture_size": 2048,
             "max_terrain_rocks": 16,

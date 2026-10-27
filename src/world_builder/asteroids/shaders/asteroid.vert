@@ -24,6 +24,7 @@ uniform float uCellSize[16];
 uniform float uTime;           // seconds since the table's epoch
 uniform float uPixelsPerRadian;
 uniform float uMinPixels;      // the smallest diameter drawn
+uniform float uClassFar[16];   // per size class: none farther is drawn
 
 in vec4 p3d_Vertex;   // body frame, bounding radius 1
 in vec3 p3d_Normal;
@@ -92,8 +93,13 @@ void main() {
     vTu = uFieldRot * qrot(q, FACE_U[face]);
     vTv = uFieldRot * qrot(q, FACE_V[face]);
     vQuat = q;
-    // Fade out over the last quarter of the drawing distance.
-    float pixels = 2.0 * radius * uPixelsPerRadian / max(length(centre), 1e-3);
-    float fade = clamp((pixels - uMinPixels) / (0.25 * uMinPixels), 0.0, 1.0);
+    // Fade out over the last quarter of the drawing distance, and over the
+    // last fifth of the class's limit (Population.limits: the field's far, a
+    // window still growing; population.FAR_FADE): into the haze.
+    float dist = max(length(centre), 1e-3);
+    float pixels = 2.0 * radius * uPixelsPerRadian / dist;
+    float limit = uClassFar[cls];
+    float fade = min(clamp((pixels - uMinPixels) / (0.25 * uMinPixels), 0.0, 1.0),
+                     clamp((limit - dist) / max(0.2 * limit, 1e-6), 0.0, 1.0));
     vRock = vec4(radius, ice, float(proto), fade);
 }

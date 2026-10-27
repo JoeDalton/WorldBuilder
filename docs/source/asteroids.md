@@ -198,15 +198,22 @@ sits at `position` with `orientation` (world from field) in the world.
   when the field is made: about 2.5 s for 32. `loading` is True until they
   are all in; nothing is drawn before. A game's loading phase waits for it.
 - **Rocks in range** (`asteroids/population.py`). A rock is drawn while its
-  diameter covers `min_pixels` on screen. Each size class holds a box of
-  cells (its window) out to its largest rock's drawing distance: small
-  rocks near the camera, big ones far. Each rock in those cells holds a slot
-  of the instance table until its cell leaves the window. A window moves by
-  its difference: when the camera crosses a cell, only the cells entering it
-  are scattered, and the rocks of those leaving it freed. It grows toward its
-  range by whole layers, about 30,000 new cells a frame at most over all
-  classes, so entering a ring is spread over frames; `loading` stays True
-  until every window has reached its range.
+  diameter covers `min_pixels` on screen. Each size class holds a ball of
+  cells (its window: every cell within its range of some point of the
+  camera's cell) out to its largest rock's drawing distance: small rocks
+  near the camera, big ones far. Each rock in those cells holds a slot of
+  the instance table until its cell leaves the window. A window is its
+  centre cell and its radius, each row of cells one interval: when the
+  camera crosses a cell, only the cells entering it are scattered, and the
+  rocks of those leaving it freed. It grows toward its range at most about
+  30,000 new cells a frame over all classes, so entering a ring is spread
+  over frames; `loading` stays True until every window is within 10 % of
+  its range.
+- **Class limits.** No rock of a class is drawn past its window's radius
+  (while it grows) or the field's `far`: they fade out over the last fifth
+  of it, and the haze takes them in over the same band, class by class. A
+  window lagging behind a fast camera is a soft edge into the haze, not a
+  front.
 - **The instance table** is a float texture of four texels per slot: the
   rock's centre relative to its cell's corner, its radius, its orientation at
   an epoch, its precession and spin, its cell and its class, prototype and
@@ -216,15 +223,21 @@ sits at `position` with `orientation` (world from field) in the world.
   are written into the texture's RAM image (only those) and uploaded at most
   every three frames; a rock is drawn once its row is on the GPU (new ones
   are at the edge of their range, a few frames late is unseen).
-- **The visible pass**, per frame: big enough on screen, inside some
-  camera's view (`cameras=`: the main one, and a rear-view mirror), at the
-  coarsest level of detail whose error stays under `lod_error_px` pixels,
-  with 15 % hysteresis. The slots drawn go in an index texture, grouped by
+- **The visible pass** (`native/visible.c`, numpy without the library),
+  per frame over every rock held: big enough on screen, within its class's
+  limit, inside some camera's view (`cameras=`: the main one, and a
+  rear-view mirror), at the coarsest level of detail whose error stays
+  under `lod_error_px` pixels, with 15 % hysteresis. It reads a compact
+  copy of each slot (40 bytes), and lists the big rocks near the camera for
+  the terrain rocks. The coarsest mesh (2 quads a face side, 48 triangles)
+  draws rocks a few pixels wide. The slots drawn go in an index texture, grouped by
   (prototype, level): one GeomNode each, drawn with
   `set_instance_count`. Nothing per rock goes through the scene graph.
-- **Budget.** Past `instance_budget` rocks in range, the smallest size drawn
-  grows by 10 % a frame until they fit, and shrinks back when well under.
-  The haze takes the rocks it drops.
+- **Budgets.** Past `instance_budget` rocks drawn (in view: the GPU's),
+  the smallest size drawn grows by 10 % a frame until they fit, and shrinks
+  back when well under. Past `held_budget` rocks held (in every direction:
+  the CPU's), the windows keep only bigger rocks, 3 % a frame: the class
+  limits come nearer. The haze takes the rocks either drops.
 - **Spin** is computed in the vertex shader at the game's time (`clock=`,
   never Panda's): q(t) as in `motion.py`, from the table's orientation at
   the epoch. The epoch moves every 1,024 s, rewriting the table, so float32
@@ -237,7 +250,10 @@ sits at `position` with `orientation` (world from field) in the world.
   projected from the sides on steep flanks), lit as the terrain lights its
   ground (`object_light.glsl`), no shadows. Then either the world's exposure
   and ACES tonemap, or, with `tonemap=False`, a plain display encoding to
-  match models lit by Panda's fixed-function lights.
+  match models lit by Panda's fixed-function lights. Last, the haze between
+  the camera and the rock veils it ([Haze](#haze)): a far rock takes the
+  haze's colour as the haze would hide it, so it melts into the haze it
+  leaves to.
 - **Costs** are the `asteroids` section of the [quality settings](quality.md).
 
 ### Measured
@@ -347,10 +363,13 @@ around the camera. Two things scale with it:
   empty) when `min_pixels` is small: they move by their difference and grow
   over frames (see [Drawing](#drawing)). Moving through the `ring` preset
   with 180,000 rocks held cost 230 ms a cell crossed when windows were
-  rebuilt whole; now 5 ms.
-- **The budget** holds them: in the ring at HIGH, the smallest size drawn
-  rises from 2 to about 12 pixels to keep 20,000 rocks in range; the haze
-  takes the others.
+  rebuilt whole; now a few ms.
+- **Rocks held.** At 2 pixels, the ring holds half a million rocks around
+  the camera for 15,000 drawn: the held budget (300,000 at HIGH) keeps the
+  CPU's share to about 5 ms a frame.
+- **Cells.** Bigger cells (`cell_factor`) mean fewer of them, but the hard
+  core compares every candidate with its neighbours' (cost per rock: 5 µs at
+  8, 111 µs at 32): keep the default.
 
 `python -m world_builder.asteroids.preview --preset ring` maps a 40 km patch
 of a field too big to scatter whole, beside the density of the whole ring.
@@ -364,7 +383,8 @@ approaching, rocks appear out of it while it thins by as much.
 
 - **What is missing.** At a distance t, the rocks under r_cut = t ×
   1.125 `min_pixels` / (2 pixels per radian) (the middle of the drawn rocks'
-  fade), and all of them past the field's `far`. Their cross-section per
+  fade), and the share of each class its limit fades out (all of it past
+  the limit). Their cross-section per
   metre is the density there (the shape's profile, the peak density, the
   clumping's coverage: clumps averaged) times the mean of π r² over the
   rocks under r_cut, each size weighted by the share the hard core keeps
@@ -380,9 +400,15 @@ approaching, rocks appear out of it while it thins by as much.
   per km: about 0.2 across it, with its rocks.
 - **The integral.** For each pixel where a ray leaves the field's hull, over
   the interval that ends there (a ring's annulus cuts a ray into two), by
-  32 midpoints spaced geometrically from where something is missing.
+  32 midpoints spaced geometrically from where something is missing (8 for
+  the veil over a rock). What is missing per metre at each distance is
+  tabulated each frame on the CPU (256 entries over the log of the
+  distance), so a sample is one lookup whatever the classes.
   `haze.optical_depth` is the same quadrature in numpy; the shader's pixels
-  match it within 4 levels of 255.
+  match it within 4 levels of 255. The shaders share `haze.glsl`.
+- **What it does not follow.** The clumps (their coverage, averaged) and the
+  keep-outs: away from the rocks drawn, a patchy field's haze is even. See
+  the backlog.
 - **Light.** Lambert spheres of the rocks' mean far colour: full with the
   sun behind the camera, dark against it, plus the sky light; then the
   field's exposure and tonemap. No shadows, not even a planet's on its ring.
@@ -409,10 +435,10 @@ is built this way.
 ### Ring costs
 
 `scripts/asteroid_bench.py --field ring --offscreen` (HIGH, 1600×900, in the
-ring's dense band, October 2026): frames 11.1–11.7 ms median, p95
-12.1–17.2 ms; about 47,000 rocks held, at most 18,000 in range (budget
-20,000), smallest drawn 12 pixels; the field's own update 6.2 ms median,
-3 ms of it the visible pass in numpy.
+ring's dense band, October 2026): frames 11.8–12.6 ms median, p95
+12.5–22 ms; about 290,000 rocks held (the held budget), smallest drawn 2
+pixels; the field's own update 5.3–5.5 ms median. The `cube` preset is
+unchanged: p95 3.2–4.0 ms.
 
 ## Phases
 

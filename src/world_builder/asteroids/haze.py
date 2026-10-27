@@ -6,7 +6,8 @@ of light from afar and fills the distance between drawn rocks up close.
   ``min_pixels`` (``population``), so at a distance t the rocks smaller than
   r_cut(t) = t * min_pixels * :data:`FADE_MIDDLE` / (2 pixels_per_radian)
   are not (they fade out between 1 and 1.25 times ``min_pixels``: the cut
-  is that fade's middle), nor any rock past the field's ``far``. The haze is
+  is that fade's middle), nor, past the field's ``far``, any rock: they fade
+  out over its last fifth, and the haze takes them in over the same band. The haze is
   their cross-section: per metre of a ray, the density there (the shape's
   profile times the peak density times the clumping's coverage: the clumps
   averaged out) times the mean cross-section of the rocks under r_cut
@@ -59,6 +60,7 @@ from panda3d.core import (
 )
 
 from world_builder.asteroids.distributions import interpolate
+from world_builder.asteroids.population import FAR_FADE
 from world_builder.asteroids.spec import Annulus, Box, FieldShape, FieldSpec, Sphere
 from world_builder.depth import HIDE_FROM_NEAR
 
@@ -69,6 +71,11 @@ if TYPE_CHECKING:
 SAMPLES = 32
 #: Entries of the cross-section table, over log radius (haze.frag's).
 TABLE = 64
+#: The per-frame table of what is missing per metre (haze.glsl): entries,
+#: over log distance from MISSING_T0 to MISSING_T1 metres (9 % apart).
+MISSING = 256
+MISSING_T0 = 1.0
+MISSING_T1 = 1.0e10
 #: Entries of a ring's radial profile as the shader holds it.
 PROFILE = 256
 #: Drawn rocks fade out between 1 and 1.25 times min_pixels: the haze takes
@@ -140,6 +147,8 @@ class HazeModel:
         averaged
     :ivar kept: the hard core's share kept, per size draw
     :ivar dust: the dust's optical depth per metre at full profile
+    :ivar class_lo: (classes,) the scatter's size classes' smallest radii
+    :ivar class_hi: (classes,) and largest
     """
 
     def __init__(self, spec: FieldSpec, cover: float = DEFAULT_COVER):
@@ -164,26 +173,72 @@ class HazeModel:
         upto = np.searchsorted(r, self.radii, side="right")
         self.table = np.where(upto > 0, area[np.maximum(upto - 1, 0)], 0.0)
         self.table[-1] = area[-1]
+        # The scatter's size classes (scatter._Tables): radii doubling
+        lo, bounds = self.lo, []
+        while True:
+            hi = min(2.0 * lo, self.hi)
+            bounds.append((lo, hi))
+            if hi >= self.hi:
+                break
+            lo = hi
+        self.class_lo, self.class_hi = (np.array(b) for b in zip(*bounds))
 
     @property
     def log_span(self) -> float:
         return max(math.log(self.hi / self.lo), 1e-6)
 
     def r_cut(
-        self, t: ArrayLike, pixels_per_radian: float, min_pixels: float, far: float
+        self, t: ArrayLike, pixels_per_radian: float, min_pixels: float
     ) -> np.ndarray:
-        """:returns: the largest rock not drawn at distances *t* (all of them
-        past *far*)"""
+        """:returns: the largest rock too small to be drawn at distances *t*"""
         t = np.asarray(t, dtype=np.float64)
-        cut = t * FADE_MIDDLE * min_pixels / (2.0 * pixels_per_radian)
-        return np.where(t > far, 1e30, cut)
+        return t * FADE_MIDDLE * min_pixels / (2.0 * pixels_per_radian)
 
-    def start(self, pixels_per_radian: float, min_pixels: float, far: float) -> float:
+    def cumulative(self, r: ArrayLike) -> np.ndarray:
+        """:returns: the table at radii *r*: the mean of pi r'^2 over the
+        candidates up to them (haze.glsl's hazeCrossSection)"""
+        r = np.maximum(np.asarray(r, dtype=np.float64), self.lo)
+        x = np.clip(np.log(r / self.lo) / self.log_span, 0.0, 1.0)
+        return interpolate(self.table, x)
+
+    def missing(
+        self, t: ArrayLike, pixels_per_radian: float, min_pixels: float, limits
+    ) -> np.ndarray:
+        """:returns: per metre at full profile at distances *t*: each class's
+        rocks too small to be drawn, the share of the others its limit fades
+        out (:meth:`Population.limits`, or one far for all), and the dust
+        (haze.glsl's hazeMissing)"""
+        t = np.asarray(t, dtype=np.float64)
+        cut = self.r_cut(t, pixels_per_radian, min_pixels)
+        limits = np.broadcast_to(
+            np.asarray(limits, dtype=np.float64), self.class_lo.shape
+        )
+        rocks = np.zeros_like(t)
+        for lo, hi, limit in zip(self.class_lo, self.class_hi, limits):
+            base = self.cumulative(lo)
+            under = self.cumulative(np.clip(cut, lo, hi)) - base
+            whole = self.cumulative(hi) - base
+            if math.isinf(limit):
+                drawn = np.ones_like(t)
+            else:
+                drawn = np.clip((limit - t) / max(FAR_FADE * limit, 1e-6), 0.0, 1.0)
+            rocks = rocks + under * drawn + whole * (1.0 - drawn)
+        return self.density * self.cover * rocks + self.dust
+
+    def start(self, pixels_per_radian: float, min_pixels: float, limits) -> float:
         """:returns: the distance before which nothing is missing (the
-        smallest rock is drawn, and there is no dust)"""
+        smallest rock is drawn, every class held, and there is no dust)"""
         if self.dust > 0.0:
             return 0.0
-        return min(self.lo * 2.0 * pixels_per_radian / (FADE_MIDDLE * min_pixels), far)
+        limits = np.broadcast_to(
+            np.asarray(limits, dtype=np.float64), self.class_lo.shape
+        )
+        return float(
+            min(
+                self.lo * 2.0 * pixels_per_radian / (FADE_MIDDLE * min_pixels),
+                (1.0 - FAR_FADE) * float(np.min(limits)),
+            )
+        )
 
     def extinction(self, r_cut: ArrayLike) -> np.ndarray:
         """:returns: per metre at full profile: the cross-section of the
@@ -279,20 +334,22 @@ def optical_depth(
     t1: float,
     pixels_per_radian: float,
     min_pixels: float,
-    far: float,
+    limits,
     samples: int = SAMPLES,
 ) -> float:
     """:returns: the haze's optical depth along a ray from *t0* to *t1*:
-    haze.frag's quadrature (field frame, unit *direction*)"""
-    a = max(t0, model.start(pixels_per_radian, min_pixels, far))
+    haze.glsl's quadrature (field frame, unit *direction*); *limits* per
+    class (:meth:`Population.limits`) or one far for all"""
+    a = max(t0, model.start(pixels_per_radian, min_pixels, limits))
     if t1 <= a:
         return 0.0
+    a = max(a, 1e-3)
     edges = a * (t1 / a) ** (np.arange(samples + 1) / samples)
     mids = np.sqrt(edges[:-1] * edges[1:])
     points = np.asarray(origin, dtype=np.float64) + np.outer(
         mids, np.asarray(direction, dtype=np.float64)
     )
-    sigma = model.extinction(model.r_cut(mids, pixels_per_radian, min_pixels, far))
+    sigma = model.missing(mids, pixels_per_radian, min_pixels, limits)
     return float(np.sum(model.spec.shape.profile(points) * sigma * np.diff(edges)))
 
 
@@ -415,9 +472,11 @@ def hull_triangles(shape: FieldShape) -> tuple[np.ndarray, np.ndarray]:
 
 class FieldHaze:
     """The haze of a field (see the module): a hull under the field's root,
-    sharing its inputs (sun, exposure, tonemap, frame, pixel scale)."""
+    and its inputs on the root, so the rocks are veiled by the same haze
+    (``asteroid.frag``). Without the hull (``enabled=False``) the rocks are
+    not veiled."""
 
-    def __init__(self, field: AsteroidField, shader_path):
+    def __init__(self, field: AsteroidField, shader_path, enabled: bool = True):
         self.field = field
         spec = field.spec
         self.model = HazeModel(spec)
@@ -443,27 +502,30 @@ class FieldHaze:
                 ColorBlendAttrib.O_one_minus_incoming_alpha,
             )
         )
+        if not enabled:
+            node.stash()
+        root = field.root
+        root.set_shader_input("uVeil", 1 if enabled else 0)
         self._cam = PTA_LVecBase3f.empty_array(1)
-        node.set_shader_input("uCamField", self._cam)
-        self._cover = PTA_float.empty_array(1)
-        node.set_shader_input("uCover", self._cover)
-        self._far = PTA_float.empty_array(1)
-        node.set_shader_input("uFar", self._far)
-        table = PTA_float.empty_array(TABLE)
-        for i, v in enumerate(self.model.table):
-            table[i] = float(v)
-        node.set_shader_input("uCrossSection", table)
-        node.set_shader_input("uSizeLo", self.model.lo)
-        node.set_shader_input("uLogSpan", self.model.log_span)
-        node.set_shader_input("uDensity", self.model.density)
-        node.set_shader_input("uDust", self.model.dust)
+        root.set_shader_input("uCamField", self._cam)
+        self._limits = PTA_float.empty_array(16)
+        root.set_shader_input("uClassFar", self._limits)
+        self._missing = PTA_float.empty_array(MISSING)
+        root.set_shader_input("uMissing", self._missing)
+        root.set_shader_input("uMissingT0", MISSING_T0)
+        root.set_shader_input("uMissingLogSpan", math.log(MISSING_T1 / MISSING_T0))
+        self._start = PTA_float.empty_array(1)
+        root.set_shader_input("uHazeStart", self._start)
+        self._distances = MISSING_T0 * (MISSING_T1 / MISSING_T0) ** np.linspace(
+            0.0, 1.0, MISSING
+        )
         self._set_shape(spec.shape)
         self.set_cover(DEFAULT_COVER)
         self.set_albedo(field.materials, spec)
 
     def _set_shape(self, shape: FieldShape) -> None:
-        node = self.node
-        profile = PTA_float.empty_array(PROFILE)
+        root = self.field.root
+        profile = np.zeros(PROFILE)
         size = (0.0, 0.0, 0.0)
         edges = (shape.edge, 0.0)
         kind, profiled = 0, 0
@@ -477,22 +539,19 @@ class FieldHaze:
             edges = (shape.edge, shape.radial_edge)
             if shape.radial_profile:
                 profiled = 1
-                values = interpolate(
+                profile = interpolate(
                     np.asarray(shape.radial_profile, dtype=np.float64),
                     np.linspace(0.0, 1.0, PROFILE),
                 )
-                for i, v in enumerate(values):
-                    profile[i] = float(v)
-        node.set_shader_input("uShape", kind)
-        node.set_shader_input("uShapeSize", LVecBase3f(*size))
-        node.set_shader_input("uEdges", edges)
-        node.set_shader_input("uProfiled", profiled)
-        node.set_shader_input("uProfile", profile)
+        root.set_shader_input("uShape", kind)
+        root.set_shader_input("uShapeSize", LVecBase3f(*size))
+        root.set_shader_input("uEdges", edges)
+        root.set_shader_input("uProfiled", profiled)
+        root.set_shader_input("uProfile", _floats(profile, PROFILE))
 
     def set_cover(self, cover: float) -> None:
         """The rocks' mean projected area over their bounding disc's."""
         self.model.cover = float(cover)
-        self._cover[0] = float(cover)
 
     def set_albedo(self, materials, spec: FieldSpec) -> None:
         heights = (
@@ -504,16 +563,44 @@ class FieldHaze:
             heights,
             0.3,
         )
-        self.node.set_shader_input("uHazeAlbedo", LVecBase3f(*self.albedo))
+        self.field.root.set_shader_input("uHazeAlbedo", LVecBase3f(*self.albedo))
 
-    def update(self, camera: np.ndarray, far: float) -> None:
-        """:param camera: the camera, field frame
-        :param far: rocks past this are not drawn"""
+    def update(
+        self,
+        camera: np.ndarray,
+        limits: np.ndarray,
+        pixels_per_radian: float,
+        min_pixels: float,
+    ) -> None:
+        """Per frame: the camera, and what is missing at each distance (a
+        table: the shader looks it up instead of summing the classes).
+
+        :param camera: the camera, field frame
+        :param limits: :meth:`Population.limits`, per class
+        :param pixels_per_radian: the main view's
+        :param min_pixels: the smallest diameter drawn"""
         self._cam[0] = LVecBase3f(*camera)
-        self._far[0] = float(far)
+        for k, limit in enumerate(limits):
+            self._limits[k] = float(min(limit, 1e30))
+        missing = self.model.missing(
+            self._distances, pixels_per_radian, min_pixels, limits
+        )
+        for i, value in enumerate(missing.tolist()):
+            self._missing[i] = value
+        self._start[0] = min(
+            self.model.start(pixels_per_radian, min_pixels, limits), 1e30
+        )
 
     def destroy(self) -> None:
         self.node.remove_node()
+
+
+def _floats(values, size: int) -> PTA_float:
+    """:returns: a float array input of *size*, *values* first"""
+    out = PTA_float.empty_array(size)
+    for i, v in enumerate(np.asarray(values, dtype=np.float64)):
+        out[i] = float(v)
+    return out
 
 
 def _hull_node(tris: np.ndarray, normals: np.ndarray) -> GeomNode:

@@ -66,20 +66,6 @@ typedef struct {
   const double *profile;
 } WbScatter;
 
-/* scatter.ROCK_DTYPE */
-typedef struct {
-  uint64_t id;
-  int32_t cls;
-  int32_t proto;
-  double centre[3];
-  double radius;
-  double q0[4];
-  double axis[3];
-  double precession;
-  double spin;
-  double ice;
-} WbRock;
-
 /* A candidate before the hard core. */
 typedef struct {
   uint64_t h, base, id;

@@ -226,7 +226,7 @@ def _expected(window, field, camera_world, x, y):
             t1,
             ppr,
             field._min_pixels,
-            field.far,
+            field.population.limits(field.far),
         )
     sun, colour, ambient = field.sun
     light = radiance(field.haze.albedo, sun, colour, ambient, d)
@@ -265,6 +265,18 @@ def test_rocks_appear_out_of_the_haze(window, ring):
     assert _compare(window, ring, camera, frame, rocks) > 20
 
 
+def test_rocks_fade_into_the_haze_at_far(window, ring):
+    """A far just past the ring, 20 km under the camera: the rocks of its
+    last fifth fade out, the haze takes them in, as the model has it."""
+    camera = np.array([0.0, 2.5e6, 2.0e4])
+    ring.far = 2.15e4
+    try:
+        frame, rocks = _shoot(window, ring, camera, (0.3, 0.2, -1.0))
+        assert _compare(window, ring, camera, frame, rocks) > 20
+    finally:
+        ring.far = math.inf
+
+
 def test_the_haze_starts_at_the_near_plane(window, ring):
     """A near plane inside the ring: only what lies beyond it (the far
     camera of a split starts at the split)."""
@@ -300,15 +312,79 @@ def test_dust_is_haze_from_the_camera_on():
     assert tau == pytest.approx(0.05, rel=1e-3)
 
 
+def test_the_haze_takes_the_rocks_faded_out_by_far():
+    """Past far every rock is haze; over its last fifth, as many as the
+    shader fades out (linearly); nearer, only those too small."""
+    from world_builder.asteroids.population import FAR_FADE
+
+    model = HazeModel(RING)
+    ppr, min_pixels, far = 1000.0, 2.0, 5.0e5
+    every = model.extinction(RING.sizes.hi)
+    small = model.extinction(model.r_cut(3.0e5, ppr, min_pixels))
+    assert model.missing(3.0e5, ppr, min_pixels, far) == pytest.approx(small)
+    assert model.missing(6.0e5, ppr, min_pixels, far) == pytest.approx(every)
+    middle = (1.0 - 0.5 * FAR_FADE) * far
+    under = model.extinction(model.r_cut(middle, ppr, min_pixels))
+    assert model.missing(middle, ppr, min_pixels, far) == pytest.approx(
+        0.5 * (under + every)
+    )
+    # no far: only the rocks too small
+    assert model.missing(6.0e5, ppr, min_pixels, math.inf) == pytest.approx(
+        model.extinction(model.r_cut(6.0e5, ppr, min_pixels))
+    )
+
+
+def test_each_class_past_its_limit_is_haze():
+    """A window still growing (its class's limit near): that class's rocks
+    past it are haze, the others' as before."""
+    model = HazeModel(RING)
+    scatter = Scatter(RING)
+    np.testing.assert_allclose(model.class_lo, [c.lo for c in scatter.classes])
+    np.testing.assert_allclose(model.class_hi, [c.hi for c in scatter.classes])
+    ppr, min_pixels, t = 1000.0, 2.0, 2.0e4
+    limits = np.full(len(model.class_lo), np.inf)
+    base = model.missing(t, ppr, min_pixels, limits)
+    limits[1] = 1.0e4  # class 1 held to 10 km only
+    k = 1
+    whole = model.cumulative(model.class_hi[k]) - model.cumulative(model.class_lo[k])
+    cut = np.clip(model.r_cut(t, ppr, min_pixels), model.class_lo[k], model.class_hi[k])
+    under = model.cumulative(cut) - model.cumulative(model.class_lo[k])
+    expected = base + model.density * model.cover * (whole - under)
+    assert model.missing(t, ppr, min_pixels, limits) == pytest.approx(expected)
+
+
+def test_the_haze_veils_the_rocks(window, ring):
+    """The haze between the camera and a rock veils it: its pixels move
+    toward the haze's colour."""
+    camera = np.array([0.0, 2.5e6, 2.0e4])
+    try:
+        veiled, rocks = _shoot(window, ring, camera, (0.3, 0.2, -1.0))
+        ring.root.set_shader_input("uVeil", 0)
+        bare, _ = _shoot(window, ring, camera, (0.3, 0.2, -1.0))
+    finally:
+        ring.root.set_shader_input("uVeil", 1)
+    on_rock = rocks.sum(axis=2) > 30.0
+    assert on_rock.sum() > 20
+    # the haze's own colour (what it would be, opaque), about the view's
+    sun, colour, ambient = ring.sun
+    view = np.array([0.3, 0.2, -1.0]) / np.linalg.norm([0.3, 0.2, -1.0])
+    light = radiance(ring.haze.albedo, sun, colour, ambient, view)
+    haze = aces_tonemap(light, ring.exposure) * 255.0
+    nearer = np.abs(veiled[on_rock] - haze).sum(axis=1)
+    farther = np.abs(bare[on_rock] - haze).sum(axis=1)
+    # (the haze's colour turns with the view: one is the view's centre's)
+    assert np.mean(nearer <= farther + 2.0) > 0.95
+    assert np.mean(farther - nearer) > 1.0
+
+
 def test_the_haze_follows_the_drawing_scale():
     """The cut is the drawn rocks' fade's middle: at the distance where a
     rock covers FADE_MIDDLE * min_pixels, it is the cut."""
     model = HazeModel(replace(RING, density=Density(30.0)))  # no dust
     ppr, min_pixels = 1000.0, 2.0
     t = 1.0e5
-    cut = model.r_cut(t, ppr, min_pixels, far=1e9)
+    cut = model.r_cut(t, ppr, min_pixels)
     assert 2.0 * cut * ppr / t == pytest.approx(FADE_MIDDLE * min_pixels)
-    assert model.r_cut(2e9, ppr, min_pixels, far=1e9) > RING.sizes.hi
-    assert model.start(ppr, min_pixels, far=1e9) == pytest.approx(
+    assert model.start(ppr, min_pixels, 1e9) == pytest.approx(
         RING.sizes.lo * 2.0 * ppr / (FADE_MIDDLE * min_pixels)
     )

@@ -98,6 +98,14 @@ class TerrainRocks:
         """The rocks' terrains now in use (shown or loading)."""
         return [p.terrain for p in self._rocks.values()]
 
+    def near_factor(self) -> float:
+        """:returns: how many radii from its centre a big rock may be drawn
+        as terrain (its release distance), with a quarter more: the visible
+        pass lists the rocks within it"""
+        s = self._field.settings
+        reach = show_distance(1.0, s.normal_size, ROCK_TERRAIN_SETTINGS.split_factor)
+        return 1.0 + 1.25 * RELEASE_FACTOR * PRELOAD * float(reach)
+
     def enable_collision(
         self, into_mask, name: str, owner_tag: str, max_distance: float
     ) -> None:
@@ -125,6 +133,7 @@ class TerrainRocks:
         camera_world: np.ndarray,
         camera_render: ArrayLike,
         time: float,
+        near: np.ndarray,
     ) -> np.ndarray:
         """Per frame, after the population's update.
 
@@ -132,6 +141,9 @@ class TerrainRocks:
         :param camera_world: and in the world
         :param camera_render: and in render
         :param time: the field's time
+        :param near: the slots of the big rocks near the camera, from the
+            visible pass (:attr:`Visible.near`, with :meth:`near_factor`;
+            a frame old is fine: it reaches farther than they are used)
         :returns: :attr:`promoted`
         """
         field = self._field
@@ -142,10 +154,12 @@ class TerrainRocks:
             grown[: len(self.promoted)] = self.promoted
             self.promoted = grown
         limit = settings.max_terrain_rocks if field.full_errors is not None else 0
-        radius = pop.rocks["radius"]
-        big = np.flatnonzero(pop.live & (radius >= settings.terrain_min_radius))
-        radius = radius[big]
-        rel = pop.rocks["centre"][big] - camera
+        big = np.asarray(near, dtype=np.int64)
+        big = big[big < pop.capacity]
+        radius = pop.compact["radius"][big]
+        big = big[pop.live[big] & (radius >= settings.terrain_min_radius)]
+        radius = pop.compact["radius"][big]
+        rel = pop.compact["centre"][big] - camera
         surface = np.sqrt(np.einsum("ij,ij->i", rel, rel)) - radius
         show = show_distance(
             radius, settings.normal_size, ROCK_TERRAIN_SETTINGS.split_factor

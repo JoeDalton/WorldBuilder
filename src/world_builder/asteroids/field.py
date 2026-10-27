@@ -86,8 +86,13 @@ HEADLESS_PIXELS_PER_RADIAN = 900.0 / math.radians(40.0)
 #: Past the budget, the smallest size drawn grows by this factor per frame;
 #: well under it, it shrinks back.
 BUDGET_STEP = 1.1
+#: Past the held budget, the smallest size the windows keep grows by this
+#: factor per frame (slowly: the class limits move, their rocks fading).
+HELD_STEP = 1.03
 
-_LODS = {16: (4, 8, 16), 32: (4, 8, 16, 32), 64: (4, 8, 16, 32, 64)}
+#: Quads per face side of each level of detail, by max_lod: the coarsest (2:
+#: 48 triangles) for rocks a few pixels wide.
+_LODS = {16: (2, 4, 8, 16), 32: (2, 4, 8, 16, 32), 64: (2, 4, 8, 16, 32, 64)}
 #: A slot's floats as Panda keeps an RGBA texture's RAM image: BGRA texels.
 _BGRA = (np.arange(4)[:, None] * 4 + np.array([2, 1, 0, 3])).ravel()
 
@@ -128,7 +133,7 @@ class AsteroidField:
         tonemap: bool = True,
         materials: MaterialSet | None = None,
         parent: NodePath | None = None,
-        far: float = 600_000.0,
+        far: float | None = None,
         name: str = "asteroids",
         haze: bool = True,
     ):
@@ -153,7 +158,9 @@ class AsteroidField:
             None = loaded at ``settings.texture_size``
         :param parent: what to hang under (default render; not a node offset
             by large distances)
-        :param far: rocks beyond this are never drawn (the camera's far)
+        :param far: no rock farther is drawn: they fade out over its last
+            fifth, into the haze (a game's far plane). None = as far as each
+            is drawn by its size
         :param name: the root's name, and the executor channel's
         :param haze: draw the rocks not drawn as a haze (:mod:`haze`)
         """
@@ -165,7 +172,7 @@ class AsteroidField:
         if len(self.scatter.classes) > MAX_CLASSES:
             raise ValueError(f"more than {MAX_CLASSES} size classes")
         self.population = Population(self.scatter)
-        self.far = float(far)
+        self.far = math.inf if far is None else float(far)
         self.position = np.asarray(position, dtype=np.float64)
         self.orientation = np.asarray(orientation, dtype=np.float64)
         self._rotation_matrix = _rotation(self.orientation)
@@ -183,6 +190,7 @@ class AsteroidField:
             )
         )
         self._min_pixels = self._settings.min_pixels
+        self._held_pixels = self._settings.min_pixels  # the windows' own
         self._epoch = None
         self._ready = np.zeros(self.population.capacity, dtype=bool)
         self._pending: list[np.ndarray] = []
@@ -191,6 +199,7 @@ class AsteroidField:
         self._draws: list[tuple[NodePath, Any, int]] = []  # node, offset PTA, count
         self._errors = None
         self._last_visible = None
+        self._near = np.zeros(0, dtype=np.int64)  # the last pass's
         self.collision = None
         #: per prototype, its finest mesh's error to the full detail (None
         #: until built): how near a rock must be to be drawn as terrain
@@ -203,7 +212,7 @@ class AsteroidField:
         )
         self._make_table(self.population.capacity)
         self._make_index(1024)
-        self.haze = FieldHaze(self, SHADER_PATH) if haze else None
+        self.haze = FieldHaze(self, SHADER_PATH, enabled=haze)
         self.terrain_rocks = TerrainRocks(self)
         self._request_prototypes()
 
@@ -334,11 +343,13 @@ class AsteroidField:
         else:  # headless: rocks held and solid as on a 900-pixel 40-degree view
             pixels_per_radian = HEADLESS_PIXELS_PER_RADIAN
         # Rocks in and out of range.
-        ranges = self.population.ranges(pixels_per_radian, self._min_pixels, self.far)
+        kept = max(self._min_pixels, self._held_pixels)
+        ranges = self.population.ranges(pixels_per_radian, kept, self.far)
         added, removed = self.population.update(camera, ranges)
         if self.population.capacity > len(self._ready):
             self._make_table(self.population.capacity)
         self._ready[removed] = False
+        self._held_budget()
         if len(added):
             self._pending.append(added)
         # The game's time, and the table's epoch.
@@ -363,8 +374,12 @@ class AsteroidField:
             cell = np.floor(camera / c.cell)
             frame["uCamCell"][k] = LVecBase3f(*cell)
             frame["uCamLocal"][k] = LVecBase3f(*(camera - cell * c.cell))
-        if self.haze is not None:
-            self.haze.update(camera, self.far)
+        self.haze.update(
+            camera,
+            self.population.limits(self.far),
+            pixels_per_radian,
+            self._min_pixels,
+        )
         visible_ms = 0.0
         # Big rocks near the camera drawn as terrain (hidden as instances,
         # solid as terrain)
@@ -373,12 +388,17 @@ class AsteroidField:
             np.asarray(camera_world, dtype=np.float64),
             camera_render,
             now,
+            self._near,
         )[: self.population.capacity]
         if self._errors is not None and self.collision is not None:
             self.collision.update(camera, camera_render, now, exclude=promoted)
-        if self._errors is not None and cameras:
+        if self._errors is not None:
+            # Headless (no views), nothing is drawn: the pass still lists
+            # the big rocks near the camera
             t = time.perf_counter()
             planes = np.array([self._planes(view) for view in cameras])
+            if not cameras or self.app.win is None:
+                planes = np.zeros((0, 4, 3))
             visible = self.population.visible(
                 camera,
                 planes,
@@ -387,9 +407,13 @@ class AsteroidField:
                 self._settings.lod_error_px,
                 self._errors,
                 self._ready[: self.population.capacity] & ~promoted,
+                far=self.far,
+                near_radius=self._settings.terrain_min_radius,
+                near_factor=self.terrain_rocks.near_factor(),
             )
+            self._near = visible.near
             self._draw(visible)
-            self._budget(visible.in_range)
+            self._budget(len(visible.slots))
             self._last_visible = visible
             visible_ms = (time.perf_counter() - t) * 1e3
         self.stats = {
@@ -399,6 +423,7 @@ class AsteroidField:
             if self._last_visible is None
             else self._last_visible.in_range,
             "min_pixels": self._min_pixels,
+            "held_pixels": max(self._min_pixels, self._held_pixels),
             "terrain_rocks": int(np.count_nonzero(promoted)),
             "visible_ms": visible_ms,
             "update_ms": (time.perf_counter() - start) * 1e3,
@@ -443,8 +468,7 @@ class AsteroidField:
         self.root.set_shader_input("uRockNormals", normal_map_texture(prototypes))
         self.full_errors = np.array([p.meshes[-1].error for p in prototypes])
         self.lowest = np.array([p.lowest for p in prototypes])
-        if self.haze is not None:
-            self.haze.set_cover(mean_projected_cover(prototypes))
+        self.haze.set_cover(mean_projected_cover(prototypes))
         if self.collision is not None:
             self.collision.set_prototypes(prototypes)
         levels = len(prototypes[0].meshes)
@@ -512,11 +536,24 @@ class AsteroidField:
                 path.set_instance_count(n)
             self._draws[i] = (path, offset, n)
 
-    def _budget(self, in_range: int) -> None:
+    def _held_budget(self) -> None:
+        """Past the budget of rocks held, the windows keep only bigger ones
+        (their limits shrink: the rocks past them fade into the haze)."""
+        budget, held = self._settings.held_budget, self.population.count
+        if held > budget:
+            self._held_pixels *= HELD_STEP
+        elif held < 0.8 * budget and self._held_pixels > self._settings.min_pixels:
+            self._held_pixels = max(
+                self._settings.min_pixels, self._held_pixels / HELD_STEP
+            )
+
+    def _budget(self, drawn: int) -> None:
+        """Past the budget of rocks drawn (in view), draw fewer: the smallest
+        size drawn grows (the haze takes the rocks it drops)."""
         budget = self._settings.instance_budget
-        if in_range > budget:
+        if drawn > budget:
             self._min_pixels *= BUDGET_STEP
-        elif in_range < 0.8 * budget and self._min_pixels > self._settings.min_pixels:
+        elif drawn < 0.8 * budget and self._min_pixels > self._settings.min_pixels:
             self._min_pixels = max(
                 self._settings.min_pixels, self._min_pixels / BUDGET_STEP
             )

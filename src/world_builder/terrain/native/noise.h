@@ -1,6 +1,7 @@
 /* What the noise library's own files share (noise.c, scatter.c): the lattice
- * hash and the fbm sum at one point. Internal: nothing here is exported
- * (the library builds with -fvisibility=hidden). Plain C99. */
+ * hash, the fbm sum at one point, and an asteroid's record. Internal:
+ * nothing here is exported (the library builds with -fvisibility=hidden).
+ * Plain C99. */
 #ifndef WB_NOISE_H
 #define WB_NOISE_H
 
@@ -30,5 +31,19 @@ static inline uint64_t wb_lattice_hash(int64_t i, int64_t j, int64_t k,
  * normalisation (wb_fbm per point). frames: (octaves, 12); seeds: mixed. */
 double wb_fbm_point(const double *p, int32_t octaves, const double *frames,
                     const uint64_t *seeds, const double *weights);
+
+/* An asteroid: scatter.ROCK_DTYPE. */
+typedef struct {
+  uint64_t id;
+  int32_t cls;
+  int32_t proto;
+  double centre[3];
+  double radius;
+  double q0[4];
+  double axis[3];
+  double precession;
+  double spin;
+  double ice;
+} WbRock;
 
 #endif

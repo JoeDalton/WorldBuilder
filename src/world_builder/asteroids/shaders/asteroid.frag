@@ -5,8 +5,9 @@
 // (terrain_material.glsl: rock projected from the sides on steep flanks),
 // lit as the terrain lights its ground (object_light.glsl), then either the
 // world's exposure and tonemap or a plain display encoding (for scenes lit
-// by Panda's fixed-function lights). Rocks fading out at their drawing
-// distance are dithered away.
+// by Panda's fixed-function lights). The field's haze between the camera
+// and the rock veils it (haze.glsl): far rocks melt into the haze they leave
+// to. Rocks fading out at their drawing distance are dithered away.
 
 #pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "../../terrain/shaders/terrain_material.glsl"
@@ -23,6 +24,9 @@ uniform vec3 uAmbient;
 uniform float uExposure;
 uniform int uTonemap;                 // 1: aces_tonemap, 0: plain encoding
 uniform float uRockUvPeriod;          // rock.ROCK_UV_PERIOD
+uniform int uVeil;                    // 1: veiled by the field's haze
+
+#pragma include "haze.glsl"
 
 in vec3 vRelPos;
 in vec3 vNormal;
@@ -37,6 +41,7 @@ flat in vec4 vRock;
 out vec4 fragColor;
 
 const float PI = 3.141592653589793;
+const int VEIL_SAMPLES = 8;
 
 vec3 qrot(vec4 q, vec3 v) {
     vec3 t = 2.0 * cross(q.yzw, v);
@@ -89,6 +94,17 @@ void main() {
     vec3 C = objectLight(albedo, surfaceN, roughness, ao, surfaceN, L, V,
                          uSunColor, 1.0, uAmbient);
     C *= uExposure;
-    fragColor = vec4(uTonemap == 1 ? aces_tonemap(C)
-                                   : pow(clamp(C, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+    vec3 rgb = uTonemap == 1 ? aces_tonemap(C) : pow(clamp(C, 0.0, 1.0), vec3(1.0 / 2.2));
+    if (uVeil == 1) {
+        // The haze from the camera to here, over the rock as over the sky.
+        vec3 dirRender = normalize(vRelPos);
+        vec3 d = transpose(uFieldRot) * dirRender;
+        vec2 s0, s1;
+        int n = hazeIntervals(uCamField, d, s0, s1);
+        float tau = 0.0;
+        if (n > 0) tau += hazeDepth(uCamField, d, s0.x, min(s0.y, dist), VEIL_SAMPLES);
+        if (n > 1) tau += hazeDepth(uCamField, d, s1.x, min(s1.y, dist), VEIL_SAMPLES);
+        rgb = mix(hazeColour(dirRender), rgb, exp(-tau));
+    }
+    fragColor = vec4(rgb, 1.0);
 }

@@ -45,7 +45,7 @@ $Work = (New-Item -ItemType Directory -Force (Join-Path $env:TEMP "wb_native")).
 Push-Location $Work
 try {
     & cl.exe /nologo /O2 /fp:precise /MD /utf-8 /DNDEBUG /LD `
-        "$Src\noise.c" "$Src\lod.c" "$Src\chunk.c" "$Src\billboards.c" "$Src\gravity.c" "$Src\scatter.c" "/Fe$Src\libwb_noise.dll" `
+        "$Src\noise.c" "$Src\lod.c" "$Src\chunk.c" "$Src\billboards.c" "$Src\gravity.c" "$Src\scatter.c" "$Src\visible.c" "/Fe$Src\libwb_noise.dll" `
         /link "/IMPLIB:$Work\wb_noise.lib"
     if ($LASTEXITCODE) { throw "cl failed (noise)" }
 } finally {
