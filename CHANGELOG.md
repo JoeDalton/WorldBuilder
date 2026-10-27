@@ -47,6 +47,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `World.sun_visibility` and `lights_at`. `ShadowSettings.terrain_map_size`
   sets its size. `terrain_shots.py` gains `mountains_low`,
   `mountains_orbit` and `moon_terminator`.
+- Nearby ridges' shadows (#11): `terrain.shadow_map.LocalShadowMap`, a 50 m
+  shadow map around the camera (owned by each body's `ShadowMap`) for the
+  occluders nearer than the global map's reach, sampled in the pool as the
+  camera moves a quarter of it and baked for each sun (~1 s);
+  `terrainShadow` takes the lesser of the two maps.
+  `ShadowSettings.local_map_size` and `local_map_spacing` set it.
+- The clouds' shadow from maps (#11): `clouds.shadow_map.CloudShadowMaps`
+  marches it once per texel of two maps around the camera (by where the
+  sun's ray enters the clouds' base) instead of once per pixel of ground,
+  drawn again when the camera has moved a quarter of a map or the sun has
+  turned. `ShadowSettings.cloud_map_size` sets them; `World` makes them for
+  a body with clouds (`Body.cloud_maps`).
 - `World.track_light(node, cast=False)` / `untrack_light(node)`: a game's
   model lit by the light where it is, not at the camera: its own Panda3D sun
   and ambient lights (`world_builder.lights.TrackedLights`), set every

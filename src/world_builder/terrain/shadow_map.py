@@ -42,10 +42,18 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike
-from panda3d.core import NodePath, PTA_int, SamplerState, Texture
+from panda3d.core import (
+    LVecBase4f,
+    NodePath,
+    PTA_int,
+    PTA_LVecBase4f,
+    SamplerState,
+    Texture,
+)
 
 from world_builder.clouds.weather import sample_cube
 from world_builder.sky.starfield import cube_directions
+from world_builder.terrain.chart import AzimuthalEquidistantChart, latlon
 
 #: The bake's step toward the sun, in texels at a face's centre (2 / n
 #: radians each, the widest): its nearest occluder (a texel's own ground
@@ -178,6 +186,127 @@ def ceiling_cube(
     return out.reshape(6, size, size, 2).astype(np.float32)
 
 
+def global_reach(size: int, radius: float, step_texels: float = STEP_TEXELS) -> float:
+    """:returns: the nearest occluder :func:`ceiling_cube` counts, metres
+    (nearer ones are the local map's, :func:`local_ceiling`)"""
+    return step_texels * (2.0 / size) * radius
+
+
+def _bilinear(grid: np.ndarray, y: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """*grid* (rows, columns, ...) at fractional (row, column) node
+    coordinates, clamped at its edges."""
+    rows, columns = grid.shape[:2]
+    y = np.clip(y, 0.0, rows - 1.0)
+    x = np.clip(x, 0.0, columns - 1.0)
+    y0 = np.minimum(np.floor(y).astype(np.int64), rows - 2)
+    x0 = np.minimum(np.floor(x).astype(np.int64), columns - 2)
+    ty, tx = y - y0, x - x0
+    if grid.ndim == 3:
+        ty, tx = ty[..., None], tx[..., None]
+    top = grid[y0, x0] * (1 - tx) + grid[y0, x0 + 1] * tx
+    bottom = grid[y0 + 1, x0] * (1 - tx) + grid[y0 + 1, x0 + 1] * tx
+    return top * (1 - ty) + bottom * ty
+
+
+def chart_nodes(size: int, spacing: float) -> np.ndarray:
+    """:returns: (size,) a local map's node coordinates along each chart
+    axis, metres from its centre (node centres)"""
+    return (np.arange(size) - 0.5 * (size - 1)) * spacing
+
+
+def local_ceiling(
+    heights: np.ndarray,
+    chart: AzimuthalEquidistantChart,
+    spacing: float,
+    sun: ArrayLike,
+    near: float,
+    far: float,
+) -> np.ndarray:
+    """The local shadow map's bake: :func:`ceiling_cube`'s, over a square
+    of ground around a chart's centre, counting only the occluders between
+    *near* and *far* (the global map's reach, :func:`global_reach`): the
+    two maps never count one occluder twice.
+
+    The same pass over a grid aligned with the sun, over the window that
+    covers the square (and *far* toward the sun beyond it), its nodes'
+    ground read from *heights*; the result is read back at the chart's
+    nodes. The ground beyond the square is unknown: near its sunward edges
+    the map misses occluders (the shaders fade it out there). With the sun
+    within the window's reach of the zenith the grid has no room: there is
+    no local map (and its shadows are short).
+
+    :param heights: (n, n) the ground at the chart's nodes
+        (:func:`chart_nodes`), metres above sea level
+    :param chart: the chart around the camera (planet frame)
+    :param spacing: metres between nodes
+    :param sun: toward the sun, the planet's frame
+    :param near: the nearest occluder counted, metres
+    :param far: the farthest (the global map's nearest), metres
+    :returns: (n, n, 2) float32: ceiling (:data:`NO_CEILING` where nothing
+        occludes) and distance, metres
+    """
+    size = heights.shape[0]
+    radius = chart.radius
+    sun = np.asarray(sun, dtype=np.float64)
+    sun = sun / np.linalg.norm(sun)
+    out = np.empty((size, size, 2), dtype=np.float32)
+    out[..., 0] = NO_CEILING
+    out[..., 1] = far
+    nodes = chart_nodes(size, spacing)
+    x, y = np.meshgrid(nodes, nodes)
+    dirs = chart.to_dirs(x, y).reshape(size, size, 3)
+    zenith = np.arccos(np.clip(dirs @ sun, -1.0, 1.0))
+    reach = (far + 2.0 * spacing) / radius
+    if zenith.min() <= reach or zenith.min() >= 0.5 * math.pi + 0.2:
+        return out  # the sun about overhead, or night over the whole square
+
+    side = np.cross(sun, [1.0, 0.0, 0.0] if abs(sun[0]) < 0.9 else [0.0, 1.0, 0.0])
+    side /= np.linalg.norm(side)
+    other = np.cross(sun, side)
+    around = np.arctan2(dirs @ other, dirs @ side)
+    centre = float(around[size // 2, size // 2])
+    around = (around - centre + math.pi) % (2.0 * math.pi) - math.pi
+    step = spacing / radius
+    psi0 = float(zenith.min()) - reach
+    rows = int(math.ceil((float(zenith.max()) - psi0) / step)) + 2
+    middle = float(zenith[size // 2, size // 2])
+    turn = step / math.sin(middle)  # a node's spacing across, at the centre
+    phi0 = float(around.min()) - turn
+    columns = int(math.ceil((float(around.max()) + turn - phi0) / turn)) + 1
+    psi = psi0 + np.arange(rows) * step
+    phi = centre + phi0 + np.arange(columns) * turn
+    ring = np.cos(phi)[:, None] * side + np.sin(phi)[:, None] * other
+
+    # The ground at the grid's nodes (none known outside the square: there
+    # nothing occludes).
+    ground = np.empty((rows, columns))
+    half = 0.5 * (size - 1) * spacing
+    for row, angle in enumerate(psi):
+        node = math.cos(angle) * sun + math.sin(angle) * ring
+        gx, gy = chart.from_dirs(node)
+        inside = (np.abs(gx) <= half) & (np.abs(gy) <= half)
+        value = _bilinear(heights, (gy + half) / spacing, (gx + half) / spacing)
+        ground[row] = np.where(inside, value, NO_CEILING)
+
+    # Every occluder between near and far, a row at a time.
+    ceiling = np.full((rows, columns), NO_CEILING)
+    distance = np.full((rows, columns), far)
+    lifted = radius + np.maximum(ground, 0.0)
+    for k in range(max(1, round(near / spacing)), int(math.ceil(far / spacing))):
+        gain = ray_gain(psi[k:, None], k * step, lifted[k:])
+        candidate = ground[:-k] - gain
+        higher = candidate > ceiling[k:]
+        ceiling[k:] = np.where(higher, candidate, ceiling[k:])
+        distance[k:] = np.where(higher, k * spacing, distance[k:])
+
+    # Back at the chart's nodes.
+    gy = (zenith - psi0) / step
+    gx = (around - phi0) / turn
+    both = np.stack([np.maximum(ceiling, NO_CEILING), distance], axis=-1)
+    out[...] = _bilinear(both, gy, gx)
+    return out
+
+
 def terrain_visibility(
     ceiling: ArrayLike, distance: ArrayLike, altitude: ArrayLike, sun_radius: float
 ) -> np.ndarray:
@@ -234,6 +363,8 @@ class ShadowMap:
         executor: Any,
         size: int,
         sun_direction: ArrayLike,
+        local_size: int = 0,
+        local_spacing: float = 50.0,
     ) -> None:
         """
         :param terrain: the body's :class:`~world_builder.terrain.terrain.Terrain`
@@ -242,6 +373,9 @@ class ShadowMap:
         :param size: texels per face edge (``ShadowSettings.terrain_map_size``;
             0 = none)
         :param sun_direction: toward the sun, world frame
+        :param local_size: the local map around the camera, nodes per side
+            (``ShadowSettings.local_map_size``; 0 = none)
+        :param local_spacing: its nodes' spacing, metres
         """
         self._terrain = terrain
         self._executor = executor
@@ -263,18 +397,23 @@ class ShadowMap:
         self._shades_for = None  # the map they were read from
         self._bake_started = 0.0
         self.size = 0
+        #: The nearby ridges' map, around the camera
+        self.local = LocalShadowMap(terrain, executor)
         self.set_sun(sun_direction)
         self.set_size(size)
+        self.local.set_size(local_size, local_spacing)
 
     @property
     def loading(self) -> bool:
-        """Whether the first map is still being made."""
+        """Whether the first global map is still being made."""
         return self.size > 0 and self.cube is None
 
     @property
     def current(self) -> bool:
         """Whether the map drawn is the one for the sun now (none wanted
         counts): a later sun is still baking otherwise."""
+        if not self.local.current:
+            return False
         if not self.size:
             return True
         baked = self._bake_job is None and self._baking_sun is not None
@@ -285,6 +424,11 @@ class ShadowMap:
         ``uTerrainShadow``, ``uTerrainShadowOn``: off until baked)."""
         node.set_shader_input("uTerrainShadow", self._texture)
         node.set_shader_input("uTerrainShadowOn", self._on)
+        self.local.bind(node)
+
+    def set_local(self, size: int, spacing: float) -> None:
+        """The local map's size and spacing (0: none), made again."""
+        self.local.set_size(size, spacing)
 
     def set_size(self, size: int) -> None:
         """A new resolution: the heights are sampled again (0: no map)."""
@@ -312,8 +456,23 @@ class ShadowMap:
         sun = self._terrain.rotation.T @ (sun / np.linalg.norm(sun))
         self._sun = sun
 
-    def update(self) -> None:
-        """Per frame: collect what the pool made, start the next bake."""
+    def update(self, camera_world: ArrayLike | None = None) -> None:
+        """Per frame: collect what the pool made, start the next bakes.
+
+        :param camera_world: the camera, world frame: the local map follows
+            it (None: no local map work)
+        """
+        self._update_global()
+        if camera_world is not None:
+            far = (
+                global_reach(self.size, self._terrain.radius)
+                if self.size
+                else LOCAL_FAR
+            )
+            camera = self._terrain.to_planet(np.asarray(camera_world, float)[None])[0]
+            self.local.update(camera, self._sun, far)
+
+    def _update_global(self) -> None:
         if not self.size:
             return
         if self._heights is None:
@@ -352,31 +511,232 @@ class ShadowMap:
 
     def visibility(self, points_world: ArrayLike, sun_radius: float) -> np.ndarray:
         """The share of the sun the mountains leave points: the shader's
-        ``terrainShadow`` on the CPU (the map as last baked).
+        ``terrainShadow`` on the CPU (both maps as last baked).
 
         :param points_world: (..., 3) world frame, metres
         :param sun_radius: the sun's angular radius, radians
-        :returns: (...) in [0, 1]; 1 before the first map
+        :returns: (...) in [0, 1]; 1 before the first maps
         """
         points = np.asarray(points_world, dtype=np.float64)
-        if self.cube is None:
+        if self.cube is None and self.local.drawn is None:
             return np.ones(points.shape[:-1])
-        # ~0.1 ms a call (numpy on a few points), every frame: a point's
-        # shade is kept per SHADE_CELL, until the next bake.
-        if self._shades_for is not self.cube or len(self._shades) > SHADE_CACHE_SIZE:
-            self._shades_for, self._shades = self.cube, {}
+        # ~0.1 ms a map a call (numpy on a few points), every frame: a
+        # point's shade is kept per SHADE_CELL, until either map changes.
+        maps = (id(self.cube), id(self.local.drawn))
+        if self._shades_for != maps or len(self._shades) > SHADE_CACHE_SIZE:
+            self._shades_for, self._shades = maps, {}
         planet = self._terrain.to_planet(points.reshape(-1, 3))
         cells = [tuple(c) for c in np.round(planet / SHADE_CELL).astype(np.int64)]
         missing = [i for i, cell in enumerate(cells) if cell not in self._shades]
         if missing:
-            rho = np.linalg.norm(planet[missing], axis=-1)
-            ceiling, distance = np.moveaxis(
-                sample_cube(self.cube, planet[missing]), -1, 0
-            )
-            shade = terrain_visibility(
-                ceiling, distance, rho - self._terrain.radius, sun_radius
-            )
+            at = planet[missing]
+            shade = self.local.visibility(at, sun_radius)
+            if self.cube is not None:
+                ceiling, distance = np.moveaxis(sample_cube(self.cube, at), -1, 0)
+                altitude = np.linalg.norm(at, axis=-1) - self._terrain.radius
+                shade = np.minimum(
+                    shade, terrain_visibility(ceiling, distance, altitude, sun_radius)
+                )
             for i, value in zip(missing, np.atleast_1d(shade)):
                 self._shades[cells[i]] = float(value)
         shades = np.array([self._shades[cell] for cell in cells])
         return shades.reshape(points.shape[:-1])
+
+
+#: The local map's reach without a global map, metres.
+LOCAL_FAR = 10e3
+#: Above this altitude the local map is not made again (its detail is
+#: under a pixel; the last one stays).
+LOCAL_MAX_ALTITUDE = 20e3
+
+
+def _local_heights(
+    spec, chart_state: tuple, size: int, spacing: float, rows: tuple, ocean: bool
+) -> np.ndarray:
+    """Rows of the local map's ground, in a worker (~2.5 us a node)."""
+    from world_builder.terrain.chunkgen import planet_for
+
+    planet = planet_for(spec)
+    chart = AzimuthalEquidistantChart(*chart_state)
+    nodes = chart_nodes(size, spacing)
+    x, y = np.meshgrid(nodes, nodes[rows[0] : rows[1]])
+    heights = planet.sample_dirs(
+        chart.to_dirs(x, y), min_wavelength=2.0 * spacing, apply_stamps=True
+    )[0]
+    if ocean:
+        heights = np.maximum(heights, 0.0)
+    return heights.reshape(x.shape).astype(np.float32)
+
+
+class LocalShadowMap:
+    """The nearby ridges' shadow (part E): :func:`local_ceiling` over a
+    square chart around the camera, the occluders nearer than the global
+    map's reach. Its ground is sampled when the camera has moved a quarter
+    of the square from its centre (below :data:`LOCAL_MAX_ALTITUDE`), its
+    ceiling baked for each sun and each ground, both in the pool; the last
+    map stays until the next is in (the shadows where they overlap are the
+    same: no pop). A :class:`ShadowMap` owns it.
+
+    The shaders read it with the chart's frame (shadows.glsl's
+    ``localShadow``), faded out toward its edges, where the ground beyond
+    is unknown.
+    """
+
+    def __init__(self, terrain: Any, executor: Any) -> None:
+        self._terrain = terrain
+        self._executor = executor
+        self._texture = Texture("local_terrain_shadow")
+        self._texture.setup_2d_texture(1, 1, Texture.T_float, Texture.F_rg32)
+        self._texture.set_ram_image(bytes(8))
+        self._on = PTA_int.empty_array(1)
+        self._chart_inputs = PTA_LVecBase4f.empty_array(4)
+        self.size = 0
+        self.spacing = 50.0
+        self.drawn: tuple | None = None  # (chart, (n, n, 2) map) as shown
+        self._heights_jobs: list = []
+        self._heights_chart: AzimuthalEquidistantChart | None = None  # sampled
+        self._ground: tuple | None = None  # (chart, (n, n) heights), ready
+        self._bake_job = None
+        self._baked_for: tuple | None = None  # (ground id, sun) baked or baking
+        self._far = 0.0  # the drawn map's reach
+
+    @property
+    def current(self) -> bool:
+        """Whether nothing is being sampled or baked."""
+        return not self.size or (not self._heights_jobs and self._bake_job is None)
+
+    def bind(self, node: NodePath) -> None:
+        """Give a node's shaders the local map (off until baked)."""
+        node.set_shader_input("uLocalShadow", self._texture)
+        node.set_shader_input("uLocalShadowOn", self._on)
+        node.set_shader_input("uLocalChart", self._chart_inputs)
+
+    def set_size(self, size: int, spacing: float) -> None:
+        """Nodes per side and their spacing (0: none): made again."""
+        if (size, spacing) == (self.size, self.spacing):
+            return
+        self.size, self.spacing = int(size), float(spacing)
+        self._on[0] = 0
+        self.drawn = self._ground = self._heights_chart = self._bake_job = None
+        self._heights_jobs = []
+        self._baked_for = None
+
+    def update(self, camera: np.ndarray, sun: np.ndarray, far: float) -> None:
+        """Per frame.
+
+        :param camera: the camera, the planet's frame
+        :param sun: toward the sun, the planet's frame (unit)
+        :param far: the global map's reach (:func:`global_reach`)
+        """
+        if not self.size:
+            return
+        radius = self._terrain.radius
+        extent = self.size * self.spacing
+        rho = float(np.linalg.norm(camera))
+        if not self._heights_jobs and rho - radius < LOCAL_MAX_ALTITUDE:
+            moved = self._heights_chart is None
+            if not moved:
+                x, y = self._heights_chart.from_dirs(camera[None] / rho)
+                moved = max(abs(x[0]), abs(y[0])) > 0.25 * extent
+            if moved:
+                self._sample(camera / rho)
+        if self._heights_jobs and all(job.done() for job in self._heights_jobs):
+            heights = np.concatenate([job.result() for job in self._heights_jobs])
+            self._ground = (self._heights_chart, heights)
+            self._heights_jobs = []
+        if self._bake_job is not None and self._bake_job.done():
+            self.drawn = self._bake_job.result()
+            self._upload(*self.drawn)
+            self._bake_job = None
+        if self._bake_job is None and self._ground is not None:
+            key = (id(self._ground), tuple(sun))
+            if key != self._baked_for:
+                self._baked_for = key
+                chart, heights = self._ground
+                near = 2.0 * self.spacing
+                self._bake_job = self._executor.submit_once(
+                    _local_bake,
+                    heights,
+                    (chart.lat_deg, chart.lon_deg, chart.radius),
+                    self.spacing,
+                    sun.copy(),
+                    near,
+                    far,
+                )
+
+    def _sample(self, up: np.ndarray) -> None:
+        """Ask the pool for the ground of a new square centred under *up*."""
+        lat, lon = latlon(up[None])
+        chart = AzimuthalEquidistantChart(
+            float(lat[0]), float(lon[0]), self._terrain.radius
+        )
+        spec = self._terrain.spec
+        state = (chart.lat_deg, chart.lon_deg, chart.radius)
+        bounds = np.linspace(0, self.size, 5).astype(int)
+        self._heights_chart = chart
+        self._heights_jobs = [
+            self._executor.submit_once(
+                _local_heights,
+                spec,
+                state,
+                self.size,
+                self.spacing,
+                (int(a), int(b)),
+                bool(spec.has_ocean),
+            )
+            for a, b in zip(bounds[:-1], bounds[1:])
+        ]
+
+    def _upload(self, chart: AzimuthalEquidistantChart, ceiling: np.ndarray) -> None:
+        """The map as a float texture, and its chart's frame (the uniforms
+        rewritten in place, with it)."""
+        size = ceiling.shape[0]
+        if self._texture.get_x_size() != size:
+            self._texture.setup_2d_texture(size, size, Texture.T_float, Texture.F_rg32)
+            self._texture.set_magfilter(SamplerState.FT_linear)
+            # Mipmapped: toward its far side it is read minified (0.5 ms
+            # without, at the ground poses: the texture cache).
+            self._texture.set_minfilter(SamplerState.FT_linear_mipmap_linear)
+            self._texture.set_wrap_u(SamplerState.WM_clamp)
+            self._texture.set_wrap_v(SamplerState.WM_clamp)
+        self._texture.set_ram_image(
+            np.ascontiguousarray(ceiling, dtype=np.float32).tobytes()
+        )
+        frame = chart.frame
+        half = 0.5 * (size - 1) * self.spacing
+        # Its reach: no occluder is farther (once a map: the twin reads it).
+        far = self._far = float(np.max(ceiling[..., 1]))
+        self._chart_inputs[0] = LVecBase4f(*frame.up, chart.radius)
+        self._chart_inputs[1] = LVecBase4f(*frame.east, self.spacing)
+        self._chart_inputs[2] = LVecBase4f(*frame.north, float(size))
+        # Faded out over the band within the global reach of the edge.
+        self._chart_inputs[3] = LVecBase4f(half - 2.0 * far, half - far, 0.0, 0.0)
+        self._on[0] = 1
+
+    def visibility(self, planet: np.ndarray, sun_radius: float) -> np.ndarray:
+        """``localShadow`` on the CPU, at (m, 3) planet-frame points: 1
+        outside the map (and before it), faded toward its edges."""
+        planet = np.asarray(planet, dtype=np.float64).reshape(-1, 3)
+        if self.drawn is None:
+            return np.ones(len(planet))
+        chart, ceiling = self.drawn
+        rho = np.linalg.norm(planet, axis=1)
+        x, y = chart.from_dirs(planet / rho[:, None])
+        size = ceiling.shape[0]
+        half = 0.5 * (size - 1) * self.spacing
+        far = self._far
+        edge = np.maximum(np.abs(x), np.abs(y))
+        t = np.clip((edge - (half - 2.0 * far)) / max(far, 1.0), 0.0, 1.0)
+        keep = 1.0 - t * t * (3.0 - 2.0 * t)
+        value = _bilinear(ceiling, (y + half) / self.spacing, (x + half) / self.spacing)
+        seen = terrain_visibility(
+            value[:, 0], value[:, 1], rho - chart.radius, sun_radius
+        )
+        return np.where(keep > 0.0, 1.0 - keep * (1.0 - seen), 1.0)
+
+
+def _local_bake(heights, chart_state, spacing, sun, near, far) -> tuple:
+    """:func:`local_ceiling`, in a worker (~0.9 s at 1024), returned with
+    its chart (what the map shows)."""
+    chart = AzimuthalEquidistantChart(*chart_state)
+    return chart, local_ceiling(heights, chart, spacing, sun, near, far)

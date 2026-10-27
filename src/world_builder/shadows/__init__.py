@@ -85,6 +85,13 @@ class ShadowSettings(QualitySettings):
     :ivar terrain_map_size: the mountains' shadow map, texels per cube face
         edge (:class:`~world_builder.terrain.shadow_map.ShadowMap`; 1024 is
         0.9 km texels on a 600 km planet); 0 = no mountain shadows
+    :ivar local_map_size: the nearby ridges' map around the camera, nodes
+        per side (:class:`~world_builder.terrain.shadow_map.LocalShadowMap`);
+        0 = none (ridges nearer than ~2 km cast nothing)
+    :ivar local_map_spacing: its nodes' spacing, metres
+    :ivar cloud_map_size: the clouds' shadow maps, the near one's texels per
+        side (:class:`~world_builder.clouds.shadow_map.CloudShadowMaps`); 0 =
+        none (the march per pixel)
     """
 
     cloud_shadow_steps: int = knob(
@@ -108,11 +115,58 @@ class ShadowSettings(QualitySettings):
         "sun moves (~2 s at 1024, four times that at 2048).",
     )
 
+    local_map_size: int = knob(
+        1024,
+        "Nearby ridges' shadows",
+        REBUILD,
+        unit="nodes",
+        choices={"off": 0, "512": 512, "1024": 1024, "2048": 2048},
+        help="The shadows of ridges nearer than ~2 km, from a map around the "
+        "camera made in the background (~1 s) as it moves and as the sun "
+        "does: wider is farther before it fades.",
+    )
+    local_map_spacing: float = knob(
+        50.0,
+        "Nearby ridges' detail",
+        REBUILD,
+        unit="m",
+        range=(20.0, 200.0),
+        advanced=True,
+        help="Metres between the local map's points: finer draws smaller "
+        "ridges' shadows over a smaller square.",
+    )
+
+    cloud_map_size: int = knob(
+        1024,
+        "Cloud shadow maps",
+        REBUILD,
+        unit="px",
+        choices={"off": 0, "512": 512, "1024": 1024, "2048": 2048},
+        help="The clouds' shadow, marched once per texel of two maps around "
+        "the camera instead of once per pixel of ground: much cheaper with "
+        "the sun still. Wider reaches farther before the march per pixel.",
+    )
+
     LABEL: ClassVar = "Shadows"
     PRESETS: ClassVar = {
-        QualityLevel.LOW: {"cloud_shadow_steps": 0, "terrain_map_size": 256},
-        QualityLevel.MID: {"cloud_shadow_steps": 4, "terrain_map_size": 512},
-        QualityLevel.ULTRA: {"cloud_shadow_steps": 12, "terrain_map_size": 2048},
+        QualityLevel.LOW: {
+            "cloud_shadow_steps": 0,
+            "terrain_map_size": 256,
+            "local_map_size": 0,
+            "cloud_map_size": 0,
+        },
+        QualityLevel.MID: {
+            "cloud_shadow_steps": 4,
+            "terrain_map_size": 512,
+            "local_map_size": 512,
+            "cloud_map_size": 512,
+        },
+        QualityLevel.ULTRA: {
+            "cloud_shadow_steps": 12,
+            "terrain_map_size": 2048,
+            "local_map_size": 2048,
+            "cloud_map_size": 2048,
+        },
     }
 
 
@@ -360,6 +414,14 @@ def disc_coverage(sun: ArrayLike, body: ArrayLike, separation: ArrayLike) -> np.
 _DEFAULTS: dict | None = None
 
 
+def _no_local_shadow() -> Texture:
+    """A 1-texel map for shaders with no local mountain shadow (off)."""
+    tex = Texture("no_local_shadow")
+    tex.setup_2d_texture(1, 1, Texture.T_float, Texture.F_rg32)
+    tex.set_ram_image(bytes(8))
+    return tex
+
+
 def _no_terrain_shadow() -> Texture:
     """A 1-texel cube map for shaders with no mountain shadow (off)."""
     tex = Texture("no_terrain_shadow")
@@ -397,6 +459,9 @@ def bind_defaults(node: NodePath) -> None:
             "uShadowSelf": -1,
             "uTerrainShadow": _no_terrain_shadow(),
             "uTerrainShadowOn": 0,
+            "uLocalShadow": _no_local_shadow(),
+            "uLocalShadowOn": 0,
+            "uLocalChart": PTA_LVecBase4f.empty_array(4),
         }
     for name, value in _DEFAULTS.items():
         node.set_shader_input(name, value)

@@ -10,7 +10,7 @@ the sea's near look). Issues #11 and #13; the plan is `SHADOWS_PLAN.md`.
 | Eclipse | spherical bodies (planets, moons) | terrain, far water, clouds, air, CPU light | done |
 | Cloud shadow | the planet's clouds | terrain, sea, objects | done |
 | Terrain shadow, global | mountains | terrain, sea, clouds, objects | done |
-| Terrain shadow, local | nearby ridges | terrain, sea, clouds, objects | planned (E) |
+| Terrain shadow, local | nearby ridges | terrain, sea, clouds, objects | done |
 | Ring shadow | rings | planet, clouds, air, objects | planned (I) |
 | Object shadow | tracked models | terrain, sea, models | planned (H) |
 
@@ -203,6 +203,71 @@ The clouds' `grazingLight` (the sun's path below a cloud's altitude dims it
 toward the terminator) is kept: it stands for the haze and the clouds on
 that path, which the map does not hold, and the map only darkens the
 clouds behind real peaks.
+
+## Nearby ridges (the local map)
+
+`shadow_map.LocalShadowMap`, owned by each body's `ShadowMap` (`local`):
+the occluders nearer than the global map's reach (`global_reach`, two
+global texels: 2.3 km at 1024), at 50 m, over a square chart around the
+camera (1024 nodes: 51 km).
+
+- **The bake** (`local_ceiling`): the global map's pass over a grid aligned
+  with the sun, over the window that covers the square, counting only the
+  occluders between two local nodes (100 m) and the global reach. The two
+  maps never count one occluder twice, and they combine by the lesser
+  share (`min`, not the plan's product: the higher of two horizons hides
+  the sun, a product would darken their penumbrae twice). ~0.9 s at 1024;
+  within ~10 m of a march over the same ground. With the sun within the
+  window's reach of the zenith there is no room for the grid, and the
+  shadows are short: no local map.
+- **Its ground** is sampled (`_local_heights`, four jobs, ~2.6 s of CPU at
+  1024) once the camera has moved a quarter of the square from its centre,
+  and only below 20 km (`LOCAL_MAX_ALTITUDE`: higher, its detail is under
+  a pixel, and the last map stays). The ground does not depend on the sun:
+  a new sun only bakes again. The last map stays until the next is in, and
+  where they overlap their shadows are the same: no pop.
+- **The shaders** (`localShadow`): the chart's coordinates from the
+  planet-frame direction (the angle from its centre by `atan`, precise
+  near it), one fetch of a float texture (mipmapped), faded out over the
+  band within the global reach of its edges (the ground beyond is
+  unknown). `terrainShadow` is the lesser of the two maps.
+- **Cost.** ~0.3-0.5 ms near the ground (ground 13.06 → 13.84 ms, half of
+  it the fetch); its CPU twin is kept per 25 m cell with the global one's.
+- **Knobs.** `ShadowSettings.local_map_size` (off at LOW, 512, 1024, 2048)
+  and `local_map_spacing` (50 m).
+
+The water barely shows a mountain's shadow at a low sun: its light is
+mostly the sky's, and a level surface takes little direct sunlight then
+(`mesa_above`).
+
+## The cloud shadow maps
+
+`clouds.shadow_map.CloudShadowMaps`: the clouds' shadow marched once per
+texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
+
+- **What a texel holds.** The march depends on the sun's ray alone, so it
+  is stored by where the ray enters the slab's base: each texel is a node
+  of an azimuthal equidistant chart on the base's sphere around the camera,
+  and `cloud_shadow_map.frag` runs `cloudShadowDepth` from there. A pixel
+  of ground below the slab finds its ray's entry point (analytic,
+  `cloudShadowChord`) and fetches it (`cloudMapsDepth`).
+- **Two maps**: near, 60 m texels (1024: 61 km wide), and far, 500 m
+  (512: 256 km), each faded into the next over the last eighth of its
+  half-width; beyond them (and for ground inside the slab, whose ray does
+  not start on the base) the march per pixel, and the shadow's mean
+  farther still, as before.
+- **Drawn again** (one frame of its buffer, `one_shot`) when the camera
+  has moved a quarter of a map, the sun has turned, or the steps or the
+  clouds' layer changed. With the sun still, a fetch per pixel; with it
+  swinging, a march per texel each frame.
+- **Cost.** 0.3-1.1 ms less than the march per pixel near the ground
+  (sea_surface 11.65 → 10.57, ground 13.50 → 13.12, clouds_noon 10.63 →
+  10.08); what remains is the lookup (two fetches and the chart's maths).
+  The shadows match the march within a texel's blur.
+- **Knob.** `ShadowSettings.cloud_map_size` (off at LOW, 512, 1024, 2048):
+  the near map's size, the far one half of it (at least 256). `World`
+  makes them for a body with clouds and binds them to its terrain
+  (`Body.cloud_maps`); the hand-built demo the same.
 
 ## Objects
 

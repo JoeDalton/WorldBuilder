@@ -30,6 +30,16 @@ uniform int   uCloudDebug;
 // (noise.ground_shadow_table).
 uniform sampler2D deckLight;
 uniform float deckLightCosMin;
+// The cloud shadow maps (clouds.shadow_map): cloudShadowDepth by where the
+// sun's ray enters the slab's base, near (fine) and far (coarse), each on
+// an azimuthal equidistant chart of the base's sphere (its centre's up and
+// the base's radius, east and the spacing, north and the nodes per side);
+// 0: none (the march per pixel).
+uniform sampler2D cloudShadowNear;
+uniform sampler2D cloudShadowFar;
+uniform vec4  cloudNearChart[4];
+uniform vec4  cloudFarChart[4];
+uniform int   cloudShadowMapOn;
 
 const int LAYER_VEC4S = 12;
 // A noise lattice cell, in noise coordinates (noise.NOISE_FEATURE).
@@ -305,6 +315,38 @@ float cloudShadowDepth(Field f, vec3 p, vec3 dir, int maxSteps) {
 //   the march would band, each height of ground stepping onto other
 //   clouds).
 // Faded over the second octave's cell.
+// One cloud shadow map at a point of the base's sphere (unit dir): its
+// depth, and how much of it to keep (1 inside, 0 outside, faded over the
+// last eighth of its half-width).
+float cloudMapDepth(sampler2D map, vec4 chart[4], vec3 dir, out float keep) {
+    vec2 across = vec2(dot(dir, chart[1].xyz), dot(dir, chart[2].xyz));
+    float sine = length(across);
+    float angle = atan(sine, dot(dir, chart[0].xyz));
+    vec2 xy = across * (sine > 1e-9 ? chart[0].w * angle / sine : chart[0].w);
+    float size = chart[2].w;
+    float reach = 0.5 * (size - 1.0) * chart[1].w;
+    keep = 1.0 - smoothstep(0.75 * reach, 0.875 * reach, max(abs(xy.x), abs(xy.y)));
+    return texture(map, (xy / chart[1].w + 0.5 * size) / size).r;
+}
+
+// cloudShadowDepth from the maps where they hold it (the ray enters the
+// base: ground under the slab), the near one first; false elsewhere.
+bool cloudMapsDepth(Field f, vec3 p, vec3 start, out float depth) {
+    if (cloudShadowMapOn == 0 || length(p) >= planetRadius + f.slabBase) {
+        return false;
+    }
+    vec3 dir = normalize(start);
+    float keepFar;
+    float far = cloudMapDepth(cloudShadowFar, cloudFarChart, dir, keepFar);
+    float keepNear;
+    float near = cloudMapDepth(cloudShadowNear, cloudNearChart, dir, keepNear);
+    if (keepNear <= 0.0 && keepFar <= 0.0) {
+        return false;
+    }
+    depth = keepNear >= 1.0 ? near : mix(far, near, keepNear);
+    return keepNear > 0.0 || keepFar >= 1.0;
+}
+
 float cloudShadow(Field f, vec3 p, vec3 dir, int maxSteps, float footprint) {
     vec3 start;
     float chord;
@@ -326,7 +368,11 @@ float cloudShadow(Field f, vec3 p, vec3 dir, int maxSteps, float footprint) {
     if (far >= 1.0) {
         return mean;
     }
-    return mix(exp2(-cloudShadowDepth(f, p, dir, maxSteps)), mean, far);
+    float depth;
+    if (!cloudMapsDepth(f, p, start, depth)) {
+        depth = cloudShadowDepth(f, p, dir, maxSteps);
+    }
+    return mix(exp2(-depth), mean, far);
 }
 
 // ── Sunlight on a planet's clouds (planet mode, through its own air) ──────────

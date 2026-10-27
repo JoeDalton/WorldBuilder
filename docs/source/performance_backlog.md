@@ -177,7 +177,8 @@ breakdown above predates them: frames are 1–3 ms shorter now.
   around the camera, refreshed when the sun or camera moves, one fetch
   instead of the march (~3.4 ms at dusk). Its texels (~200 m) are coarser
   than the march's 160 m steps, so the self-shadowing gets blurrier.
-- **A cloud shadow map** (docs/source/shadows.md, cloud shadows): the
+- **A cloud shadow map** (done in part E, `CloudShadowMaps`: 0.3-1.1 ms
+  back; the rest is the lookup). Was: the
   ground's per-pixel march through the clouds costs 0.8-1.7 ms at HIGH near
   the ground (ground 10.95 → 12.70 ms, high 6.01 → 7.37, sea_surface 8.23 →
   9.27; MID saves little: a chord needs 4-6 steps at most suns). The march
@@ -192,6 +193,13 @@ breakdown above predates them: frames are 1–3 ms shorter now.
   table, and the march kept for ground inside the slab (mountain tops in
   the clouds). Part E's camera-centred map has the same re-centring: build
   them together.
+- **The mountain map's bake latency** (Part D): a new sun shows its
+  mountain shadows 1-3 s later (~2.3 s of numpy in a worker at 1024, plus
+  the 25 MB height map pickled to it each time). Cheap steps: the heights
+  in shared memory (`SharedArray`), and 512 (a quarter of the work). The
+  real fix is the bake on the GPU: a fragment per texel marching the height
+  cube toward the sun (GL 3.3, so macOS too), ~0.1 s, read back for the
+  CPU twin. Wanted once the sun moves in a game.
 - **The eclipse in the air's march** (Part A): 0.2-0.5 ms with no eclipse
   in view (ground 10.22 → 10.78 ms, orbit 2.25 → 2.44), from the gather
   loop's array in every segment. Two loop variants chosen per segment, the

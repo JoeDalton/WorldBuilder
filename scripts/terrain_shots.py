@@ -71,7 +71,9 @@ mountains_low (clouds_grazing's view, the sun 6 degrees up in the
 south-east),
 mountains_orbit (1
 radius up, the sun 8 degrees up), moon_terminator (1 moon radius up over
-its craters, the sun 4 degrees up). The ring (with --ring):
+its craters, the sun 4 degrees up), mesas_low (the ground view, the sun 8
+degrees up in the west: the mesas' shadows, near and far), mesa_above
+(straight down on the level's mesa from 6 km, the same sun). The ring (with --ring):
 ring_ground (the start area, 1.5 km up, looking south at its arc),
 ring_orbit (6 radii over latitude 35, looking down: the planet and its
 whole ring). Every other pose has the sun at azimuth 210, elevation 35, as
@@ -140,6 +142,8 @@ SUNS = {
     "mountains_low": (140.0, 6.0),
     "mountains_orbit": (210.0, 8.0),
     "moon_terminator": (90.0, 4.0),
+    "mesas_low": (270.0, 8.0),
+    "mesa_above": (270.0, 8.0),
 }
 
 
@@ -211,6 +215,11 @@ def _poses(demo: TerrainDemo) -> dict:
     # sun.
     poses["mountains_low"] = poses["clouds_grazing"]
     poses["mountains_orbit"] = (lat0, lon0, 1.0 * radius, 0.0, -89.9, 0, 0)
+    # The start view's mesas (750 m) in a low western sun: their shadows
+    # nearer than the global map's reach are the local map's.
+    poses["mesas_low"] = poses["ground"]
+    # And straight down on the level's mesa (its stamp), 6 km up.
+    poses["mesa_above"] = (39.0879, -125.2894, 6000.0, 0.0, -89.9, 0, 0)
     # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     # At sea level by night: the sky's reflection must be as dark as the sky.

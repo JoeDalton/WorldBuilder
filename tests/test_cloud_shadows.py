@@ -414,3 +414,91 @@ def test_clouds_shade_a_bound_node_once_ready_and_the_cpu_alike(showbase):
         clouds.remove()
         executor.shutdown()
     assert clouds._shadow_layer[0] == -1
+
+
+# ── the cloud shadow maps (part E) ─────────────────────────────────────────────
+
+
+def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
+    """Each texel of the near map is cloudShadowDepth from where its ray
+    enters the slab's base (its chart node on the base's sphere), as the
+    CPU twin marches it; drawn again only when the sun turns or the camera
+    moves a quarter of it."""
+    from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.shadow_map import NEAR_SPACING, CloudShadowMaps
+    from world_builder.clouds.sphere import SphericalClouds
+    from world_builder.terrain.workers import ChunkExecutor
+
+    executor = ChunkExecutor(backend="inline", inline_budget=64)
+    clouds = SphericalClouds(
+        window.render,
+        R,
+        executor,
+        altitude=2200.0,
+        settings=CloudSettings(shells=2),
+        planet=PLANETS["forest"],
+    )
+    size, steps = 128, 8
+    maps = CloudShadowMaps(window.win, clouds, size, to_ram=True)
+    try:
+        clouds.update(TangentFrame.at(20.0, 40.0).up * (R + 1000.0))
+        assert clouds.weather is not None
+        # The cloudiest of a few places: a map with cloud in it.
+        places = [(lat, lon) for lat in range(-60, 61, 20) for lon in range(0, 360, 30)]
+        cover = [
+            sample_cube(clouds.weather[..., 0], TangentFrame.at(*place).up[None])[0]
+            for place in places
+        ]
+        frame = TangentFrame.at(*places[int(np.argmax(cover))])
+        camera = frame.up * (R + 1000.0)
+        clouds.update(camera)
+        sun = 0.8 * frame.up + 0.6 * frame.east
+        clouds.set_sun(sun)
+        maps.update(camera, sun / np.linalg.norm(sun), steps)
+        assert maps._on[0] == 1 and maps.near.drawn is not None
+        window.graphicsEngine.render_frame()
+        window.graphicsEngine.render_frame()
+        texture = maps.near.texture
+        dtype = np.float32 if texture.get_component_width() == 4 else np.float16
+        ram = np.frombuffer(texture.get_ram_image_as("RGBA"), dtype)
+        got = ram.reshape(size, size, 4)[..., 0].astype(np.float64)
+
+        nodes = (np.arange(size) - 0.5 * size + 0.5) * NEAR_SPACING
+        x, y = np.meshgrid(nodes, nodes)
+        base = R + clouds._deck_field.slab[0]
+        angle = np.hypot(x, y) / base
+        toward = np.stack([x, y], -1) / np.maximum(np.hypot(x, y), 1e-9)[..., None]
+        dirs = np.cos(angle)[..., None] * frame.up + np.sin(angle)[..., None] * (
+            toward[..., :1] * frame.east + toward[..., 1:] * frame.north
+        )
+        expected = cloud_shadow_on_sphere(
+            _noise(7),
+            clouds._deck_field,
+            clouds._deck_optics,
+            dirs.reshape(-1, 3) * base,
+            sun / np.linalg.norm(sun),
+            R,
+            steps,
+            shift_at=lambda p: sample_cube(clouds.weather[..., 1], p),
+        ).reshape(size, size)
+        assert expected.max() > 1.0  # some cloud in it
+        shade_error = np.abs(np.exp2(-got) - np.exp2(-expected))
+        assert np.median(shade_error) < 2e-3
+        assert np.percentile(shade_error, 99) < 0.05
+
+        # Still: not drawn again; a turned sun or a camera moved far: again.
+        near, far = maps.near.drawn, maps.far.drawn
+        maps.update(camera, sun / np.linalg.norm(sun), steps)
+        assert maps.near.drawn is near and maps.far.drawn is far
+        turned = sun + 0.1 * frame.north
+        maps.update(camera, turned / np.linalg.norm(turned), steps)
+        assert maps.near.drawn is not near and maps.far.drawn is not far
+        near, far = maps.near.drawn, maps.far.drawn
+        step = 0.3 * size * NEAR_SPACING / R
+        moved = (frame.up + step * frame.east) * (R + 1000.0)
+        maps.update(moved, turned / np.linalg.norm(turned), steps)
+        assert maps.near.drawn is not near and maps.far.drawn is far
+    finally:
+        maps.destroy()
+        clouds.remove()
+        executor.shutdown()

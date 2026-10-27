@@ -215,6 +215,9 @@ labels and ranges below are what the schema gives.
 |---|---|---|---|---|---|---|---|
 | `cloud_shadow_steps` | Cloud shadows | live | 0 to 16 samples | 0 | 4 | 8 | 12 |
 | `terrain_map_size` | Mountain shadows | rebuild | off, 256, 512, 1024, 2048 px | 256 | 512 | 1024 | 2048 |
+| `local_map_size` | Nearby ridges' shadows | rebuild | off, 512, 1024, 2048 nodes | off | 512 | 1024 | 2048 |
+| `local_map_spacing` (advanced) | Nearby ridges' detail | rebuild | 20 to 200 m | 50 | 50 | 50 | 50 |
+| `cloud_map_size` | Cloud shadow maps | rebuild | off, 512, 1024, 2048 px | off | 512 | 1024 | 2048 |
 
 ## Notes
 

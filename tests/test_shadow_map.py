@@ -19,8 +19,13 @@ from world_builder.shadows import SUN_ANGULAR_RADIUS
 from world_builder.sky.starfield import cube_directions
 from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.shadow_map import (
+    NO_CEILING,
     ShadowMap,
+    _bilinear,
     ceiling_cube,
+    chart_nodes,
+    global_reach,
+    local_ceiling,
     terrain_visibility,
 )
 from world_builder.terrain.workers import ChunkExecutor
@@ -281,6 +286,241 @@ void main() {
         got = (rgb[..., 0] * 65536 + rgb[..., 1] * 256 + rgb[..., 2]) / 16711680.0
         # The GPU's filtering weights are 8-bit: steep penumbrae differ a
         # little.
+        error = np.abs(got.ravel() - expected)
+        assert np.median(error) < 1e-3
+        assert np.percentile(error, 99) < 0.05
+    finally:
+        window.graphicsEngine.remove_window(buffer)
+        root.remove_node()
+
+
+# ── the local map (part E) ─────────────────────────────────────────────────────
+
+SPACING = 50.0
+LOCAL = 256
+
+
+def _ridge_chart():
+    """A chart at (20, 30) with a 300 m ridge along its north-south axis, and
+    a sun 10 degrees up in the east (the ridge's shadow to the west)."""
+    from world_builder.terrain.chart import AzimuthalEquidistantChart
+
+    chart = AzimuthalEquidistantChart(20.0, 30.0, R)
+    nodes = chart_nodes(LOCAL, SPACING)
+    x, _ = np.meshgrid(nodes, nodes)
+    heights = (300.0 * np.clip(1.0 - np.abs(x) / 200.0, 0.0, 1.0)).astype(np.float32)
+    el = math.radians(10.0)
+    sun = math.sin(el) * chart.frame.up + math.cos(el) * chart.frame.east
+    return chart, heights, sun
+
+
+def _local_brute(chart, heights, sun, point_xy, near, far):
+    """The lowest height from which a ray toward the sun clears the chart's
+    ground between near and far, by marching it."""
+    half = 0.5 * (LOCAL - 1) * SPACING
+    d = chart.to_dirs(np.array([point_xy[0]]), np.array([point_xy[1]]))[0]
+    unit = sun / np.linalg.norm(sun)
+    t = np.linspace(near, far, 4000)
+
+    def clears(a):
+        q = d[None] * (R + a) + unit[None] * t[:, None]
+        r = np.linalg.norm(q, axis=1)
+        qx, qy = chart.from_dirs(q / r[:, None])
+        ground = _bilinear(heights, (qy + half) / SPACING, (qx + half) / SPACING)
+        return np.all(r >= R + ground)
+
+    lo, hi = -2000.0, 3000.0
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (lo, mid) if clears(mid) else (mid, hi)
+    return hi
+
+
+def test_the_local_bake_is_a_march_toward_the_sun():
+    """The local map's ceiling, where the ridge shades, is a march over the
+    same ground, counting only the occluders between near and far."""
+    chart, heights, sun = _ridge_chart()
+    out = local_ceiling(heights, chart, SPACING, sun, 100.0, 2340.0)
+    half = 0.5 * (LOCAL - 1) * SPACING
+    for west in (300.0, 800.0, 1500.0, 2000.0):
+        i, j = np.array([half / SPACING]), np.array([(half - west) / SPACING])
+        baked = _bilinear(out, i, j)[0, 0]
+        brute = _local_brute(chart, heights, sun, (-west, 0.0), 100.0, 2340.0)
+        assert baked == pytest.approx(brute, abs=20.0)
+    # The far limit: the ridge farther than it shades nothing locally (the
+    # flat ground nearer still counts, below the point: lit).
+    short = local_ceiling(heights, chart, SPACING, sun, 100.0, 300.0)
+    i, j = np.array([half / SPACING]), np.array([(half - 800.0) / SPACING])
+    assert _bilinear(short, i, j)[0, 0] < 0.0 < _bilinear(out, i, j)[0, 0] - 50.0
+
+
+def test_the_local_bake_has_no_room_with_the_sun_overhead():
+    chart, heights, _ = _ridge_chart()
+    out = local_ceiling(heights, chart, SPACING, chart.frame.up, 100.0, 2340.0)
+    assert np.all(out[..., 0] == NO_CEILING)
+
+
+def test_the_maps_split_the_occluders_between_them():
+    """global_reach is where the local map stops and the global one starts:
+    a peak nearer than it is the local map's alone, farther the global's."""
+    assert global_reach(1024, R) == pytest.approx(2.0 * 2.0 / 1024 * R)
+    chart, heights, sun = _ridge_chart()
+    reach = global_reach(1024, R)
+    out = local_ceiling(heights, chart, SPACING, sun, 2.0 * SPACING, reach)
+    assert np.all(out[..., 1] <= reach + 1e-3)  # every occluder within it
+
+
+def _stand_in(spec):
+    return SimpleNamespace(
+        spec=spec,
+        radius=spec.radius,
+        rotation=np.eye(3),
+        to_planet=lambda points: np.asarray(points, float),
+    )
+
+
+def test_the_local_map_follows_the_camera_with_hysteresis():
+    """Sampled under the camera; again once it has moved a quarter of the
+    square, not before; not above the altitude limit; a new sun bakes
+    again; its CPU twin reads it."""
+    from world_builder.terrain.shadow_map import LOCAL_MAX_ALTITUDE, LocalShadowMap
+
+    spec = PRESETS["moon"]
+    executor = ChunkExecutor(backend="inline")
+    try:
+        local = LocalShadowMap(_stand_in(spec), executor)
+        local.set_size(64, 50.0)
+        node = NodePath("ground")
+        local.bind(node)
+        up = np.array([0.0, 0.0, 1.0])
+        camera = up * (spec.radius + 500.0)
+        sun = np.array([1.0, 0.0, 0.2]) / np.linalg.norm([1.0, 0.0, 0.2])
+        for _ in range(3):
+            local.update(camera, sun, 2000.0)
+        assert local.current and local.drawn is not None and local._on[0] == 1
+        first = local._heights_chart
+        extent = 64 * 50.0
+        side = np.array([1.0, 0.0, 0.0])
+        nudge = up * spec.radius + side * 0.2 * extent
+        local.update(nudge / np.linalg.norm(nudge) * (spec.radius + 500.0), sun, 2e3)
+        assert local._heights_chart is first  # within a quarter: kept
+        moved = up * spec.radius + side * 0.3 * extent
+        moved = moved / np.linalg.norm(moved) * (spec.radius + 500.0)
+        local.update(moved, sun, 2000.0)
+        assert local._heights_chart is not first
+        for _ in range(3):
+            local.update(moved, sun, 2000.0)
+        high = moved / np.linalg.norm(moved) * (spec.radius + LOCAL_MAX_ALTITUDE + 1.0)
+        kept = local._heights_chart
+        far_away = np.array([0.0, 1.0, 0.0]) * (spec.radius + LOCAL_MAX_ALTITUDE + 1.0)
+        local.update(far_away, sun, 2000.0)
+        assert local._heights_chart is kept  # too high to sample again
+        assert local.visibility(high[None], SUN_ANGULAR_RADIUS).shape == (1,)
+        drawn = local.drawn
+        local.update(moved, -sun + 2 * up, 2000.0)
+        assert not local.current
+        for _ in range(3):
+            local.update(moved, -sun + 2 * up, 2000.0)
+        assert local.current and local.drawn is not drawn
+    finally:
+        executor.shutdown()
+
+
+def test_the_shader_local_shadow_is_the_cpus(window):
+    """localShadow (its chart from the planet-frame direction, a float
+    texture) matches LocalShadowMap.visibility across the ridge's shadow and
+    the map's faded edge."""
+    from panda3d.core import (
+        Geom,
+        GeomNode,
+        GeomPoints,
+        GeomVertexData,
+        GeomVertexFormat,
+        GeomVertexWriter,
+        OmniBoundingVolume,
+        Shader,
+        Texture,
+    )
+
+    from world_builder.shadows import Shadows, bind_defaults
+    from world_builder.terrain.shadow_map import LocalShadowMap
+
+    chart, heights, sun = _ridge_chart()
+    baked = local_ceiling(heights, chart, SPACING, sun, 100.0, 2340.0)
+    local = LocalShadowMap(_stand_in(PRESETS["moon"]), None)
+    local.spacing = SPACING
+    local.drawn = (chart, baked)
+    local._upload(chart, baked)
+
+    size = 32
+    rng = np.random.default_rng(4)
+    half = 0.5 * (LOCAL - 1) * SPACING
+    x = rng.uniform(-2500.0, 600.0, size * size)
+    y = rng.uniform(-half, half, size * size)  # out to the faded edges
+    altitude = rng.uniform(0.0, 200.0, size * size)
+    dirs = chart.to_dirs(x, y)
+    planet = dirs * (R + altitude)[:, None]
+    expected = local.visibility(planet, SUN_ANGULAR_RADIUS)
+    assert expected.min() < 0.05 and expected.max() == 1.0
+
+    vdata = GeomVertexData("points", GeomVertexFormat.get_v3n3(), Geom.UH_static)
+    position = GeomVertexWriter(vdata, "vertex")
+    normal = GeomVertexWriter(vdata, "normal")
+    for d, a in zip(dirs, altitude):
+        position.add_data3f(*(float(v) for v in d))
+        normal.add_data3f(float(a), 0.0, 0.0)
+    prim = GeomPoints(Geom.UH_static)
+    prim.add_next_vertices(len(dirs))
+    geom = Geom(vdata)
+    geom.add_primitive(prim)
+    node = GeomNode("local_shadow_points")
+    node.add_geom(geom)
+    node.set_bounds(OmniBoundingVolume())
+    node.set_final(True)
+    source = (
+        (Path(__file__).parents[1] / "src/world_builder/shadows/shaders/shadows.glsl")
+        .read_text()
+        .replace("#pragma once", "")
+    )
+    vertex = f"""#version 330
+in vec4 p3d_Vertex;
+in vec3 p3d_Normal;
+flat out float vVisible;
+{source}
+void main() {{
+    vVisible = localShadow(normalize(p3d_Vertex.xyz), p3d_Normal.x);
+    int x = gl_VertexID % {size}, y = gl_VertexID / {size};
+    gl_Position = vec4((vec2(x, y) + 0.5) / {size}.0 * 2.0 - 1.0, 0.0, 1.0);
+}}
+"""
+    fragment = """#version 330
+flat in float vVisible;
+out vec4 fragColor;
+void main() {
+    float v = floor(clamp(vVisible, 0.0, 1.0) * 16711680.0 + 0.5);
+    float r = floor(v / 65536.0);
+    float g = floor((v - r * 65536.0) / 256.0);
+    fragColor = vec4(r, g, v - r * 65536.0 - g * 256.0, 255.0) / 255.0;
+}
+"""
+    root = NodePath("local_shadow_check")
+    points_np = root.attach_new_node(node)
+    points_np.set_shader(Shader.make(Shader.SL_GLSL, vertex, fragment))
+    bind_defaults(points_np)
+    Shadows().bind(points_np)
+    local.bind(points_np)
+    texture = Texture("local_shadow_check")
+    buffer = window.win.make_texture_buffer(
+        "local_shadow_check", size, size, texture, True
+    )
+    try:
+        camera = window.makeCamera(buffer)
+        camera.node().set_scene(root)
+        window.graphicsEngine.render_frame()
+        window.graphicsEngine.render_frame()
+        ram = np.frombuffer(texture.get_ram_image_as("RGB").get_data(), np.uint8)
+        rgb = ram.reshape(size, size, 3).astype(np.int64)
+        got = (rgb[..., 0] * 65536 + rgb[..., 1] * 256 + rgb[..., 2]) / 16711680.0
         error = np.abs(got.ravel() - expected)
         assert np.median(error) < 1e-3
         assert np.percentile(error, 99) < 0.05
