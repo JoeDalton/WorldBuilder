@@ -77,6 +77,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one) use it; M switches them to Panda3D's lighting. `terrain_shots.py`
   gains `ball_noon`, `ball_sunset`, `ball_eclipse`, `ball_cloud_edge`,
   `ball_mountain_edge` and `--panda-lights`.
+- Objects cast shadows (#13): a model tracked with
+  `World.track_light(node, cast=True)` shadows the terrain, the sea and
+  the models the model shader draws, itself too, through a sun-space depth
+  map fitted every frame to the casters' bounds
+  (`world_builder.shadows.casters.CasterMap`, `World.casters`; read by
+  `shadows.glsl`'s `casterShadow`, 3x3 hardware comparisons). Its pass
+  draws the casters alone (camera bit 20, `depth.CASTER_BIT`).
+  `ShadowSettings.object_shadows` and `caster_map_size` set it. The demos'
+  balls cast; `terrain_shots.py` gains `caster_pad`,
+  `caster_ship_on_ship`, `caster_self` and `caster_altitude`.
 - `World.track_light(node, cast=False)` / `untrack_light(node)`: a game's
   model lit by the light where it is, not at the camera: its own Panda3D sun
   and ambient lights (`world_builder.lights.TrackedLights`), set every

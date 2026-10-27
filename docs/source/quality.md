@@ -219,6 +219,8 @@ labels and ranges below are what the schema gives.
 | `local_map_spacing` (advanced) | Nearby ridges' detail | rebuild | 20 to 200 m | 50 | 50 | 50 | 50 |
 | `cloud_map_size` | Cloud shadow maps | rebuild | off, 512, 1024, 2048 px | off | 512 | 1024 | 2048 |
 | `cloud_far_reach` | Clouds' long shadows | live | 0 to 10000 m | 0 | 2000 | 4000 | 8000 |
+| `object_shadows` | Objects' shadows | live | on / off | off | on | on | on |
+| `caster_map_size` | Objects' shadow detail | rebuild | 512, 1024, 2048, 4096 px | 512 | 1024 | 2048 | 4096 |
 
 ## Notes
 

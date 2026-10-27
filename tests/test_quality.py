@@ -68,6 +68,8 @@ COST_FIELDS = {
         "local_map_size",
         "cloud_map_size",
         "cloud_far_reach",
+        "object_shadows",
+        "caster_map_size",
     ],
 }
 

@@ -353,6 +353,59 @@ Poses: `ball_noon`, `ball_sunset`, `ball_eclipse`, `ball_cloud_edge`,
 `ball_mountain_edge` (see [Demo and shots](#demo-and-shots));
 `--panda-lights` draws the balls by Panda3D's lighting, to compare.
 
+## Objects' shadows (part H)
+
+`World.track_light(node, cast=True)`: the model shadows the terrain (land,
+far water, the near sea) and the models the model shader draws, itself
+too (`shadows.casters.CasterMap`, `World.casters`).
+
+- **The map.** An orthographic depth buffer looking down the sun's rays,
+  drawn every frame by a camera of its own on camera bit 20
+  (`depth.CASTER_BIT`). `render` is hidden from that bit and each caster
+  shows through it, so the pass culls and draws the casters alone (Panda
+  prunes the rest by its draw masks). The camera's initial state swaps in
+  a depth-only shader over the casters' own (priority 1000), turns colour
+  and textures off, and keeps the back faces: the faces turned to the sun
+  are clear of their own shadow, and the back faces, which keep the
+  comparison's error, are dark anyway.
+- **Fitted to the casters**, not to the view: their bounding spheres, in
+  the sun's frame, give the square and the depth range (a metre wider). A
+  ship's shadow lands wherever it falls, under it or a kilometre away; a
+  caster's texels stay put as it moves (no shimmer). Casters far apart
+  share one map: their square spans them all.
+- **The receivers** (`shadows.glsl`'s `casterShadow`): a position from the
+  camera goes through `uCasterMatrix` (built on the CPU in float64) to the
+  map's texture and depth. It is pushed 1.5 texels out along its normal as
+  it turns from the sun, its depth a texel toward the sun (no acne, no gap
+  at a caster's foot), and 3x3 of the hardware's bilinear comparisons
+  (`FT_shadow`) give a soft edge a few texels wide. Outside the map's
+  square, or nearer the sun than it, nothing. Past the casters' far side a
+  receiver counts as at it: the ground under a ship is behind it whatever
+  its distance.
+- **Out of sight, out of the map.** A caster's shadow lies in the cylinder
+  its sphere sweeps down the sun's rays, so nothing it shades is nearer
+  the camera than that cylinder. A caster whose shadow would be under two
+  pixels across wherever it falls is left out (`MIN_SHADOW_PIXELS`, from
+  the view's pixel angle), and with none left the pass is not drawn.
+- **Cost.** `flight_bench.py --flight low` (mean / p95 ms), the test
+  balls casting, alternating with the objects' shadows off: 10.0 / 15.9
+  and 10.0 / 16.4 against 9.9 / 16.0 and 9.9 / 15.6. Without the cull
+  above, the balls, left behind after the start, still cost the pass every
+  frame: 10.8 / 18.0 and 10.1 / 17.0 against 10.0 / 16.2 and 9.6 / 15.0.
+  In view, the pass costs about 0.5-1 ms (the `caster_*` shots against
+  the ball poses), of which `update` is ~0.1 ms.
+- **Not on the CPU.** `World.lights_at` (Panda3D's lights, a tracked node's
+  own light) leaves the objects' shadows out: they are per pixel only.
+- **Knobs.** `ShadowSettings.object_shadows` (off at LOW) and
+  `caster_map_size` (512, 1024, 2048, 4096; `ShadowSettings.caster_size`
+  is 0 when off). Without a window there is no map (`World.casters` is
+  None).
+
+`tests/test_casters.py` reads `casterShadow` back over a plane under a
+ball against its geometric shadow (the plane's points whose ray to the
+sun crosses the ball), with points over it, off the map and on its lit
+side; and that only the casters show to the map's camera.
+
 ## Demo and shots
 
 F7 in the terrain demos cycles the shadows' preset (`--shadows-quality` at
@@ -373,6 +426,15 @@ its shadow: the sun 3° up in the west, and 0.4° off the moon's centre),
 nearest edge of a cloud's or a mesa's shadow around the start, where the
 CPU twin leaves half the sun, seen from 150 m across the sun). A cloud's
 shadow edge is hundreds of metres wide: a ball on it is dimmed evenly.
+
+The objects' shadows (part H; the balls cast theirs): `caster_pad` (the
+white ball resting on the ground, the textured one 60 m up beside it, both
+shadows on the ground), `caster_ship_on_ship` (the textured ball 26 m
+sunward of the white one and 9 m above its line: the white one's upper
+part in its shadow), `caster_self` (a teapot on the ground, its handle
+toward the sun, turned 40°: the handle's shadow on the pot), and
+`caster_altitude` (the textured ball 300 m up: its shadow on the hillside
+where its ray meets the ground).
 
 `scripts/demo_terrain.py` puts the moon 21,000 km out: from the planet's
 ground it looks 0.56° wide, as wide as the sun, so a total eclipse has an

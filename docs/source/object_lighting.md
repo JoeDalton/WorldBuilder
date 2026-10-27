@@ -142,7 +142,10 @@ thousand pixels. `flight_bench.py --flight low`, four alternating pairs
 9.9 / 16.7: within the runs' spread (on average 0.2 / 0.5 ms more with the
 shader). The shots' timed frames differ by less than their noise.
 
-Not done: normal maps, emission and metalness (the material's other
-fields), and the shadows models cast (part H). In the clouds'
-half-resolution pass a shaded model is drawn whole as an occluder, where
-the terrain swaps in a depth-only stage.
+Not done (logged in the repository's `BACKLOG.md`): normal maps, emission
+and metalness (the material's other fields), light bounced off the ground,
+and a depth-only stage in the clouds' half-resolution pass.
+
+A model tracked with `cast=True` also casts shadows (part H of
+[Shadows](shadows.md)): on the terrain and the sea, on the other shaded
+models and on itself. The test balls cast theirs.

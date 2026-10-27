@@ -88,6 +88,7 @@ from world_builder.objects import ModelLighting
 from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
 from world_builder.shadows import ECLIPSE_SKY_FLOOR, SUN_ANGULAR_RADIUS, Shadows
+from world_builder.shadows.casters import CasterMap
 from world_builder.sky import Sky
 from world_builder.sky.starfield import NebulaStyle, Starfield
 from world_builder.terrain.collision import TerrainCollision
@@ -335,6 +336,7 @@ class World:
     :ivar settings: what every part costs
     :ivar sun_light: Panda3D's sun on render (None without lights)
     :ivar ambient_light: Panda3D's ambient light on render (None without)
+    :ivar casters: the objects' shadow map (None without a window)
     """
 
     #: The game's split cameras (:meth:`use_split_depth`), and the clouds'
@@ -433,6 +435,11 @@ class World:
         self.shadows.set_sun(self._sun)
 
         render = app.render
+        # The casting models' shadow map: every terrain and model reads it.
+        output = getattr(app, "win", None)
+        self.casters = None
+        if output is not None:
+            self.casters = CasterMap(output, render, self.settings.shadows.caster_size)
         self.bodies: list[Body] = []
         materials = None
         for look, index in zip(bodies, indices):
@@ -464,6 +471,8 @@ class World:
                 shadow_settings.local_map_spacing,
             )
             body.shadow_map.bind(terrain.root)
+            if self.casters is not None:
+                self.casters.bind(terrain.root)
             if look.clouds is not None:
                 body.clouds = self._make_clouds(look, index)
                 self.shadows.bind(body.clouds.root, len(self.bodies))
@@ -574,6 +583,8 @@ class World:
         lighting = ModelLighting(exposure, atmosphere, terrain, light_scale)
         self.atmospheres.bind(lighting.inputs)
         self.shadows.bind(lighting.inputs, body)
+        if self.casters is not None:
+            self.casters.bind(lighting.inputs)
         lighting.set_sun(self._sun, self._sun_color)
         return lighting
 
@@ -828,8 +839,10 @@ class World:
         there: place it before. See :class:`world_builder.lights.TrackedLights`.
 
         :param node: the model (its children are lit alike)
-        :param cast: whether it casts shadows on the world (kept for later:
-            not drawn yet)
+        :param cast: whether it casts shadows: on the terrain, the sea and
+            the models drawn by the model shader (itself too), through the
+            objects' shadow map (:mod:`world_builder.shadows.casters`;
+            ``ShadowSettings.object_shadows``)
         :param shader: draw it with the world's model shader
             (:mod:`world_builder.objects`): lit and tonemapped as the
             terrain is, every world shadow per pixel, the air in front.
@@ -883,6 +896,8 @@ class World:
                 )
             if body.cloud_maps is not None:
                 body.cloud_maps.set_size(settings.shadows.cloud_map_size)
+        if self.casters is not None:
+            self.casters.set_size(settings.shadows.caster_size)
         self._sync_half_res()
 
     def use_split_depth(self, depth: SplitDepthCameras) -> None:
@@ -981,6 +996,10 @@ class World:
                 body.ocean.update(camera)
         self._light(camera, np.asarray(origin_world, dtype=np.float64))
         self._shade_models(camera_render, np.asarray(origin_world, dtype=np.float64))
+        if self.casters is not None:
+            self.casters.update(
+                self.tracked.casting, self._sun, camera_render, self._pixel_angle()
+            )
 
     def _pixel_angle(self) -> float | None:
         """:returns: the angle one pixel of the camera's output spans
@@ -1088,6 +1107,9 @@ class World:
             self.half_res = None
         self.tracked.clear()
         self.space_models.destroy()
+        if self.casters is not None:
+            self.casters.destroy()
+            self.casters = None
         render = self.app.render
         for light in (self.sun_light, self.ambient_light):
             if light is not None:

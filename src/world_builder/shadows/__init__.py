@@ -53,11 +53,13 @@ from typing import ClassVar
 import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import (
+    LMatrix4f,
     LVecBase4f,
     NodePath,
     PTA_float,
     PTA_int,
     PTA_LVecBase4f,
+    SamplerState,
     Texture,
 )
 
@@ -95,6 +97,9 @@ class ShadowSettings(QualitySettings):
     :ivar cloud_far_reach: how far along the sun's ray each cloud billboard
         looks for the clouds that shade it, past its own march, metres
         (cloud_field.glsl's ``cloudFarDepth``); 0 = no farther
+    :ivar object_shadows: whether the game's casting models shadow the
+        terrain, the sea and the models (:mod:`world_builder.shadows.casters`)
+    :ivar caster_map_size: their shadow map's texels per side
     """
 
     cloud_shadow_steps: int = knob(
@@ -160,6 +165,22 @@ class ShadowSettings(QualitySettings):
         "across the clouds. Per billboard, cheap; 0 leaves them out.",
     )
 
+    object_shadows: bool = knob(
+        True,
+        "Objects' shadows",
+        help="Ships and other models cast shadows on the ground, the sea and "
+        "each other: one more pass drawing them alone, each frame.",
+    )
+    caster_map_size: int = knob(
+        2048,
+        "Objects' shadow detail",
+        REBUILD,
+        unit="px",
+        choices={"512": 512, "1024": 1024, "2048": 2048, "4096": 4096},
+        help="Their shadow map, fitted to them: finer draws sharper shadows "
+        "of their smaller parts.",
+    )
+
     LABEL: ClassVar = "Shadows"
     PRESETS: ClassVar = {
         QualityLevel.LOW: {
@@ -168,6 +189,8 @@ class ShadowSettings(QualitySettings):
             "local_map_size": 0,
             "cloud_map_size": 0,
             "cloud_far_reach": 0.0,
+            "object_shadows": False,
+            "caster_map_size": 512,
         },
         QualityLevel.MID: {
             "cloud_shadow_steps": 4,
@@ -175,6 +198,7 @@ class ShadowSettings(QualitySettings):
             "local_map_size": 512,
             "cloud_map_size": 512,
             "cloud_far_reach": 2000.0,
+            "caster_map_size": 1024,
         },
         QualityLevel.ULTRA: {
             "cloud_shadow_steps": 12,
@@ -182,8 +206,14 @@ class ShadowSettings(QualitySettings):
             "local_map_size": 2048,
             "cloud_map_size": 2048,
             "cloud_far_reach": 8000.0,
+            "caster_map_size": 4096,
         },
     }
+
+    @property
+    def caster_size(self) -> int:
+        """The objects' shadow map's size, 0 when they cast none."""
+        return self.caster_map_size if self.object_shadows else 0
 
 
 class Shadows:
@@ -476,6 +506,16 @@ def _no_terrain_shadow() -> Texture:
     return tex
 
 
+def _no_caster_map() -> Texture:
+    """A 1-texel depth map, compared, for shaders with no casters (off)."""
+    tex = Texture("no_caster_map")
+    tex.setup_2d_texture(1, 1, Texture.T_float, Texture.F_depth_component32)
+    tex.set_ram_image(np.float32(1.0).tobytes())
+    tex.set_minfilter(SamplerState.FT_shadow)
+    tex.set_magfilter(SamplerState.FT_shadow)
+    return tex
+
+
 def bind_defaults(node: NodePath) -> None:
     """Give a node "nothing casts a shadow" inputs, so shaders including
     shadows.glsl (every one including atmosphere.glsl) run unchanged until
@@ -509,6 +549,10 @@ def bind_defaults(node: NodePath) -> None:
             "uLocalShadow": _no_local_shadow(),
             "uLocalShadowOn": 0,
             "uLocalChart": PTA_LVecBase4f.empty_array(4),
+            "uCasterMap": _no_caster_map(),
+            "uCasterOn": 0,
+            "uCasterMatrix": LMatrix4f.ident_mat(),
+            "uCasterBias": LVecBase4f(0.0, 0.0, 0.0, 0.0),
         }
     for name, value in _DEFAULTS.items():
         node.set_shader_input(name, value)

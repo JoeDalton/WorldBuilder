@@ -74,8 +74,8 @@ class TrackedLights:
         its own sun and ambient lights, the others off on it. Tracking a
         node again only changes *cast* and *shader*.
 
-        :param cast: whether it casts shadows on the world (kept for the
-            caster map, not drawn yet)
+        :param cast: whether it casts shadows on the world (the objects'
+            shadow map: :attr:`casting`)
         :param shader: drawn by the world's model shader (its owner applies
             it, :attr:`shaded`); its own shader state is put back when no
             longer
@@ -119,6 +119,12 @@ class TrackedLights:
             if tracked.node == node:
                 return tracked.cast
         raise KeyError(node)
+
+    @property
+    def casting(self) -> list[NodePath]:
+        """The tracked nodes that cast shadows."""
+        self._drop_removed()
+        return [tracked.node for tracked in self._tracked if tracked.cast]
 
     @property
     def shaded(self) -> list[bool]:

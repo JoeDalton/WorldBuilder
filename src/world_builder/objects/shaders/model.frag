@@ -48,8 +48,12 @@ void main() {
     // Taken out of any branch.
     float footprint = max(length(dFdx(vRelPos)), length(dFdy(vRelPos)));
     // The shadows only where the sun can light the pixel at all
-    // (objectLight's terms go as N.L).
-    vec3 sunlight = dot(N, L) > 0.0 ? modelSunlight(vRelPos, L, footprint) : vec3(0.0);
+    // (objectLight's terms go as N.L): the world's, and the objects' (its
+    // own parts' too).
+    vec3 sunlight = vec3(0.0);
+    if (dot(N, L) > 0.0) {
+        sunlight = modelSunlight(vRelPos, L, footprint) * casterShadow(vRelPos, N, L);
+    }
     vec3 skylight = p3d_LightModel.ambient.rgb / uLightScale;
     vec3 C = objectLight(albedo, N, p3d_Material.roughness, 1.0, modelUp(vRelPos, N),
                          L, V, sunlight, 1.0, skylight);

@@ -76,4 +76,5 @@ and runs the tests against it, then attaches the wheels and the sdist to the
 [backlog](docs/source/performance_backlog.md),
 [lighting on objects](docs/source/object_lighting.md). Build the HTML, with
 the API reference, with `invoke doc`. Changes are listed in the
-[changelog](CHANGELOG.md).
+[changelog](CHANGELOG.md), features not made yet in the
+[backlog](BACKLOG.md).

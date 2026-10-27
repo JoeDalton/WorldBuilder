@@ -85,7 +85,14 @@ ball_sunset and ball_eclipse (3.7 km up, over the cloud deck, the balls
 moon's centre, to the right of the view), ball_cloud_edge and
 ball_mountain_edge (the balls moved onto the nearest edge of a cloud's or
 a mesa's shadow on the ground around the start, seen from 150 m across the
-sun: half in it). The ring (with
+sun: half in it). The objects' shadows (the balls moved around the
+ground 150 m ahead of the start pose, seen across the sun): caster_pad (the
+white ball resting on the ground, the textured one 60 m up beside it),
+caster_ship_on_ship (the textured ball 26 m sunward of the white one, 30 m
+up: its shadow on it), caster_self (a teapot on the ground, the balls
+hidden: its spout's, handle's and lid's shadows on itself), caster_altitude
+(the textured ball 300 m up, its shadow on the ground, seen from near
+it). The ring (with
 --ring): ring_ground (the start area, 1.5 km up, looking south at its arc),
 ring_orbit (6 radii over latitude 35, looking down: the planet and its
 whole ring). Every other pose has the sun at azimuth 210, elevation 35, as
@@ -109,6 +116,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from demo_terrain import (  # noqa: E402
     TEST_BALL_DIAMETER,
     TerrainDemo,
+    _quat_from_axes,
     add_world_arguments,
     describe_window,
     settings_from_args,
@@ -163,12 +171,18 @@ SUNS = {
     "ball_sunset": (270.0, 3.0),
     "ball_eclipse": AimedSun(1, 0.4),
     "ball_mountain_edge": (270.0, 8.0),
+    "caster_self": (210.0, 25.0),
+    "caster_altitude": (210.0, 50.0),
 }
 #: Poses whose balls are moved onto a shadow's edge once settled: the
 #: shadow's kind (:func:`_balls_on_edge`).
 BALL_EDGES = {"ball_cloud_edge": "clouds", "ball_mountain_edge": "mountains"}
 #: Poses whose balls hang ahead of their camera, not of the start pose.
 BALLS_AHEAD = ("ball_sunset", "ball_eclipse")
+#: Poses of the objects' shadows: the balls (or a teapot) set out around
+#: the ground ahead of the start pose once the sun is set
+#: (:func:`_casters_scene`).
+CASTER_POSES = ("caster_pad", "caster_ship_on_ship", "caster_self", "caster_altitude")
 
 
 def _poses(demo: TerrainDemo) -> dict:
@@ -251,7 +265,7 @@ def _poses(demo: TerrainDemo) -> dict:
     # The test balls, from the start view (they hang 150 m ahead of it),
     # or moved onto a shadow's edge around it (BALL_EDGES), or over the
     # cloud deck, out of its shadow at a low sun (BALLS_AHEAD).
-    for name in ("ball_noon", *BALL_EDGES):
+    for name in ("ball_noon", *BALL_EDGES, *CASTER_POSES):
         poses[name] = poses["ground"]
     poses["ball_sunset"] = (lat0, lon0, 3700.0, start.get("heading", 0.0), -2.0, 0, 0)
     if len(demo.bodies) > 1:
@@ -418,6 +432,93 @@ def _balls_on_edge(demo: TerrainDemo, kind: str) -> bool:
     return True
 
 
+def _look_across_sun(
+    demo: TerrainDemo,
+    target: np.ndarray,
+    distance: float,
+    height: float,
+    toward_sun: float = 0.0,
+) -> None:
+    """Put the camera *distance* metres from a point (world frame) across
+    the sun's azimuth (turned *toward_sun* degrees toward it), *height*
+    above it, looking at it."""
+    up = (target - demo.home.position) / np.linalg.norm(target - demo.home.position)
+    flat_sun = demo._sun - up * float(demo._sun @ up)
+    flat_sun /= np.linalg.norm(flat_sun)
+    side = np.cross(up, flat_sun)
+    angle = math.radians(toward_sun)
+    across = math.cos(angle) * side + math.sin(angle) * flat_sun
+    eye = target + across * distance + up * height
+    eye_up = (eye - demo.home.position) / np.linalg.norm(eye - demo.home.position)
+    lat, lon = (float(v[0]) for v in latlon(eye_up[None, :]))
+    altitude = float(np.linalg.norm(eye - demo.home.position)) - demo.radius
+    heading, pitch = _look_at(demo, lat, lon, altitude, target)
+    demo._place_camera(lat, lon, altitude, heading, pitch)
+
+
+def _casters_scene(demo: TerrainDemo, name: str, extra: list) -> None:
+    """Set out the casters of an objects' shadow pose (see the module) on
+    the ground where the white ball hangs over, and look at them.
+
+    :param extra: models added for the pose, to remove after it (appended)
+    """
+    planet = demo.home.terrain.planet
+    white_node, white_point = demo._test_balls[0]
+    textured_node, _ = demo._test_balls[1]
+    up = white_point / np.linalg.norm(white_point)
+    ground = float(planet.sample_dirs(up[None, :], apply_stamps=True)[0][0])
+    foot = up * (demo.radius + max(ground, 0.0))  # planet frame
+    sun = demo._sun
+    flat_sun = sun - up * float(sun @ up)
+    flat_sun /= np.linalg.norm(flat_sun)
+    side = np.cross(up, flat_sun)
+    radius = TEST_BALL_DIAMETER / 2.0
+    world = demo.home.position
+    if name == "caster_pad":
+        white = foot + up * (radius + 0.5)
+        textured = foot + side * 30.0 + up * 60.0
+        target = foot - flat_sun * 30.0 + side * 15.0
+        view = (110.0, 35.0)
+    elif name == "caster_ship_on_ship":
+        white = foot + up * 30.0
+        textured = white + sun * 26.0 + up * 9.0  # its upper part shaded
+        target = white
+        view = (80.0, 10.0, 30.0)
+    elif name == "caster_self":
+        white = foot - up * 1000.0  # out of the way, hidden
+        textured = white
+        teapot = demo.loader.load_model("models/teapot")
+        teapot.set_scale(4.0)
+        teapot.reparent_to(demo.render)
+        # Its handle (-x) toward the sun, turned 40 degrees: the loop's
+        # shadow on the pot's side the camera sees.
+        turn = math.radians(40.0)
+        handle = math.cos(turn) * flat_sun + math.sin(turn) * side
+        teapot.set_quat(
+            demo.render, _quat_from_axes(-handle, -np.cross(up, handle), up)
+        )
+        extra.append(teapot)
+        demo._test_balls.append((teapot, foot))
+        demo.tracked.track(teapot, cast=True, shader=demo._model_shader)
+        for node in (white_node, textured_node):
+            node.hide()
+        target = foot + up * 6.0
+        view = (45.0, 12.0, 45.0)
+    else:  # caster_altitude
+        white = foot + up * (radius + 0.5)
+        textured = foot + up * 300.0
+        # Down its ray toward the ground, in 5 m steps.
+        steps = textured - np.outer(np.arange(0.0, 3000.0, 5.0), sun)
+        dirs = steps / np.linalg.norm(steps, axis=1, keepdims=True)
+        heights = planet.sample_dirs(dirs, apply_stamps=True)[0]
+        below = np.linalg.norm(steps, axis=1) - demo.radius <= np.maximum(heights, 0.0)
+        target = steps[int(np.argmax(below))]
+        view = (150.0, 80.0)
+    demo._test_balls[0] = (white_node, white)
+    demo._test_balls[1] = (textured_node, textured)
+    _look_across_sun(demo, world + target, *view)
+
+
 def _settle(demo: TerrainDemo, timeout: float) -> bool:
     """Step frames until nothing is wanted or generating for 10 frames.
 
@@ -493,9 +594,16 @@ def main() -> None:
     probe = win.make_display_region(0, 1 / win.get_x_size(), 0, 1 / win.get_y_size())
     poses = _poses(demo)
     balls = list(demo._test_balls)  # where they hang (edge poses move them)
+    extra: list = []  # models a pose added
     for name in args.pose or list(poses):
         lat, lon, alt, heading, pitch, view, body = poses[name]
         demo._test_balls = list(balls)
+        for node in extra:
+            demo.tracked.untrack(node)
+            node.remove_node()
+        extra = []
+        for node, _ in balls:
+            node.show()
         demo.set_debug_view(view)
         demo._place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])
         if name in BALLS_AHEAD:
@@ -506,6 +614,8 @@ def main() -> None:
             _aim_sun(demo, sun)
         else:
             demo.set_local_sun(*sun)
+        if name in CASTER_POSES:
+            _casters_scene(demo, name, extra)
         settled = _settle(demo, args.timeout)
         if name in BALL_EDGES:
             if not _balls_on_edge(demo, BALL_EDGES[name]):

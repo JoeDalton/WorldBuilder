@@ -98,7 +98,8 @@ is, not at the camera (world_builder.lights.TrackedLights: it darkens in an
 eclipse or past the terminator whatever the camera's light), and is drawn
 by the world's model shader (world_builder.objects: lit and tonemapped as
 the terrain, every world shadow per pixel); M switches them to Panda3D's
-own lighting, to compare.
+own lighting, to compare. They cast shadows on the ground, the sea and
+each other (world_builder.shadows.casters).
 
 Terrain is generated in background processes, coarse first: the world shows
 blurry for a second, then sharpens.
@@ -141,6 +142,7 @@ from world_builder.ocean import Sea
 from world_builder.quality import QualityLevel
 from world_builder.settings import SECTIONS, WorldSettings
 from world_builder.shadows import ECLIPSE_SKY_FLOOR, Shadows
+from world_builder.shadows.casters import CasterMap
 from world_builder.sky import Sky, Starfield
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import (
@@ -483,8 +485,9 @@ class TerrainDemo(ShowBase):
                 world.shadows.local_map_spacing,
             )
             body.shadow_map.bind(body.terrain.root)
-        # The models' shader's inputs near each (the clouds' are bound with
-        # them).
+        # The casting models' shadow map (the test balls'), and the models'
+        # shader's inputs near each body (the clouds' are bound with them).
+        self.casters = CasterMap(self.win, self.render, world.shadows.caster_size)
         for index, body in enumerate(self.bodies):
             body.models = ModelLighting(
                 atmosphere=0 if body.atmosphere else None, terrain=body.terrain
@@ -492,6 +495,8 @@ class TerrainDemo(ShowBase):
             self.atmospheres.bind(body.models.inputs)
             self.shadows.bind(body.models.inputs, index)
             body.shadow_map.bind(body.models.inputs)
+            self.casters.bind(body.terrain.root)
+            self.casters.bind(body.models.inputs)
         self.ring = None
         if ring:
             self.ring = AsteroidField(
@@ -672,7 +677,7 @@ class TerrainDemo(ShowBase):
     def _track_test_balls(self) -> None:
         """Light the balls where they are, by the model shader or not."""
         for ball, _ in self._test_balls:
-            self.tracked.track(ball, shader=self._model_shader)
+            self.tracked.track(ball, cast=True, shader=self._model_shader)
 
     def _toggle_model_shader(self) -> None:
         """M: the test balls by the world's model shader, or by Panda3D's
@@ -727,6 +732,8 @@ class TerrainDemo(ShowBase):
         self._place_test_balls()
         self._update_sun()
         self._shade_models()
+        pixel = math.radians(self.camLens.get_fov()[1]) / max(self.win.get_y_size(), 1)
+        self.casters.update(self.tracked.casting, self._sun, (0.0, 0.0, 0.0), pixel)
         self.ocean.update(self.cam_world)
         # Text geometry is rebuilt on every change: a few times a second is
         # plenty to read, and saves ~1 ms a frame.
@@ -1046,6 +1053,7 @@ class TerrainDemo(ShowBase):
         )
         if self.cloud_maps is not None:
             self.cloud_maps.set_size(world.shadows.cloud_map_size)
+        self.casters.set_size(world.shadows.caster_size)
         for body in self.bodies:
             body.shadow_map.set_size(world.shadows.terrain_map_size)
             body.shadow_map.set_local(
@@ -1169,6 +1177,7 @@ class TerrainDemo(ShowBase):
         if self.ring is not None:
             self.ring.destroy()
         self.tracked.clear()
+        self.casters.destroy()
         if self.cloud_maps is not None:
             self.cloud_maps.destroy()
         for terrain in self._terrains():

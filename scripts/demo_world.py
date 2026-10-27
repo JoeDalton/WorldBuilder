@@ -274,7 +274,7 @@ class WorldDemo(TerrainDemo):
     def _track_test_balls(self) -> None:
         """Light the balls where they are, by the model shader or not."""
         for ball, _ in self._test_balls:
-            self.scene.track_light(ball, shader=self._model_shader)
+            self.scene.track_light(ball, cast=True, shader=self._model_shader)
 
     def _set_world(self, world: WorldSettings) -> None:
         """Hand every part its section (F1 - F6)."""

@@ -169,6 +169,7 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world.tracked = TrackedLights(NodePath("render"))
     world.light_scale = 1.0
     world.space_models = ModelLighting()
+    world.casters = None
     world.atmospheres = MagicMock()
     world.atmospheres.light_at.return_value = (np.ones(3), np.full(3, 0.5))
     world.sky = MagicMock() if sky else None
@@ -624,6 +625,10 @@ def test_a_whole_world(window, monkeypatch):
     plane, Panda3D's lights on, and all of it gone after destroy."""
     window.camLens.set_near_far(1.0, 600e3)
     frame = TangentFrame.at(30.0, 40.0)
+    low = WorldSettings.preset("low")
+    low_with_object_shadows = replace(
+        low, shadows=replace(low.shadows, object_shadows=True)
+    )
     world = World(
         window,
         bodies=[
@@ -639,7 +644,7 @@ def test_a_whole_world(window, monkeypatch):
         ],
         sun=SunLook(direction=tuple(frame.up + frame.north)),
         sky=SkyLook(),
-        settings=WorldSettings.preset("low"),
+        settings=low_with_object_shadows,
         backend="inline",
         clock=lambda: 2.0,
     )
@@ -657,10 +662,19 @@ def test_a_whole_world(window, monkeypatch):
         assert not world.sky.node.is_hidden(FAR_CAMERA_MASK)
 
         origin = frame.up * (R + 300.0)
+        # A ball drawn by the model shader, casting its shadow.
+        ball = window.loader.load_model("models/smiley")
+        ball.reparent_to(window.render)
+        ball.set_pos(window.camera.get_pos(window.render) + (0.0, 50.0, 0.0))
+        world.track_light(ball, cast=True, shader=True)
         for _ in range(2):
             depth.update(*world.depth_ranges(origin))
             world.update(origin, far=depth.far)
             window.graphicsEngine.render_frame()
+        assert world.casters._on[0] == 1
+        assert ball.get_attrib(ShaderAttrib).get_shader() == model_shader()
+        world.untrack_light(ball)
+        ball.remove_node()
 
         assert planet.ocean.near == 1.0
         # The sea's plane is the tangent plane at the camera's nadir (the
@@ -674,7 +688,7 @@ def test_a_whole_world(window, monkeypatch):
         depth.destroy()
         world.destroy()
     assert shutdowns == [1]
-    assert world.bodies == [] and world.sky is None
+    assert world.bodies == [] and world.sky is None and world.casters is None
     assert not window.render.find("**/planet_sea_frame")
 
 

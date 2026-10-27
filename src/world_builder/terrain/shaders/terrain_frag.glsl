@@ -110,7 +110,8 @@ void main() {
     if (uSeaSurface == 1 && vSeabed < 0.0 && uSeaNear >= 1.0 && uDebugMode == 0) {
         bool raw;
         float sunShade = cloudShade(L, footprint)
-                       * terrainShadow(normalize(vPlanetPos), vHeight);
+                       * terrainShadow(normalize(vPlanetPos), vHeight)
+                       * casterShadow(vRelPos, up, L);
         vec3 near = seaShade(uCamPos + vRelPos, vSwell,
                              vRelPos / max(dist, 1e-3), dist,
                              -vSeabed, vStep, sunShade, raw);
@@ -203,6 +204,8 @@ void main() {
                                                               : 1.0;
     // The mountains' (one fetch): what the sun clears from this height.
     shade *= terrainShadow(normalize(vPlanetPos), vHeight);
+    // The game's objects' (their map: nothing to do without one).
+    shade *= casterShadow(vRelPos, N, L);
     vec3 sunlight = uSunColor * (eclipse * shade);
     float sunDay = day;
     if (uOwnAtmosphere >= 0) {
