@@ -67,6 +67,7 @@ from panda3d.core import (
     AmbientLight,
     ClockObject,
     DirectionalLight,
+    NodePath,
     Texture,
     Vec3,
 )
@@ -81,6 +82,7 @@ from world_builder.clouds.sphere import SphericalClouds
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.gravity import Gravity
+from world_builder.lights import TrackedLights
 from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
 from world_builder.shadows import ECLIPSE_SKY_FLOOR, SUN_ANGULAR_RADIUS, Shadows
@@ -507,6 +509,8 @@ class World:
             self.sky.set_sun(self._sun)
 
         self.light_scale = float(light_scale)
+        #: The game's models lit where they are (:meth:`track_light`)
+        self.tracked = TrackedLights(render)
         self.sun_light = self.ambient_light = None
         if lights:
             self.sun_light = render.attach_new_node(DirectionalLight("world_sun"))
@@ -646,34 +650,106 @@ class World:
     def light_at(self, point_world: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
         """The light at a point, as the terrain's shader lights the ground
         there: through the nearest body's air, or in its shadow if airless,
-        and eclipsed by the other bodies.
+        and in the other world shadows (:meth:`sun_visibility`).
 
         :param point_world: world frame, metres
         :returns: (direct, ambient), linear rgb; in open space (no body) the
             bare sun and ``space_ambient``
         """
-        if not self.bodies:
-            return self._sun_color.copy(), self._space_ambient.copy()
-        return self._light_at(self.nearest(point_world), point_world)
+        direct, ambient = self.lights_at(np.asarray(point_world, float)[None, :])
+        return direct[0], ambient[0]
 
-    def _light_at(self, body: Body, point_world) -> tuple[np.ndarray, np.ndarray]:
+    def lights_at(self, points_world: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
+        """:meth:`light_at` for many points at once, each by its nearest
+        body.
+
+        :param points_world: (n, 3) world frame, metres
+        :returns: (direct, ambient), (n, 3) each, linear rgb
+        """
+        points = np.asarray(points_world, dtype=np.float64).reshape(-1, 3)
+        if not self.bodies:
+            n = len(points)
+            return np.tile(self._sun_color, (n, 1)), np.tile(
+                self._space_ambient, (n, 1)
+            )
+        direct = np.empty((len(points), 3))
+        ambient = np.empty((len(points), 3))
+        nearest = self._nearest_indices(points)
+        for index in np.unique(nearest):
+            mask = nearest == index
+            direct[mask], ambient[mask] = self._lights_at(int(index), points[mask])
+        return direct, ambient
+
+    def sun_visibility(self, points_world: ArrayLike) -> np.ndarray:
+        """The share of the sun the world's shadows leave each point, each
+        by its nearest body: the product of the shadow terms the shaders
+        draw (:mod:`world_builder.shadows`: so far, the other bodies'
+        eclipses). The nearest body's own shadow is not in it: that is its
+        air's or its day and night (:meth:`light_at` has both).
+
+        :param points_world: (n, 3) world frame, metres
+        :returns: (n,) in [0, 1]
+        """
+        points = np.asarray(points_world, dtype=np.float64).reshape(-1, 3)
+        visible = np.ones(len(points))
+        if not self.bodies:
+            return visible
+        nearest = self._nearest_indices(points)
+        for index in np.unique(nearest):
+            mask = nearest == index
+            visible[mask] = self._sun_visibility(int(index), points[mask])
+        return visible
+
+    def _nearest_indices(self, points: np.ndarray) -> np.ndarray:
+        """:returns: (n,) each point's nearest body (by sea level), an index
+        into :attr:`bodies`"""
+        centres = np.array([body.position for body in self.bodies])
+        radii = np.array([body.radius for body in self.bodies])
+        gaps = np.linalg.norm(points[:, None, :] - centres[None], axis=-1) - radii
+        return np.argmin(gaps, axis=1)
+
+    def _sun_visibility(self, index: int, points: np.ndarray) -> np.ndarray:
+        """:meth:`sun_visibility` for points of body *index*."""
+        return self.shadows.eclipse(points, self._sun, index)
+
+    def _lights_at(
+        self, index: int, points: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """:meth:`lights_at` for (n, 3) points of body *index*."""
+        body = self.bodies[index]
         ambient = np.asarray(body.look.ambient, dtype=np.float64)
         if body.atmosphere is not None:
             direct, ambient = self.atmospheres.light_at(
-                body.atmosphere, point_world, self._sun, self._sun_color, ambient
+                body.atmosphere, points, self._sun, self._sun_color, ambient
             )
         else:
-            hidden = in_shadow(
-                np.asarray(point_world, dtype=np.float64) - body.position,
-                self._sun,
-                body.radius,
-            )
-            direct = np.zeros(3) if hidden else self._sun_color.copy()
-        own = next(i for i, other in enumerate(self.bodies) if other is body)
-        eclipse = float(self.shadows.eclipse(point_world, self._sun, own))
-        return direct * eclipse, ambient * (
-            ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * eclipse
+            hidden = in_shadow(points - body.position, self._sun, body.radius)
+            direct = np.where(np.asarray(hidden)[..., None], 0.0, self._sun_color)
+        visible = self._sun_visibility(index, points)[:, None]
+        sky = ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * visible
+        return (
+            np.broadcast_to(direct * visible, (len(points), 3)),
+            np.broadcast_to(ambient * sky, (len(points), 3)),
         )
+
+    # ── objects ─────────────────────────────────────────────────────────────
+
+    def track_light(self, node: NodePath, cast: bool = False) -> None:
+        """Light a game's model by the light at its own position, not the
+        camera's: its own Panda3D sun and ambient lights (the world's are
+        off on it), set at every :meth:`update` from :meth:`lights_at`, in
+        the world's shadows, times ``light_scale``. Its position is read
+        there: place it before. See :class:`world_builder.lights.TrackedLights`.
+
+        :param node: the model (its children are lit alike)
+        :param cast: whether it casts shadows on the world (kept for later:
+            not drawn yet)
+        """
+        self.tracked.track(node, cast)
+
+    def untrack_light(self, node: NodePath) -> None:
+        """Back to the world's lights (the light at the camera)."""
+        self.tracked.untrack(node)
 
     # ── changes ─────────────────────────────────────────────────────────────
 
@@ -792,13 +868,10 @@ class World:
                 if pixel_angle is not None:
                     body.clouds.set_pixel_angle(pixel_angle)
                 body.clouds.update(camera, camera_render)
-        self._light(camera)
         for body in self.bodies:
             if body.ocean is not None:
                 body.ocean.update(camera)
-                if body.ocean.near > 0.0:
-                    relative = camera - body.position
-                    self._light_ocean(body, relative / np.linalg.norm(relative))
+        self._light(camera, np.asarray(origin_world, dtype=np.float64))
 
     def _pixel_angle(self) -> float | None:
         """:returns: the angle one pixel of the camera's output spans
@@ -810,21 +883,47 @@ class World:
         height = cam.node().get_display_region(0).get_pixel_height()
         return math.radians(lens.get_fov()[1]) / max(height, 1)
 
-    def _light(self, camera: np.ndarray) -> None:
-        """Panda3D's sun and ambient lights as they are at the camera."""
-        if self.sun_light is None:
+    def _light(self, camera: np.ndarray, origin_world: np.ndarray) -> None:
+        """Panda3D's sun and ambient lights as they are at the camera, each
+        tracked node's as they are where it is, and each near sea's look as
+        the sea under the camera: one :meth:`lights_at` for them all (each
+        call costs ~0.2 ms, whatever its points)."""
+        seas = [
+            body
+            for body in self.bodies
+            if body.ocean is not None and body.ocean.near > 0.0
+        ]
+        ups = [
+            (camera - b.position) / np.linalg.norm(camera - b.position) for b in seas
+        ]
+        tracked = origin_world + self.tracked.positions()
+        if self.sun_light is None and not seas and not len(tracked):
             return
-        direct, ambient = self.light_at(camera)
-        direct, ambient = direct * self.light_scale, ambient * self.light_scale
-        self.sun_light.node().set_color((*direct, 1.0))
-        self.sun_light.node().set_direction(Vec3(*(-self._sun)))
-        self.ambient_light.node().set_color((*ambient, 1.0))
+        points = [camera[None, :], tracked]
+        points += [
+            (body.position + up * body.radius)[None, :] for body, up in zip(seas, ups)
+        ]
+        direct, ambient = self.lights_at(np.concatenate(points))
+        scale = self.light_scale
+        if self.sun_light is not None:
+            self.sun_light.node().set_color((*(direct[0] * scale), 1.0))
+            self.sun_light.node().set_direction(Vec3(*(-self._sun)))
+            self.ambient_light.node().set_color((*(ambient[0] * scale), 1.0))
+        count = len(tracked)
+        if count:
+            self.tracked.apply(
+                direct[1 : 1 + count] * scale, ambient[1 : 1 + count] * scale, self._sun
+            )
+        for i, (body, up) in enumerate(zip(seas, ups), start=1 + count):
+            self._light_ocean(body, up, direct[i], ambient[i])
 
-    def _light_ocean(self, body: Body, up: np.ndarray) -> None:
-        """Light the sea's near look as the sea under the camera, relative to
-        the daylight its colour was tuned in (dark at night)."""
+    def _light_ocean(
+        self, body: Body, up: np.ndarray, direct: np.ndarray, ambient: np.ndarray
+    ) -> None:
+        """Light the sea's near look as the sea under the camera (*direct*
+        and *ambient* there), relative to the daylight its colour was tuned
+        in (dark at night)."""
         sea = body.position + up * body.radius
-        direct, ambient = self._light_at(body, sea)
         light = direct * max(float(self._sun @ up), 0.0) + ambient
         if body.ocean_reference is None:
             elevation = math.radians(body.look.ocean.tuned_elevation)
@@ -850,6 +949,7 @@ class World:
         if self.half_res is not None:
             self.half_res.destroy()
             self.half_res = None
+        self.tracked.clear()
         render = self.app.render
         for light in (self.sun_light, self.ambient_light):
             if light is not None:

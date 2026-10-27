@@ -93,8 +93,8 @@ nodes and rewrites them in place once a frame, in float64 where it matters
 ### Lighting anything else
 
 `Atmospheres.light_at(index, point_world, sun_direction, sun_color,
-sky_light)` gives the light at a point as the terrain's shader lights its
-ground: the sunlight through the air (none in the planet's shadow), and the
+sky_light)` gives the light at a point (or at an array of points, at once)
+as the terrain's shader lights its ground: the sunlight through the air (none in the planet's shadow), and the
 sky light fading through twilight (`twilight`, the terrain's
 `smoothstep(-0.2, 0.2, cos)`). `transmittance_to_sun` is the shader's
 `atmoSunlight` on the CPU (the Chapman function, `depth_toward`, with the

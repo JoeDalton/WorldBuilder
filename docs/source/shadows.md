@@ -88,6 +88,31 @@ annular eclipse).
 - **CPU light** (`World.light_at`, so Panda3D's lights and the sea's near
   look): the same eclipse, at the camera or the sea under it.
 
+## Objects
+
+Panda3D's lights on `render` are the light at the camera, wrong for a model
+elsewhere (a ship in an eclipse the camera is outside of). `World` lights a
+tracked model where it is:
+
+- `World.sun_visibility(points)`: the product of the CPU shadow terms at
+  each point, by its nearest body (so far the eclipse; the cloud and terrain
+  terms join it in later parts).
+- `World.lights_at(points)`: the light at many points in one vectorised call
+  (the air's `Atmospheres.light_at`, `in_shadow` and `twilight` take arrays
+  of points), times that visibility; `light_at(point)` is its single-point
+  form.
+- `World.track_light(node, cast=False)`: the node gets its own
+  `DirectionalLight` and `AmbientLight`
+  (`world_builder.lights.TrackedLights`), the world's off on it; `update`
+  sets them from `lights_at` at the nodes' positions, times `light_scale`.
+  `untrack_light` puts back the node's own lights. `cast` is kept for the
+  caster map (part H).
+
+The demos track the test ball. Its light only differs from the camera's
+over the scale of a shadow's edge: the moon's penumbra is ~400 km wide, so
+from 150 m away it looks the same. `tests/test_world.py` checks a ball in an
+umbra goes dark while the camera outside it keeps the sun.
+
 ## Demo and shots
 
 `scripts/demo_terrain.py` puts the moon 21,000 km out: from the planet's

@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from panda3d.core import LPoint3f
+from panda3d.core import LPoint3f, NodePath
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
@@ -24,6 +24,7 @@ from world_builder.depth import (
     NEAR_CAMERA_MASK,
     SplitDepthCameras,
 )
+from world_builder.lights import TrackedLights
 from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
 from world_builder.shadows import ECLIPSE_SKY_FLOOR, SUN_ANGULAR_RADIUS, Shadows
@@ -164,6 +165,8 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     for body in bodies:
         world.shadows.add(body.radius, body.position)
     world.shadows.set_sun([0.0, 0.0, 1.0])  # as world._sun below
+    world.tracked = TrackedLights(NodePath("render"))
+    world.light_scale = 1.0
     world.atmospheres = MagicMock()
     world.atmospheres.light_at.return_value = (np.ones(3), np.full(3, 0.5))
     world.sky = MagicMock() if sky else None
@@ -284,7 +287,8 @@ def test_panda_lights_are_the_light_at_the_camera_scaled():
     world.light_scale = 0.5
     world.sun_light, world.ambient_light = MagicMock(), MagicMock()
 
-    world._light(np.array([0.0, 0.0, R + 10.0]))
+    camera = np.array([0.0, 0.0, R + 10.0])
+    world._light(camera, camera)
 
     world.sun_light.node().set_color.assert_called_once_with((0.5, 0.5, 0.5, 1.0))
     world.ambient_light.node().set_color.assert_called_once_with(
@@ -329,6 +333,96 @@ def test_a_planet_eclipses_an_airless_moon():
     # The sun along +z: the planet stands between it and the moon.
     direct, _ = world.light_at([0.0, 0.0, -1e7 + MOON.radius + 10.0])
     np.testing.assert_allclose(direct, 0.0)
+
+
+def test_lights_at_many_points_are_each_points_light():
+    """The vectorised light is the single point's, point by point, each by
+    its nearest body; sun_visibility is its eclipse share."""
+    planet = _body(ambient=(0.2, 0.2, 0.2))
+    distance = MOON.radius / math.sin(SUN_ANGULAR_RADIUS) + R
+    moon = _body("moon", MOON, position=(0.0, 0.0, distance), ambient=(0.01,) * 3)
+    world = _world(planet, moon)
+    rng = np.random.default_rng(2)
+    points = rng.normal(size=(50, 3))
+    points /= np.linalg.norm(points, axis=1, keepdims=True)
+    points = np.concatenate([points * (R + 100.0), points[:10] * 3e5 + moon.position])
+    direct, ambient = world.lights_at(points)
+    for point, d, a in zip(points, direct, ambient):
+        one_d, one_a = world.light_at(point)
+        np.testing.assert_allclose(d, one_d)
+        np.testing.assert_allclose(a, one_a)
+    visible = world.sun_visibility(points)
+    assert visible[0] == pytest.approx(
+        world.shadows.eclipse(points[0], world._sun, 0)[()]
+    )
+    assert visible.shape == (60,) and visible.min() >= 0.0
+
+
+def test_one_light_call_lights_the_camera_the_nodes_and_the_sea():
+    """The frame's lights come from one lights_at call: the camera's, each
+    tracked node's and the near sea's, each the light where it is."""
+    from world_builder.atmosphere import Atmospheres
+
+    planet = _body(atmosphere=AtmosphereParams(), ocean=OceanLook())
+    planet.atmosphere = 0
+    planet.ocean = MagicMock(near=1.0)
+    world = _world(planet)
+    world.atmospheres = Atmospheres()
+    world.atmospheres.add(R, AtmosphereParams())
+    world._sun = np.array([0.6, 0.0, 0.8])
+    world.sun_light, world.ambient_light = MagicMock(), MagicMock()
+    camera = np.array([0.0, 0.0, R + 300.0])
+    ball = world.tracked.render.attach_new_node("ball")
+    ball.set_pos(0.0, 2e5, 0.0)  # 200 km away, still near the planet
+    world.track_light(ball)
+    calls = []
+    lights_at = world.lights_at
+    world.lights_at = lambda points: calls.append(len(points)) or lights_at(points)
+
+    world._light(camera, camera)
+
+    assert calls == [3]
+    direct, ambient = world.light_at(camera)
+    assert world.sun_light.node().set_color.call_args[0][0][:3] == pytest.approx(
+        tuple(direct)
+    )
+    ball_sun = world.tracked.render.find("**/ball_sun").node().get_color()
+    expected, _ = world.light_at(camera + [0.0, 2e5, 0.0])
+    np.testing.assert_allclose(tuple(ball_sun)[:3], expected, rtol=1e-6)
+    sea = np.array([0.0, 0.0, R])
+    direct, ambient = world.light_at(sea)
+    light = direct * 0.8 + ambient
+    np.testing.assert_allclose(
+        planet.ocean.set_light.call_args[0][0],
+        np.clip(light / planet.ocean_reference, 0.0, 1.5),
+    )
+
+
+def test_a_tracked_node_is_lit_where_it_is():
+    """A ball in the moon's umbra goes dark while the camera, outside the
+    shadow, keeps the sun; untracked, it takes the camera's light again."""
+    planet = _body()
+    distance = MOON.radius / math.sin(SUN_ANGULAR_RADIUS) + R
+    moon = _body("moon", MOON, position=(0.0, 0.0, distance))
+    world = _world(planet, moon)
+    world.light_scale = 0.5
+    world.sun_light, world.ambient_light = MagicMock(), MagicMock()
+    origin = np.array([R * math.sin(1.2), 0.0, R * math.cos(1.2) + 10.0])
+    ball = world.tracked.render.attach_new_node("ball")
+    ball.set_pos(*(np.array([0.0, 0.0, R + 10.0]) - origin))
+    world.track_light(ball)
+
+    world.update(origin)
+
+    camera_sun = world.sun_light.node().set_color.call_args[0][0]
+    assert camera_sun[:3] == pytest.approx((1.0, 1.0, 1.0))  # 2.0 * 0.5
+    ball_sun = world.tracked.render.find("**/ball_sun").node()
+    assert tuple(ball_sun.get_color())[:3] == pytest.approx((0.0, 0.0, 0.0), abs=1e-6)
+    ball_sky = world.tracked.render.find("**/ball_ambient").node().get_color()
+    expected = 0.5 * np.asarray(planet.look.ambient) * ECLIPSE_SKY_FLOOR
+    np.testing.assert_allclose(tuple(ball_sky)[:3], expected, rtol=1e-4)
+    world.untrack_light(ball)
+    assert world.tracked.render.find("**/ball_sun").is_empty()
 
 
 # ── loading, collision ─────────────────────────────────────────────────────────

@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   airless moon in its planet's shadow goes dark. `Shadows.set_sun` works
   out which bodies' shadows can reach which, so a view with no eclipse
   costs about what it did (within ~0.2 ms). (#13)
+- `World.track_light(node, cast=False)` / `untrack_light(node)`: a game's
+  model lit by the light where it is, not at the camera: its own Panda3D sun
+  and ambient lights (`world_builder.lights.TrackedLights`), set every
+  `update` in one vectorised call. `World.lights_at(points)` and
+  `World.sun_visibility(points)` give the light and the world's shadows at
+  many points at once (`Atmospheres.light_at`, `transmittance_to_sun`,
+  `in_shadow`, `twilight` and `depth_toward` take arrays). The demos' test
+  ball is tracked. (#13)
 - `SunLook.angular_radius` and `Sky(sun_angular_radius=)`: one sun size, the
   disc the sky draws and every penumbra (`shadows.SUN_ANGULAR_RADIUS`,
   0.55°). (#13)
@@ -127,9 +135,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The terrain demo's moon is 21,000 km out (was 10,000 km): as wide in the
   sky as the sun, so it can eclipse it. (#13)
 - The terrain demos (`demo_terrain.py`, `demo_world.py`, and the shots and
-  flight bench built on them) give the planet a small ring of dust and rocks
-  in its equator's plane, 1.5 to 2.1 radii out (`ring_spec`; `--no-ring`
-  leaves it out); `terrain_shots.py` gains `ring_ground` and `ring_orbit`.
+  flight bench built on them) take `--ring`: a small ring of dust and rocks
+  around the planet, in its equator's plane, 1.5 to 2.1 radii out
+  (`ring_spec`; off by default, so runs compare with earlier ones).
+  `terrain_shots.py --ring` adds its poses, `ring_ground` and `ring_orbit`.
   (#13)
 - `sky.SUN_ANGULAR_RADIUS` moves to `world_builder.shadows` (`sky` still
   imports it). (#13)

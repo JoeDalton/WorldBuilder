@@ -2,11 +2,12 @@
 The terrain demo built on :class:`world_builder.world.World`.
 
 Flies the same small planetary system as scripts/demo_terrain.py (the demo
-level's 600 km planet with its air, clouds, sea and small ring, an airless
-moon 21,000 km away that can eclipse the sun, the star field), with the same
-controls, keys, HUD and options. The difference is the assembly: here the
-world's look is a handful of looks (:class:`BodyLook`, :class:`CloudLook`,
-:class:`OceanLook`, :class:`SunLook`, :class:`SkyLook`), and each frame is::
+level's 600 km planet with its air, clouds and sea, and its ring with
+--ring; an airless moon 21,000 km away that can eclipse the sun; the star
+field), with the same controls, keys, HUD and options. The difference is
+the assembly: here the world's look is a handful of looks
+(:class:`BodyLook`, :class:`CloudLook`, :class:`OceanLook`,
+:class:`SunLook`, :class:`SkyLook`), and each frame is::
 
     self.depth.update(*world.depth_ranges(cam_world))
     world.update(cam_world, far=self.depth.far)
@@ -150,7 +151,7 @@ class WorldDemo(TerrainDemo):
         clouds: bool = True,
         cloud_debug: int = 0,
         ocean_debug: int = 0,
-        ring: bool = True,
+        ring: bool = False,
     ) -> None:
         ShowBase.__init__(self)
         self.setFrameRateMeter(True)
@@ -243,6 +244,7 @@ class WorldDemo(TerrainDemo):
         self._hud_time = -1.0
         self._reset_camera()
         self._test_ball, self._test_ball_point = self._make_test_ball()
+        self.scene.track_light(self._test_ball)  # lit where it is
         self.taskMgr.add(self._update, "terrain_demo_update")
         print(__doc__)
 
@@ -257,10 +259,10 @@ class WorldDemo(TerrainDemo):
             self.scene.set_sun(self._sun)
             self._scene_sun = self._sun.copy()
 
+        # The ball first: the world lights it where it is.
+        self._place_test_ball()
         self.depth.update(*self.scene.depth_ranges(self.cam_world))
         self.scene.update(self.cam_world, far=self.depth.far)
-
-        self._test_ball.set_pos(*self.home.terrain.to_render(self._test_ball_point))
         now = self._clock.get_frame_time()
         if now - self._hud_time >= HUD_PERIOD:
             self._hud_time = now
@@ -308,7 +310,7 @@ def main() -> None:
         moon,
         settings=settings_from_args(args),
         clouds=not args.no_clouds,
-        ring=not args.no_ring,
+        ring=args.ring,
     ).run()
 
 

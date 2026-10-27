@@ -126,7 +126,7 @@ In order, it updates:
 4. each body's clouds, with the angle one pixel spans, taken from the
    camera's own output (a window, or a game's offscreen buffer);
 5. Panda3D's sun and ambient lights, set to the light at the camera
-   (`World.light_at`): the air reddens the sun, an airless body's shadow
+   (`World.light_at`), and each tracked model's at the model: the air reddens the sun, an airless body's shadow
    hides it, and the other bodies eclipse it. Their colours are multiplied by `light_scale`. A game
    whose models use Panda3D's fixed-function lighting scales them down, since
    that lighting has no tone map and clips the physical noon sun (about 2.5)
@@ -176,6 +176,15 @@ band (see `world_builder.depth`).
 - **`enable_collision(into_mask, bodies=None, **kw)`**: makes bodies' drawn
   terrain solid to the game's collision traverser.
 - **`set_sun(direction)`**: moves the sun; every part follows.
+- **`light_at(point)`, `lights_at(points)`**: the light (direct, ambient)
+  at one point or many, each by its nearest body, in the world's shadows;
+  **`sun_visibility(points)`** is those shadows' share alone (so far, the
+  eclipses: see [Shadows](shadows.md)).
+- **`track_light(node, cast=False)`, `untrack_light(node)`**: a model lit by
+  the light where it is, not at the camera: its own Panda3D sun and ambient
+  lights (the world's off on it), set at every `update` in one vectorised
+  call, times `light_scale`. Place the model before `update`. `cast` is kept
+  for the shadows models will cast.
 - **`body(name)`**: a body's terrain, clouds and sea, for tools and debug
   views.
 - **`field(name)`**: an asteroid field, to make it solid

@@ -35,10 +35,13 @@ air between the camera and the surface (aerial perspective, `applyAtmospheres`).
 ## What models get
 
 Models have no shader. OpenGL's built-in lighting computes
-`ambient + sun × cos(angle)` from the demo's Panda3D lights (a
-`DirectionalLight` and an `AmbientLight` on `render`, set each frame from the
-light at the camera, `TerrainDemo._update_lights`) and **clips each channel at
-1.0**. Nothing else is applied, which shows on the test ball:
+`ambient + sun × cos(angle)` from Panda3D lights and **clips each channel at
+1.0**. The lights are either the world's (a `DirectionalLight` and an
+`AmbientLight` on `render`, set each frame from the light at the camera), or,
+for a model tracked with `World.track_light(node)`, its own pair, set each
+frame from the light where the model is (`world_builder.lights.TrackedLights`;
+the demos track the test ball). Nothing else is applied, which shows on the
+test ball:
 
 - **Clipping**: with sunlight at about 2.4, every part of a white object facing
   within about 75° of the sun exceeds 1.0 and clips to the same pure white.
@@ -51,8 +54,10 @@ light at the camera, `TerrainDemo._update_lights`) and **clips each channel at
   distant model would not fade into the horizon as the ground does.
 
 The **colour** of the light is right: the lights take the sunlight reaching
-the camera through the atmosphere (`Atmospheres.light_at`), reddened at sunset
-and gone in the planet's shadow. At a 2° sun the ball's lit side is salmon and
+the camera, or the tracked model, through the atmosphere
+(`Atmospheres.light_at`), reddened at sunset, gone in the planet's shadow,
+and dimmed in the world's shadows (`World.sun_visibility`: so far the
+eclipses, see [Shadows](shadows.md)). At a 2° sun the ball's lit side is salmon and
 its shadow side takes the blue sky light, as expected. Only the conversion to
 screen colours differs.
 

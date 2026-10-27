@@ -234,23 +234,50 @@ class Atmospheres:
     def transmittance_to_sun(
         self, index: int, point_world: ArrayLike, sun_direction: ArrayLike
     ) -> np.ndarray:
-        """Sunlight reaching a point through atmosphere *index*: the GLSL's
+        """Sunlight reaching points through atmosphere *index*: the GLSL's
         atmoSunlight on the CPU (the same formula, :func:`depth_toward`, with
         the same ``sunset_radius`` scale).
 
-        :param point_world: the point in the world frame, metres
+        :param point_world: (..., 3) points in the world frame, metres
         :param sun_direction: toward the sun, world frame (any length)
-        :returns: (3,) factors in [0, 1]: 1 above the air, 0 in the planet's
-            shadow
+        :returns: (..., 3) factors in [0, 1]: 1 above the air, 0 in the
+            planet's shadow
         """
         radius, params, position = self._bodies[index]
         p = np.asarray(point_world, float) - position
         d = np.asarray(sun_direction, float)
-        d = d / np.linalg.norm(d)
-        r = max(float(np.linalg.norm(p)), radius)
-        if r >= radius + params.height and float(p @ d) >= 0.0:
+        d = d / np.sqrt(d @ d)
+        if p.ndim == 1:  # one point: in floats, 3x faster than numpy's arrays
+            return self._transmittance_one(index, p, d)
+        rho = np.sqrt(np.sum(p * p, axis=-1))
+        r = np.maximum(rho, radius)
+        along = p @ d
+        cos_sun = along / np.maximum(rho, 1e-9)
+        # Rayleigh and Mie at once: their scale heights on a last axis.
+        heights = np.array([params.rayleigh_height, params.mie_height])
+        depth = depth_toward(
+            r[..., None], cos_sun[..., None], radius, heights, _curve(radius, params)
+        )
+        through = np.exp(
+            -(
+                np.asarray(params.rayleigh) * depth[..., :1]
+                + params.mie_extinction * depth[..., 1:]
+            )
+        )
+        through = np.where(depth[..., :1] >= 1e9, 0.0, through)  # planet in the way
+        above = (r >= radius + params.height) & (along >= 0.0)
+        return np.where(above[..., None], 1.0, through)  # above the air, sun ahead
+
+    def _transmittance_one(self, index: int, p: np.ndarray, d: np.ndarray):
+        """:meth:`transmittance_to_sun` at one point *p* (relative to the
+        centre), toward a unit *d*."""
+        radius, params, _ = self._bodies[index]
+        rho = math.sqrt(float(p @ p))
+        r = max(rho, radius)
+        along = float(p @ d)
+        if r >= radius + params.height and along >= 0.0:
             return np.ones(3)  # above the air, the sun not behind it
-        cos_sun = float(p @ d) / max(float(np.linalg.norm(p)), 1e-9)
+        cos_sun = along / max(rho, 1e-9)
         curve = _curve(radius, params)
         depth_r = depth_toward(r, cos_sun, radius, params.rayleigh_height, curve)
         depth_m = depth_toward(r, cos_sun, radius, params.mie_height, curve)
@@ -268,48 +295,55 @@ class Atmospheres:
         sun_color: ArrayLike,
         sky_light: ArrayLike,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """The light at a point in atmosphere *index*, as the terrain's
+        """The light at points in atmosphere *index*, as the terrain's
         shader lights its ground: for lighting anything else there (Panda3D
         lights, the ocean...).
 
-        :param point_world: the point in the world frame, metres
+        :param point_world: (..., 3) points in the world frame, metres
         :param sun_direction: toward the sun, world frame
         :param sun_color: sunlight above the air, linear RGB
         :param sky_light: the sky's light by day, linear RGB
-        :returns: (direct, ambient): the sunlight through the air (0 in the
-            planet's shadow), and the sky light, fading through twilight
-            (:func:`twilight`)
+        :returns: (direct, ambient), (..., 3) each: the sunlight through the
+            air (0 in the planet's shadow), and the sky light, fading through
+            twilight (:func:`twilight`)
         """
         radius, _, position = self._bodies[index]
         p = np.asarray(point_world, float) - position
         d = np.asarray(sun_direction, float)
-        d = d / np.linalg.norm(d)
+        d = d / np.sqrt(d @ d)
         direct = np.asarray(sun_color, float) * self.transmittance_to_sun(
             index, point_world, d
         )
-        cos_sun = float(p @ d) / max(float(np.linalg.norm(p)), 1e-9)
-        return direct, np.asarray(sky_light, float) * twilight(cos_sun)
+        cos_sun = (p @ d) / np.maximum(np.sqrt(np.sum(p * p, axis=-1)), 1e-9)
+        ambient = (
+            np.asarray(sky_light, float) * np.asarray(twilight(cos_sun))[..., None]
+        )
+        return direct, ambient
 
 
-def twilight(cos_sun: float) -> float:
+def twilight(cos_sun: ArrayLike) -> float | np.ndarray:
     """How much of the sky's light is left with the sun at *cos_sun* from
-    the vertical: terrain.frag's ``smoothstep(-0.2, 0.2, dot(up, L))``."""
-    t = min(max((cos_sun + 0.2) / 0.4, 0.0), 1.0)
-    return t * t * (3.0 - 2.0 * t)
+    the vertical: terrain.frag's ``smoothstep(-0.2, 0.2, dot(up, L))``. A
+    float for a float, an array for an array."""
+    t = np.clip((np.asarray(cos_sun, float) + 0.2) / 0.4, 0.0, 1.0)
+    out = t * t * (3.0 - 2.0 * t)
+    return float(out) if out.ndim == 0 else out
 
 
-def in_shadow(point: ArrayLike, sun_direction: ArrayLike, radius: float) -> bool:
+def in_shadow(
+    point: ArrayLike, sun_direction: ArrayLike, radius: float
+) -> bool | np.ndarray:
     """Whether a body of *radius* (centred at the origin) hides the sun from
-    *point*: for airless bodies, which :meth:`Atmospheres.light_at` does not
-    cover. The shadow is the body's cylinder away from the sun (the sun is
-    taken as a point at infinity: no penumbra)."""
+    points ((..., 3)): for airless bodies, which :meth:`Atmospheres.light_at`
+    does not cover. The shadow is the body's cylinder away from the sun (the
+    sun is taken as a point at infinity: no penumbra). A bool for one point,
+    an array for several."""
     p = np.asarray(point, float)
     d = np.asarray(sun_direction, float)
     d = d / np.linalg.norm(d)
-    along = float(p @ d)
-    if along >= 0.0:
-        return False
-    return float(p @ p) - along * along < radius * radius
+    along = p @ d
+    hidden = (along < 0.0) & (np.sum(p * p, axis=-1) - along * along < radius * radius)
+    return bool(hidden) if hidden.ndim == 0 else hidden
 
 
 def _curve(radius: float, params: AtmosphereParams) -> float:
@@ -319,35 +353,68 @@ def _curve(radius: float, params: AtmosphereParams) -> float:
     return max(1.0, params.sunset_radius / radius)
 
 
-def _chapman(x: float, cos_chi: float) -> float:
+def _chapman(x: ArrayLike, cos_chi: ArrayLike) -> np.ndarray:
+    y = np.sqrt(0.5 * x) * cos_chi
+    erfcx = 1.0 / (1.1635781 * y + np.sqrt(0.3707296 * y * y + 1.0))
+    return np.sqrt(1.5707963 * x) * erfcx
+
+
+def _chapman_one(x: float, cos_chi: float) -> float:
     y = math.sqrt(0.5 * x) * cos_chi
     erfcx = 1.0 / (1.1635781 * y + math.sqrt(0.3707296 * y * y + 1.0))
     return math.sqrt(1.5707963 * x) * erfcx
 
 
-def depth_toward(
-    r: float, cos_chi: float, ground: float, height: float, curve: float = 1.0
+def _depth_toward_one(
+    r: float, cos_chi: float, ground: float, height: float, curve: float
 ) -> float:
+    """:func:`depth_toward` for floats, in floats."""
+    density = math.exp(-(r - ground) / height)
+    k = curve / height
+    if cos_chi >= 0.0:
+        return height * density * _chapman_one(r * k, cos_chi)
+    tangent = r * math.sqrt(max(0.0, 1.0 - cos_chi * cos_chi))
+    if tangent < ground:
+        return 1e9
+    return height * (
+        2.0 * math.exp(-(tangent - ground) / height) * _chapman_one(tangent * k, 0.0)
+        - density * _chapman_one(r * k, -cos_chi)
+    )
+
+
+def depth_toward(
+    r: ArrayLike,
+    cos_chi: ArrayLike,
+    ground: float,
+    height: float,
+    curve: float = 1.0,
+) -> float | np.ndarray:
     """atmosphere.glsl's atmoDepthToward: optical depth (density-weighted
     metres) from radius *r* toward a direction at *cos_chi* from the vertical,
     through a layer of scale height *height* over a ground of radius
-    *ground*; 1e9 if the planet is in the way.
+    *ground*; 1e9 if the planet is in the way. A float for floats, an array
+    for arrays (broadcast).
 
     *curve* (>= 1) takes the slant through the air as over a planet that many
     times larger (:attr:`AtmosphereParams.sunset_radius`): the same overhead,
     longer near the horizon.
     """
-    density = math.exp(-(r - ground) / height)
+    if np.ndim(r) == 0 and np.ndim(cos_chi) == 0 and np.ndim(height) == 0:
+        return _depth_toward_one(float(r), float(cos_chi), ground, height, curve)
+    r = np.asarray(r, dtype=np.float64)
+    cos_chi = np.asarray(cos_chi, dtype=np.float64)
+    height = np.asarray(height, dtype=np.float64)
     k = curve / height
-    if cos_chi >= 0.0:
-        return height * density * _chapman(r * k, cos_chi)
-    tangent = r * math.sqrt(max(0.0, 1.0 - cos_chi * cos_chi))
-    if tangent < ground:
-        return 1e9
-    return height * (
-        2.0 * math.exp(-(tangent - ground) / height) * _chapman(tangent * k, 0.0)
-        - density * _chapman(r * k, -cos_chi)
-    )
+    # Toward the sky; below the horizon, the same from the far side: both
+    # sides of the tangent point (horizontal there: Chapman is sqrt(pi x /
+    # 2)), minus the side behind the start.
+    away = height * np.exp(-(r - ground) / height) * _chapman(r * k, np.abs(cos_chi))
+    tangent = r * np.sqrt(np.maximum(0.0, 1.0 - cos_chi * cos_chi))
+    # Clamped: past it the planet is in the way, and the value is dropped.
+    over = np.exp(np.minimum((ground - tangent) / height, 50.0))
+    down = 2.0 * height * over * np.sqrt(1.5707963 * tangent * k) - away
+    out = np.where(cos_chi >= 0.0, away, np.where(tangent < ground, 1e9, down))
+    return float(out) if out.ndim == 0 else out
 
 
 _DEFAULTS: dict | None = None
