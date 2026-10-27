@@ -269,6 +269,38 @@ texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
   makes them for a body with clouds and binds them to its terrain
   (`Body.cloud_maps`); the hand-built demo the same.
 
+## Long cloud shadows across the deck
+
+A cloud's fragment marches toward the sun for its own few hundred metres
+(`sun_steps × sun_step_length`: 270 m for cumulus, 1.9 km for a storm
+tower), enough for its own form. With a low sun the clouds kilometres
+upwind shade it too, and that march misses them.
+
+- **The far segment.** `cloud_field.glsl`'s `cloudFarDepth`, per vertex
+  in `cloud_sphere.vert`, from the billboard's centre: from where the
+  fragment's march stops along the sun's ray to the slab's top (or the
+  reach), in steps of 600 m (`CLOUD_FAR_STEP`, at most 12), through
+  `slabOpticalDepth`. It multiplies `vSunTint`. The fragment's march does
+  not change; only the slowly varying far part sits in the vertex (the
+  march per vertex rejected before lit far billboards flat because it held
+  the near part too).
+- **When it does anything.** With a high sun the ray leaves the slab
+  within the fragment's march and the segment returns at once; it acts
+  only as the sun gets low. The far deck's averaged table
+  (`deck_light_table`) already holds a low sun's long path and is left as
+  it is. CPU twin: `noise.far_cloud_depth`.
+- **Look.** At dusk the banks' bases and the deck's sides away from the
+  sun go blue-grey, and the clouds' reflections in the sea darken with
+  them. A billboard takes one value, so where the deck's distant rim
+  already shows the billboards' edges, the darker ones stand out a little
+  more.
+- **Cost.** None measurable: median frame ms on / off, `dusk_in_clouds`
+  12.82 / 12.84, `dusk_above_clouds` 13.69 / 13.73; `flight_bench.py
+  --flight low` (mean / p95), alternating, on 9.1 / 15.2 and 9.5 / 15.9,
+  off 9.6 / 16.0 and 9.6 / 15.3.
+- **Knob.** `ShadowSettings.cloud_far_reach` (0 at LOW, 2 km, 4 km, 8 km),
+  live.
+
 ## Objects
 
 Panda3D's lights on `render` are the light at the camera, wrong for a model
@@ -303,6 +335,9 @@ Mountain shadow poses: `mountains_low` (clouds_grazing's peaks, the sun 6°
 up in the south-east), `mountains_orbit` (1 radius up, the sun 8° up),
 `moon_terminator` (the moon's craters at its terminator). Each pose's line
 prints the last bake's time.
+
+Long cloud shadows: `dusk_in_clouds` (2.7 km, in the deck, looking north)
+and `dusk_above_clouds` (4.5 km, over it), the sun 4° up in the west.
 
 `scripts/demo_terrain.py` puts the moon 21,000 km out: from the planet's
 ground it looks 0.56° wide, as wide as the sun, so a total eclipse has an

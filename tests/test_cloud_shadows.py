@@ -24,6 +24,7 @@ from world_builder.clouds.noise import (
     NOISE_SIZE,
     build_noise_texture,
     cloud_shadow_on_sphere,
+    far_cloud_depth,
     fbm_sigma,
     ground_shadow_table,
     pack_layer_params,
@@ -502,3 +503,192 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
         maps.destroy()
         clouds.remove()
         executor.shutdown()
+
+
+# ── the far segment (part F) ───────────────────────────────────────────────────
+
+
+def _far(field, points, sun, reach, shift=0.0, optics=OPTICS):
+    return far_cloud_depth(
+        _noise(7),
+        field,
+        optics,
+        np.asarray(points, dtype=np.float64),
+        sun,
+        R,
+        reach,
+        shift_at=lambda p: np.full(len(p), shift),
+    )
+
+
+def _in_slab(field, n=200, seed=5, height=0.5):
+    rng = np.random.default_rng(seed)
+    up = rng.normal(size=(n, 3))
+    up /= np.linalg.norm(up, axis=1, keepdims=True)
+    return up * (R + field.slab[0] + height * field.slab[1]), up
+
+
+def _low_sun(up, elevation):
+    level = np.cross(up, [0.0, 0.0, 1.0])
+    level /= np.linalg.norm(level, axis=1, keepdims=True)
+    el = math.radians(elevation)
+    return math.sin(el) * up + math.cos(el) * level
+
+
+def test_the_far_segment_is_past_the_clouds_own_march(field, table):
+    """Nothing within the cloud's own march, nothing past the slab's top
+    (a high sun leaves it at once), and under a low sun more cloud the
+    farther it looks (on the whole: a longer reach moves the steps)."""
+    points, up = _in_slab(field)
+    near = OPTICS.sun_steps * OPTICS.sun_step_length
+    overcast = coverage_to_shift(1.0, table)
+    assert np.all(_far(field, points, up, near, overcast) == 0.0)
+    assert np.all(_far(field, points, up, 4000.0, overcast) == 0.0)  # straight up
+    sun = _low_sun(up, 2.0)  # in the slab for ~14 km from its middle
+    broken = coverage_to_shift(0.5, table)
+    depths = [_far(field, points, sun, reach, broken) for reach in (2e3, 4e3, 8e3)]
+    means = [depth.mean() for depth in depths]
+    assert 0.0 < means[0] < means[1] < means[2]
+
+
+def test_the_far_segment_through_a_full_slab_is_its_integral(field):
+    """Every column full of cloud: the depth is the slab's base fill
+    integrated along the ray from the cloud's own march to the reach (or
+    the slab's top), the steps coarse but the fill smooth."""
+    points, up = _in_slab(field, n=5)
+    sun = _low_sun(up, 3.0)
+    near = OPTICS.sun_steps * OPTICS.sun_step_length
+    got = _far(field, points, sun, 6000.0, 100.0)
+    for p, d, value in zip(points, sun, got):
+        t = np.arange(near, 6000.0, 1.0) + 0.5
+        radii = np.linalg.norm(p + t[:, None] * d, axis=1)
+        h = (radii - R - field.slab[0]) / field.slab[1]
+        fill = np.where((h > 0) & (h < 1), 1.0 - np.exp2(-field.base_ramp * h), 0.0)
+        expected = fill.sum() * field.density * OPTICS.shadow_strength
+        assert value == pytest.approx(expected, rel=0.03)
+
+
+def test_the_shader_far_segment_is_the_cpus(window, field, table):
+    """cloudFarDepth read back against far_cloud_depth, under a real
+    weather map and a low sun."""
+    from panda3d.core import (
+        Geom,
+        GeomNode,
+        GeomPoints,
+        GeomVertexData,
+        GeomVertexFormat,
+        GeomVertexWriter,
+        LVecBase4f,
+        OmniBoundingVolume,
+        PTA_LVecBase4f,
+        Shader,
+        Texture,
+    )
+
+    size = 32
+    cube = weather_cube(WeatherSpec(PLANETS["earthlike"]), table)
+    points, up = _in_slab(field, n=size * size, seed=9, height=0.4)
+    points = points.astype(np.float32).astype(np.float64)
+    sun = _low_sun(up, 6.0).astype(np.float32)
+    reach = 5000.0
+    expected = np.exp2(
+        -far_cloud_depth(
+            _noise(7),
+            field,
+            OPTICS,
+            points,
+            sun.astype(np.float64),
+            R,
+            reach,
+            shift_at=lambda p: sample_cube(cube[..., 1], p),
+        )
+    )
+    assert expected.min() < 0.9
+
+    vdata = GeomVertexData("points", GeomVertexFormat.get_v3n3(), Geom.UH_static)
+    position = GeomVertexWriter(vdata, "vertex")
+    normal = GeomVertexWriter(vdata, "normal")
+    for p, d in zip(points, sun):
+        position.add_data3f(*(float(v) for v in p))
+        normal.add_data3f(*(float(v) for v in d))
+    prim = GeomPoints(Geom.UH_static)
+    prim.add_next_vertices(len(points))
+    geom = Geom(vdata)
+    geom.add_primitive(prim)
+    node = GeomNode("far_points")
+    node.add_geom(geom)
+    node.set_bounds(OmniBoundingVolume())
+    node.set_final(True)
+    atmosphere = SHADERS.parents[1] / "atmosphere/shaders/atmosphere.glsl"
+    shadows = SHADERS.parents[1] / "shadows/shaders/shadows.glsl"
+    include = "\n".join(
+        line
+        for path in (shadows, atmosphere, SHADERS / "cloud_field.glsl")
+        for line in path.read_text().splitlines()
+        if not line.startswith("#pragma")
+    )
+    vertex = f"""#version 330
+in vec4 p3d_Vertex;
+in vec3 p3d_Normal;
+flat out float vVisible;
+{include}
+void main() {{
+    vVisible = exp2(-cloudFarDepth(getField(0), p3d_Vertex.xyz, p3d_Normal, {reach}));
+    int x = gl_VertexID % {size}, y = gl_VertexID / {size};
+    gl_Position = vec4((vec2(x, y) + 0.5) / {size}.0 * 2.0 - 1.0, 0.0, 1.0);
+}}
+"""
+    fragment = """#version 330
+flat in float vVisible;
+out vec4 fragColor;
+void main() {
+    float v = floor(clamp(vVisible, 0.0, 1.0) * 16711680.0 + 0.5);
+    float r = floor(v / 65536.0);
+    float g = floor((v - r * 65536.0) / 256.0);
+    fragColor = vec4(r, g, v - r * 65536.0 - g * 256.0, 255.0) / 255.0;
+}
+"""
+    params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
+    packed = pack_layer_params(
+        field,
+        extinction=field.density,
+        wrap_radius=1e12,
+        wrap_fade_band=0.0,
+        octave_mean=float(_noise(7).mean()),
+        optics=OPTICS,
+        octaves=2,
+    )
+    for i, row in enumerate(packed):
+        params[i] = LVecBase4f(*(float(v) for v in row))
+    root = NodePath("far_check")
+    points_np = root.attach_new_node(node)
+    points_np.set_shader(Shader.make(Shader.SL_GLSL, vertex, fragment))
+    bind_defaults(points_np)
+    bind_shadow_defaults(points_np)
+    points_np.set_shader_inputs(
+        cloudNoise=build_noise_texture(_noise(7)),
+        noiseSize=float(NOISE_SIZE),
+        noiseOffset=Vec3(0.0, 0.0, 0.0),
+        sunDir=Vec3(0.0, 0.0, 1.0),
+        layerParams=params,
+        uSpherical=1,
+        planetRadius=R,
+        weatherMap=build_weather_texture(cube),
+        uCloudDebug=0,
+    )
+    texture = Texture("far_check")
+    buffer = window.win.make_texture_buffer("far_check", size, size, texture, True)
+    try:
+        camera = window.makeCamera(buffer)
+        camera.node().set_scene(root)
+        window.graphicsEngine.render_frame()
+        window.graphicsEngine.render_frame()
+        ram = np.frombuffer(texture.get_ram_image_as("RGB").get_data(), np.uint8)
+        rgb = ram.reshape(size, size, 3).astype(np.int64)
+        got = (rgb[..., 0] * 65536 + rgb[..., 1] * 256 + rgb[..., 2]) / 16711680.0
+        error = np.abs(got.ravel() - expected)
+        assert np.median(error) < 2e-3
+        assert np.percentile(error, 99) < 0.05
+    finally:
+        window.graphicsEngine.remove_window(buffer)
+        root.remove_node()

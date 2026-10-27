@@ -924,6 +924,74 @@ def _cloud_shadow_depth(
     return np.where(alive, depth, 0.0)
 
 
+#: cloud_field.glsl's CLOUD_FAR_STEP and CLOUD_FAR_STEPS: the far segment's
+#: steps (:func:`far_cloud_depth`), metres, and their most.
+CLOUD_FAR_STEP = 600.0
+CLOUD_FAR_STEPS = 12
+
+
+def far_cloud_depth(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    reach: float,
+    shift_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    octave_mean: float | None = None,
+) -> np.ndarray:
+    """The shader's ``cloudFarDepth``: the clouds along the sun's ray from
+    points (in or under the slab) past their own march (``sun_steps`` of
+    ``sun_step_length``) out to *reach* metres, or to where the ray leaves
+    the slab's top, in steps of about :data:`CLOUD_FAR_STEP`.
+
+    :param volume: the noise octave (quantised, to match the GPU)
+    :param spec: a resolved field (the billboards' layer's)
+    :param optics: its optics (its march, step and shadow strength)
+    :param points: (..., 3) planet-frame positions
+    :param sun_dirs: (..., 3) unit directions toward the sun (broadcast)
+    :param radius: sea-level radius, metres
+    :param reach: how far along the ray, metres (0: nothing)
+    :param shift_at: the weather's fbm shift at planet-frame positions
+        ((m, 3) -> (m,)), taken where the segment starts; None = none
+    :param octave_mean: the noise's mean; None = *volume*'s
+    :returns: (...) optical depth
+    """
+    _require_resolved(spec)
+    points = np.asarray(points, dtype=np.float64)
+    dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
+    near = max(optics.sun_steps, 0) * optics.sun_step_length
+    base, thickness = spec.slab
+    outer = radius + base + thickness
+    r = np.linalg.norm(points, axis=-1)
+    b = np.sum(points * dirs, axis=-1)
+    leave = -b + np.sqrt(np.maximum((outer - r) * (outer + r) + b * b, 0.0))
+    end = np.minimum(reach, leave)
+    alive = (r < outer) & (end > near) & (reach > near)
+    steps = np.clip(np.ceil((end - near) / CLOUD_FAR_STEP), 1, CLOUD_FAR_STEPS)
+    step_length = np.where(alive, end - near, 0.0) / steps
+    start = points + dirs * near
+    k = np.arange(CLOUD_FAR_STEPS)
+    positions = (
+        start[..., None, :]
+        + dirs[..., None, :] * ((k + 0.5) * step_length[..., None])[..., None]
+    )
+    h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
+    coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    pair = fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
+    shift = np.zeros(points.shape[:-1])
+    if shift_at is not None:
+        shift = np.reshape(shift_at(start.reshape(-1, 3)), points.shape[:-1])
+    gain, bias = shadow_calibration(spec, octave_mean)
+    density = _slab_density(spec, h, pair * gain + shift[..., None] + bias)
+    density = np.where(k < steps[..., None], density, 0.0).sum(axis=-1)
+    depth = density * step_length * spec.density * optics.shadow_strength
+    return np.where(alive, depth, 0.0)
+
+
 def ground_shadow_table(
     volume: np.ndarray,
     spec: DensityField,

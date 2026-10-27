@@ -315,6 +315,33 @@ float cloudShadowDepth(Field f, vec3 p, vec3 dir, int maxSteps) {
 //   the march would band, each height of ground stepping onto other
 //   clouds).
 // Faded over the second octave's cell.
+// The clouds far along the sun's ray from a cloud at p (planet frame): the
+// optical depth from where the cloud's own march stops (sunSteps steps of
+// sunStepLength) out to reach metres, or to where the ray leaves the
+// slab's top if sooner, in steps of about CLOUD_FAR_STEP (at most
+// CLOUD_FAR_STEPS): a low sun's ray runs along the slab for kilometres,
+// through the clouds sunward. Slowly varying across a billboard, so taken
+// at its centre (cloud_sphere.vert). noise.far_cloud_depth on the CPU.
+const float CLOUD_FAR_STEP = 600.0;
+const int CLOUD_FAR_STEPS = 12;
+float cloudFarDepth(Field f, vec3 p, vec3 dir, float reach) {
+    float near = float(max(f.sunSteps, 0)) * f.sunStepLength;
+    vec3 start;
+    float chord;
+    if (reach <= near || !cloudShadowChord(f, p, dir, start, chord)) {
+        return 0.0;
+    }
+    // From p, inside or under the slab: the ray leaves the top at its
+    // chord's end (enter + chord from p).
+    float leave = length(start - p) + chord;
+    float end = min(reach, leave);
+    if (end <= near) {
+        return 0.0;
+    }
+    int steps = clamp(int(ceil((end - near) / CLOUD_FAR_STEP)), 1, CLOUD_FAR_STEPS);
+    return slabOpticalDepth(f, p + dir * near, dir, (end - near) / float(steps), steps);
+}
+
 // One cloud shadow map at a point of the base's sphere (unit dir): its
 // depth, and how much of it to keep (1 inside, 0 outside, faded over the
 // last eighth of its half-width).

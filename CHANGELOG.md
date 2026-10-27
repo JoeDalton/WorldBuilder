@@ -59,6 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drawn again when the camera has moved a quarter of a map or the sun has
   turned. `ShadowSettings.cloud_map_size` sets them; `World` makes them for
   a body with clouds (`Body.cloud_maps`).
+- Long cloud shadows (#11): with a low sun, each cloud billboard looks
+  past its own march toward the sun for the clouds kilometres away that
+  shade it (`cloud_field.glsl`'s `cloudFarDepth`, per vertex, its CPU twin
+  `noise.far_cloud_depth`). `ShadowSettings.cloud_far_reach` sets how far
+  (0: off). `terrain_shots.py` gains `dusk_in_clouds` and
+  `dusk_above_clouds`.
 - `World.track_light(node, cast=False)` / `untrack_light(node)`: a game's
   model lit by the light where it is, not at the camera: its own Panda3D sun
   and ambient lights (`world_builder.lights.TrackedLights`), set every
