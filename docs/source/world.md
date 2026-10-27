@@ -122,7 +122,9 @@ In order, it updates:
 2. the air (`Atmospheres.update`) and the bodies as sun occluders
    (`World.shadows`, a `Shadows`: each body eclipses the sun for the others,
    see [Shadows](shadows.md)); with the terrain, each body's mountain
-   shadow map (`Body.shadow_map`) collects what the pool baked;
+   shadow maps (`Body.shadow_map`, the global one and the local one
+   around the camera) collect what the pool baked; after the clouds, their
+   shadow maps (`Body.cloud_maps`) are drawn again if they must be;
 3. the sky;
 4. each body's clouds, with the angle one pixel spans, taken from the
    camera's own output (a window, or a game's offscreen buffer);

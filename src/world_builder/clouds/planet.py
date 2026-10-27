@@ -36,6 +36,7 @@ from world_builder.clouds.cirrus import CirrusSpec, CloudSheet
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
 from world_builder.clouds.march import CloudMarch
+from world_builder.clouds.noise import DensityField
 from world_builder.clouds.shadow_defaults import cloud_shadow_defaults
 from world_builder.clouds.sphere import CLOUD_BIN, CloudVolume
 from world_builder.clouds.weather import WeatherSpec
@@ -115,6 +116,8 @@ class PlanetClouds:
         :class:`march.CloudMarch`, by ``settings.renderer``)
     :ivar sheet: the cirrus (:class:`cirrus.CloudSheet`), or None
     :ivar weather: the weather both follow
+    :ivar radius: the planet's sea-level radius, metres
+    :ivar position: its centre, world frame
     """
 
     #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
@@ -200,6 +203,8 @@ class PlanetClouds:
             planet = planet or PlanetSpec(name="clouds", radius=float(radius))
             weather = WeatherSpec(planet, seed=weather_seed)
         self.weather = weather
+        self.radius = float(radius)
+        self.position = np.asarray(position, dtype=np.float64)
         self._settings = settings
         self.root = parent.attach_new_node("planet_clouds")
         # What the volume is built from, again on a change of renderer.
@@ -362,6 +367,23 @@ class PlanetClouds:
         else:
             for node in nodes:
                 cloud_shadow_defaults(node)
+
+    @property
+    def shadow_layer(self) -> int:
+        """The volume's layer its shadow is marched in
+        (:attr:`sphere.CloudVolume.shadow_layer`); -1 = none (not ready, or
+        a raymarch)."""
+        if isinstance(self.volume, CloudVolume):
+            return self.volume.shadow_layer
+        return -1
+
+    @property
+    def shadow_field(self) -> DensityField | None:
+        """The field the volume's shadow is marched in; None with a
+        raymarch."""
+        if isinstance(self.volume, CloudVolume):
+            return self.volume.shadow_field
+        return None
 
     def sun_visibility(
         self, points_world: ArrayLike, sun_direction: ArrayLike, max_steps: int

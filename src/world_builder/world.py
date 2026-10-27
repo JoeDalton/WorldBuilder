@@ -82,6 +82,7 @@ from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.planet import PlanetClouds, check_layers
+from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.gravity import Gravity
@@ -279,6 +280,7 @@ class Body:
     :ivar ocean_reference: the light its water's colour was tuned in (see
         :meth:`World._light_ocean`); set on the first update
     :ivar shadow_map: its mountains' shadow (one per body)
+    :ivar cloud_maps: its clouds' shadow maps, or None
     """
 
     look: BodyLook
@@ -288,6 +290,7 @@ class Body:
     ocean: Sea | None = None
     ocean_reference: np.ndarray | None = None
     shadow_map: ShadowMap | None = None
+    cloud_maps: CloudShadowMaps | None = None
 
     @property
     def name(self) -> str:
@@ -465,11 +468,14 @@ class World:
             # One texture set for every body (they load once)
             materials = materials or terrain.materials
             body = Body(look=look, terrain=terrain, atmosphere=index)
+            shadow_settings = self.settings.shadows
             body.shadow_map = ShadowMap(
                 terrain,
                 self.executor,
-                self.settings.shadows.terrain_map_size,
+                shadow_settings.terrain_map_size,
                 self._sun,
+                shadow_settings.local_map_size,
+                shadow_settings.local_map_spacing,
             )
             body.shadow_map.bind(terrain.root)
             if look.clouds is not None:
@@ -479,6 +485,12 @@ class World:
                 )
                 body.clouds.bind_shadow_inputs(terrain.root)  # their shadow
                 body.clouds.bind_inputs(body.shadow_map.bind)  # the peaks' on them
+                output = getattr(app, "win", None)
+                if output is not None:
+                    body.cloud_maps = CloudShadowMaps(
+                        output, body.clouds, self.settings.shadows.cloud_map_size
+                    )
+                    body.cloud_maps.bind(terrain.root)
             if look.ocean is not None:
                 kwargs = {
                     name: getattr(look.ocean, name)
@@ -855,6 +867,11 @@ class World:
         for body in self.bodies:
             if body.shadow_map is not None:
                 body.shadow_map.set_size(settings.shadows.terrain_map_size)
+                body.shadow_map.set_local(
+                    settings.shadows.local_map_size, settings.shadows.local_map_spacing
+                )
+            if body.cloud_maps is not None:
+                body.cloud_maps.set_size(settings.shadows.cloud_map_size)
         self._sync_half_res()
 
     def use_split_depth(self, depth: SplitDepthCameras) -> None:
@@ -933,7 +950,7 @@ class World:
         for body in self.bodies:
             body.terrain.update(camera, camera_render, camera_forward=forward)
             if body.shadow_map is not None:
-                body.shadow_map.update()
+                body.shadow_map.update(camera)  # the local map follows it
         for asteroids in self.fields:
             asteroids.update(camera, camera_render)
         self.atmospheres.update(camera)
@@ -952,6 +969,9 @@ class World:
                 if pixel_angle is not None:
                     body.clouds.set_pixel_angle(pixel_angle, volume_scale=scale)
                 body.clouds.update(camera, camera_render)
+                if body.cloud_maps is not None:
+                    steps = self.shadows.settings.cloud_shadow_steps
+                    body.cloud_maps.update(camera, self._sun, steps)
         for body in self.bodies:
             if body.ocean is not None:
                 body.ocean.update(camera)
@@ -1054,6 +1074,8 @@ class World:
         for body in self.bodies:
             if body.ocean is not None:
                 body.ocean.destroy()
+            if body.cloud_maps is not None:
+                body.cloud_maps.destroy()
             if body.clouds is not None:
                 body.clouds.remove()
             body.terrain.destroy()

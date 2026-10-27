@@ -26,6 +26,14 @@ uniform int   uShadowSelf;
 // the distance to the occluder that sets it, both km; off (0) until baked.
 uniform samplerCube uTerrainShadow;
 uniform int   uTerrainShadowOn;
+// The nearby ridges' (shadow_map.LocalShadowMap): the same over a square
+// chart around the camera, metres, occluders nearer than the global map's
+// reach. uLocalChart: its centre's up (xyz) and the radius, east and the
+// node spacing, north and the nodes per side, and where it fades out
+// (from x to y metres from its centre, along either axis).
+uniform sampler2D uLocalShadow;
+uniform int   uLocalShadowOn;
+uniform vec4  uLocalChart[4];
 // The most samples a ground pixel takes through the planet's clouds toward
 // the sun (cloud_field.glsl's cloudShadowDepth), 0 = no cloud shadows: a
 // quality knob (world_builder.shadows.ShadowSettings).
@@ -112,11 +120,40 @@ float eclipseVisibility(vec3 rel, vec3 L, int self) {
 // (altitude - ceiling) / distance radians, and the penumbra is a smoothstep
 // of that over the sun's angular radius. shadow_map.terrain_visibility on
 // the CPU.
-float terrainShadow(vec3 planetDir, float altitude) {
+float globalTerrainShadow(vec3 planetDir, float altitude) {
     if (uTerrainShadowOn == 0) {
         return 1.0;
     }
     vec2 ceiling = texture(uTerrainShadow, planetDir).rg * 1000.0;
     float margin = (altitude - ceiling.x) / max(ceiling.y, 1.0);
     return smoothstep(-uSunAngularRadius, uSunAngularRadius, margin);
+}
+
+// The same from the local map: 1 outside it, faded out toward its edges
+// (the ground beyond them is unknown). Its chart is azimuthal equidistant
+// (terrain.chart): the angle from its centre by atan, precise near it.
+float localShadow(vec3 planetDir, float altitude) {
+    if (uLocalShadowOn == 0) {
+        return 1.0;
+    }
+    vec2 across = vec2(dot(planetDir, uLocalChart[1].xyz), dot(planetDir, uLocalChart[2].xyz));
+    float sine = length(across);
+    float angle = atan(sine, dot(planetDir, uLocalChart[0].xyz));
+    vec2 xy = across * (sine > 1e-9 ? uLocalChart[0].w * angle / sine : uLocalChart[0].w);
+    float keep = 1.0 - smoothstep(uLocalChart[3].x, uLocalChart[3].y,
+                                  max(abs(xy.x), abs(xy.y)));
+    if (keep <= 0.0) {
+        return 1.0;
+    }
+    float size = uLocalChart[2].w;
+    vec2 ceiling = texture(uLocalShadow, (xy / uLocalChart[1].w + 0.5 * size) / size).rg;
+    float margin = (altitude - ceiling.x) / max(ceiling.y, 1.0);
+    return mix(1.0, smoothstep(-uSunAngularRadius, uSunAngularRadius, margin), keep);
+}
+
+// Both: their occluders never overlap (the local map's are nearer than
+// the global map's reach), and the higher horizon of the two hides the
+// sun: the lesser share.
+float terrainShadow(vec3 planetDir, float altitude) {
+    return min(globalTerrainShadow(planetDir, altitude), localShadow(planetDir, altitude));
 }

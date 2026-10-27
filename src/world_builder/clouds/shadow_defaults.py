@@ -58,4 +58,18 @@ def cloud_shadow_defaults(node: NodePath) -> None:
         noiseOffset=Vec3(0.0, 0.0, 0.0),
         uCloudDebug=0,
         uCloudShadowLayer=-1,
+        cloudShadowNear=_no_cloud_map(),
+        cloudShadowFar=_no_cloud_map(),
+        cloudNearChart=PTA_LVecBase4f.empty_array(4),
+        cloudFarChart=PTA_LVecBase4f.empty_array(4),
+        cloudShadowMapOn=0,
     )
+
+
+@functools.cache
+def _no_cloud_map() -> Texture:
+    """A 1-texel cloud shadow map, for shaders with none (off)."""
+    tex = Texture("no_cloud_shadow_map")
+    tex.setup_2d_texture(1, 1, Texture.T_float, Texture.F_rgba32)
+    tex.set_ram_image(bytes(16))
+    return tex

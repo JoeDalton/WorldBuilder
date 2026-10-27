@@ -1252,6 +1252,17 @@ class CloudVolume:
         """
         self.root.set_shader_input("uCloudDebug", int(flags))
 
+    @property
+    def shadow_layer(self) -> int:
+        """The layer of ``layerParams`` the clouds' shadow is marched in
+        (the deck's), -1 until the set-up is done or after :meth:`remove`."""
+        return int(self._shadow_layer[0])
+
+    @property
+    def shadow_field(self) -> DensityField:
+        """The field the clouds' shadow is marched in (the deck's)."""
+        return self._deck_field
+
     def bind_shadow_inputs(self, node: NodePath) -> None:
         """Let the shaders on a node (the planet's terrain) darken the sun
         under these clouds (cloud_field.glsl's ``cloudShadowDepth``, through

@@ -144,6 +144,7 @@ from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.planet import PlanetClouds
+from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS, HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.lights import TrackedLights
@@ -495,7 +496,12 @@ class TerrainDemo(ShowBase):
         # Each body's mountains' shadow, baked in the pool for each sun.
         for body in self.bodies:
             body.shadow_map = ShadowMap(
-                body.terrain, self.executor, world.shadows.terrain_map_size, self._sun
+                body.terrain,
+                self.executor,
+                world.shadows.terrain_map_size,
+                self._sun,
+                world.shadows.local_map_size,
+                world.shadows.local_map_spacing,
             )
             body.shadow_map.bind(body.terrain.root)
         self.ring = None
@@ -515,6 +521,7 @@ class TerrainDemo(ShowBase):
         self.shadows.bind(self.sky.node)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.clouds = None
+        self.cloud_maps = None  # the clouds' shadow maps
         self._cloud_debug = cloud_debug
         self._rebuild_clouds()
         # Built before the depth split changes the lens: the sea's reflection
@@ -697,7 +704,7 @@ class TerrainDemo(ShowBase):
         self.atmospheres.update(self.cam_world)
         self.shadows.update(self.cam_world)
         for body in self.bodies:
-            body.shadow_map.update()
+            body.shadow_map.update(self.cam_world)  # the local map follows it
         self.sky.update((0.0, 0.0, 0.0), far)
         if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
@@ -706,6 +713,9 @@ class TerrainDemo(ShowBase):
                 fov / max(self.win.get_y_size(), 1), volume_scale=scale
             )
             self.clouds.update(self.cam_world)
+            if self.cloud_maps is not None:
+                steps = self.shadows.settings.cloud_shadow_steps
+                self.cloud_maps.update(self.cam_world, self._sun, steps)
         self._place_test_ball()
         self._update_sun()
         self.ocean.update(self.cam_world)
@@ -950,6 +960,9 @@ class TerrainDemo(ShowBase):
         over the old ones' worker channel, which drops their tiles."""
         if self.clouds is not None:
             self.clouds.remove()
+            if self.cloud_maps is not None:
+                self.cloud_maps.destroy()
+                self.cloud_maps = None
             self.clouds = None
         if not self._clouds_on:
             return
@@ -970,6 +983,11 @@ class TerrainDemo(ShowBase):
         self.clouds.bind_shadow_inputs(self.terrain.root)  # their shadow on it
         if self.home.shadow_map is not None:  # the peaks' on them
             self.clouds.bind_inputs(self.home.shadow_map.bind)
+        # Their shadow marched once per texel of two maps (Shadows, part E).
+        self.cloud_maps = CloudShadowMaps(
+            self.win, self.clouds, self.world.shadows.cloud_map_size
+        )
+        self.cloud_maps.bind(self.terrain.root)
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
         if getattr(self, "depth", None) is not None:
@@ -1037,8 +1055,13 @@ class TerrainDemo(ShowBase):
         world.apply(
             *self._terrains(), self.atmospheres, self.shadows, self.sky, self.ocean
         )
+        if self.cloud_maps is not None:
+            self.cloud_maps.set_size(world.shadows.cloud_map_size)
         for body in self.bodies:
             body.shadow_map.set_size(world.shadows.terrain_map_size)
+            body.shadow_map.set_local(
+                world.shadows.local_map_size, world.shadows.local_map_spacing
+            )
         if self.clouds is not None:
             world.apply(self.clouds)
         if self.ring is not None:
@@ -1154,6 +1177,8 @@ class TerrainDemo(ShowBase):
         if self.ring is not None:
             self.ring.destroy()
         self.tracked.clear()
+        if self.cloud_maps is not None:
+            self.cloud_maps.destroy()
         for terrain in self._terrains():
             terrain.destroy()
         self.executor.shutdown()
