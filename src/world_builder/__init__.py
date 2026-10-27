@@ -10,6 +10,8 @@ WorldBuilder: procedural worlds for Panda3D.
     atmosphere  single-scattering atmospheres (plus a twilight fill),
              applied by every shader; CPU copies to light anything else
     sky      star field (procedural or painted) and the sun, through the air
+    asteroids  asteroid fields and planet rings: rocks scattered from a
+             spec, the same every time, stored nowhere
     gravity  the bodies' summed point-mass gravity at many points (native or
              numpy)
     depth    near/far camera split, for views from the ground to orbit

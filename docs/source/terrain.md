@@ -123,11 +123,55 @@ Chunk keys are `(level, face, i, j)`.
   merges back only 15 % farther out. The distance is measured to a box in
   the tile's own tangent frame, bounded by its height range.
 - Tiles wholly behind the planet's bulge are culled, using exact sphere
-  geometry, as are tiles wholly beyond `max_distance` when it is set.
+  geometry, as are tiles wholly beyond `max_distance` when it is set. The
+  bulge is the body's lowest ground (sea level with an ocean), and a root
+  not generated yet is assumed to span the body's whole height range: both
+  come from the body (`height_bounds`, see [Other bodies](#other-bodies)).
 - Away from face seams, a ring holds about 66 tiles per level, as on the
   flat chart. Near a seam, the two faces' grids don't align and both
   contribute partial rings.
 - A parent is never replaced before all its children are ready.
+
+## Other bodies
+
+The terrain draws any **body**: what a spec's `evaluator()` returns. A
+`PlanetSpec` gives a `Planet`; an asteroid's `RockSpec` gives a `RockBody`
+(`world_builder.asteroids.rock`, see [Asteroid fields](asteroids.md)). The
+chunk pipeline, the LOD pass, the queries and the collision only ask a body
+for:
+
+- `spec`: its radius, `has_ocean`, `has_vegetation`, `paints`, and
+  optionally `radial_light` (False: lit as an object, below);
+- `grid`: its `CubeGrid`;
+- `height_bounds`: its lowest and highest ground, metres from the radius.
+  A planet's are -7 km and +9 km; a 200 m rock's are about -110 m and
+  +1.5 m. Using the planets' for a small body culled most of it and
+  over-refined the rest;
+- `sample_face_grid(face, ka, kb, step)`, whose `GridSample` may carry its
+  own biome weights (a rock: snow for its ice, rock for the rest), and
+  `sample_dirs`.
+
+**Small bodies.** `grid_for(radius, uv_period)` takes the texture period: a
+face edge spans a whole number of it. Planets keep 4,096 m (every biome's
+tiling divides it); a rock uses 128 m, so its rock and snow textures (4 m
+tiles) are not stretched 13-52 times as they were below 500 m.
+
+**Orientation.** `Terrain(orientation=)` and `set_orientation(q)` turn the
+body (world from planet frame, a unit quaternion), every frame for a
+spinning asteroid. Chunks, cells, the chunk table, queries and collision
+stay in the planet frame: the camera and the view direction are turned into
+it, the root carries the rotation, `to_planet` / `to_render` turn, and the
+vertex shader turns the faces' texture axes (`cube_faces.glsl`). The cost is
+constant per frame, whatever the chunk count. A sea on a turning body is not
+supported (its frame assumes planet axes).
+
+**Lighting as an object.** A body whose spec sets `radial_light = False` (a
+rock) has no day and night by its vertical: each face is lit as it faces the
+sun and the sky light comes from all round, as the instanced asteroids are
+lit. `Terrain(tonemap=False)` encodes for display without the ACES tonemap,
+next to models lit by Panda3D's fixed-function lights, and
+`Terrain(textures=)` shares texture arrays already on the GPU (an asteroid
+field's rocks share the field's).
 
 ## Coordinates and precision
 

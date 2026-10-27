@@ -1,6 +1,5 @@
-// Linear radiance to display colour: the tonemap the sky, the stars and the
-// clouds share (the terrain keeps its own copy of aces_tonemap). Include once
-// per shader with #pragma include.
+// Linear radiance to display colour: the tonemap the terrain, the sky, the
+// stars and the clouds share. Include once per shader with #pragma include.
 
 vec3 aces_tonemap(vec3 color) {
     mat3 m1 = mat3(

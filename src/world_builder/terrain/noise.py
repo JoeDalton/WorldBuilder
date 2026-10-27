@@ -317,7 +317,7 @@ def _ridged_plan(
 # ── native library ────────────────────────────────────────────────────────────
 
 #: Interface version of the native library (``WB_NOISE_ABI`` in noise.c).
-_NATIVE_ABI = 8
+_NATIVE_ABI = 13
 _SUFFIX = {"win32": ".dll", "darwin": ".dylib"}.get(sys.platform, ".so")
 #: Where the native noise library is built and shipped. Found by path: the
 #: ``native`` package's own imports lead back here.
@@ -358,7 +358,7 @@ class _NativeNoise:
         lib.wb_lod_new.argtypes = [f64, i32, i64, f64]
         lib.wb_lod_new.restype = ptr
         lib.wb_lod_free.argtypes = [ptr]
-        lib.wb_lod_set_params.argtypes = [ptr, f64, f64, f64, f64, i32]
+        lib.wb_lod_set_params.argtypes = [ptr, f64, f64, f64, f64, i32, f64, f64]
         lib.wb_lod_reset.argtypes = [ptr]
         lib.wb_lod_set_bounds.argtypes = [ptr, ptr, ptr, i64]
         lib.wb_lod_set_ready.argtypes = [ptr, ptr, i32, i64]

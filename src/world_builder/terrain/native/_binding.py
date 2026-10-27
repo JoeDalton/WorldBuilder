@@ -99,12 +99,26 @@ def _library() -> ctypes.CDLL:
         "wb_terrain_sphere": (N, [P, P, D, N, P]),
         "wb_terrain_material": (N, [P, P]),
         "wb_terrain_set_swell": (None, [P, N, D, D, P, P, N, D, D]),
+        # Asteroid fields (asteroid_collision.cpp).
+        "wb_asteroids_init": (N, []),
+        "wb_asteroids_new": (P, [N, P, P]),
+        "wb_asteroids_free": (None, [P]),
+        "wb_asteroids_set_prototype": (None, [P, N, N, P]),
+        "wb_asteroids_add": (None, [P, L, P, P]),
+        "wb_asteroids_remove": (None, [P, L, P]),
+        "wb_asteroids_count": (N, [P]),
+        "wb_asteroids_set_time": (None, [P, D]),
+        "wb_asteroids_set_origin": (None, [P, D, D, D]),
+        "wb_asteroids_attach": (N, [P, P, N]),
+        "wb_asteroids_sphere": (N, [P, P, D, N, P]),
+        "wb_asteroids_segment": (N, [P, P, P, P]),
     }
     for name, (restype, argtypes) in signatures.items():
         function = getattr(lib, name)
         function.restype = restype
         function.argtypes = argtypes
     lib.wb_init()
+    lib.wb_asteroids_init()
     return lib
 
 
@@ -249,3 +263,109 @@ class NativeTerrain:
         """:returns: the dominant biome index at the vertex nearest a surface
         point, -1 over the sea, -2 where nothing is registered"""
         return self._lib.wb_terrain_material(self._handle, _vec(point).ctypes.data)
+
+
+class NativeAsteroids:
+    """An asteroid field's rocks near the camera, as the native collision
+    solid sees them (``asteroid_collision.cpp``).
+
+    Positions are float64 metres in the field frame. The solids attached to
+    collision nodes (:meth:`attach`) share these rocks; they work in the
+    field frame shifted by :meth:`set_origin`.
+    """
+
+    #: Doubles per rock row (:meth:`add`).
+    ROW = 15
+
+    def __init__(self, cells: ArrayLike, largest: ArrayLike):
+        """
+        :param cells: per size class, the scatter's cell edge
+        :param largest: per size class, the largest radius
+        :raises NativeCollisionError: the library is missing or mismatched
+        """
+        self._handle = None
+        self._lib = _library()
+        cells = np.ascontiguousarray(cells, dtype=np.float64)
+        largest = np.ascontiguousarray(largest, dtype=np.float64)
+        self._handle = self._lib.wb_asteroids_new(
+            len(cells), cells.ctypes.data, largest.ctypes.data
+        )
+        self._out = np.zeros(8)
+
+    def close(self) -> None:
+        """Release the rocks (attached solids keep them until removed)."""
+        if self._handle:
+            self._lib.wb_asteroids_free(self._handle)
+            self._handle = None
+
+    def __del__(self):
+        self.close()
+
+    def __len__(self) -> int:
+        return self._lib.wb_asteroids_count(self._handle)
+
+    def set_prototype(self, index: int, quads: int, vertices: np.ndarray) -> None:
+        """A prototype's finest mesh: (6 (quads + 1)^2, 3) positions, unit
+        bounding radius (``PrototypeMesh.vertices``)."""
+        vertices = np.ascontiguousarray(vertices, dtype=np.float32)
+        if vertices.shape != (6 * (quads + 1) ** 2, 3):
+            raise ValueError(f"vertices {vertices.shape} for {quads} quads")
+        self._lib.wb_asteroids_set_prototype(
+            self._handle, int(index), int(quads), vertices.ctypes.data
+        )
+
+    def add(self, slots: np.ndarray, rows: np.ndarray) -> None:
+        """Register rocks by slot (replacing what a slot held): per row the
+        centre (3), radius, q0 (4), axis (3), precession, spin, prototype and
+        class, field frame."""
+        slots = np.ascontiguousarray(slots, dtype=np.int64)
+        rows = np.ascontiguousarray(rows, dtype=np.float64).reshape(-1, self.ROW)
+        if len(slots) != len(rows):
+            raise ValueError("one row per slot")
+        self._lib.wb_asteroids_add(
+            self._handle, len(slots), slots.ctypes.data, rows.ctypes.data
+        )
+
+    def remove(self, slots: np.ndarray) -> None:
+        slots = np.ascontiguousarray(slots, dtype=np.int64)
+        self._lib.wb_asteroids_remove(self._handle, len(slots), slots.ctypes.data)
+
+    def set_time(self, t: float) -> None:
+        """The field's time: the rocks' orientations (``motion.orientation``)."""
+        self._lib.wb_asteroids_set_time(self._handle, float(t))
+
+    def set_origin(self, origin: ArrayLike) -> None:
+        """The field-frame point at the collision node's origin."""
+        x, y, z = (float(v) for v in origin)
+        self._lib.wb_asteroids_set_origin(self._handle, x, y, z)
+
+    def attach(self, node, samples: int = 5) -> None:
+        """Add a solid answering for these rocks to a CollisionNode.
+
+        :param samples: sphere footprint samples per side (odd)
+        """
+        self._lib.wb_asteroids_attach(
+            self._handle, _collision_node_pointer(node), samples
+        )
+
+    def sphere(self, centre: ArrayLike, radius: float, samples: int = 5):
+        """:returns: (point (3,), normal (3,), depth, slot) of a sphere's
+        deepest contact, field frame, or None"""
+        c = _vec(centre)
+        out = self._out
+        if not self._lib.wb_asteroids_sphere(
+            self._handle, c.ctypes.data, float(radius), samples, out.ctypes.data
+        ):
+            return None
+        return out[0:3].copy(), out[3:6].copy(), float(out[6]), int(out[7])
+
+    def segment(self, a: ArrayLike, b: ArrayLike):
+        """:returns: (t, point (3,), normal (3,), slot) of the first crossing
+        into a rock, field frame, or None"""
+        a, b = _vec(a), _vec(b)
+        out = self._out
+        if not self._lib.wb_asteroids_segment(
+            self._handle, a.ctypes.data, b.ctypes.data, out.ctypes.data
+        ):
+            return None
+        return float(out[0]), out[1:4].copy(), out[4:7].copy(), int(out[7])

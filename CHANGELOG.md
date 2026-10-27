@@ -14,9 +14,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`g = -G sum m (x - p) / |x - p|^3`, capped inside a body at its surface
   value). A fused native kernel (`native/gravity.c`, 4-9x faster) with a numpy
   fallback.
+- `world_builder.asteroids`: asteroid fields from a spec, stored nowhere
+  (docs/source/asteroids.md). A `FieldSpec` sets the extent (box or ball, soft
+  edges), the density and its clumping (noise above a threshold set from a
+  coverage), the size distribution (`Distribution`: uniform, normal,
+  lognormal, power law, U-shaped, table), spins (axis distribution, size
+  scaling, free symmetric-top tumble), prototypes, ice and keep-outs.
+  `Scatter` gives the rocks of any part of it, the same every time: Poisson
+  cells per size class, density thinning and a Matern hard core (no two
+  rocks overlap). A native scatter (`native/scatter.c`) gives numpy's rocks
+  ~100x faster. `python -m world_builder.asteroids.preview` draws a field's
+  rocks and statistics. (#14)
+- Rock prototypes (`asteroids.shape`, `asteroids.prototype`,
+  `asteroids.mesh`): an ellipsoid with lumpy noise, ridges and craters,
+  meshed on the terrain's cube-sphere grid at four levels of detail (band
+  limited, crack-free, with each level's error), with a full-detail normal
+  map and a radius grid for collision; built by `ChunkExecutor` workers.
+  `scripts/asteroid_gallery.py` renders them. (#14)
+- `world_builder.asteroids.field.AsteroidField`: an asteroid field drawn by
+  hardware instancing around the camera (one draw per prototype and level
+  of detail), rocks held per size class within their drawing distance,
+  levels of detail by pixel error, spin and tumble in the vertex shader at
+  the game's clock, the terrain's materials and lighting. `AsteroidSettings`
+  (the `asteroids` section of `WorldSettings`) sets its costs.
+  `scripts/demo_asteroids.py` flies through one; `scripts/asteroid_bench.py
+  --field` times it: 3-5 ms p95 frames against SpaceFlight's 10-37 ms for
+  the same 15 km cube. (#14)
+- `AsteroidField.enable_collision`: the rocks near the camera solid to a
+  game's CollisionTraverser, through a native solid
+  (`native/asteroid_collision.cpp`, in the collision library) testing spheres
+  and segments against each rock's finest mesh as drawn, turned to the
+  field's time; one entry per collider. Its owner gives the material
+  (`material_at`) and the surface's speed (`velocity_at`) at a hit.
+  `scripts/asteroid_bench.py --collision` times it: 2.4 ms a traverse
+  against 32 ms for SpaceFlight's per-rock spheres. (#14)
+- An `AsteroidField` without a camera (headless) keeps its rocks and their
+  collision up to date and draws nothing. (#14)
+- `scripts/asteroid_bench.py`: frame times of an asteroid field flown along
+  fixed paths; `--legacy` rebuilds SpaceFlight's current field (one node and
+  collision sphere per rock) as the reference to beat. (#14)
+- `scripts/compare_shots.py`: compares two folders of screenshots pixel by
+  pixel, for shader changes meant to change nothing. (#14)
+
+- Big rocks near the camera drawn as terrain (`asteroids.promotion`,
+  `asteroids.rock.RockSpec`): the terrain's level of detail and collision
+  within ~0.8 radii of their surface, turning with the field's time; pooled
+  `Terrain`s on the field's workers and textures. `AsteroidSettings` gains
+  `terrain_min_radius` and `max_terrain_rocks`.
+  `scripts/asteroid_bench.py --flight approach` flies into one, and
+  `--terrain-rocks N` overrides their number. (#14)
+- Crooked asteroid shapes (`ShapeSpec.family`): besides round rocks (now
+  with big bulges), contact binaries (two lobes at an angle, a waist, as
+  Toutatis), bent and twisted rocks (as 54509 YORP) and angular fragments
+  (planes clipping the body). Small rocks are mostly crooked, big ones
+  mostly round (`ShapeSpec.round_share`, 15 % to 85 %), chosen by the
+  scatter in numpy and C alike (native interface 13). Lumps are evaluated
+  on the body's surface. `asteroid_gallery.py --family NAME --views N`.
+  (#14)
+- Ice in patches (`asteroids.shape.IcePatches`, `MaterialSpec.patch_scale`):
+  a rock's ice covers its share of the surface where a smooth noise ranks
+  highest, a few patches of ice on a rocky rock, a few of rock on an icy
+  one, each pure (no rock/snow blend, no beige). The rank is the normal
+  map's fourth channel (RGBA8); the rock's terrain and `material_at` read
+  the same function. Far rocks keep the patches' mean colours. (#14)
+- The terrain draws any body (`spec.evaluator()`; a `Planet` or a rock), with
+  per-body height bounds for the LOD pass (a small body was mostly culled
+  by the planets' -7 km), a texture period per grid (`grid_for(radius,
+  uv_period)`: no stretched textures on small bodies), an orientation
+  (`Terrain(orientation=)`, `set_orientation`: a turning body), lighting as
+  an object (`spec.radial_light`), a plain display encoding
+  (`Terrain(tonemap=False)`) and shared texture arrays (`Terrain(textures=)`).
+  (#14)
+- `World` takes no body for open space: the sky, the sun and the lights
+  alone, `space_ambient` the sky light away from any body. (#14)
+- Planet rings: `asteroids.spec.Annulus` (inner and outer radius,
+  thickness, soft faces and rims, a radial profile of ringlets and gaps),
+  in the numpy and native scatter (native interface 11), and a `ring`
+  preset 220,000 km across. (#14)
+- The haze of the rocks not drawn (`asteroids.haze`, `shaders/haze.frag`):
+  along each pixel's ray, the cross-section of the rocks under the drawn
+  size (the hard core's thinning included) and past the field's `far`, plus
+  `Density(dust=)`, lit as Lambert spheres. A ring is a band of light from
+  afar; rocks appear out of it on approach. Drawn by the far camera of a
+  split from its near plane, on a hull pulled inside the far plane.
+  `AsteroidField(haze=)`. The haze averages the clumps (backlog). (#14)
+- `World(fields=[FieldLook(...)])` and `World.field(name)`: asteroid fields
+  and rings in a world, on its pool, settings, sun and clock, part of its
+  loading. `scripts/demo_asteroids.py` is built on it (split depth, the sky,
+  render's origin at the camera) and gains `--preset ring` and a far view
+  (Home). (#14)
 
 ### Changed
 
+- Asteroid fields without thresholds (#14):
+  - each size class holds a ball of cells around the camera (not a box),
+    moved by its difference and grown over frames (about 30,000 new cells a
+    frame); `AsteroidField.loading` waits for every window to be within 10 %
+    of its range. Crossing a cell in a ring cost 230 ms, now a few ms;
+  - `far` defaults to None (each rock as far as its size draws it); a far,
+    or a window still growing, fades its class's rocks out over its last
+    fifth, and the haze takes them in, class by class (no square, no
+    fronts);
+  - the haze between the camera and a rock veils it (`haze.glsl`, shared by
+    the haze and the rocks): far rocks melt into the haze they leave to;
+  - a native visible pass (`native/visible.c`, interface 12) over a compact
+    copy of the rocks held, which also lists the big rocks near for the
+    terrain rocks (they cost 19 ms a frame in a ring);
+  - `instance_budget` counts rocks drawn in view (HIGH 80,000), and a new
+    `held_budget` (HIGH 300,000) bounds the rocks held in every direction:
+    a ring is drawn down to 2 pixels (it was 12);
+  - a coarser mesh level (2 quads a face side) for rocks a few pixels wide;
+  - what the haze misses per metre is tabulated each frame (one lookup a
+    sample: the ring's frames 23 ms to 12);
+  - only new rows of the instance table are written on the CPU (an upload
+    cost 11 ms with 45,000 rocks);
+  - `asteroid_bench.py` flies a ring (`--field ring`), reports rocks held
+    and in range, and takes `--setting NAME=VALUE`.
+
+- The terrain's fragment shader is split into includes other shaders can
+  share, with no pixel changed: `terrain_material.glsl` (the biome texture
+  blend, `layeredMaterial`) and `object_light.glsl` (sun, sky light and
+  highlight, `objectLight`); it takes `aces_tonemap` from `display.glsl`
+  instead of keeping its own copy. (#14)
 - **Breaking:** `BodyLook.mass` is required (keyword only), for the gravity
   field; `Body.mass` reads it.
 - Terrain chunks generate about 3x faster (~8 ms instead of ~24): the noise

@@ -88,6 +88,7 @@ class LodSelector:
         max_distance: float | None = None,
         horizon_floor: float = 0.0,
         min_level: int = 0,
+        unknown_bounds: tuple[float, float] = UNKNOWN_BOUNDS,
     ):
         """
         :param grid: the planet's chunk grid (carries the radius)
@@ -101,8 +102,11 @@ class LodSelector:
             planet's bulge, metres (0 with an ocean, since water is opaque)
         :param min_level: finest level drawn; nodes at it never split, so
             raising it drops the finest detail (0 = full detail)
+        :param unknown_bounds: the heights a root is assumed to span before it
+            is generated: the body's (``height_bounds``)
         """
         self.grid = grid
+        self.unknown_bounds = tuple(unknown_bounds)
         self.radius = grid.radius
         self.split_factor = split_factor
         self.hysteresis = hysteresis
@@ -150,7 +154,7 @@ class LodSelector:
         split_now: set[Key] = set()
         for root in self.grid.roots():
             selection.keep.add(root)
-            box = bounds(root) or UNKNOWN_BOUNDS
+            box = bounds(root) or self.unknown_bounds
             distance, culled = self._measure(root, box)
             self._distances[root] = distance
             if not culled:
@@ -389,6 +393,7 @@ class NativeLodSelector:
         max_distance: float | None = None,
         horizon_floor: float = 0.0,
         min_level: int = 0,
+        unknown_bounds: tuple[float, float] = UNKNOWN_BOUNDS,
     ):
         """As :class:`LodSelector`; the native library must be loaded."""
         native = native_library()
@@ -406,6 +411,7 @@ class NativeLodSelector:
             "max_distance": max_distance,
             "horizon_floor": horizon_floor,
             "min_level": min_level,
+            "unknown_bounds": tuple(unknown_bounds),
         }
         self._push()
         self._key = (ctypes.c_int32 * 4)()
@@ -422,6 +428,8 @@ class NativeLodSelector:
             -1.0 if p["max_distance"] is None else float(p["max_distance"]),
             float(p["horizon_floor"]),
             int(p["min_level"]),
+            float(p["unknown_bounds"][0]),
+            float(p["unknown_bounds"][1]),
         )
 
     def __getattr__(self, name: str):

@@ -14,6 +14,7 @@
 #include <math.h>
 #include <stdint.h>
 
+#include "noise.h"
 #include "swell.h"
 
 #if defined(_WIN32)
@@ -23,7 +24,7 @@
 #endif
 
 /* Bumped when a signature or a result changes; noise.py checks it. */
-#define WB_NOISE_ABI 8
+#define WB_NOISE_ABI 13
 
 static const double F3 = 1.0 / 3.0;
 static const double G3 = 1.0 / 6.0;
@@ -37,20 +38,6 @@ static const double GRADIENTS[16][3] = {
     {1, 1, 0},  {-1, 1, 0},  {0, -1, 1}, {0, -1, -1},
 };
 
-/* noise._hash: lattice coordinates and seed into 64 bits (splitmix64). */
-static uint64_t lattice_hash(int64_t i, int64_t j, int64_t k, uint64_t seed) {
-  uint64_t h = ((uint64_t)i * 0x9E3779B185EBCA87ULL) ^
-               ((uint64_t)j * 0xC2B2AE3D27D4EB4FULL);
-  h ^= (uint64_t)k * 0x165667B19E3779F9ULL;
-  h ^= seed;
-  h ^= h >> 30;
-  h *= 0xBF58476D1CE4E5B9ULL;
-  h ^= h >> 27;
-  h *= 0x94D049BB133111EBULL;
-  h ^= h >> 31;
-  return h;
-}
-
 /* noise._corner */
 static double corner(double x, double y, double z, int64_t i, int64_t j,
                      int64_t k, uint64_t seed) {
@@ -59,7 +46,7 @@ static double corner(double x, double y, double z, int64_t i, int64_t j,
   if (t < 0.0) t = 0.0;
   t *= t;
   t *= t;
-  g = GRADIENTS[lattice_hash(i, j, k, seed) >> 60];
+  g = GRADIENTS[wb_lattice_hash(i, j, k, seed) >> 60];
   return t * (g[0] * x + g[1] * y + g[2] * z);
 }
 
@@ -106,20 +93,23 @@ WB_API void wb_simplex3(const double *points, int64_t n, uint64_t seed,
     out[a] = simplex(points[3 * a], points[3 * a + 1], points[3 * a + 2], seed);
 }
 
+double wb_fbm_point(const double *p, int32_t octaves, const double *frames,
+                    const uint64_t *seeds, const double *weights) {
+  double total = 0.0;
+  int32_t o;
+  for (o = 0; o < octaves; o++)
+    total += weights[o] * octave(p, frames + 12 * o, seeds[o]);
+  return total;
+}
+
 /* The weighted sum of octaves, as noise.fbm before its normalisation:
  * out = sum of weights[o] * octave o. frames: (octaves, 12); seeds: mixed. */
 WB_API void wb_fbm(const double *points, int64_t n, int32_t octaves,
                    const double *frames, const uint64_t *seeds,
                    const double *weights, double *out) {
   int64_t a;
-  int32_t o;
-  for (a = 0; a < n; a++) {
-    const double *p = points + 3 * a;
-    double total = 0.0;
-    for (o = 0; o < octaves; o++)
-      total += weights[o] * octave(p, frames + 12 * o, seeds[o]);
-    out[a] = total;
-  }
+  for (a = 0; a < n; a++)
+    out[a] = wb_fbm_point(points + 3 * a, octaves, frames, seeds, weights);
 }
 
 /* noise.ridged before its normalisation, over the octaves it evaluates

@@ -33,6 +33,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from world_builder.asteroids.settings import AsteroidSettings
 from world_builder.atmosphere import AtmosphereSettings
 from world_builder.clouds.cloud import CloudSettings
 from world_builder.ocean.ocean import OceanSettings
@@ -54,6 +55,7 @@ SECTIONS: dict[str, type[QualitySettings]] = {
     "sky": SkySettings,
     "clouds": CloudSettings,
     "ocean": OceanSettings,
+    "asteroids": AsteroidSettings,
 }
 
 
@@ -71,6 +73,7 @@ class WorldSettings:
     sky: SkySettings = field(default_factory=SkySettings)
     clouds: CloudSettings = field(default_factory=CloudSettings)
     ocean: OceanSettings = field(default_factory=OceanSettings)
+    asteroids: AsteroidSettings = field(default_factory=AsteroidSettings)
 
     @classmethod
     def preset(cls, level: QualityLevel | str) -> WorldSettings:

@@ -74,6 +74,7 @@ typedef struct {
   int64_t n0;
   /* the parameters */
   double split_factor, hysteresis, max_distance, horizon_floor;
+  double unknown_b0, unknown_b1; /* a root's heights before it is generated */
   int32_t min_level;
   /* the nodes */
   Node *nodes;
@@ -436,12 +437,16 @@ WB_API void wb_lod_free(Lod *lod) {
   free(lod);
 }
 
-/* max_distance < 0: no cap. */
+/* max_distance < 0: no cap. unknown_b0, unknown_b1: the heights a root is
+ * assumed to span before it is generated (the body's height bounds). */
 WB_API void wb_lod_set_params(Lod *lod, double split_factor, double hysteresis,
-                              double max_distance, double horizon_floor, int32_t min_level) {
+                              double max_distance, double horizon_floor, int32_t min_level,
+                              double unknown_b0, double unknown_b1) {
   lod->split_factor = split_factor, lod->hysteresis = hysteresis;
   lod->max_distance = max_distance, lod->horizon_floor = horizon_floor;
   lod->min_level = min_level;
+  if (unknown_b0 != lod->unknown_b0 || unknown_b1 != lod->unknown_b1) lod->gen += 1;
+  lod->unknown_b0 = unknown_b0, lod->unknown_b1 = unknown_b1;
 }
 
 /* Forget the hysteresis state. */
@@ -497,7 +502,7 @@ WB_API void wb_lod_select(Lod *lod, const double *camera, const double *forward)
         lod->split_factor * (lod->spacing0 * (double)((int64_t)1 << level) * QUADS);
   for (face = 0; face < 6; face++) {
     int64_t n = node_of(lod, lod->max_level, face, 0, 0);
-    double b0 = -7000.0, b1 = 9000.0, distance; /* quadtree.UNKNOWN_BOUNDS */
+    double b0 = lod->unknown_b0, b1 = lod->unknown_b1, distance;
     int culled;
     push(&lod->keep, lod->nodes[n].key, lod->max_level, 0.0, 0);
     if (lod->nodes[n].has_bounds) b0 = lod->nodes[n].h_min, b1 = lod->nodes[n].h_max;

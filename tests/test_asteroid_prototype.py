@@ -1,0 +1,301 @@
+"""Rock prototypes (asteroids.shape, asteroids.prototype, asteroids.mesh):
+closed outward meshes inside the bounding radius, errors, the collision grid
+and the normal map, and the worker job."""
+
+import pickle
+import time
+
+import numpy as np
+import pytest
+
+from world_builder.asteroids.prototype import (
+    PrototypeJob,
+    generate_prototype,
+    interpolate_grid,
+    mesh_indices,
+)
+from world_builder.asteroids.shape import face_grid_dirs, prototype_shape
+from world_builder.asteroids.spec import ShapeSpec
+from world_builder.terrain.workers import ChunkExecutor
+
+JOB = PrototypeJob(ShapeSpec(), seed=3, lods=(4, 8, 16), normal_size=48)
+#: The first prototype of each family, and a second round one
+KEYS = sorted(
+    {
+        next(k for k in range(32) if ShapeSpec().family(k) == f)
+        for f in ShapeSpec.FAMILIES
+    }
+    | {1}
+)
+
+
+@pytest.fixture(scope="module")
+def prototypes():
+    """One of each family (the mesh tests hold for all)."""
+    return [generate_prototype(JOB, k) for k in KEYS]
+
+
+def test_meshes_are_closed_and_face_outward(prototypes):
+    for prototype in prototypes:
+        for mesh in prototype.meshes:
+            # weld the seams' duplicated vertices (bit-identical directions)
+            keys = np.round(mesh.vertices.astype(np.float64), 6)
+            _, weld = np.unique(keys, axis=0, return_inverse=True)
+            tris = weld.ravel()[mesh.indices.astype(np.int64)].reshape(-1, 3)
+            directed = np.concatenate(
+                [tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]]
+            )
+            # each directed edge once, and its reverse once: closed, consistent
+            assert len(np.unique(directed, axis=0)) == len(directed)
+            reverse = {tuple(e) for e in directed[:, ::-1].tolist()}
+            assert reverse == {tuple(e) for e in directed.tolist()}
+            v = mesh.vertices.astype(np.float64)[mesh.indices.astype(np.int64)].reshape(
+                -1, 3, 3
+            )
+            normal = np.cross(v[:, 1] - v[:, 0], v[:, 2] - v[:, 0])
+            assert np.all(np.sum(normal * v.mean(axis=1), axis=1) > 0.0)
+
+
+def test_rocks_stay_inside_their_bounding_radius(prototypes):
+    for prototype in prototypes:
+        for mesh in prototype.meshes:
+            radius = np.linalg.norm(mesh.vertices, axis=1)
+            assert radius.max() <= 1.0 and radius.min() > 0.1  # a binary's waist
+            np.testing.assert_allclose(
+                np.linalg.norm(mesh.normals, axis=1), 1.0, atol=1e-5
+            )
+            # vertex normals face out of the rock
+            assert np.all(np.sum(mesh.normals * mesh.vertices, axis=1) > 0.0)
+        # the longest axis is z
+        assert prototype.axes[2] == 1.0 and np.all(prototype.axes <= 1.0)
+
+
+# ── the families ────────────────────────────────────────────────────────────
+
+SHAPES = ShapeSpec()
+
+
+def _first(family: str) -> int:
+    return next(k for k in range(SHAPES.prototypes) if SHAPES.family(k) == family)
+
+
+def _profile(shape, axis: int, samples: int = 4000) -> tuple[np.ndarray, np.ndarray]:
+    """:returns: along body *axis*, the surface points' coordinate and
+    their distance from that axis (the rock's width there)"""
+    dirs = face_grid_dirs(64).reshape(-1, 3)
+    points = dirs * shape.radius(dirs)[:, None]
+    other = [a for a in range(3) if a != axis]
+    return points[:, axis], np.linalg.norm(points[:, other], axis=1)
+
+
+def test_the_families_split_the_prototypes():
+    families = [SHAPES.family(k) for k in range(SHAPES.prototypes)]
+    assert families[: SHAPES.round_count] == ["round"] * SHAPES.round_count
+    crooked = SHAPES.prototypes - SHAPES.round_count
+    for family, share in zip(SHAPES.FAMILIES[1:], SHAPES.crooked_shares):
+        assert abs(families.count(family) - share * crooked) <= 1.0
+    # the chance of round grows with the size
+    chance = SHAPES.round_chance([50.0, 400.0, 2000.0], 50.0, 2000.0)
+    np.testing.assert_allclose(chance[[0, 2]], SHAPES.round_share)
+    assert chance[0] < chance[1] < chance[2]
+
+
+def test_a_binary_has_a_waist():
+    """Two lobes meeting at the centre: straight out sideways from there,
+    the rock is much narrower than its big lobe."""
+    shape = prototype_shape(SHAPES, 3, _first("binary"))
+    (_, _, big), _ = shape._lobes
+    angle = np.linspace(0.0, 2.0 * np.pi, 360, endpoint=False)
+    sideways = np.column_stack((np.cos(angle), np.sin(angle), np.zeros_like(angle)))
+    waist = np.median(shape.radius(sideways) / shape.scale)
+    assert waist < 0.85 * min(big[0], big[1])
+
+
+def test_a_bent_rock_is_not_mirror_symmetric():
+    """Its ends curve aside: the surface leans to +x at both ends."""
+    shape = prototype_shape(SHAPES, 3, _first("bent"))
+    dirs = face_grid_dirs(64).reshape(-1, 3)
+    points = dirs * shape.radius(dirs)[:, None]
+    ends = np.abs(points[:, 2]) > 0.6 * np.abs(points[:, 2]).max()
+    middle = np.abs(points[:, 2]) < 0.2 * np.abs(points[:, 2]).max()
+    assert points[ends, 0].mean() > points[middle, 0].mean() + 0.02
+
+
+def test_a_fragment_has_flat_faces():
+    """Clipped by planes: much of its surface is flat, and it never reaches
+    past its unclipped ellipsoid."""
+    from world_builder.asteroids.shape import _ellipsoid
+
+    shape = prototype_shape(SHAPES, 3, _first("fragment"))
+    dirs = face_grid_dirs(64).reshape(-1, 3)
+    radius = shape.radius(dirs, min_wavelength=0.3) / shape.scale
+    on_planes = 0
+    for nx, ny, nz, distance in shape._planes:
+        n = np.array([nx, ny, nz])
+        height = (dirs * radius[:, None]) @ n
+        on_planes += np.count_nonzero(np.abs(height - distance) < 0.02 * distance)
+    assert on_planes > 0.15 * len(dirs)
+    bare = _ellipsoid(dirs, shape.axes) * (1.0 + 0.5 * SHAPES.lumps + SHAPES.ridges)
+    assert np.all(radius <= bare * 1.05)
+
+
+def test_round_rocks_bulge():
+    """The bulges add large-scale relief: the radius varies more at low
+    frequency than with no bulges."""
+    from dataclasses import replace
+
+    flat = prototype_shape(replace(SHAPES, bulges=0.0), 3, 0)
+    bulgy = prototype_shape(SHAPES, 3, 0)
+    dirs = face_grid_dirs(16).reshape(-1, 3)
+    smooth = 1.0  # the lumps mostly faded, the bulges (2 radii) whole
+    assert np.std(bulgy.radius(dirs, smooth)) > 1.2 * np.std(flat.radius(dirs, smooth))
+
+
+def test_errors_shrink_to_the_finest(prototypes):
+    for prototype in prototypes:
+        to_finest = [m.error_to_finest for m in prototype.meshes]
+        assert to_finest[-1] == 0.0
+        assert to_finest[0] > to_finest[-2] > 0.0
+        # the finest is the closest to the full detail
+        full = [m.error for m in prototype.meshes]
+        assert full[-1] == min(full) and full[-1] > 0.0
+
+
+def test_the_radius_grid_is_the_finest_mesh(prototypes):
+    for prototype in prototypes:
+        finest = prototype.meshes[-1]
+        n = finest.quads + 1
+        assert prototype.radius_grid.shape == (6, n, n)
+        np.testing.assert_allclose(
+            prototype.radius_grid.ravel(),
+            np.linalg.norm(finest.vertices, axis=1),
+            rtol=1e-6,
+        )
+        # interpolated at the grid's nodes, the grid itself
+        uv = finest.face_uv.astype(np.float64)
+        at_nodes = interpolate_grid(
+            prototype.radius_grid.astype(np.float64),
+            uv[:, 2].astype(int),
+            uv[:, 0],
+            uv[:, 1],
+        )
+        np.testing.assert_allclose(at_nodes, prototype.radius_grid.ravel(), rtol=1e-12)
+
+
+def test_the_normal_map_faces_out(prototypes):
+    size = JOB.normal_size
+    dirs = face_grid_dirs(size, centred=True)
+    for prototype in prototypes:
+        assert prototype.normal_map.shape == (6, size, size, 4)
+        normal = prototype.normal_map[..., :3].astype(np.float64) / 255.0 * 2.0 - 1.0
+        np.testing.assert_allclose(np.linalg.norm(normal, axis=-1), 1.0, atol=0.02)
+        assert np.mean(np.sum(normal * dirs, axis=-1) > 0.0) > 0.99
+
+
+def test_the_normal_map_carries_the_ice_patches(prototypes):
+    """Its fourth channel is the ice patches' rank: uniform over the
+    surface, the same function a rock's terrain and collision read."""
+    from world_builder.asteroids.shape import ice_patches
+
+    size = JOB.normal_size
+    dirs = face_grid_dirs(size, centred=True).reshape(-1, 3)
+    for prototype in prototypes:
+        rank = prototype.normal_map[..., 3].ravel() / 255.0
+        expected = ice_patches(JOB.seed, prototype.key, JOB.patch_scale).rank(dirs)
+        np.testing.assert_allclose(rank, expected, atol=0.5 / 255.0 + 1e-9)
+        # about uniform (the cube's texels are not quite equal areas)
+        assert abs(np.mean(rank > 0.8) - 0.2) < 0.05
+
+
+def test_ice_patches_cover_the_ice_share():
+    """A rock of ice f is ice on the share f of its surface, in patches:
+    a few of ice on a rocky one, a few of rock on an icy one."""
+    from world_builder.asteroids.shape import _fibonacci, ice_patches, ice_weight
+
+    patches = ice_patches(3, 1, 0.8)
+    dirs = _fibonacci(20_000)
+    rank = patches.rank(dirs)
+    for ice in (0.0, 0.1, 0.5, 0.9, 1.0):
+        assert ice_weight(rank, ice).mean() == pytest.approx(ice, abs=0.01)
+        # pure patches: little of the surface in between
+        w = ice_weight(rank, ice)
+        assert np.mean((w > 0.05) & (w < 0.95)) < 0.05
+    # deterministic, and another prototype's differ
+    np.testing.assert_array_equal(rank, ice_patches(3, 1, 0.8).rank(dirs))
+    assert not np.allclose(rank, ice_patches(3, 2, 0.8).rank(dirs))
+
+
+def test_prototypes_are_deterministic_and_distinct():
+    a = generate_prototype(JOB, 1)
+    b = generate_prototype(JOB, 1)
+    np.testing.assert_array_equal(a.meshes[-1].vertices, b.meshes[-1].vertices)
+    np.testing.assert_array_equal(a.normal_map, b.normal_map)
+    c = generate_prototype(JOB, 2)
+    assert not np.array_equal(a.meshes[-1].vertices, c.meshes[-1].vertices)
+    # the shape is cached per process, keyed by its spec
+    assert prototype_shape(JOB.shape, JOB.seed, 1) is prototype_shape(
+        JOB.shape, JOB.seed, 1
+    )
+
+
+def test_seams_share_their_vertices():
+    """Both faces of a seam compute the same directions, so the same
+    positions: the mesh has no cracks."""
+    mesh = generate_prototype(JOB, 0).meshes[-1]
+    keys = mesh.vertices.view(np.dtype((np.void, 12))).ravel()
+    n = mesh.quads + 1
+    # 6 n^2 vertices, of which the 12 edges' (n - 2) inner ones are doubled
+    # and the 8 corners tripled
+    assert len(np.unique(keys)) == 6 * n * n - 12 * (n - 2) - 16
+
+
+def test_mesh_indices():
+    indices = mesh_indices(4)
+    assert indices.dtype == np.uint16 and len(indices) == 6 * 4 * 4 * 6
+    assert mesh_indices(128).dtype == np.uint32
+
+
+@pytest.mark.parametrize("backend", ["inline", "thread", "process"])
+def test_the_workers_build_prototypes(backend):
+    job = PrototypeJob(ShapeSpec(prototypes=2), seed=0, lods=(4, 8), normal_size=16)
+    assert pickle.loads(pickle.dumps(job)) == job
+    executor = ChunkExecutor(backend=backend, workers=2, inline_budget=4)
+    try:
+        version = executor.set_spec(job, "asteroids", generator=generate_prototype)
+        executor.request([0, 1], "asteroids")
+        done = []
+        for _ in range(600):
+            done += executor.collect("asteroids")
+            if len(done) == 2:
+                break
+            time.sleep(0.05)
+        assert sorted(p.key for p in done) == [0, 1]
+        assert all(p.version == version for p in done)
+    finally:
+        executor.shutdown()
+
+
+def test_panda_geometry():
+    from world_builder.asteroids.mesh import build_geom, normal_map_texture
+
+    prototype = generate_prototype(JOB, 0)
+    mesh = prototype.meshes[1]
+    geom = build_geom(mesh)
+    assert geom.get_vertex_data().get_num_rows() == len(mesh.vertices)
+    assert geom.get_primitive(0).get_num_vertices() == len(mesh.indices)
+    tex = normal_map_texture([prototype, prototype])
+    assert tex.get_z_size() == 12 and tex.get_x_size() == JOB.normal_size
+
+
+@pytest.mark.parametrize("quads", [64, 128])
+def test_fine_levels_keep_their_index_buffer(quads):
+    """64 quads a side: 147,456 indices of 25,350 vertices, still 16-bit;
+    128: 32-bit."""
+    from world_builder.asteroids.mesh import shared_triangles
+
+    tris = shared_triangles(quads)
+    indices = mesh_indices(quads)
+    assert tris.get_num_vertices() == len(indices)
+    assert tris.get_vertex(len(indices) - 1) == int(indices[-1])
+    wide = 6 * (quads + 1) ** 2 > 65536
+    assert tris.get_index_stride() == (4 if wide else 2)

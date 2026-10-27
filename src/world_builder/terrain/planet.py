@@ -191,6 +191,10 @@ class PlanetSpec:
             return self
         return replace(self, sea_bias=_sea_bias(self))
 
+    def evaluator(self) -> Planet:
+        """:returns: what samples it (the terrain's body protocol)"""
+        return Planet(self)
+
 
 PRESETS: dict[str, PlanetSpec] = {
     "earthlike": PlanetSpec(name="earthlike"),
@@ -304,16 +308,39 @@ class GridSample:
     :ivar elevation: (rows, columns) metres above sea level
     :ivar temperature: (rows, columns) degrees Celsius, altitude lapse included
     :ivar humidity: (rows, columns) in [0, 1]
+    :ivar weights: (rows, columns, 6) biome weights summing to 1, for a body
+        that sets them itself; None = from the climate (biomes.weights)
     """
 
     dirs: np.ndarray
     elevation: np.ndarray
     temperature: np.ndarray
     humidity: np.ndarray
+    weights: np.ndarray | None = None
+
+
+#: The heights a planet's ground can take, metres above sea level: before a
+#: chunk is generated, its ground is assumed anywhere in them.
+PLANET_HEIGHT_BOUNDS = (-7000.0, 9000.0)
 
 
 class Planet:
-    """Evaluates a :class:`PlanetSpec`. Cheap to build once the spec is resolved."""
+    """Evaluates a :class:`PlanetSpec`. Cheap to build once the spec is resolved.
+
+    The terrain's **body protocol** (what the chunk pipeline, the LOD pass,
+    the queries and the collision ask of a body; ``asteroids.rock.RockBody``
+    is another):
+
+    - ``spec``: its spec, with ``radius``, ``has_ocean``, ``has_vegetation``,
+      ``paints`` and ``evaluator()``;
+    - ``grid``: its :class:`cubesphere.CubeGrid`;
+    - ``height_bounds``: (lowest, highest) ground, metres from the radius;
+    - ``sample_face_grid(face, ka, kb, step)`` and
+      ``sample_dirs(dirs, min_wavelength, apply_stamps)``.
+    """
+
+    #: (lowest, highest) ground, metres above sea level
+    height_bounds = PLANET_HEIGHT_BOUNDS
 
     def __init__(self, spec: PlanetSpec):
         """:param spec: the planet; resolved here if its sea bias is unset"""
@@ -497,7 +524,7 @@ class Planet:
         :returns: the sampled fields
         """
         grid = self.grid
-        dirs = _face_grid(face, grid.param(ka), grid.param(kb))
+        dirs = face_grid(face, grid.param(ka), grid.param(kb))
         if step >= self.low_band_step:
             low = self.low_band(dirs)
         else:
@@ -563,7 +590,7 @@ class Planet:
 
         :returns: (len(lb), len(la), 7)
         """
-        dirs = _face_grid(face, self.grid.param(la), self.grid.param(lb))
+        dirs = face_grid(face, self.grid.param(la), self.grid.param(lb))
         return self.low_band(dirs).reshape(len(lb), len(la), -1)
 
 
@@ -622,7 +649,7 @@ def _pchip_end(h0: float, h1: float, m0: float, m1: float) -> float:
     return float(d)
 
 
-def _face_grid(face: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+def face_grid(face: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """:returns: ``face_dirs`` over the grid a x b, rows along b: in the
     native library when it is built (one tangent per row and column)"""
     native = native_library()

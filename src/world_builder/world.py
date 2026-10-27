@@ -4,10 +4,11 @@ updated as one.
 
 A game describes its world (what bodies there are, where, and how they look)
 and :class:`World` builds and wires the parts: each body's terrain, its air,
-its planet clouds and its sea, the sky, the sun, and Panda3D lights for
-everything else (the game's own models). Every frame, :meth:`World.update`
-does what scripts/demo_terrain.py does by hand: the terrain, the air, the
-sky, the clouds, the lights and the sea's frame.
+its planet clouds and its sea, the asteroid fields and rings, the sky, the
+sun, and Panda3D lights for everything else (the game's own models). Every
+frame, :meth:`World.update` does what scripts/demo_terrain.py does by hand:
+the terrain, the fields, the air, the sky, the clouds, the lights and the
+sea's frame.
 
 Usage::
 
@@ -71,6 +72,8 @@ from panda3d.core import (
 )
 
 from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
+from world_builder.asteroids.field import AsteroidField
+from world_builder.asteroids.spec import FieldSpec, KeepOut
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.half_res import HalfResClouds
@@ -84,9 +87,13 @@ from world_builder.sky import Sky
 from world_builder.sky.starfield import NebulaStyle, Starfield
 from world_builder.terrain.collision import TerrainCollision
 from world_builder.terrain.planet import PlanetSpec
-from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.terrain.terrain import Terrain
 from world_builder.terrain.workers import ChunkExecutor
+
+#: Open space (a world with no body): the depth split and the far plane,
+#: metres (the sky is drawn just inside the far plane).
+SPACE_SPLIT_M = 2000.0
+SPACE_FAR_M = 1.0e6
 
 # ── looks: what the game decides ─────────────────────────────────────────────
 
@@ -214,6 +221,37 @@ class BodyLook:
     mass: float = field(kw_only=True)
 
 
+@dataclass(frozen=True)
+class FieldLook:
+    """An asteroid field or a planet's ring
+    (:class:`~world_builder.asteroids.field.AsteroidField`'s arguments of the
+    same names). Its rocks are massless; they turn with the world's clock.
+
+    :ivar name: what :meth:`World.field` finds it by
+    :ivar spec: the field
+    :ivar position: its centre, world frame, metres (a ring's planet's)
+    :ivar orientation: world from field, unit quaternion (w, x, y, z): a
+        ring lies in the field's xy plane
+    :ivar keep_outs: room no rock enters, added to the spec's
+    :ivar ambient: the sky light on its rocks, linear; None = the world's
+        ``space_ambient``
+    :ivar exposure: its exposure (shared tonemap)
+    :ivar far: no rock farther is drawn (they fade into its haze); None =
+        as far as each is drawn by its size
+    :ivar haze: draw the rocks not drawn as a haze
+    """
+
+    name: str
+    spec: FieldSpec
+    position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    orientation: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    keep_outs: tuple[KeepOut, ...] = ()
+    ambient: tuple[float, float, float] | None = None
+    exposure: float = 0.9
+    far: float | None = None
+    haze: bool = True
+
+
 # ── the parts of one body ────────────────────────────────────────────────────
 
 
@@ -272,6 +310,7 @@ class World:
     lights (see the module).
 
     :ivar bodies: the built bodies, in the order given
+    :ivar fields: the asteroid fields and rings, in the order given
     :ivar atmospheres: the bodies' air, one :class:`Atmospheres` for all
     :ivar sky: the sky, or None
     :ivar executor: the worker pool every terrain and cloud layer shares
@@ -296,10 +335,13 @@ class World:
         light_scale: float = 1.0,
         clock: Callable[[], float] | None = None,
         backend: str = "process",
+        space_ambient: ArrayLike = (0.025, 0.025, 0.03),
+        fields: Sequence[FieldLook] = (),
     ) -> None:
         """
         :param app: the ShowBase: its render, camera, lens and window
-        :param bodies: the planets and moons (at least one)
+        :param bodies: the planets and moons; none for open space (the sky,
+            the sun and the lights alone)
         :param sun: the sun
         :param sky: the sky; None = none (the game draws its own)
         :param settings: what every part costs; None = HIGH
@@ -310,18 +352,22 @@ class World:
             Panda3D's fixed-function lighting, with no tone map, clip every
             channel at 1 (see docs/source/object_lighting.md): a game whose
             models are lit that way scales it down. 1 = as the world is lit
-        :param clock: game time in seconds, for the swell; None = Panda's
-            frame time
+        :param clock: game time in seconds, for the swell and the rocks'
+            spin; None = Panda's frame time
         :param backend: where chunks and cloud tiles are generated
             (:class:`ChunkExecutor`)
-        :raises ValueError: no body, two bodies of one name, clouds without
-            air, or an ocean on a dry planet
+        :param space_ambient: the sky light where there is no body (open
+            space), linear
+        :param fields: the asteroid fields and rings
+        :raises ValueError: two bodies (or fields) of one name, clouds
+            without air, or an ocean on a dry planet
         """
-        if not bodies:
-            raise ValueError("a world needs a body")
         names = [look.name for look in bodies]
         if len(set(names)) != len(names):
             raise ValueError(f"body names must differ: {names}")
+        field_names = [look.name for look in fields]
+        if len(set(field_names)) != len(field_names):
+            raise ValueError(f"field names must differ: {field_names}")
         for look in bodies:
             if look.clouds is not None and look.atmosphere is None:
                 raise ValueError(f"{look.name}: clouds need an atmosphere")
@@ -332,6 +378,7 @@ class World:
         self.settings = settings or WorldSettings()
         self._sun = self._unit(sun.direction)
         self._sun_color = np.asarray(sun.color, dtype=np.float64)
+        self._space_ambient = np.asarray(space_ambient, dtype=np.float64)
         if clock is None:
             frame_clock = ClockObject.get_global_clock()
             clock = frame_clock.get_frame_time
@@ -393,6 +440,31 @@ class World:
                 )
             self.bodies.append(body)
 
+        self.fields: list[AsteroidField] = []
+        self._field_looks = list(fields)
+        for look in fields:
+            ambient = self._space_ambient if look.ambient is None else look.ambient
+            self.fields.append(
+                AsteroidField(
+                    app,
+                    look.spec,
+                    clock=clock,
+                    settings=self.settings.asteroids,
+                    keep_outs=look.keep_outs,
+                    executor=self.executor,
+                    position=look.position,
+                    orientation=look.orientation,
+                    sun_direction=tuple(self._sun),
+                    sun_color=tuple(self._sun_color),
+                    ambient=tuple(ambient),
+                    exposure=look.exposure,
+                    materials=materials,
+                    far=look.far,
+                    name=look.name,
+                    haze=look.haze,
+                )
+            )
+
         self.sky = None
         if sky is not None:
             self.sky = Sky(
@@ -420,7 +492,9 @@ class World:
             render.set_light(self.ambient_light)
 
         #: The camera's world position at the last update
-        self.camera_world = np.asarray(bodies[0].position, dtype=np.float64)
+        self.camera_world = np.asarray(
+            bodies[0].position if bodies else (0.0, 0.0, 0.0), dtype=np.float64
+        )
 
     def _make_clouds(self, look: BodyLook, atmosphere: int) -> SphericalClouds:
         cl = look.clouds
@@ -463,6 +537,14 @@ class World:
                 return body
         raise KeyError(name)
 
+    def field(self, name: str) -> AsteroidField:
+        """:returns: the asteroid field of that name
+        :raises KeyError: for an unknown name"""
+        for look, built in zip(self._field_looks, self.fields):
+            if look.name == name:
+                return built
+        raise KeyError(name)
+
     @property
     def sun(self) -> np.ndarray:
         """Toward the sun, world frame (unit)."""
@@ -470,14 +552,15 @@ class World:
 
     @property
     def loading(self) -> bool:
-        """Whether any terrain still waits for ground, or any clouds for
-        tiles: for a game's loading phase. Wait for it to stay False for a
-        moment rather than for one frame (see :attr:`Terrain.loading`)."""
+        """Whether any terrain still waits for ground, any clouds for
+        tiles, or any field for its rocks: for a game's loading phase. Wait
+        for it to stay False for a moment rather than for one frame (see
+        :attr:`Terrain.loading`)."""
         return any(
             body.terrain.loading
             or (body.clouds is not None and body.clouds.stats["pending"] > 0)
             for body in self.bodies
-        )
+        ) or any(asteroids.loading for asteroids in self.fields)
 
     def camera_render(self) -> np.ndarray:
         """:returns: the camera's position in render, float64 (the origin
@@ -502,15 +585,20 @@ class World:
         the farthest visible part of any body.
 
         :param origin_world: render's origin in the world frame (float64)
-        :returns: (split, far), metres
+        :returns: (split, far), metres; in open space (no body) a fixed
+            split and :data:`SPACE_FAR_M`
         """
+        if not self.bodies:
+            return SPACE_SPLIT_M, SPACE_FAR_M
         camera = np.asarray(origin_world, dtype=np.float64) + self.camera_render()
         return SplitDepthCameras.system_ranges(
             (
                 body.radius,
                 float(np.linalg.norm(camera - body.position)),
-                UNKNOWN_BOUNDS[1],
-                0.0 if body.look.spec.has_ocean else UNKNOWN_BOUNDS[0],
+                body.terrain.planet.height_bounds[1],
+                0.0
+                if body.look.spec.has_ocean
+                else body.terrain.planet.height_bounds[0],
             )
             for body in self.bodies
         )
@@ -537,8 +625,11 @@ class World:
         there: through the nearest body's air, or in its shadow if airless.
 
         :param point_world: world frame, metres
-        :returns: (direct, ambient), linear rgb
+        :returns: (direct, ambient), linear rgb; in open space (no body) the
+            bare sun and ``space_ambient``
         """
+        if not self.bodies:
+            return self._sun_color.copy(), self._space_ambient.copy()
         return self._light_at(self.nearest(point_world), point_world)
 
     def _light_at(self, body: Body, point_world) -> tuple[np.ndarray, np.ndarray]:
@@ -568,6 +659,9 @@ class World:
             )
             if body.clouds is not None:
                 body.clouds.set_sun(self._sun)
+        for look, built in zip(self._field_looks, self.fields):
+            ambient = self._space_ambient if look.ambient is None else look.ambient
+            built.set_sun(self._sun, self._sun_color, ambient)
 
     def set_settings(self, settings: WorldSettings) -> None:
         """Change what every part costs (see :meth:`WorldSettings.apply`)."""
@@ -577,6 +671,7 @@ class World:
             parts.append(self.sky)
         for body in self.bodies:
             parts += body.parts()
+        parts += self.fields
         settings.apply(*parts)
         self._sync_half_res()
 
@@ -648,6 +743,8 @@ class World:
 
         for body in self.bodies:
             body.terrain.update(camera, camera_render, camera_forward=forward)
+        for asteroids in self.fields:
+            asteroids.update(camera, camera_render)
         self.atmospheres.update(camera)
         if self.sky is not None:
             if far is None:
@@ -737,4 +834,8 @@ class World:
                 body.clouds.remove()
             body.terrain.destroy()
         self.bodies = []
+        for asteroids in self.fields:
+            asteroids.destroy()
+        self.fields = []
+        self._field_looks = []
         self.executor.shutdown()
