@@ -4,9 +4,10 @@ Standalone flythrough demo for the procedural planet terrain.
 Flies a free camera around a small planetary system: a Kerbin-sized planet
 (600 km) with hand-made stamps (world_builder/terrain/levels/demo.yaml), its
 atmosphere, its clouds (cumulus over the whole planet, following its
-weather) and its sea, an airless sand moon 10,000 km away,
-and a procedural star field, from orbit down to the ground of either. Run it
-from an environment where world_builder is importable::
+weather) and its sea, an airless sand moon 21,000 km away (as wide in the
+sky as the sun: it can eclipse it), and a procedural star field, from orbit
+down to the ground of either. Run it from an environment where world_builder
+is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--radius METRES]
         [--moon-distance METRES] [--no-moon] [--workers N]
@@ -16,7 +17,7 @@ from an environment where world_builder is importable::
 
     --level          the planet's level file (default: the demo level)
     --radius         overrides the level's planet radius
-    --moon-distance  centre to centre (default 10,000 km)
+    --moon-distance  centre to centre (default 21,000 km)
     --no-moon        the planet alone
     --workers        generation processes (the terrain's ``workers``
                      setting; default: physical cores - 1)
@@ -75,8 +76,10 @@ and generation, upload and LOD timings; the depth split and far plane; the
 clouds' tiles and billboards; each part's quality preset ("custom" when it
 differs from every preset).
 
-Lighting: the sun is one direction for the whole system; the atmosphere
-reddens it and the planets' shadows hide it. Panda3D's own lights (a
+Lighting: the sun is one direction for the whole system, a disc as wide as
+the sky draws it; the atmosphere reddens it, the planets' shadows hide it,
+and each body eclipses it for the other, with a penumbra (swing the sun
+behind the moon with J / K and I / U). Panda3D's own lights (a
 DirectionalLight and an AmbientLight on render, for anything drawn without
 the world's shaders) follow the light at the camera, and the sea's near look
 is lit as the sea under the camera (Sea.set_light), so it darkens at night.
@@ -116,6 +119,7 @@ from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.ocean import Sea
 from world_builder.quality import QualityLevel
 from world_builder.settings import SECTIONS, WorldSettings
+from world_builder.shadows import ECLIPSE_SKY_FLOOR, Shadows
 from world_builder.sky import Sky, Starfield
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import (
@@ -124,7 +128,7 @@ from world_builder.terrain.chart import (
 )
 from world_builder.terrain.cubesphere import FACE_NAMES, dirs_to_face
 from world_builder.terrain.level import DEMO_LEVEL, load_level
-from world_builder.terrain.planet import PRESETS
+from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 
 INITIAL_FAR_M = 600000.0  # the lens the sea's reflection camera copies
@@ -132,9 +136,11 @@ SPEED = 300.0  # metres/second at low altitude
 BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground
 ORBIT_RADII = 3.0  # HOME and TAB jump this high
-# The moon: centre-to-centre distance, and where it hangs in the start view
-# (this far from the start point's vertical, toward its north).
-MOON_DISTANCE_M = 10_000e3
+# The moon: centre-to-centre distance (as wide in the sky as the sun, seen
+# from the planet's ground: a total eclipse is possible), and where it hangs
+# in the start view (this far from the start point's vertical, toward its
+# north).
+MOON_DISTANCE_M = 21_000e3
 MOON_SEED = 7
 MOON_ZENITH_ANGLE = 75.0
 # The camera stays within this many moon distances of the planet.
@@ -367,6 +373,10 @@ class TerrainDemo(ShowBase):
         # The planet's air: everything is seen through it, the moon included.
         self.atmospheres = Atmospheres(world.atmosphere)
         self.atmospheres.add(spec.radius, AtmosphereParams())
+        # Each body eclipses the sun for the other (body 0 owns the air).
+        self.shadows = Shadows()
+        self.shadows.add(spec.radius, reach=spec.radius + AtmosphereParams().height)
+        self.shadows.set_atmosphere(0, 0)
         self.terrain = Terrain(
             parent=self.render,
             spec=spec,
@@ -377,9 +387,11 @@ class TerrainDemo(ShowBase):
             ambient=SKY_AMBIENT,
             settings=world.terrain,
         )
+        self.shadows.bind(self.terrain.root, 0)
         self.home = Body("planet", self.terrain, atmosphere=True)
         self.bodies = [self.home]
         if moon_distance is not None:
+            moon_position = self._moon_position(spec, moon_distance)
             moon = Terrain(
                 parent=self.render,
                 spec=replace(PRESETS["moon"], seed=MOON_SEED),
@@ -387,16 +399,20 @@ class TerrainDemo(ShowBase):
                 atmospheres=self.atmospheres,  # seen through the planet's
                 sun_color=SUN_COLOR,
                 ambient=SPACE_AMBIENT,
-                position=self._moon_position(spec, moon_distance),
+                position=moon_position,
                 materials=self.terrain.materials,
                 settings=world.terrain,
             )
+            reach = moon.radius + PLANET_HEIGHT_BOUNDS[1]
+            index = self.shadows.add(moon.radius, moon_position, reach=reach)
+            self.shadows.bind(moon.root, index)
             self.bodies.append(Body("moon", moon, atmosphere=False))
         self.max_range = MAX_RANGE_FACTOR * (moon_distance or 10.0 * spec.radius)
         self.body = self.home  # the nearest body, updated every frame
 
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
         self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
+        self.shadows.bind(self.sky.node)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.clouds = None
         self._cloud_debug = cloud_debug
@@ -560,6 +576,7 @@ class TerrainDemo(ShowBase):
             self.half_res.update()
 
         self.atmospheres.update(self.cam_world)
+        self.shadows.update(self.cam_world)
         self.sky.update((0.0, 0.0, 0.0), far)
         if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
@@ -618,6 +635,7 @@ class TerrainDemo(ShowBase):
 
     def _update_sun(self) -> None:
         # Sunlight above the air: the atmosphere reddens it where it must.
+        self.shadows.set_sun(self._sun)
         self.sky.set_sun(self._sun)
         if self.clouds is not None:
             self.clouds.set_sun(self._sun)
@@ -628,18 +646,25 @@ class TerrainDemo(ShowBase):
         self._update_lights()
 
     def _light_at(self, body: Body, point_world) -> tuple[np.ndarray, np.ndarray]:
-        """:returns: (direct, ambient) light at a point near a body"""
+        """:returns: (direct, ambient) light at a point near a body, eclipsed
+        by the other"""
         if body.atmosphere:
-            return self.atmospheres.light_at(
+            direct, ambient = self.atmospheres.light_at(
                 0,
                 point_world,
                 self._sun,
                 SUN_COLOR,
                 np.asarray(SKY_AMBIENT),
             )
-        hidden = in_shadow(point_world - body.position, self._sun, body.radius)
-        direct = np.zeros(3) if hidden else np.asarray(SUN_COLOR)
-        return direct, np.asarray(SPACE_AMBIENT)
+        else:
+            hidden = in_shadow(point_world - body.position, self._sun, body.radius)
+            direct = np.zeros(3) if hidden else np.asarray(SUN_COLOR)
+            ambient = np.asarray(SPACE_AMBIENT)
+        own = next(i for i, other in enumerate(self.bodies) if other is body)
+        eclipse = float(self.shadows.eclipse(point_world, self._sun, own))
+        return direct * eclipse, ambient * (
+            ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * eclipse
+        )
 
     def _update_lights(self) -> None:
         """Panda3D's sun and ambient lights as they are at the camera, and
@@ -777,6 +802,7 @@ class TerrainDemo(ShowBase):
             settings=self.world.clouds,
             channel="clouds",
         )
+        self.shadows.bind(self.clouds.root, 0)
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
         if getattr(self, "half_res", None) is not None:

@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `world_builder.shadows`: what hides the sun from a point, for every
+  receiver (docs/source/shadows.md). Its first term is the eclipse: each
+  body hides the sun's disc for the others, with a physical penumbra
+  (`shadows.glsl`'s `eclipseVisibility`, the covered share of the sun's
+  disc). It darkens the terrain and far water, the cloud billboards and
+  deck, the air's samples (the sky and the aerial perspective), and the
+  sky light (down to `ECLIPSE_SKY_FLOOR`). `Shadows` feeds the shared
+  uniforms, as `Atmospheres` does; `Shadows.eclipse` is its CPU twin, which
+  `World.light_at` (Panda3D's lights, the sea's near look) now applies: an
+  airless moon in its planet's shadow goes dark. `Shadows.set_sun` works
+  out which bodies' shadows can reach which, so a view with no eclipse
+  costs about what it did (within ~0.2 ms). (#13)
+- `SunLook.angular_radius` and `Sky(sun_angular_radius=)`: one sun size, the
+  disc the sky draws and every penumbra (`shadows.SUN_ANGULAR_RADIUS`,
+  0.55°). (#13)
+- `scripts/terrain_shots.py`: a pose's sun can be aimed at a body
+  (`AimedSun`), and four eclipse poses: `eclipse_ground`, `eclipse_total`,
+  `eclipse_orbit`, `lunar_eclipse`. (#13)
 - `world_builder.gravity.Gravity` and `World.gravity_field(g_constant)`: the
   bodies' raw gravity vector at many points at once, from point masses
   (`g = -G sum m (x - p) / |x - p|^3`, capped inside a body at its surface
@@ -106,6 +124,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The terrain demo's moon is 21,000 km out (was 10,000 km): as wide in the
+  sky as the sun, so it can eclipse it. (#13)
+- `sky.SUN_ANGULAR_RADIUS` moves to `world_builder.shadows` (`sky` still
+  imports it). (#13)
 - Asteroid fields without thresholds (#14):
   - each size class holds a ball of cells around the camera (not a box),
     moved by its difference and grown over frames (about 30,000 new cells a

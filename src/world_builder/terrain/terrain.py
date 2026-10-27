@@ -66,6 +66,7 @@ from world_builder.depth import PASS_TAG, REFLECTION_CAMERA_MASK
 from world_builder.ocean.ocean import bind_sea_defaults
 from world_builder.ocean.swell import Swell
 from world_builder.quality import RESTART, QualityLevel, QualitySettings, knob
+from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.biomes import BIOME_COLORS
 from world_builder.terrain.chunkgen import ChunkData
 from world_builder.terrain.collision import TerrainCollision
@@ -406,6 +407,7 @@ class Terrain:
         self._set_static_inputs(sun_direction, sun_color, ambient, exposure, textures)
         self.root.set_shader_input("uTonemap", int(tonemap))
         bind_defaults(self.root)
+        bind_shadow_defaults(self.root)
         if atmospheres is not None:
             atmospheres.bind(self.root)
         self.root.set_shader_input(

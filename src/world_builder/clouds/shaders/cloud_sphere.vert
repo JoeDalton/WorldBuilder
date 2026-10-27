@@ -122,4 +122,10 @@ void main() {
         vTwilight = cloudTwilight(uOwnAtmosphere, p, sunDir, vSunTint);
         vSkyTint = smoothstep(-0.3, 0.1, dot(normalize(p), sunDir));
     }
+    // Other bodies eclipsing the sun, at the billboard's centre: the sun,
+    // the lit air above (twilight) and the sky dim together.
+    float eclipse = eclipseVisibility(centre - uCamRender, sunDir, uShadowSelf);
+    vSunTint *= eclipse;
+    vTwilight *= eclipse;
+    vSkyTint *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
 }

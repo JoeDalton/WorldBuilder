@@ -172,16 +172,19 @@ void main() {
 
     vec3 V = normalize(-vRelPos);
     // Sunlight through this planet's own air: reddened low, gone in its
-    // shadow. An airless body just has the day/night line.
-    vec3 sunlight = uSunColor;
+    // shadow. An airless body just has the day/night line. Other bodies
+    // eclipse it.
+    float eclipse = eclipseVisibility(vRelPos, L, uShadowSelf);
+    vec3 sunlight = uSunColor * eclipse;
     float sunDay = day;
     if (uOwnAtmosphere >= 0) {
         sunlight *= atmoSunlight(uOwnAtmosphere, uAtmoCam[uOwnAtmosphere].xyz + vRelPos, L);
         sunDay = 1.0;
     }
-    // Sky light fades through twilight.
-    vec3 skylight = uRadialLight == 1 ? uAmbient * smoothstep(-0.2, 0.2, dot(up, L))
-                                      : uAmbient;
+    // Sky light fades through twilight, and dims in an eclipse.
+    vec3 skylight = (uRadialLight == 1 ? uAmbient * smoothstep(-0.2, 0.2, dot(up, L))
+                                       : uAmbient)
+                  * mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
     vec3 C = objectLight(albedo, surfaceN, roughness, ao,
                          uRadialLight == 1 ? up : surfaceN, L, V, sunlight, sunDay, skylight);
     if (water) {

@@ -52,8 +52,17 @@ sun 60 degrees below the nadir's horizon), night_sea (3 m over the sea, the
 sun 8 degrees down: the sky's reflection must be as dark as the sky), beach
 (40 m up, 300 m off the coast nearest the reference point, looking at it: the
 sea's foam, colour by depth and swell), open_sea (150 m over open water,
-looking along it: the swell and how it flattens with distance). Every
-other pose has the sun at azimuth 210, elevation 35, as seen there.
+looking along it: the swell and how it flattens with distance).
+
+Eclipses, the sun aimed at a body from the point under the camera (plus an
+offset): eclipse_ground (the moonrise view, looking at the moon, the sun
+0.6 degrees off its centre: a partial eclipse), eclipse_total (the same, the
+sun behind the moon's centre: the camera in the umbra's tip),
+eclipse_orbit (3 radii over the point under the moon, looking down: the
+moon's shadow on the planet, noon there), lunar_eclipse (the moon_orbit view,
+the sun behind the planet, 0.8 degrees off: the planet's umbra edge across
+the moon). Every other pose has the sun at azimuth 210, elevation 35, as
+seen there.
 """
 
 from __future__ import annotations
@@ -62,6 +71,7 @@ import argparse
 import math
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -77,15 +87,40 @@ from demo_terrain import (  # noqa: E402
     window_config,
 )
 
-from world_builder.terrain.chart import AzimuthalEquidistantChart, latlon  # noqa: E402
+from world_builder.terrain.chart import (  # noqa: E402
+    AzimuthalEquidistantChart,
+    TangentFrame,
+    latlon,
+)
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 
 CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
-#: Sun (azimuth, elevation) per pose, as seen there; default (210, 35).
+
+
+@dataclass(frozen=True)
+class AimedSun:
+    """A sun aimed at a body: the direction from the point under the camera
+    (at sea level) to the body's centre, turned *offset* degrees toward that
+    point's north (an eclipse's depth).
+
+    :ivar body: the body's index in ``demo.bodies``
+    :ivar offset: degrees
+    """
+
+    body: int
+    offset: float = 0.0
+
+
+#: Sun per pose: (azimuth, elevation) as seen there, or an :class:`AimedSun`;
+#: default (210, 35).
 SUNS = {
     "sunset": (270.0, 3.0),
     "night_orbit": (90.0, -60.0),
     "night_sea": (90.0, -8.0),
+    "eclipse_ground": AimedSun(1, 0.6),
+    "eclipse_total": AimedSun(1),
+    "eclipse_orbit": AimedSun(1),
+    "lunar_eclipse": AimedSun(0, 0.8),
 }
 
 
@@ -129,6 +164,15 @@ def _poses(demo: TerrainDemo) -> dict:
         lat, lon = (float(v[0]) for v in latlon(facing[None, :]))
         poses["moon_orbit"] = (lat, lon, 3.0 * moon.radius, 0.0, -89.9, 0, 1)
         poses["moon_ground"] = (lat + 1.0, lon, 2000.0, 0.0, -15.0, 0, 1)
+        # Eclipses (SUNS): looking at the moon (a little above the middle
+        # of the view, the horizon in it), and their shadows from orbit.
+        heading, pitch = _look_at(demo, ref_lat, ref_lon, 1500.0, moon.position)
+        eclipse = (ref_lat, ref_lon, 1500.0, heading, pitch - 8.0, 0, 0)
+        poses["eclipse_ground"] = poses["eclipse_total"] = eclipse
+        under = moon.position / np.linalg.norm(moon.position)
+        lat, lon = (float(v[0]) for v in latlon(under[None, :]))
+        poses["eclipse_orbit"] = (lat, lon, 3.0 * radius, 0.0, -89.9, 0, 0)
+        poses["lunar_eclipse"] = poses["moon_orbit"]
     # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     # At sea level by night: the sky's reflection must be as dark as the sky.
@@ -140,6 +184,34 @@ def _poses(demo: TerrainDemo) -> dict:
     if beach is not None:
         poses["beach"] = beach
     return poses
+
+
+def _look_at(
+    demo: TerrainDemo, lat: float, lon: float, altitude: float, target: np.ndarray
+) -> tuple[float, float]:
+    """:returns: (heading, pitch) from altitude over (lat, lon) of the planet
+    toward a point of the world frame (degrees, as :func:`_poses`')"""
+    frame = TangentFrame.at(lat, lon)
+    eye = demo.home.position + frame.up * (demo.radius + altitude)
+    forward = (target - eye) / np.linalg.norm(target - eye)
+    heading = math.degrees(math.atan2(-(forward @ frame.east), forward @ frame.north))
+    return heading, math.degrees(math.asin(float(forward @ frame.up)))
+
+
+def _aim_sun(demo: TerrainDemo, sun: AimedSun) -> None:
+    """Point the demo's sun as *sun* says, from the point under the camera
+    (once it is placed)."""
+    relative = demo.cam_world - demo.body.position
+    up = relative / np.linalg.norm(relative)
+    ground = demo.body.position + up * demo.body.radius
+    toward = demo.bodies[sun.body].position - ground
+    toward /= np.linalg.norm(toward)
+    lat, lon = latlon(up[None, :])
+    side = TangentFrame.at(float(lat[0]), float(lon[0])).north
+    side = side - toward * float(side @ toward)
+    side /= np.linalg.norm(side)
+    angle = math.radians(sun.offset)
+    demo._sun = math.cos(angle) * toward + math.sin(angle) * side
 
 
 def _beach_pose(demo: TerrainDemo) -> tuple | None:
@@ -246,7 +318,11 @@ def main() -> None:
         lat, lon, alt, heading, pitch, view, body = poses[name]
         demo.set_debug_view(view)
         demo._place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])
-        demo.set_local_sun(*SUNS.get(name, (210.0, 35.0)))
+        sun = SUNS.get(name, (210.0, 35.0))
+        if isinstance(sun, AimedSun):
+            _aim_sun(demo, sun)
+        else:
+            demo.set_local_sun(*sun)
         settled = _settle(demo, args.timeout)
         for _ in range(3):  # let the last uploads reach the screen
             demo.taskMgr.step()

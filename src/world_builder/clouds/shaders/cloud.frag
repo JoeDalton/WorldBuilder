@@ -214,6 +214,11 @@ void main() {
         // does (atmosphere.glsl), so clouds in the planet's shadow stay as
         // bright as the air around them.
         skylight *= smoothstep(-0.3, 0.1, dot(normalize(samplePos), sunDir));
+        // Other bodies eclipsing the sun (as cloud_sphere.vert).
+        float eclipse = eclipseVisibility(samplePos - camPos, sunDir, uShadowSelf);
+        sunlight *= eclipse;
+        twilight *= eclipse;
+        skylight *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
     }
     // The lit air above a cloud in the planet's shadow (cloudTwilight): light
     // from the sky, so neither phase-weighted nor self-shadowed, and reaching

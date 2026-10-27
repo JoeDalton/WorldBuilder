@@ -98,7 +98,9 @@ ground: the sunlight through the air (none in the planet's shadow), and the
 sky light fading through twilight (`twilight`, the terrain's
 `smoothstep(-0.2, 0.2, cos)`). `transmittance_to_sun` is the shader's
 `atmoSunlight` on the CPU (the Chapman function, `depth_toward`, with the
-same `sunset_radius` scale); `in_shadow` covers airless bodies.
+same `sunset_radius` scale); `in_shadow` covers airless bodies. Other
+bodies' eclipses are `Shadows.eclipse`'s ([Shadows](shadows.md)), which
+`World.light_at` multiplies in.
 
 The demo uses them each frame for:
 
@@ -358,6 +360,9 @@ in `cloud_field.glsl` (billboards per vertex, the deck per pixel) spread it:
   undersides as the sky's light does. It carries the clouds from lit to dark
   over about 4° past the line (about 40 km on this planet).
 
+Another body's eclipse multiplies both, and the clouds' sky light dims with
+it (`eclipseVisibility`, see [Shadows](shadows.md)).
+
 The terrain and Panda3D's lights still use the plain shadow: on the ground
 the sun has set long before, so there is no line to see there.
 
@@ -393,7 +398,9 @@ few samples of that air per vertex (as orange with 8 as with 4).
 ### Not yet
 
 - **Wind:** the clouds are static.
-- **Shadows on the ground:** clouds do not shade the terrain.
+- **Shadows on the ground:** clouds do not shade the terrain (planned:
+  [Shadows](shadows.md)). Eclipses by other bodies already darken the air,
+  the ground and the clouds.
 - **One cloud type per planet** (cumulus in the demo); the flat field mixes
   types, the planet field could take one per slab (the weather map could
   then say which).

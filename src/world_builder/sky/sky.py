@@ -38,6 +38,8 @@ from panda3d.core import (
 
 from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
+from world_builder.shadows import SUN_ANGULAR_RADIUS
+from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.sky.starfield import NebulaStyle, StarCatalogue, Starfield
 
 SHADER_PATH = Path(__file__).parent / "shaders"
@@ -46,9 +48,6 @@ SHADER_PATH = Path(__file__).parent / "shaders"
 #: plane, depth-tested), and before the clouds (``clouds.sphere``, 22-29).
 SKY_BIN = "sky"
 SKY_BIN_SORT = 21
-#: The sun's angular radius as drawn (about twice the real one: a disc that
-#: reads at any resolution), radians.
-SUN_ANGULAR_RADIUS = math.radians(0.55)
 
 
 @dataclass(frozen=True)
@@ -122,6 +121,7 @@ class Sky:
         star_hpr: ArrayLike = (0.0, 0.0, 0.0),
         star_adaptation: float = 60.0,
         settings: SkySettings | None = None,
+        sun_angular_radius: float = SUN_ANGULAR_RADIUS,
     ) -> None:
         """
         :param parent: usually ``render``; the sphere is placed at the camera
@@ -141,6 +141,9 @@ class Sky:
             ~0.05 hides all but the brightest)
         :param settings: what the sky costs (:class:`SkySettings`;
             :meth:`set_settings` changes it); None = the HIGH preset
+        :param sun_angular_radius: the disc's angular radius, radians: the
+            sun's size, which every penumbra shares
+            (:class:`world_builder.shadows.Shadows`)
         """
         self._starfield = stars if isinstance(stars, Starfield) else None
         glow = None
@@ -172,6 +175,7 @@ class Sky:
         self.node.set_light_off()
         self.node.set_two_sided(True)
         bind_defaults(self.node)
+        bind_shadow_defaults(self.node)
         if atmospheres is not None:
             atmospheres.bind(self.node)
         self._sun = PTA_LVecBase3f.empty_array(1)
@@ -184,7 +188,7 @@ class Sky:
             uStarBrightness=float(star_brightness),
             uSunDir=self._sun,
             uSunRadiance=LVecBase3f(*sun_radiance),
-            uSunCos=math.cos(SUN_ANGULAR_RADIUS),
+            uSunCos=math.cos(sun_angular_radius),
             uExposure=float(exposure),
             uStarAdaptation=float(star_adaptation),
         )

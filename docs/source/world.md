@@ -86,7 +86,9 @@ parts.
   `space_ambient`. Given as `World(fields=[...])`; it takes the world's pool,
   `asteroids` settings, sun, clock (the rocks turn with the game's time) and
   the bodies' textures. Its rocks are massless.
-- **`SunLook`**: the direction toward the sun and its colour above any air.
+- **`SunLook`**: the direction toward the sun, its colour above any air,
+  and its `angular_radius` (radians): the disc the sky draws and every
+  eclipse's penumbra ([Shadows](shadows.md)).
 - **`SkyLook`**: `Sky`'s arguments: stars, nebula, sun disc, exposure.
 
 Quality is not part of the look. It comes in as `settings=`, a
@@ -117,13 +119,15 @@ In order, it updates:
 1. each body's terrain, placed and detailed around the camera, its collision
    node following, then each asteroid field (its rocks in range, drawn and
    solid, its haze);
-2. the air (`Atmospheres.update`);
+2. the air (`Atmospheres.update`) and the bodies as sun occluders
+   (`World.shadows`, a `Shadows`: each body eclipses the sun for the others,
+   see [Shadows](shadows.md));
 3. the sky;
 4. each body's clouds, with the angle one pixel spans, taken from the
    camera's own output (a window, or a game's offscreen buffer);
 5. Panda3D's sun and ambient lights, set to the light at the camera
-   (`World.light_at`): the air reddens the sun, and an airless body's
-   shadow hides it. Their colours are multiplied by `light_scale`. A game
+   (`World.light_at`): the air reddens the sun, an airless body's shadow
+   hides it, and the other bodies eclipse it. Their colours are multiplied by `light_scale`. A game
    whose models use Panda3D's fixed-function lighting scales them down, since
    that lighting has no tone map and clips the physical noon sun (about 2.5)
    to white (see [Lighting on objects](object_lighting.md));

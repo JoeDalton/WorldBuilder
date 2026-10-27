@@ -3,10 +3,10 @@ The terrain demo built on :class:`world_builder.world.World`.
 
 Flies the same small planetary system as scripts/demo_terrain.py (the demo
 level's 600 km planet with its air, clouds and sea, an airless moon
-10,000 km away, the star field), with the same controls, keys, HUD and
-options. The difference is the assembly: here the world's look is a handful
-of looks (:class:`BodyLook`, :class:`CloudLook`, :class:`OceanLook`,
-:class:`SunLook`, :class:`SkyLook`), and each frame is::
+21,000 km away that can eclipse the sun, the star field), with the same
+controls, keys, HUD and options. The difference is the assembly: here the
+world's look is a handful of looks (:class:`BodyLook`, :class:`CloudLook`,
+:class:`OceanLook`, :class:`SunLook`, :class:`SkyLook`), and each frame is::
 
     self.depth.update(*world.depth_ranges(cam_world))
     world.update(cam_world, far=self.depth.far)

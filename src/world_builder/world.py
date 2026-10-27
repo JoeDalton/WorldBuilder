@@ -83,10 +83,11 @@ from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.gravity import Gravity
 from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
+from world_builder.shadows import ECLIPSE_SKY_FLOOR, SUN_ANGULAR_RADIUS, Shadows
 from world_builder.sky import Sky
 from world_builder.sky.starfield import NebulaStyle, Starfield
 from world_builder.terrain.collision import TerrainCollision
-from world_builder.terrain.planet import PlanetSpec
+from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PlanetSpec
 from world_builder.terrain.terrain import Terrain
 from world_builder.terrain.workers import ChunkExecutor
 
@@ -105,10 +106,13 @@ class SunLook:
     :ivar direction: toward the sun, world frame (any length)
     :ivar color: sunlight above any air, linear (may exceed 1); the air
         reddens it where it must
+    :ivar angular_radius: its disc's angular radius, radians: as the sky
+        draws it, and every eclipse's penumbra
     """
 
     direction: tuple[float, float, float] = (0.0, 0.0, 1.0)
     color: tuple[float, float, float] = (2.6, 2.5, 2.35)
+    angular_radius: float = SUN_ANGULAR_RADIUS
 
 
 @dataclass(frozen=True)
@@ -312,6 +316,8 @@ class World:
     :ivar bodies: the built bodies, in the order given
     :ivar fields: the asteroid fields and rings, in the order given
     :ivar atmospheres: the bodies' air, one :class:`Atmospheres` for all
+    :ivar shadows: the bodies as sun occluders (eclipses), one
+        :class:`Shadows` for all, in the order of :attr:`bodies`
     :ivar sky: the sky, or None
     :ivar executor: the worker pool every terrain and cloud layer shares
     :ivar settings: what every part costs
@@ -392,14 +398,27 @@ class World:
             if isinstance(stars, Starfield):
                 stars.prefetch_glow(self.executor, self.settings.sky.glow_size)
 
-        # Every body's air first: the terrains and clouds bind them all.
+        # Every body's air and shadow first: the terrains and clouds bind
+        # them all.
         self.atmospheres = Atmospheres(self.settings.atmosphere)
-        indices = [
-            None
-            if look.atmosphere is None
-            else self.atmospheres.add(look.spec.radius, look.atmosphere, look.position)
-            for look in bodies
-        ]
+        self.shadows = Shadows(sun.angular_radius)
+        indices = []
+        for look in bodies:
+            # What the body holds reaches its highest ground, or its air's top.
+            top = PLANET_HEIGHT_BOUNDS[1]
+            if look.atmosphere is not None:
+                top = max(top, look.atmosphere.height)
+            body_index = self.shadows.add(
+                look.spec.radius, look.position, reach=look.spec.radius + top
+            )
+            index = None
+            if look.atmosphere is not None:
+                index = self.atmospheres.add(
+                    look.spec.radius, look.atmosphere, look.position
+                )
+                self.shadows.set_atmosphere(index, body_index)
+            indices.append(index)
+        self.shadows.set_sun(self._sun)
 
         render = app.render
         self.bodies: list[Body] = []
@@ -419,11 +438,13 @@ class World:
                 position=look.position,
                 settings=self.settings.terrain,
             )
+            self.shadows.bind(terrain.root, len(self.bodies))
             # One texture set for every body (they load once)
             materials = materials or terrain.materials
             body = Body(look=look, terrain=terrain, atmosphere=index)
             if look.clouds is not None:
                 body.clouds = self._make_clouds(look, index)
+                self.shadows.bind(body.clouds.root, len(self.bodies))
             if look.ocean is not None:
                 kwargs = {
                     name: getattr(look.ocean, name)
@@ -479,7 +500,9 @@ class World:
                 star_hpr=sky.star_hpr,
                 star_adaptation=sky.star_adaptation,
                 settings=self.settings.sky,
+                sun_angular_radius=sun.angular_radius,
             )
+            self.shadows.bind(self.sky.node)
             self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it
             self.sky.set_sun(self._sun)
 
@@ -622,7 +645,8 @@ class World:
 
     def light_at(self, point_world: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
         """The light at a point, as the terrain's shader lights the ground
-        there: through the nearest body's air, or in its shadow if airless.
+        there: through the nearest body's air, or in its shadow if airless,
+        and eclipsed by the other bodies.
 
         :param point_world: world frame, metres
         :returns: (direct, ambient), linear rgb; in open space (no body) the
@@ -635,15 +659,21 @@ class World:
     def _light_at(self, body: Body, point_world) -> tuple[np.ndarray, np.ndarray]:
         ambient = np.asarray(body.look.ambient, dtype=np.float64)
         if body.atmosphere is not None:
-            return self.atmospheres.light_at(
+            direct, ambient = self.atmospheres.light_at(
                 body.atmosphere, point_world, self._sun, self._sun_color, ambient
             )
-        hidden = in_shadow(
-            np.asarray(point_world, dtype=np.float64) - body.position,
-            self._sun,
-            body.radius,
+        else:
+            hidden = in_shadow(
+                np.asarray(point_world, dtype=np.float64) - body.position,
+                self._sun,
+                body.radius,
+            )
+            direct = np.zeros(3) if hidden else self._sun_color.copy()
+        own = next(i for i, other in enumerate(self.bodies) if other is body)
+        eclipse = float(self.shadows.eclipse(point_world, self._sun, own))
+        return direct * eclipse, ambient * (
+            ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * eclipse
         )
-        return (np.zeros(3) if hidden else self._sun_color.copy()), ambient
 
     # ── changes ─────────────────────────────────────────────────────────────
 
@@ -651,6 +681,7 @@ class World:
         """Move the sun (toward it, world frame, any length): every part
         follows at once, the lights at the next :meth:`update`."""
         self._sun = self._unit(direction)
+        self.shadows.set_sun(self._sun)
         if self.sky is not None:
             self.sky.set_sun(self._sun)
         for body in self.bodies:
@@ -746,6 +777,7 @@ class World:
         for asteroids in self.fields:
             asteroids.update(camera, camera_render)
         self.atmospheres.update(camera)
+        self.shadows.update(camera)
         if self.sky is not None:
             if far is None:
                 far = self.depth_ranges(origin_world)[1]

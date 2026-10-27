@@ -26,6 +26,7 @@ from world_builder.depth import (
 )
 from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
+from world_builder.shadows import ECLIPSE_SKY_FLOOR, SUN_ANGULAR_RADIUS, Shadows
 from world_builder.sky import Sky
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PRESETS
@@ -159,6 +160,10 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     camera.get_pos.return_value = LPoint3f(*camera_render)
     world.app = SimpleNamespace(camera=camera, render=MagicMock(), camLens=None)
     world.bodies = list(bodies)
+    world.shadows = Shadows()
+    for body in bodies:
+        world.shadows.add(body.radius, body.position)
+    world.shadows.set_sun([0.0, 0.0, 1.0])  # as world._sun below
     world.atmospheres = MagicMock()
     world.atmospheres.light_at.return_value = (np.ones(3), np.full(3, 0.5))
     world.sky = MagicMock() if sky else None
@@ -295,6 +300,35 @@ def test_airless_light_is_the_sun_or_the_shadow():
     np.testing.assert_allclose(ambient, 0.01)
     dark, _ = world.light_at([0.0, 0.0, -MOON.radius - 10.0])  # night side
     np.testing.assert_allclose(dark, 0.0)
+
+
+def test_a_moon_eclipses_the_light_on_the_planet():
+    """Under a moon as wide as the sun, straight toward it: no sunlight,
+    and the sky's light down to its floor; well off its shadow, both
+    whole."""
+    planet = _body(atmosphere=AtmosphereParams())
+    planet.atmosphere = 0
+    distance = MOON.radius / math.sin(SUN_ANGULAR_RADIUS) + R
+    moon = _body("moon", MOON, position=(0.0, 0.0, distance))
+    world = _world(planet, moon)
+    direct, ambient = world.light_at([0.0, 0.0, R + 10.0])
+    np.testing.assert_allclose(direct, 0.0, atol=1e-6)
+    np.testing.assert_allclose(ambient, 0.5 * ECLIPSE_SKY_FLOOR, rtol=1e-4)
+    side = [R * math.sin(1.2), 0.0, R * math.cos(1.2)]  # past the penumbra
+    direct, ambient = world.light_at(side)
+    np.testing.assert_allclose(direct, 1.0)
+    np.testing.assert_allclose(ambient, 0.5)
+
+
+def test_a_planet_eclipses_an_airless_moon():
+    """A lunar eclipse: the moon's day side, behind the planet from the
+    sun, is dark (its own shadow alone left it lit)."""
+    planet = _body()
+    moon = _body("moon", MOON, position=(0.0, 0.0, -1e7), ambient=(0.01,) * 3)
+    world = _world(planet, moon)
+    # The sun along +z: the planet stands between it and the moon.
+    direct, _ = world.light_at([0.0, 0.0, -1e7 + MOON.radius + 10.0])
+    np.testing.assert_allclose(direct, 0.0)
 
 
 # ── loading, collision ─────────────────────────────────────────────────────────

@@ -79,6 +79,7 @@ from world_builder.clouds.noise import (
     with_threshold,
 )
 from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.utils import magnitude
 
 _SHADERS = Path(__file__).parent / "shaders"
@@ -244,6 +245,7 @@ def flat_mode_inputs(node: NodePath) -> None:
     :param node: the node the cloud shader is on
     """
     bind_defaults(node)
+    bind_shadow_defaults(node)
     node.set_shader_inputs(
         uSpherical=0,
         uDeck=0,

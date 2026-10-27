@@ -27,6 +27,8 @@ it works.
   a spec, stored nowhere: sizes, density, clumping, spins, keep-outs,
   rock shapes; its [backlog](asteroids_backlog.md) lists what could be better.
 - [Clouds](clouds.md): billboard clouds, their density fields and shading.
+- [Shadows](shadows.md): what hides the sun from a point (eclipses so far),
+  on every receiver, with a CPU twin for what the CPU lights.
 - [Quality settings](quality.md): every cost/quality knob, the LOW to ULTRA
   presets, and how a game's settings menu reads and saves them.
 - [Performance](performance.md): where the time goes, measured, and what was
@@ -47,6 +49,7 @@ native_build
 asteroids
 asteroids_backlog
 clouds
+shadows
 quality
 performance
 performance_backlog

@@ -12,7 +12,10 @@
 // hard bands across the dusk sky). Single scattering, plus a flat share of
 // multiply scattered light that fades through twilight (see docs: precomputed
 // multiple scattering, Bruneton). Lengths in metres, positions relative to
-// each planet's centre.
+// each planet's centre. Each sample's sunlight is eclipsed by the other
+// bodies (shadows.glsl), and the multiply scattered light dims with it.
+
+#pragma include "../../shadows/shaders/shadows.glsl"
 
 #define MAX_ATMOSPHERES 2
 
@@ -37,6 +40,10 @@ uniform vec4 uAtmoMie[MAX_ATMOSPHERES];
 // x: multiply scattered light, as a share of direct sunlight; y: the slant
 // path's curvature scale (atmoDepthToward), >= 1.
 uniform vec4 uAtmoExtra[MAX_ATMOSPHERES];
+// The shadow body (shadows.glsl) whose air each atmosphere is: its own
+// planet does not eclipse it (that is atmoShadow's work), -1 none. Bound by
+// world_builder.shadows.Shadows.
+uniform int uAtmoBody[MAX_ATMOSPHERES];
 
 const float ATMO_PI = 3.14159265;
 // A sight line takes every sample once it climbs this many Mie scale heights,
@@ -44,6 +51,8 @@ const float ATMO_PI = 3.14159265;
 // taking them all: within one 8-bit level of colour.
 const float ATMO_FULL_CLIMB = 2.0;
 const float ATMO_FULL_LENGTH = 32.0;
+// The most samples a segment takes (AtmosphereSettings' range).
+const int ATMO_MAX_STEPS = 16;
 
 // exp(y^2) erfc(y) for y >= 0, within 0.33 %.
 vec2 atmoErfcx(vec2 y) {
@@ -176,6 +185,18 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
     float ds = (t1 - t0) / float(steps);
     vec2 shadow = atmoShadow(o, dir, sunDir, R);
     float multiple = uAtmoExtra[i].x;
+    // Other bodies hiding the sun from each sample (at its centre, relative
+    // to the camera), gathered first, and only where a shadow can reach
+    // this air: inside the loop below the eclipse's code cost every pixel
+    // ~0.5 ms a frame, eclipsed or not.
+    bool eclipsable = eclipseCanReach(uAtmoBody[i]);
+    float eclipses[ATMO_MAX_STEPS];
+    if (eclipsable) {
+        for (int k = 0; k < steps && k < ATMO_MAX_STEPS; ++k) {
+            eclipses[k] = eclipseVisibility(dir * (t0 + (float(k) + 0.5) * ds), sunDir,
+                                            uAtmoBody[i]);
+        }
+    }
     float depthR = 0.0;
     float depthM = 0.0;
     vec3 sumR = vec3(0.0);
@@ -201,16 +222,20 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
         vec3 ps = o + dir * ts;
         float rs = length(ps);
         float cosSun = dot(ps, sunDir) / rs;
+        float eclipse = eclipsable ? eclipses[min(k, ATMO_MAX_STEPS - 1)] : 1.0;
         vec3 direct = vec3(0.0);
         if (lit > 0.0) {
             float curve = max(uAtmoExtra[i].y, 1.0);
             vec2 sun = atmoDepthToward(rs, cosSun, R, vec2(Hr, Hm), curve);
-            direct = exp(-(betaR * (depthR + sun.x) + betaMExt * (depthM + sun.y))) * lit;
+            direct = exp(-(betaR * (depthR + sun.x) + betaMExt * (depthM + sun.y)))
+                   * (lit * eclipse);
         }
         // Light scattered more than once: a share of the sunlight, wherever
-        // the sky above is lit (fading through twilight), seen through the
-        // air back to the camera.
-        float twilight = smoothstep(-0.3, 0.1, dot(p, sunDir) / r);
+        // the sky above is lit (fading through twilight, dimmed in an
+        // eclipse as the sky's light is), seen through the air back to the
+        // camera.
+        float twilight = smoothstep(-0.3, 0.1, dot(p, sunDir) / r)
+                       * mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
         vec3 fill = exp(-(betaR * depthR + betaMExt * depthM)) * multiple * twilight;
         sumR += (direct + fill) * densityR;
         sumM += (direct + fill) * densityM;

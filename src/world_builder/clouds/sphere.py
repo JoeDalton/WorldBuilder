@@ -116,6 +116,7 @@ from world_builder.clouds.weather import (
 )
 from world_builder.depth import REFLECTION_CAMERA_MASK
 from world_builder.quality import REBUILD
+from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.cubesphere import QUADS, CubeGrid, face_dirs, grid_for
 from world_builder.terrain.noise import native_library
 from world_builder.terrain.planet import PlanetSpec
@@ -710,6 +711,7 @@ class SphericalClouds:
             layer_params.push_back(LVecBase4f(*(float(v) for v in row)))
         self._layer_params = layer_params
         bind_defaults(root)
+        bind_shadow_defaults(root)
         if atmospheres is not None:
             atmospheres.bind(root)
         self._camera_planet = PTA_LVecBase3f.empty_array(1)
