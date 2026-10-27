@@ -200,7 +200,7 @@ public:
 
   // Every rock whose bounding sphere may meet the box [lo, hi].
   template <typename F>
-  void near(const V3 &lo, const V3 &hi, F visit) const {
+  void rocks_near(const V3 &lo, const V3 &hi, F visit) const {
     const int64_t off = (int64_t)1 << 20;
     for (size_t k = 0; k < cells.size(); ++k) {
       if (grid[k].empty()) continue;
@@ -294,7 +294,7 @@ public:
     bool found = false;
     depth = -INFINITY;
     V3 lo = c - V3(r, r, r), hi = c + V3(r, r, r);
-    near(lo, hi, [&](const Rock &rock, int slot) {
+    rocks_near(lo, hi, [&](const Rock &rock, int slot) {
       V3 pt, nm;
       double d;
       if (sphere_rock(rock, c, r, samples, pt, nm, d) && d > depth) {
@@ -379,7 +379,7 @@ public:
     t_hit = INFINITY;
     V3 lo(std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z));
     V3 hi(std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z));
-    near(lo, hi, [&](const Rock &rock, int slot) {
+    rocks_near(lo, hi, [&](const Rock &rock, int slot) {
       double t;
       V3 pt, nm;
       if (segment_rock(rock, a, b, t, pt, nm) && t < t_hit) {

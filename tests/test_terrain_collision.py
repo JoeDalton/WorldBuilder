@@ -307,6 +307,10 @@ def moon(showbase):
 
 
 def _settle(terrain, camera, frames=60):
+    """Step a fixed number of frames. The count is a speed assumption:
+    ``Terrain._upload`` stops at ``upload_ms_per_frame`` of wall-clock time, so
+    a slow machine may not be done (issue #28; see ``_settle_until_loaded`` in
+    test_terrain_multibody.py)."""
     for _ in range(frames):
         terrain.update(camera)
 
