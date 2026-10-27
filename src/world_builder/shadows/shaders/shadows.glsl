@@ -20,6 +20,10 @@ uniform int   uShadowCasters[MAX_SHADOW_BODIES];
 uniform float uSunAngularRadius;
 // The receiver's own body, which never eclipses it (-1: none).
 uniform int   uShadowSelf;
+// The most samples a ground pixel takes through the planet's clouds toward
+// the sun (cloud_field.glsl's cloudShadowDepth), 0 = no cloud shadows: a
+// quality knob (world_builder.shadows.ShadowSettings).
+uniform int   uCloudShadowSteps;
 
 const float SHADOW_PI = 3.14159265;
 // The sky's light left in a total eclipse, as a share of its light by day:

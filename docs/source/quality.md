@@ -209,6 +209,12 @@ labels and ranges below are what the schema gives.
 | `terrain_min_radius` (advanced) | Detailed rocks from | live | 50 to 5000 m | 200 | 200 | 200 | 200 |
 | `max_terrain_rocks` | Detailed rocks | live | 0 to 32 | 0 | 4 | 8 | 16 |
 
+### `shadows`: Shadows (`ShadowSettings`)
+
+| Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
+|---|---|---|---|---|---|---|---|
+| `cloud_shadow_steps` | Cloud shadows | live | 0 to 16 samples | 0 | 4 | 8 | 12 |
+
 ## Notes
 
 - **The terrain's finest detail** (`min_level`) counts levels dropped below

@@ -353,6 +353,7 @@ def bind_sea_defaults(node: NodePath) -> None:
         "uSeaNear": 0.0,
         "iWaterColor": LVecBase3f(0.02, 0.06, 0.14),
         "iWaterLight": LVecBase3f(1.0, 1.0, 1.0),
+        "iWaterSun": LVecBase3f(0.0, 0.0, 0.0),
         "iReflectionTex": blank,
         "iRippleStrength": 0.0,
         "uReflUVScale": LVecBase2f(1.0, 1.0),

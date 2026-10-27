@@ -23,7 +23,10 @@ uniform vec3      uSeaCamForward;  // the view's axis, render frame
 uniform float     uSeaPixelAngle;  // a pixel's angle at the screen's centre, radians
 uniform float     uSeaNear;        // 1: this shading; 0: the far (terrain) water
 uniform vec3      iWaterColor;
-uniform vec3      iWaterLight;     // daylight 1; dims it by night (Sea.set_light)
+uniform vec3      iWaterLight;     // daylight 1; dims it by night (Sea.set_light):
+                                   // the sky's share, with iWaterSun the sun's,
+                                   // which the world's shadows dim per pixel
+uniform vec3      iWaterSun;
 uniform sampler2D iReflectionTex;
 uniform float     iRippleStrength;
 uniform vec2      uReflUVScale;
@@ -289,11 +292,13 @@ vec3 aces_inverse(vec3 display) {
 // the vertices (terrain.vert's vSwell: its gradient per metre, planet axes,
 // and its field); Vr: from the camera to it, unit, render frame; dist: its distance; depth: metres of
 // water under it; spacing: the chunk's vertex spacing (how finely the depth
-// is known).
+// is known); sunShade: the share of the sun the world's shadows leave it
+// (the clouds'), which dims the light's sun share (iWaterSun).
 // ---------------------------------------------------------------------------
 vec3 seaShade(vec3 P, vec4 swell, vec3 Vr, float dist, float depth, float spacing,
-              out bool raw) {
+              float sunShade, out bool raw) {
     raw = false;
+    vec3 waterLight = iWaterLight + iWaterSun * sunShade;
     // The fragment on the tangent plane, in chart coordinates: local, near
     // the origin (precise), and the full position (the chart's).
     vec3  rel   = P - uSeaOrigin;
@@ -420,7 +425,7 @@ vec3 seaShade(vec3 P, vec4 swell, vec3 Vr, float dist, float depth, float spacin
         waterColor = mix(uShallowWater, iWaterColor,
                          deepWaterShare(depth, abs(V.z), uShallowDepth));
     }
-    vec3 scattered = waterColor * iWaterLight * (1.0 - fresnel);
+    vec3 scattered = waterColor * waterLight * (1.0 - fresnel);
     vec3 C = fresnel * reflected + scattered;
 
     // --- Shoreline foam -----------------------------------------------------
@@ -448,7 +453,7 @@ vec3 seaShade(vec3 P, vec4 swell, vec3 Vr, float dist, float depth, float spacin
         }
         foam *= uFoamStrength * foamSure;
     }
-    C = mix(C, uFoamColor * iWaterLight, foam);
+    C = mix(C, uFoamColor * waterLight, foam);
 
     raw = uSeaDebug != 0;
     if (uSeaDebug == 1) {        // surface normal (xy encoded)

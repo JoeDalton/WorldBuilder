@@ -36,6 +36,7 @@ from world_builder.clouds.cirrus import CirrusSpec, CloudSheet
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
 from world_builder.clouds.march import CloudMarch
+from world_builder.clouds.shadow_defaults import cloud_shadow_defaults
 from world_builder.clouds.sphere import CLOUD_BIN, CloudVolume
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS
@@ -232,6 +233,9 @@ class PlanetClouds:
         # What every layer's shader also takes (bind_inputs), again for a
         # new volume.
         self._binders: list[Callable[[NodePath], None]] = []
+        # The nodes the clouds shade (bind_shadow_inputs), again for a new
+        # volume.
+        self._shadow_nodes: list[NodePath] = []
         self.volume = self._make_volume(settings)
         #: The genera's stratus, under the convective volume; None = none
         self.stratus: CloudVolume | None = None
@@ -311,6 +315,7 @@ class PlanetClouds:
                 self.volume.set_sky_light(self._sky_light)
             self.volume.set_debug(self._debug)
             self._bind_layer(self.volume)
+            self._shade(self._shadow_nodes)
             if self._half_res is not None and isinstance(self.volume, CloudVolume):
                 self._half_res.add(self.volume.root)
             if self.sheet is not None:
@@ -337,6 +342,43 @@ class PlanetClouds:
             return  # its passes' nodes: not yet
         for bind in self._binders if binders is None else binders:
             bind(layer.root)
+
+    def bind_shadow_inputs(self, node: NodePath) -> None:
+        """Let the shaders on a node (the planet's terrain) darken the sun
+        under the clouds: the volume's shadow
+        (:meth:`sphere.CloudVolume.bind_shadow_inputs`), kept across a change
+        of renderer. A raymarched volume casts none yet.
+
+        :param node: the node whose shaders include cloud_field.glsl's
+            ``cloudShadow``
+        """
+        self._shadow_nodes.append(node)
+        self._shade([node])
+
+    def _shade(self, nodes: list[NodePath]) -> None:
+        if isinstance(self.volume, CloudVolume):
+            for node in nodes:
+                self.volume.bind_shadow_inputs(node)
+        else:
+            for node in nodes:
+                cloud_shadow_defaults(node)
+
+    def sun_visibility(
+        self, points_world: ArrayLike, sun_direction: ArrayLike, max_steps: int
+    ) -> np.ndarray:
+        """The share of the sun the clouds leave points under them (or in
+        them), as their shaders draw it on the ground
+        (:meth:`sphere.CloudVolume.sun_visibility`; 1 with a raymarch).
+
+        :param points_world: (..., 3) world frame, metres
+        :param sun_direction: toward the sun, world frame (any length)
+        :param max_steps: the most samples a chord takes
+            (``ShadowSettings.cloud_shadow_steps``; 0 = none)
+        :returns: (...) in [0, 1]
+        """
+        if isinstance(self.volume, CloudVolume):
+            return self.volume.sun_visibility(points_world, sun_direction, max_steps)
+        return np.ones(np.shape(points_world)[:-1])
 
     # ── live ──────────────────────────────────────────────────────────────────
 

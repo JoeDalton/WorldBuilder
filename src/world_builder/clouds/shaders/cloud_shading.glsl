@@ -7,11 +7,7 @@ uniform vec3  skyColor;
 uniform float sunBrightness;
 uniform float skyStrength;
 uniform float skyOcclusion;     // share of sky light reaching a slab's underside
-// The far deck's lighting (noise.deck_light_table): x the sun's cosine at the
-// cloud, from deckLightCosMin to 1; y the weather's coverage. r: the sun
-// term's shadowing (with the powder), g: the shadowing alone.
-uniform sampler2D deckLight;
-uniform float deckLightCosMin;
+// The far deck's lighting: deckLight and deckLightCosMin (cloud_field.glsl).
 
 // Darkens optically THIN cloud. Fed the LOCAL density over a fixed length: the
 // sunward depth would invert it, and the quad's chord would tie it to quad size.

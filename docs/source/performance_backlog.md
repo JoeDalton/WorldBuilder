@@ -177,6 +177,29 @@ breakdown above predates them: frames are 1–3 ms shorter now.
   around the camera, refreshed when the sun or camera moves, one fetch
   instead of the march (~3.4 ms at dusk). Its texels (~200 m) are coarser
   than the march's 160 m steps, so the self-shadowing gets blurrier.
+- **A cloud shadow map** (docs/source/shadows.md, cloud shadows): the
+  ground's per-pixel march through the clouds costs 0.8-1.7 ms at HIGH near
+  the ground (ground 10.95 → 12.70 ms, high 6.01 → 7.37, sea_surface 8.23 →
+  9.27; MID saves little: a chord needs 4-6 steps at most suns). The march
+  depends on the sun ray alone, so it can be stored by where the ray
+  enters the slab's base: a map on that sphere around the camera, each
+  texel marched once (one render-to-texture pass), each pixel then one
+  fetch at its ray's entry point (analytic). Estimated 0.2-0.3 ms. Re-made
+  when the camera has moved a fraction of the map or the sun has turned
+  (every frame while J/K swing it: still one march per texel, not per
+  pixel). Needs two extents (near detail at ~60 m texels, the far shadows
+  out to the horizon at ~500 m), a fade between them and to the mean
+  table, and the march kept for ground inside the slab (mountain tops in
+  the clouds). Part E's camera-centred map has the same re-centring: build
+  them together.
+- **The eclipse in the air's march** (Part A): 0.2-0.5 ms with no eclipse
+  in view (ground 10.22 → 10.78 ms, orbit 2.25 → 2.44), from the gather
+  loop's array in every segment. Two loop variants chosen per segment, the
+  plain one the old code, should take it back.
+- **The CPU light at objects** (Part B): ~0.2 ms of the demos' update per
+  frame (the light at the camera, the ball and the sea, ~70 µs each in
+  numpy). One batched call does it in `World`; the hand-built demo still
+  calls per point.
 - **Cheaper terrain in the reflection:** a lighter shader for the reflection
   camera (camera tag states), without detail normals and with fewer texture
   fetches. That saves up to ~1 ms; the difference is hard to see at half
