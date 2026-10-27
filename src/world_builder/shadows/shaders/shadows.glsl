@@ -38,6 +38,15 @@ uniform vec4  uLocalChart[4];
 // the sun (cloud_field.glsl's cloudShadowDepth), 0 = no cloud shadows: a
 // quality knob (world_builder.shadows.ShadowSettings).
 uniform int   uCloudShadowSteps;
+// The objects' shadow map (world_builder.shadows.casters.CasterMap): their
+// depth down the sun's rays, compared by the hardware; uCasterMatrix takes
+// a position from the camera (render frame) to its texture and depth;
+// uCasterBias: the normal offset (metres), the depth bias, a texel (uv).
+// Off (0) with no caster.
+uniform sampler2DShadow uCasterMap;
+uniform int   uCasterOn;
+uniform mat4  uCasterMatrix;
+uniform vec4  uCasterBias;
 // How far along the sun's ray a cloud billboard looks for the clouds that
 // shade it, past its own march (cloud_field.glsl's cloudFarDepth), metres;
 // 0 = no farther (ShadowSettings.cloud_far_reach).
@@ -173,6 +182,34 @@ float localShadow(vec3 planetDir, float altitude) {
     vec2 ceiling = texture(uLocalShadow, (xy / uLocalChart[1].w + 0.5 * size) / size).rg;
     float margin = (altitude - ceiling.x) / max(ceiling.y, 1.0);
     return mix(1.0, smoothstep(-uSunAngularRadius, uSunAngularRadius, margin), keep);
+}
+
+// The share of the sun the objects (the casters) leave a point rel (from
+// the camera, render frame) whose surface faces N, toward L: 1 outside
+// their map or nearer the sun than it. Pushed out along its normal as it
+// turns from the sun, and its depth toward the sun, against acne; 3x3 of
+// the hardware's bilinear comparisons, a soft edge a few texels wide.
+float casterShadow(vec3 rel, vec3 N, vec3 L) {
+    if (uCasterOn == 0) {
+        return 1.0;
+    }
+    float slope = 1.0 - clamp(dot(N, L), 0.0, 1.0);
+    vec3 s = (uCasterMatrix * vec4(rel + N * (uCasterBias.x * slope), 1.0)).xyz;
+    if (any(lessThan(s.xy, vec2(0.0))) || any(greaterThan(s.xy, vec2(1.0)))) {
+        return 1.0;
+    }
+    // Past the casters' far side: as at it (behind every one).
+    float ref = min(s.z - uCasterBias.y, 1.0);
+    if (ref <= 0.0) {
+        return 1.0;
+    }
+    float lit = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            lit += texture(uCasterMap, vec3(s.xy + vec2(x, y) * uCasterBias.z, ref));
+        }
+    }
+    return lit / 9.0;
 }
 
 // Both: their occluders never overlap (the local map's are nearer than

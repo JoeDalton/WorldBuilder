@@ -63,6 +63,10 @@ from panda3d.core import (
     Point3,
 )
 
+#: Camera bit of the objects' shadow map's camera
+#: (:class:`world_builder.shadows.casters.CasterMap`): render is hidden from
+#: it, and only the casters show through.
+CASTER_BIT = 20
 #: Camera bit only the near camera has (outside the ocean reflection's 0-19).
 NEAR_BIT = 21
 #: Camera bit only the far camera has.

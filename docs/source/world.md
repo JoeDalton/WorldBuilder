@@ -191,7 +191,8 @@ band (see `world_builder.depth`).
   a model lit by the light where it is, not at the camera: its own Panda3D
   sun and ambient lights (the world's off on it), set at every `update` in
   one vectorised call, times `light_scale`. Place the model before
-  `update`. `cast` is kept for the shadows models will cast. With
+  `update`. With `cast=True` it casts shadows on the terrain, the sea and
+  the shaded models (`World.casters`, see [Shadows](shadows.md)). With
   `shader=True` the world's model shader draws it: lit and tonemapped as
   the terrain, every world shadow per pixel, the air in front (see
   [Lighting on objects](object_lighting.md)); `Body.models` holds its
