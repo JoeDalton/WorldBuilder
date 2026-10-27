@@ -230,3 +230,31 @@ def test_sky_draws_point_stars_and_tunes_the_nebula(showbase):
         assert sky.nebula == style
     finally:
         sky.remove()
+
+
+def test_light_for_many_points_is_each_points_light():
+    """Arrays of points (World.lights_at's) and single points (the float
+    path) give the same light, the planet's shadow and twilight included."""
+    atmospheres = Atmospheres()
+    atmospheres.add(R, AtmosphereParams(), (1e5, 0.0, 0.0))
+    rng = np.random.default_rng(1)
+    dirs = rng.normal(size=(400, 3))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    points = dirs * (R + rng.uniform(-100.0, 2e5, 400))[:, None] + [1e5, 0.0, 0.0]
+    sun = np.array([0.3, -0.5, 0.8])
+    direct, ambient = atmospheres.light_at(0, points, sun, (2.6, 2.5, 2.4), (0.3,) * 3)
+    shadowed = in_shadow(points - [1e5, 0.0, 0.0], sun, R)
+    assert 0 < shadowed.sum() < len(points)
+    for i, point in enumerate(points):
+        one_direct, one_ambient = atmospheres.light_at(
+            0, point, sun, (2.6, 2.5, 2.4), (0.3,) * 3
+        )
+        np.testing.assert_allclose(direct[i], one_direct, rtol=1e-12, atol=1e-15)
+        np.testing.assert_allclose(ambient[i], one_ambient, rtol=1e-12, atol=1e-15)
+        assert in_shadow(point - [1e5, 0.0, 0.0], sun, R) == shadowed[i]
+    cos = np.linspace(-1.0, 1.0, 41)
+    many = depth_toward(R + 500.0, cos, R, 8000.0, 10.0)
+    for c, value in zip(cos, many):
+        assert depth_toward(R + 500.0, float(c), R, 8000.0, 10.0) == pytest.approx(
+            value, rel=1e-12
+        )

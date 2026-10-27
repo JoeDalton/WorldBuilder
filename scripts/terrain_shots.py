@@ -13,7 +13,7 @@ times a few frames, then saves a screenshot::
         [--size "1600 900"] [--offscreen]
         [--quality low|mid|high|ultra] [--<part>-quality LEVEL] [--no-clouds]
         [--workers N] [--cloud-debug BITS] [--frames N] [--ocean-debug MODE]
-        [--no-ring]
+        [--ring]
 
     --out            where the PNGs go (default ./terrain_shots)
     --level          the planet's level file (default: the demo level)
@@ -31,7 +31,7 @@ times a few frames, then saves a screenshot::
     --<part>-quality one part's preset over it: terrain, atmosphere, sky,
                      clouds, ocean
     --no-clouds      no clouds at all
-    --no-ring        no ring around the planet
+    --ring           a small ring around the planet (and its poses)
     --workers        generation processes (the terrain's setting)
     --cloud-debug    PlanetClouds.set_debug bits (cloud.frag's
                      uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
@@ -337,7 +337,7 @@ def main() -> None:
         settings=settings,
         clouds=not args.no_clouds,
         genera=args.genera,
-        ring=not args.no_ring,
+        ring=args.ring,
         cloud_debug=args.cloud_debug,
         ocean_debug=args.ocean_debug,
         preset=args.planet,

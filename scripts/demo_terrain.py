@@ -4,11 +4,11 @@ Standalone flythrough demo for the procedural planet terrain.
 Flies a free camera around a small planetary system: a Kerbin-sized planet
 (600 km) with hand-made stamps (world_builder/terrain/levels/demo.yaml), its
 atmosphere, its clouds (cumulus over the whole planet, following its weather,
-and high cirrus streaming along its jets) and its sea, a small ring of dust
-and rocks in its equator's plane (1.5 to 2.1 radii out), an airless sand moon
-21,000 km away (as wide in the sky as the sun: it can eclipse it), and a
-procedural star field, from orbit down to the ground of either. Run it from
-an environment where world_builder is importable::
+and high cirrus streaming along its jets) and its sea (and, with --ring, a
+small ring of dust and rocks in its equator's plane, 1.5 to 2.1 radii out),
+an airless sand moon 21,000 km away (as wide in the sky as the sun: it can
+eclipse it), and a procedural star field, from orbit down to the ground of
+either. Run it from an environment where world_builder is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--planet PRESET]
         [--seed N] [--start LAT LON] [--radius METRES]
@@ -16,7 +16,7 @@ an environment where world_builder is importable::
         [--backend process|thread|inline] [--quality low|mid|high|ultra]
         [--terrain-quality L] [--atmosphere-quality L] [--sky-quality L]
         [--clouds-quality L] [--ocean-quality L] [--asteroids-quality L]
-        [--no-clouds] [--no-ring]
+        [--no-clouds] [--ring]
 
     --level          the planet's level file (default: the demo level)
     --planet         overrides the level's planet preset: earthlike, desert,
@@ -41,7 +41,8 @@ an environment where world_builder is importable::
                      world_builder.settings.WorldSettings)
     --<part>-quality one part's preset, over --quality
     --no-clouds      no clouds at all (neither cumulus nor cirrus)
-    --no-ring        no ring around the planet
+    --ring           a small ring around the planet (off by default, so
+                     runs compare with earlier ones)
 
 The default backend generates terrain in spawned worker processes, which
 re-import this script: keep the ``if __name__ == "__main__"`` guard. All
@@ -100,7 +101,10 @@ DirectionalLight and an AmbientLight on render, for anything drawn without
 the world's shaders) follow the light at the camera, and the sea's near look
 is lit as the sea under the camera (Sea.set_light), so it darkens at night.
 A white ball (Panda3D's smiley, untextured, 20 m across) floats ahead of the
-start pose, at its height, to judge how they light an object.
+start pose, at its height, to judge how an object is lit: it has its own
+Panda3D lights, set to the light where it is, not at the camera
+(world_builder.lights.TrackedLights: it darkens in an eclipse or past the
+terminator whatever the camera's light).
 
 Terrain is generated in background processes, coarse first: the world shows
 blurry for a second, then sharpens.
@@ -140,6 +144,7 @@ from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS, HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.lights import TrackedLights
 from world_builder.ocean import Sea
 from world_builder.quality import QualityLevel
 from world_builder.settings import SECTIONS, WorldSettings
@@ -386,7 +391,7 @@ class TerrainDemo(ShowBase):
         preset: str | None = None,
         seed: int | None = None,
         start: tuple[float, float] | None = None,
-        ring: bool = True,
+        ring: bool = False,
     ) -> None:
         """
         :param level_path: the planet's level file
@@ -565,6 +570,9 @@ class TerrainDemo(ShowBase):
         self._hud_time = -1.0
         self._reset_camera()
         self._test_ball, self._test_ball_point = self._make_test_ball()
+        # Lit where it is, by its own lights (_update_lights).
+        self.tracked = TrackedLights(self.render)
+        self.tracked.track(self._test_ball)
         self.taskMgr.add(self._update, "terrain_demo_update")
         print(__doc__)
 
@@ -587,10 +595,13 @@ class TerrainDemo(ShowBase):
         """:returns: the camera in a body's planet frame (the nearest's by default)"""
         return self.cam_world - (body or self.body).position
 
-    def _nearest_body(self) -> Body:
+    def _nearest_body(self, point: np.ndarray | None = None) -> Body:
+        """:returns: the body whose sea level is nearest a point (the camera
+        by default)"""
+        point = self.cam_world if point is None else point
         return min(
             self.bodies,
-            key=lambda b: float(np.linalg.norm(self.cam_world - b.position)) - b.radius,
+            key=lambda b: float(np.linalg.norm(point - b.position)) - b.radius,
         )
 
     def _true_frame(
@@ -618,7 +629,8 @@ class TerrainDemo(ShowBase):
 
     def _make_test_ball(self):
         """A white ball ahead of the start pose, level with it, lit by Panda3D's
-        lights as any model is: for judging them.
+        lights as any model is (its own, set to the light where it is): for
+        judging them.
 
         :returns: (node, its position in the planet frame)
         """
@@ -632,6 +644,12 @@ class TerrainDemo(ShowBase):
         ahead = self._forward() - up * float(self._forward() @ up)
         ahead /= max(np.linalg.norm(ahead), 1e-9)
         return ball, start + ahead * TEST_BALL_DISTANCE
+
+    def _place_test_ball(self) -> None:
+        """The ball where it hangs, this frame (before its light is set: the
+        camera is render's origin, and the planet does not turn)."""
+        ball = self.home.position + self._test_ball_point
+        self._test_ball.set_pos(*(ball - self.cam_world))
 
     # ── per frame ──────────────────────────────────────────────────────────────
 
@@ -673,9 +691,9 @@ class TerrainDemo(ShowBase):
                 fov / max(self.win.get_y_size(), 1), volume_scale=scale
             )
             self.clouds.update(self.cam_world)
+        self._place_test_ball()
         self._update_sun()
         self.ocean.update(self.cam_world)
-        self._test_ball.set_pos(*self.home.terrain.to_render(self._test_ball_point))
         # Text geometry is rebuilt on every change: a few times a second is
         # plenty to read, and saves ~1 ms a frame.
         now = self._clock.get_frame_time()
@@ -759,12 +777,19 @@ class TerrainDemo(ShowBase):
         )
 
     def _update_lights(self) -> None:
-        """Panda3D's sun and ambient lights as they are at the camera, and
-        the sea's near look lit as the sea under it."""
+        """Panda3D's sun and ambient lights as they are at the camera, the
+        tracked nodes' (the ball's) as they are at each, and the sea's near
+        look lit as the sea under the camera."""
         direct, ambient = self._light_at(self.body, self.cam_world)
         self.sun_light.node().set_color((*direct, 1.0))
         self.sun_light.node().set_direction(Vec3(*(-self._sun)))
         self.ambient_light.node().set_color((*ambient, 1.0))
+        lights = [
+            self._light_at(self._nearest_body(point), point)
+            for point in self.cam_world + self.tracked.positions()
+        ]
+        if lights:
+            self.tracked.apply(*zip(*lights), self._sun)
         # The water's colour was tuned in daylight: scale it by the light on
         # the sea now (sun on a level surface plus sky) over that day's.
         up = self._relative(self.home) / np.linalg.norm(self._relative(self.home))
@@ -1079,6 +1104,7 @@ class TerrainDemo(ShowBase):
         workers."""
         if self.ring is not None:
             self.ring.destroy()
+        self.tracked.clear()
         for terrain in self._terrains():
             terrain.destroy()
         self.executor.shutdown()
@@ -1124,7 +1150,7 @@ def main() -> None:
         preset=args.planet,
         seed=args.seed,
         start=args.start,
-        ring=not args.no_ring,
+        ring=args.ring,
     ).run()
 
 
@@ -1192,7 +1218,7 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
     """The quality arguments every script built on the demo takes:
     ``--quality``, a ``--<part>-quality`` per WorldSettings section,
     ``--workers`` (the terrain's setting), ``--no-clouds`` and
-    ``--no-ring``."""
+    ``--ring``."""
     levels = [level.value for level in QualityLevel]
     parser.add_argument(
         "--quality", default="high", choices=levels, help="every part's preset"
@@ -1209,7 +1235,7 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--no-clouds", action="store_true", help="no clouds")
     parser.add_argument(
-        "--no-ring", action="store_true", help="no ring around the planet"
+        "--ring", action="store_true", help="a small ring around the planet"
     )
     parser.add_argument(
         "--half-res-clouds",
