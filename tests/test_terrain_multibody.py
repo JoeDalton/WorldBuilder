@@ -3,7 +3,6 @@ Several planets in one world (world_builder.terrain): the shared worker pool,
 per-planet positions, and memory released by planets seen from afar.
 """
 
-import sys
 import threading
 import time
 from dataclasses import replace
@@ -16,12 +15,6 @@ from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.chunkgen import generate_chunk
 from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.workers import ChunkExecutor
-
-pytestmark = pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="fails _sometimes_ on macOS x86_64: "
-    "https://github.com/JoeDalton/WorldBuilder/issues/28",
-)
 
 
 @pytest.fixture(scope="module")
@@ -168,10 +161,29 @@ def two_bodies(showbase, planet_spec, moon_spec):
 
 def _settle(terrains, camera, frames=60):
     """Step frames (a pass every few frames while uploads arrive, and six
-    uploads a frame: refining takes a few frames per level)."""
+    uploads a frame: refining takes a few frames per level).
+
+    The frame count is a speed assumption: ``Terrain._upload`` stops at
+    ``upload_ms_per_frame`` of wall-clock time, so on a slow machine a fixed
+    count can stop before refinement ends (issue #28). Possible fix for the
+    callers that need a finished terrain: use ``_settle_until_loaded`` (or give
+    this an ``until_loaded`` option); callers that rely on a fixed count (e.g.
+    the eviction test's 15 frames per stop) must be reviewed one by one."""
     for _ in range(frames):
         for terrain in terrains:
             terrain.update(camera)
+
+
+def _settle_until_loaded(terrain, camera, timeout=60.0, stable_frames=5):
+    """Update until ``terrain.loading`` has stayed False for ``stable_frames``
+    frames. Waits on the state, not a frame count (the uploads' wall-clock budget
+    makes the frames needed depend on the machine). Fails after ``timeout`` s."""
+    deadline = time.perf_counter() + timeout
+    stable = 0
+    while stable < stable_frames:
+        assert time.perf_counter() < deadline, "terrain still loading"
+        terrain.update(camera)
+        stable = 0 if terrain.loading else stable + 1
 
 
 def test_bodies_are_placed_in_one_world(showbase, two_bodies):
@@ -266,13 +278,13 @@ def test_terrain_reports_loading(showbase, moon_spec):
     try:
         assert terrain.loading
         camera = TangentFrame.at(30.0, 20.0).up * (terrain.radius + 2000.0)
-        _settle((terrain,), camera, frames=40)
+        _settle_until_loaded(terrain, camera)
         assert not terrain.loading
         # Unseen ground: loading again until it is drawn.
         elsewhere = TangentFrame.at(-30.0, -100.0).up * (terrain.radius + 2000.0)
         terrain.update(elsewhere)
         assert terrain.loading
-        _settle((terrain,), elsewhere, frames=40)
+        _settle_until_loaded(terrain, elsewhere)
         assert not terrain.loading
     finally:
         terrain.destroy()
