@@ -92,6 +92,9 @@ class ShadowSettings(QualitySettings):
     :ivar cloud_map_size: the clouds' shadow maps, the near one's texels per
         side (:class:`~world_builder.clouds.shadow_map.CloudShadowMaps`); 0 =
         none (the march per pixel)
+    :ivar cloud_far_reach: how far along the sun's ray each cloud billboard
+        looks for the clouds that shade it, past its own march, metres
+        (cloud_field.glsl's ``cloudFarDepth``); 0 = no farther
     """
 
     cloud_shadow_steps: int = knob(
@@ -147,6 +150,16 @@ class ShadowSettings(QualitySettings):
         "the sun still. Wider reaches farther before the march per pixel.",
     )
 
+    cloud_far_reach: float = knob(
+        4000.0,
+        "Clouds' long shadows",
+        unit="m",
+        range=(0.0, 10000.0),
+        help="How far toward the sun each cloud looks for the clouds that "
+        "shade it, past its own few hundred metres: a low sun's long shadows "
+        "across the clouds. Per billboard, cheap; 0 leaves them out.",
+    )
+
     LABEL: ClassVar = "Shadows"
     PRESETS: ClassVar = {
         QualityLevel.LOW: {
@@ -154,18 +167,21 @@ class ShadowSettings(QualitySettings):
             "terrain_map_size": 256,
             "local_map_size": 0,
             "cloud_map_size": 0,
+            "cloud_far_reach": 0.0,
         },
         QualityLevel.MID: {
             "cloud_shadow_steps": 4,
             "terrain_map_size": 512,
             "local_map_size": 512,
             "cloud_map_size": 512,
+            "cloud_far_reach": 2000.0,
         },
         QualityLevel.ULTRA: {
             "cloud_shadow_steps": 12,
             "terrain_map_size": 2048,
             "local_map_size": 2048,
             "cloud_map_size": 2048,
+            "cloud_far_reach": 8000.0,
         },
     }
 
@@ -192,6 +208,7 @@ class Shadows:
         :param settings: what the shadows cost; None = the HIGH preset
         """
         self._cloud_steps = PTA_int.empty_array(1)
+        self._cloud_far = PTA_float.empty_array(1)
         self.set_settings(settings or ShadowSettings())
         self._bodies: list[list] = []  # [radius, position, reach]
         self._sun = np.array([0.0, 0.0, 1.0])
@@ -216,6 +233,7 @@ class Shadows:
         step count is an array written in place)."""
         self._settings = settings
         self._cloud_steps[0] = settings.cloud_shadow_steps
+        self._cloud_far[0] = settings.cloud_far_reach
 
     @property
     def sun_angular_radius(self) -> float:
@@ -319,6 +337,7 @@ class Shadows:
         node.set_shader_input("uSunAngularRadius", self._sun_radius)
         node.set_shader_input("uAtmoBody", self._atmosphere_bodies)
         node.set_shader_input("uCloudShadowSteps", self._cloud_steps)
+        node.set_shader_input("uCloudFarReach", self._cloud_far)
         node.set_shader_input("uShadowSelf", -1 if body is None else int(body))
 
     def update(self, camera_world: ArrayLike) -> None:
@@ -456,6 +475,7 @@ def bind_defaults(node: NodePath) -> None:
             "uSunAngularRadius": sun_radius,
             "uAtmoBody": owners,
             "uCloudShadowSteps": 0,
+            "uCloudFarReach": 0.0,
             "uShadowSelf": -1,
             "uTerrainShadow": _no_terrain_shadow(),
             "uTerrainShadowOn": 0,

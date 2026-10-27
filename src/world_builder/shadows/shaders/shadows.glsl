@@ -38,6 +38,10 @@ uniform vec4  uLocalChart[4];
 // the sun (cloud_field.glsl's cloudShadowDepth), 0 = no cloud shadows: a
 // quality knob (world_builder.shadows.ShadowSettings).
 uniform int   uCloudShadowSteps;
+// How far along the sun's ray a cloud billboard looks for the clouds that
+// shade it, past its own march (cloud_field.glsl's cloudFarDepth), metres;
+// 0 = no farther (ShadowSettings.cloud_far_reach).
+uniform float uCloudFarReach;
 
 const float SHADOW_PI = 3.14159265;
 // The sky's light left in a total eclipse, as a share of its light by day:

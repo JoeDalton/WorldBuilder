@@ -67,6 +67,7 @@ COST_FIELDS = {
         "terrain_map_size",
         "local_map_size",
         "cloud_map_size",
+        "cloud_far_reach",
     ],
 }
 
