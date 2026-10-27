@@ -2,8 +2,8 @@
 The terrain demo built on :class:`world_builder.world.World`.
 
 Flies the same small planetary system as scripts/demo_terrain.py (the demo
-level's 600 km planet with its air, clouds and sea, an airless moon
-21,000 km away that can eclipse the sun, the star field), with the same
+level's 600 km planet with its air, clouds, sea and small ring, an airless
+moon 21,000 km away that can eclipse the sun, the star field), with the same
 controls, keys, HUD and options. The difference is the assembly: here the
 world's look is a handful of looks (:class:`BodyLook`, :class:`CloudLook`,
 :class:`OceanLook`, :class:`SunLook`, :class:`SkyLook`), and each frame is::
@@ -60,6 +60,7 @@ from demo_terrain import (  # noqa: E402
     Body,
     TerrainDemo,
     add_world_arguments,
+    ring_spec,
     settings_from_args,
     sun_lighting,
     window_config,
@@ -74,6 +75,7 @@ from world_builder.terrain.planet import PRESETS  # noqa: E402
 from world_builder.world import (  # noqa: E402
     BodyLook,
     CloudLook,
+    FieldLook,
     OceanLook,
     SkyLook,
     SunLook,
@@ -148,6 +150,7 @@ class WorldDemo(TerrainDemo):
         clouds: bool = True,
         cloud_debug: int = 0,
         ocean_debug: int = 0,
+        ring: bool = True,
     ) -> None:
         ShowBase.__init__(self)
         self.setFrameRateMeter(True)
@@ -177,8 +180,10 @@ class WorldDemo(TerrainDemo):
             sky=SkyLook(),
             settings=self.world,
             backend=backend,
+            fields=[FieldLook("ring", ring_spec(spec.radius))] if ring else [],
         )
         self._scene_sun = self._sun.copy()
+        self.ring = self.scene.field("ring") if ring else None
 
         planet = self.scene.body("planet")
         self.executor = self.scene.executor
@@ -303,6 +308,7 @@ def main() -> None:
         moon,
         settings=settings_from_args(args),
         clouds=not args.no_clouds,
+        ring=not args.no_ring,
     ).run()
 
 

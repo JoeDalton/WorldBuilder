@@ -4,16 +4,18 @@ Standalone flythrough demo for the procedural planet terrain.
 Flies a free camera around a small planetary system: a Kerbin-sized planet
 (600 km) with hand-made stamps (world_builder/terrain/levels/demo.yaml), its
 atmosphere, its clouds (cumulus over the whole planet, following its
-weather) and its sea, an airless sand moon 21,000 km away (as wide in the
-sky as the sun: it can eclipse it), and a procedural star field, from orbit
-down to the ground of either. Run it from an environment where world_builder
+weather) and its sea, a small ring of dust and rocks in its equator's
+plane (1.5 to 2.1 radii out), an airless sand moon 21,000 km away (as wide
+in the sky as the sun: it can eclipse it), and a procedural star field,
+from orbit down to the ground of either. Run it from an environment where world_builder
 is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--radius METRES]
         [--moon-distance METRES] [--no-moon] [--workers N]
         [--backend process|thread|inline] [--quality low|mid|high|ultra]
         [--terrain-quality L] [--atmosphere-quality L] [--sky-quality L]
-        [--clouds-quality L] [--ocean-quality L] [--no-clouds]
+        [--clouds-quality L] [--ocean-quality L] [--asteroids-quality L]
+        [--no-clouds] [--no-ring]
 
     --level          the planet's level file (default: the demo level)
     --radius         overrides the level's planet radius
@@ -27,6 +29,7 @@ is importable::
                      world_builder.settings.WorldSettings)
     --<part>-quality one part's preset, over --quality
     --no-clouds      no clouds at all
+    --no-ring        no ring around the planet
 
 The default backend generates terrain in spawned worker processes, which
 re-import this script: keep the ``if __name__ == "__main__"`` guard. All
@@ -112,6 +115,10 @@ from panda3d.core import (
     loadPrcFileData,
 )
 
+from world_builder.asteroids.distributions import Distribution
+from world_builder.asteroids.field import AsteroidField
+from world_builder.asteroids.spec import PRESETS as FIELD_PRESETS
+from world_builder.asteroids.spec import Annulus, Clumping, Density, FieldSpec
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.sphere import SphericalClouds
@@ -161,6 +168,12 @@ CLOUD_SKY_LIGHT = 0.35
 # The sun's elevation the ocean's water colour was tuned in (the start pose).
 WATER_TUNED_ELEVATION = 35.0
 CLOUD_BASE = 2200.0  # metres above sea level: above the start pose
+# The planet's ring: from and to this many planet radii from its centre, in
+# its equator's plane (the field's xy plane is the world's: the poles are on
+# z), this thick, metres. Seen from the start area, 10-26 degrees over the
+# southern horizon.
+RING_RADII = (1.5, 2.1)
+RING_THICKNESS = 1000.0
 HUD_PERIOD = 0.2  # seconds between HUD refreshes
 # The white ball ahead of the start pose (judging the lights on objects).
 TEST_BALL_DIAMETER = 20.0
@@ -266,6 +279,30 @@ def sun_lighting(azimuth: float, elevation: float) -> tuple[np.ndarray, tuple, t
     return direction, tuple(sun), tuple(sky)
 
 
+def ring_spec(radius: float) -> FieldSpec:
+    """The planet's small ring: the ring preset's ringlets, spins and icy
+    rocks, scaled down around a planet of *radius*. Mostly dust (an optical
+    depth of ~0.2 across it), so it reads as a band from the ground, with
+    sparse rocks (20-400 m) to fly through."""
+    inner, outer = (radius * r for r in RING_RADII)
+    return replace(
+        FIELD_PRESETS["ring"],
+        shape=Annulus(
+            inner,
+            outer,
+            RING_THICKNESS,
+            edge=250.0,
+            radial_edge=0.02 * radius,
+            radial_profile=FIELD_PRESETS["ring"].shape.radial_profile,
+        ),
+        density=Density(
+            1.0, Clumping(scale=8000.0, coverage=0.7, softness=0.15), dust=0.3
+        ),
+        sizes=Distribution.power_law(3.0, 20.0, 400.0),
+        seed=5,
+    )
+
+
 def _smoothstep(edge0: float, edge1: float, x: float) -> float:
     t = min(max((x - edge0) / (edge1 - edge0), 0.0), 1.0)
     return t * t * (3.0 - 2.0 * t)
@@ -327,6 +364,7 @@ class TerrainDemo(ShowBase):
         clouds: bool = True,
         cloud_debug: int = 0,
         ocean_debug: int = 0,
+        ring: bool = True,
     ) -> None:
         """
         :param level_path: the planet's level file
@@ -339,6 +377,7 @@ class TerrainDemo(ShowBase):
         :param cloud_debug: the clouds' profiling switches
             (:meth:`SphericalClouds.set_debug`)
         :param ocean_debug: the sea's debug view (:meth:`Sea.set_debug_mode`)
+        :param ring: draw the planet's ring (:func:`ring_spec`)
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -411,6 +450,19 @@ class TerrainDemo(ShowBase):
         self.body = self.home  # the nearest body, updated every frame
 
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
+        self.ring = None
+        if ring:
+            self.ring = AsteroidField(
+                self,
+                ring_spec(spec.radius),
+                clock=self._clock.get_frame_time,
+                settings=world.asteroids,
+                executor=self.executor,
+                sun_color=SUN_COLOR,
+                ambient=SPACE_AMBIENT,
+                materials=self.terrain.materials,
+                name="ring",
+            )
         self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
         self.shadows.bind(self.sky.node)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
@@ -559,6 +611,8 @@ class TerrainDemo(ShowBase):
         forward = self._forward()
         for terrain in self._terrains():
             terrain.update(self.cam_world, camera_forward=forward)
+        if self.ring is not None:
+            self.ring.update(self.cam_world)
         ranges = []
         for body in self.bodies:
             spec = body.terrain.spec
@@ -643,6 +697,8 @@ class TerrainDemo(ShowBase):
         for body in self.bodies:
             ambient = SKY_AMBIENT if body.atmosphere else SPACE_AMBIENT
             body.terrain.set_sun(tuple(self._sun), SUN_COLOR, ambient)
+        if self.ring is not None:
+            self.ring.set_sun(self._sun, SUN_COLOR, SPACE_AMBIENT)
         self._update_lights()
 
     def _light_at(self, body: Body, point_world) -> tuple[np.ndarray, np.ndarray]:
@@ -840,6 +896,8 @@ class TerrainDemo(ShowBase):
         world.apply(*self._terrains(), self.atmospheres, self.sky, self.ocean)
         if self.clouds is not None:
             world.apply(self.clouds)
+        if self.ring is not None:
+            world.apply(self.ring)
         self._sync_half_res()
 
     def set_debug_view(self, view: int) -> None:
@@ -949,7 +1007,10 @@ class TerrainDemo(ShowBase):
             print(f"{body.name} terrain: {body.terrain.stats}")
 
     def destroy_terrain(self) -> None:
-        """Remove every body's terrain and stop the shared workers."""
+        """Remove every body's terrain and the ring, and stop the shared
+        workers."""
+        if self.ring is not None:
+            self.ring.destroy()
         for terrain in self._terrains():
             terrain.destroy()
         self.executor.shutdown()
@@ -990,13 +1051,15 @@ def main() -> None:
         moon,
         settings=settings_from_args(args),
         clouds=not args.no_clouds,
+        ring=not args.no_ring,
     ).run()
 
 
 def add_world_arguments(parser: argparse.ArgumentParser) -> None:
     """The quality arguments every script built on the demo takes:
     ``--quality``, a ``--<part>-quality`` per WorldSettings section,
-    ``--workers`` (the terrain's setting) and ``--no-clouds``."""
+    ``--workers`` (the terrain's setting), ``--no-clouds`` and
+    ``--no-ring``."""
     levels = [level.value for level in QualityLevel]
     parser.add_argument(
         "--quality", default="high", choices=levels, help="every part's preset"
@@ -1012,6 +1075,9 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         "--workers", type=int, default=None, help="generation processes"
     )
     parser.add_argument("--no-clouds", action="store_true", help="no clouds")
+    parser.add_argument(
+        "--no-ring", action="store_true", help="no ring around the planet"
+    )
     parser.add_argument(
         "--half-res-clouds",
         action="store_true",

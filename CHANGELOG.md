@@ -126,6 +126,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The terrain demo's moon is 21,000 km out (was 10,000 km): as wide in the
   sky as the sun, so it can eclipse it. (#13)
+- The terrain demos (`demo_terrain.py`, `demo_world.py`, and the shots and
+  flight bench built on them) give the planet a small ring of dust and rocks
+  in its equator's plane, 1.5 to 2.1 radii out (`ring_spec`; `--no-ring`
+  leaves it out); `terrain_shots.py` gains `ring_ground` and `ring_orbit`.
+  (#13)
 - `sky.SUN_ANGULAR_RADIUS` moves to `world_builder.shadows` (`sky` still
   imports it). (#13)
 - Asteroid fields without thresholds (#14):

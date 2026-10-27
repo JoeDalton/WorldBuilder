@@ -11,6 +11,7 @@ times a few frames, then saves a screenshot::
         [--size "1600 900"] [--offscreen]
         [--quality low|mid|high|ultra] [--<part>-quality LEVEL] [--no-clouds]
         [--workers N] [--cloud-debug BITS] [--frames N] [--ocean-debug MODE]
+        [--no-ring]
 
     --out            where the PNGs go (default ./terrain_shots)
     --level          the planet's level file (default: the demo level)
@@ -23,6 +24,7 @@ times a few frames, then saves a screenshot::
     --<part>-quality one part's preset over it: terrain, atmosphere, sky,
                      clouds, ocean
     --no-clouds      no clouds at all
+    --no-ring        no ring around the planet
     --workers        generation processes (the terrain's setting)
     --cloud-debug    SphericalClouds.set_debug bits (cloud.frag's
                      uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
@@ -61,8 +63,10 @@ sun behind the moon's centre: the camera in the umbra's tip),
 eclipse_orbit (3 radii over the point under the moon, looking down: the
 moon's shadow on the planet, noon there), lunar_eclipse (the moon_orbit view,
 the sun behind the planet, 0.8 degrees off: the planet's umbra edge across
-the moon). Every other pose has the sun at azimuth 210, elevation 35, as
-seen there.
+the moon). The ring: ring_ground (the start area, 1.5 km up, looking south
+at its arc), ring_orbit (6 radii over latitude 35, looking down: the planet
+and its whole ring). Every other pose has the sun at azimuth 210, elevation
+35, as seen there.
 """
 
 from __future__ import annotations
@@ -173,6 +177,9 @@ def _poses(demo: TerrainDemo) -> dict:
         lat, lon = (float(v[0]) for v in latlon(under[None, :]))
         poses["eclipse_orbit"] = (lat, lon, 3.0 * radius, 0.0, -89.9, 0, 0)
         poses["lunar_eclipse"] = poses["moon_orbit"]
+    if demo.ring is not None:
+        poses["ring_ground"] = (ref_lat, ref_lon, 1500.0, 180.0, 12.0, 0, 0)
+        poses["ring_orbit"] = (35.0, lon0, 6.0 * radius, 0.0, -89.9, 0, 0)
     # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     # At sea level by night: the sky's reflection must be as dark as the sky.
@@ -260,8 +267,10 @@ def _settle(demo: TerrainDemo, timeout: float) -> bool:
     quiet = 0
     while time.perf_counter() - start < timeout:
         demo.taskMgr.step()
-        busy = demo.executor.pending or any(
-            body.terrain.stats["wanted"] for body in demo.bodies
+        busy = (
+            demo.executor.pending
+            or any(body.terrain.stats["wanted"] for body in demo.bodies)
+            or (demo.ring is not None and demo.ring.loading)
         )
         quiet = 0 if busy else quiet + 1
         if quiet >= 10:
@@ -306,6 +315,7 @@ def main() -> None:
         args.radius,
         settings=settings,
         clouds=not args.no_clouds,
+        ring=not args.no_ring,
         cloud_debug=args.cloud_debug,
         ocean_debug=args.ocean_debug,
     )
