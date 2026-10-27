@@ -150,20 +150,46 @@ on the very edge of existing may differ.
 
 Every rock is one of the field's prototypes (`ShapeSpec.prototypes`, 32 by
 default), turned and scaled. A prototype is a radius function of direction
-(`asteroids/shape.py`), in units of the rock's bounding radius:
+(`asteroids/shape.py`), in units of the rock's bounding radius. Its body
+depends on its family (`ShapeSpec.family`: the first 40 % of the prototypes,
+`round_prototypes`, are round; the others split by `crooked_shares`):
 
-- an ellipsoid, semi-axes (short, middle, 1), its long axis along body z (a
-  tumbling rock's symmetry axis): `elongation` draws short / long;
-- lumpy fbm noise (`lumps`, `lump_scale`) and faint ridged noise (`ridges`);
+| Family | Body | Like |
+|---|---|---|
+| round | An ellipsoid, semi-axes (short, middle, 1), its long axis along body z (a tumbling rock's symmetry axis; `elongation` draws short / long), with big bulges and dents (`bulges`: 2 octaves of noise, 2 radii long). | Most big asteroids |
+| binary | Two ellipsoidal lobes, the small one `lobe_ratio` of the big one, its axis up to 40° off the big one's, overlapping by `lobe_overlap` at the centre, joined by a smooth maximum (a waist, not a crease), each with its own lumps. | Toutatis, Itokawa |
+| bent | An elongated ellipsoid (`crooked_elongation`) seen through bent directions (its ends curve aside, `bend`) and twisted ones (`warp`, low-frequency noise, faded out at the tips). | 54509 YORP |
+| fragment | An ellipsoid clipped by `facets` planes (`facet_depth` deep), joined by a smooth minimum: flat faces, rounded edges. Half the lumps and craters. | Collision shards |
+
+On every family:
+
+- lumpy fbm noise (`lumps`, `lump_scale`) and faint ridged noise (`ridges`),
+  evaluated on the body's surface (not by direction: on an elongated rock's
+  long sides, or a fragment's faces, noise by direction stretches into
+  streaks);
 - craters with raised rims (`craters` per prototype, `crater_size` their
   angular radius, `crater_depth` over their diameter);
 - scaled so its farthest point is 1, measured on a fixed sampling with a 2 %
   margin, so the shape does not depend on the quality settings.
 
-A radius function has no overhangs, arches or caves.
+**Size picks the family.** Small rocks are mostly crooked, big ones mostly
+round, as real bodies round under their own gravity: a rock is round with
+the chance `round_share` (15 % at the smallest size, 85 % at the largest,
+log-linear between; `ShapeSpec.round_chance`), then one of its family's
+prototypes. The scatter draws both from the same uniform as before,
+through a table of the chance over the radius (numpy and C alike, no log).
+
+A radius function has no overhangs, arches or caves: every family is
+star-shaped from the centre (a binary's centre is inside both lobes; a
+fragment is convex).
+
+`python scripts/asteroid_gallery.py --family binary --views 4` shows one
+family's prototypes from four sides.
 
 The workers build each prototype (`asteroids/prototype.py`,
-`generate_prototype` on a `ChunkExecutor` channel, about 180 ms each):
+`generate_prototype` on a `ChunkExecutor` channel: about 230 ms for a round
+one, 300 for a binary or a bent one, on one core; 32 load in about 3.3 s on
+the workers):
 
 - **Meshes**, one per level of detail: a cube-sphere grid of 4, 8, 16 and 32
   quads per face side (64 at ULTRA), the terrain's face frames, equal-angle

@@ -39,13 +39,9 @@ Ways to make them better:
   2 km one. The normal map hides it in the shading, not in the outline. The
   64-quad level (ULTRA) halves it. Rocks from 200 m up get the terrain's
   level of detail near the camera (phase 6).
-- **Shape variety.** Real asteroids include contact binaries (two lobes),
-  flattened spinning tops and angular fragments. The radius function could
-  take a second lobe (the union of two ellipsoids as a radius function),
-  facets (a few planes clipping the ellipsoid), and a per-rock choice of
-  family.
-- **Generation time.** About 180 ms per prototype on one core: 32 prototypes
-  take about 2 s across the workers at level load. The vertex normals
+- **Generation time.** About 230-300 ms per prototype on one core (the
+  binary and bent families evaluate more noise): 32 prototypes take about
+  3.3 s across the workers at level load. The vertex normals
   evaluate the shape five times per vertex; the finest level could reuse
   neighbouring vertices instead (as the normal map does), and the radius
   function could go native.
@@ -62,6 +58,15 @@ Ways to make them better:
   shader.
 - **Overhangs, arches and caves.** A radius function cannot have them: these
   are the hero rocks (designed for in the plan, not built).
+- **Crooked rocks cost a little more to draw.** Their coarse meshes are
+  further from their finest (more large-scale relief), so nearer rocks take
+  finer levels: the `cube` flights' p95 rose about 10-15 % (3.7 ms cruise,
+  4.6 ms outside).
+- **Grazed slivers.** The native segment test marches every half mesh
+  spacing: a laser grazing a bump thinner than that (about 5 % of the
+  radius at 16 quads) passes through it to the next entry. Bulgier shapes
+  make such grazes likelier; a finer march near the bounding sphere's entry,
+  or a triangle test of the cells crossed, would catch them.
 
 ## Drawing
 

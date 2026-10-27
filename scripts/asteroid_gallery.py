@@ -4,7 +4,12 @@ column per level of detail with its vertex normals, then the 8- and
 32-quad levels shaded with the normal map (what the field draws)::
 
     python scripts/asteroid_gallery.py [--out FILE] [--count N] [--seed S]
-        [--ice FRACTION] [--size "1500 1000"]
+        [--ice FRACTION] [--size "1500 1000"] [--family NAME] [--views N]
+
+    --family   only that family's prototypes (round, binary, bent, fragment;
+               ShapeSpec.family)
+    --views    instead of the levels of detail, N views of each prototype's
+               finest mesh, normal-mapped, turned about two axes
 
 Plain Lambert lighting from the upper left, no textures: the shapes only.
 """
@@ -83,6 +88,8 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--ice", type=float, default=0.0)
     parser.add_argument("--size", default="1500 1000")
+    parser.add_argument("--family", choices=ShapeSpec.FAMILIES, default=None)
+    parser.add_argument("--views", type=int, default=0)
     args = parser.parse_args()
 
     window_config("asteroid gallery", args.size, offscreen=True, vsync=False)
@@ -90,17 +97,27 @@ def main() -> None:
 
     base = ShowBase()
     base.set_background_color(0.05, 0.05, 0.07, 1)
-    job = PrototypeJob(ShapeSpec(), seed=args.seed)
-    prototypes = [generate_prototype(job, k) for k in range(args.count)]
+    spec = ShapeSpec()
+    job = PrototypeJob(spec, seed=args.seed)
+    keys = [
+        k
+        for k in range(spec.prototypes)
+        if args.family is None or spec.family(k) == args.family
+    ][: args.count]
+    prototypes = [generate_prototype(job, k) for k in keys]
     normals = normal_map_texture(prototypes)
     shader = Shader.make(Shader.SL_GLSL, vertex=_VERTEX, fragment=_FRAGMENT)
     rock = Vec3(0.42, 0.39, 0.35)
     ice = Vec3(0.75, 0.85, 0.95)
     albedo = rock + (ice - rock) * args.ice
-    columns = [(i, False) for i in range(len(job.lods))] + [
-        (1, True),
-        (len(job.lods) - 1, True),
-    ]
+    finest = len(job.lods) - 1
+    if args.views:
+        columns = [(finest, True)] * args.views
+    else:
+        columns = [(i, False) for i in range(len(job.lods))] + [
+            (1, True),
+            (finest, True),
+        ]
     root = base.render.attach_new_node("gallery")
     root.set_shader(shader)
     root.set_shader_input("uNormals", normals)
@@ -117,7 +134,10 @@ def main() -> None:
                 0.0,
                 (0.5 * (len(prototypes) - 1) - row) * spacing,
             )
-            path.set_hpr(25.0, 20.0, 10.0)
+            if args.views:
+                path.set_hpr(360.0 * col / args.views, 35.0 * (col % 2), 10.0)
+            else:
+                path.set_hpr(25.0, 20.0, 10.0)
             path.set_shader_input("uLayer", 6 * row)
             path.set_shader_input("uMapped", 1 if mapped else 0)
     lens = base.cam.node().get_lens()
@@ -139,6 +159,8 @@ def main() -> None:
         for m in prototypes[0].meshes
     )
     print(f"{args.out}: errors of prototype 0 (to finest / to full detail) {errors}")
+    for p in prototypes:
+        print(f"  prototype {p.key} {spec.family(p.key)}: {p.gen_ms:.0f} ms")
     base.destroy()
 
 

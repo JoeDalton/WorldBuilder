@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -268,9 +269,16 @@ class ShapeSpec:
     is one of a few prototypes, turned and scaled; lengths here are in units
     of a rock's radius, angles in radians.
 
+    Prototypes come in families (:meth:`family`): **round** (a lumpy
+    ellipsoid with big bulges), and three crooked ones: **binary** (two
+    lobes joined by a waist, as Toutatis), **bent** (elongated, bent and
+    warped, as 54509 YORP) and **fragment** (a few planes clipping it: an
+    angular shard). Small rocks are mostly crooked, big ones mostly round
+    (:meth:`round_chance`), as real bodies round under their own gravity.
+
     :ivar prototypes: distinct shapes
-    :ivar elongation: each prototype's shortest axis over its longest (body
-        z); the third axis lies between them
+    :ivar elongation: each round or fragment prototype's shortest axis over
+        its longest (body z); the third axis lies between them
     :ivar lumps: the lumpy noise's amplitude, a share of the radius
     :ivar lump_scale: its largest wavelength
     :ivar ridges: ridged noise's amplitude: crests and grooves
@@ -278,6 +286,22 @@ class ShapeSpec:
     :ivar crater_size: their angular radius
     :ivar crater_depth: a crater's depth over its diameter (0.2 for a fresh
         bowl)
+    :ivar round_prototypes: the share of the prototypes that are round
+    :ivar crooked_shares: how the others split: binary, bent, fragment
+    :ivar round_share: the chance a rock is round, at the smallest size and
+        at the largest (log-linear in radius between)
+    :ivar bulges: a round prototype's big bulges and dents, a share of its
+        radius (2 octaves, wavelength 2 radii)
+    :ivar crooked_elongation: a bent prototype's shortest axis over its
+        longest
+    :ivar lobe_ratio: a binary's small lobe over its big one
+    :ivar lobe_overlap: how far the lobes overlap at the waist, a share of
+        the small lobe's length
+    :ivar bend: how far a bent prototype's ends curve aside
+    :ivar warp: its directions' large-scale twist
+    :ivar facets: a fragment's clipping planes (rounded down)
+    :ivar facet_depth: how deep each cuts: its distance from the centre over
+        the ellipsoid's radius there
     """
 
     prototypes: int = 32
@@ -288,6 +312,57 @@ class ShapeSpec:
     craters: float = 10.0
     crater_size: Distribution = Distribution.power_law(2.5, 0.06, 0.5)
     crater_depth: float = 0.2
+    round_prototypes: float = 0.4
+    crooked_shares: tuple[float, float, float] = (0.4, 0.35, 0.25)
+    round_share: tuple[float, float] = (0.15, 0.85)
+    bulges: float = 0.18
+    crooked_elongation: Distribution = Distribution.uniform(0.35, 0.6)
+    lobe_ratio: Distribution = Distribution.uniform(0.45, 0.8)
+    lobe_overlap: Distribution = Distribution.uniform(0.2, 0.35)
+    bend: Distribution = Distribution.uniform(0.3, 0.7)
+    warp: float = 0.25
+    facets: Distribution = Distribution.uniform(4.0, 7.99)
+    facet_depth: Distribution = Distribution.uniform(0.45, 0.75)
+
+    #: The families, in the order of the prototypes' indices
+    FAMILIES: ClassVar[tuple[str, ...]] = ("round", "binary", "bent", "fragment")
+
+    def __post_init__(self):
+        if not 0.0 <= self.round_prototypes <= 1.0:
+            raise ValueError("round_prototypes must be a share (0-1)")
+        if len(self.crooked_shares) != 3 or min(self.crooked_shares) < 0.0:
+            raise ValueError("crooked_shares: three shares, binary, bent, fragment")
+        if sum(self.crooked_shares) <= 0.0:
+            raise ValueError("crooked_shares must not all be 0")
+        if not all(0.0 <= p <= 1.0 for p in self.round_share):
+            raise ValueError("round_share: two chances (0-1)")
+
+    @property
+    def round_count(self) -> int:
+        """The round prototypes (the first ones)."""
+        return min(
+            self.prototypes, max(0, int(round(self.prototypes * self.round_prototypes)))
+        )
+
+    def family(self, index: int) -> str:
+        """:returns: prototype *index*'s family: the first
+        :attr:`round_count` are round, the others binary, bent and fragment
+        in contiguous runs, in the proportions of :attr:`crooked_shares`"""
+        if index < self.round_count:
+            return "round"
+        crooked = self.prototypes - self.round_count
+        x = (index - self.round_count + 0.5) / crooked
+        shares = np.asarray(self.crooked_shares, dtype=np.float64)
+        bounds = np.cumsum(shares / shares.sum())
+        return self.FAMILIES[1 + min(int(np.searchsorted(bounds, x)), 2)]
+
+    def round_chance(self, radius: ArrayLike, lo: float, hi: float) -> np.ndarray:
+        """:returns: the chance a rock of *radius* is round, in a field of
+        radii *lo* to *hi* (log-linear between :attr:`round_share`'s)"""
+        r = np.asarray(radius, dtype=np.float64)
+        x = np.log(np.maximum(r, lo) / lo) / max(math.log(hi / lo), 1e-12)
+        small, large = self.round_share
+        return small + (large - small) * np.clip(x, 0.0, 1.0)
 
 
 @dataclass(frozen=True)

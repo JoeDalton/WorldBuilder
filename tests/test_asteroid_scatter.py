@@ -415,3 +415,35 @@ def test_the_native_scatter_gives_numpys_ring(native):
         np.testing.assert_array_equal(a["centre"], b["centre"])
         np.testing.assert_array_equal(a["radius"], b["radius"])
     assert len(fast.rocks_in_box(centre - reach, centre + reach)) > 0
+
+
+# ── shape families ──────────────────────────────────────────────────────────
+
+
+def test_small_rocks_are_mostly_crooked_big_ones_mostly_round():
+    """Each rock is round with its size's chance (ShapeSpec.round_chance):
+    as many round rocks as those chances add up to, among the small and
+    among the big; within a family, its prototypes alike."""
+    spec = FieldSpec(
+        shape=Box((10_000.0,) * 3),
+        density=Density(0.5),  # sparse: the hard core keeps the small ones
+        sizes=Distribution.uniform(40.0, 640.0),
+    )
+    rocks = Scatter(spec).rocks_in_box([-10_000.0] * 3, [10_000.0] * 3)
+    shapes = spec.shapes
+    chance = shapes.round_chance(rocks["radius"], spec.sizes.lo, spec.sizes.hi)
+    is_round = rocks["proto"] < shapes.round_count
+    for part in (rocks["radius"] < 100.0, rocks["radius"] > 400.0):
+        expected = chance[part].sum()
+        sigma = math.sqrt(np.sum(chance[part] * (1.0 - chance[part])))
+        assert abs(is_round[part].sum() - expected) < 4.0 * sigma
+    small = rocks["radius"] < 100.0
+    assert (
+        is_round[small].mean() < 0.35
+        and is_round[~small & (rocks["radius"] > 400.0)].mean() > 0.6
+    )
+    # every prototype is used, each family's alike
+    counts = np.bincount(rocks["proto"], minlength=shapes.prototypes)
+    assert np.all(counts > 0)
+    crooked = counts[shapes.round_count :]
+    assert crooked.std() < 4.0 * math.sqrt(crooked.mean())

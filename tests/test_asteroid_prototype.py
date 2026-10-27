@@ -19,11 +19,20 @@ from world_builder.asteroids.spec import ShapeSpec
 from world_builder.terrain.workers import ChunkExecutor
 
 JOB = PrototypeJob(ShapeSpec(), seed=3, lods=(4, 8, 16), normal_size=48)
+#: The first prototype of each family, and a second round one
+KEYS = sorted(
+    {
+        next(k for k in range(32) if ShapeSpec().family(k) == f)
+        for f in ShapeSpec.FAMILIES
+    }
+    | {1}
+)
 
 
 @pytest.fixture(scope="module")
 def prototypes():
-    return [generate_prototype(JOB, k) for k in range(3)]
+    """One of each family (the mesh tests hold for all)."""
+    return [generate_prototype(JOB, k) for k in KEYS]
 
 
 def test_meshes_are_closed_and_face_outward(prototypes):
@@ -51,7 +60,7 @@ def test_rocks_stay_inside_their_bounding_radius(prototypes):
     for prototype in prototypes:
         for mesh in prototype.meshes:
             radius = np.linalg.norm(mesh.vertices, axis=1)
-            assert radius.max() <= 1.0 and radius.min() > 0.2
+            assert radius.max() <= 1.0 and radius.min() > 0.1  # a binary's waist
             np.testing.assert_allclose(
                 np.linalg.norm(mesh.normals, axis=1), 1.0, atol=1e-5
             )
@@ -59,6 +68,87 @@ def test_rocks_stay_inside_their_bounding_radius(prototypes):
             assert np.all(np.sum(mesh.normals * mesh.vertices, axis=1) > 0.0)
         # the longest axis is z
         assert prototype.axes[2] == 1.0 and np.all(prototype.axes <= 1.0)
+
+
+# ── the families ────────────────────────────────────────────────────────────
+
+SHAPES = ShapeSpec()
+
+
+def _first(family: str) -> int:
+    return next(k for k in range(SHAPES.prototypes) if SHAPES.family(k) == family)
+
+
+def _profile(shape, axis: int, samples: int = 4000) -> tuple[np.ndarray, np.ndarray]:
+    """:returns: along body *axis*, the surface points' coordinate and
+    their distance from that axis (the rock's width there)"""
+    dirs = face_grid_dirs(64).reshape(-1, 3)
+    points = dirs * shape.radius(dirs)[:, None]
+    other = [a for a in range(3) if a != axis]
+    return points[:, axis], np.linalg.norm(points[:, other], axis=1)
+
+
+def test_the_families_split_the_prototypes():
+    families = [SHAPES.family(k) for k in range(SHAPES.prototypes)]
+    assert families[: SHAPES.round_count] == ["round"] * SHAPES.round_count
+    crooked = SHAPES.prototypes - SHAPES.round_count
+    for family, share in zip(SHAPES.FAMILIES[1:], SHAPES.crooked_shares):
+        assert abs(families.count(family) - share * crooked) <= 1.0
+    # the chance of round grows with the size
+    chance = SHAPES.round_chance([50.0, 400.0, 2000.0], 50.0, 2000.0)
+    np.testing.assert_allclose(chance[[0, 2]], SHAPES.round_share)
+    assert chance[0] < chance[1] < chance[2]
+
+
+def test_a_binary_has_a_waist():
+    """Two lobes meeting at the centre: straight out sideways from there,
+    the rock is much narrower than its big lobe."""
+    shape = prototype_shape(SHAPES, 3, _first("binary"))
+    (_, _, big), _ = shape._lobes
+    angle = np.linspace(0.0, 2.0 * np.pi, 360, endpoint=False)
+    sideways = np.column_stack((np.cos(angle), np.sin(angle), np.zeros_like(angle)))
+    waist = np.median(shape.radius(sideways) / shape.scale)
+    assert waist < 0.85 * min(big[0], big[1])
+
+
+def test_a_bent_rock_is_not_mirror_symmetric():
+    """Its ends curve aside: the surface leans to +x at both ends."""
+    shape = prototype_shape(SHAPES, 3, _first("bent"))
+    dirs = face_grid_dirs(64).reshape(-1, 3)
+    points = dirs * shape.radius(dirs)[:, None]
+    ends = np.abs(points[:, 2]) > 0.6 * np.abs(points[:, 2]).max()
+    middle = np.abs(points[:, 2]) < 0.2 * np.abs(points[:, 2]).max()
+    assert points[ends, 0].mean() > points[middle, 0].mean() + 0.02
+
+
+def test_a_fragment_has_flat_faces():
+    """Clipped by planes: much of its surface is flat, and it never reaches
+    past its unclipped ellipsoid."""
+    from world_builder.asteroids.shape import _ellipsoid
+
+    shape = prototype_shape(SHAPES, 3, _first("fragment"))
+    dirs = face_grid_dirs(64).reshape(-1, 3)
+    radius = shape.radius(dirs, min_wavelength=0.3) / shape.scale
+    on_planes = 0
+    for nx, ny, nz, distance in shape._planes:
+        n = np.array([nx, ny, nz])
+        height = (dirs * radius[:, None]) @ n
+        on_planes += np.count_nonzero(np.abs(height - distance) < 0.02 * distance)
+    assert on_planes > 0.15 * len(dirs)
+    bare = _ellipsoid(dirs, shape.axes) * (1.0 + 0.5 * SHAPES.lumps + SHAPES.ridges)
+    assert np.all(radius <= bare * 1.05)
+
+
+def test_round_rocks_bulge():
+    """The bulges add large-scale relief: the radius varies more at low
+    frequency than with no bulges."""
+    from dataclasses import replace
+
+    flat = prototype_shape(replace(SHAPES, bulges=0.0), 3, 0)
+    bulgy = prototype_shape(SHAPES, 3, 0)
+    dirs = face_grid_dirs(16).reshape(-1, 3)
+    smooth = 1.0  # the lumps mostly faded, the bulges (2 radii) whole
+    assert np.std(bulgy.radius(dirs, smooth)) > 1.2 * np.std(flat.radius(dirs, smooth))
 
 
 def test_errors_shrink_to_the_finest(prototypes):

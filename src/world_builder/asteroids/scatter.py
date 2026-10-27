@@ -53,6 +53,8 @@ from world_builder.asteroids.spec import (
 )
 from world_builder.terrain import noise
 
+#: Entries of the round chance's table over the radius.
+ROUND_TABLE = 257
 #: One rock, as both implementations write it (``WbRock`` in scatter.c).
 ROCK_DTYPE = np.dtype(
     [
@@ -254,6 +256,10 @@ class _Tables:
         self.cone_table = zero if tumble is None else tumble.cone_angle.table_values()
         self.ratio_table = zero if tumble is None else tumble.ratio.table_values()
         self.ice_table = spec.material.ice_fraction.table_values()
+        # The chance a rock is round, over its radius (linear, so numpy and
+        # C interpolate it alike: no log)
+        radii = sizes.lo + (sizes.hi - sizes.lo) * np.linspace(0.0, 1.0, ROUND_TABLE)
+        self.round_table = spec.shapes.round_chance(radii, sizes.lo, sizes.hi)
         # Extent and keep-outs.
         self.bounds = spec.shape.bounds()
         self.keep_outs = np.array(
@@ -401,8 +407,7 @@ def _attributes(tables: _Tables, cls: int, rocks: dict[str, np.ndarray]) -> np.n
     out["cls"] = cls
     out["centre"] = rocks["centre"]
     out["radius"] = rocks["radius"]
-    prototypes = np.uint64(tables.spec.shapes.prototypes)
-    out["proto"] = (_draw(hh, base + np.uint64(_PROTO)) % prototypes).astype(np.int32)
+    out["proto"] = _prototype(tables, u(_PROTO), rocks["radius"])
     out["ice"] = interpolate(tables.ice_table, u(_ICE))
     rate = interpolate(tables.rate_table, u(_RATE))
     rate = rate * np.power(
@@ -434,6 +439,34 @@ def _attributes(tables: _Tables, cls: int, rocks: dict[str, np.ndarray]) -> np.n
     q_free = _uniform_rotation(u(_Q0), u(_Q0 + 1), u(_Q0 + 2))
     out["q0"] = np.where(tumbling[:, None], q_tumble, q_free)
     return out
+
+
+def _prototype(tables: _Tables, u: np.ndarray, radius: np.ndarray) -> np.ndarray:
+    """Each rock's prototype from one uniform: round or crooked by its size
+    (the round chance, tabulated), then one of that family's prototypes
+    (scatter.c's ``prototype``, in its arithmetic)."""
+    shapes = tables.spec.shapes
+    round_n = shapes.round_count
+    crooked_n = shapes.prototypes - round_n
+    if round_n <= 0:
+        p = np.zeros_like(u)
+    elif crooked_n <= 0:
+        p = np.ones_like(u)
+    else:
+        lo, hi = tables.spec.sizes.lo, tables.spec.sizes.hi
+        span = hi - lo
+        x = (radius - lo) / span if span > 0.0 else np.zeros_like(radius)
+        p = interpolate(tables.round_table, np.clip(x, 0.0, 1.0))
+    is_round = u < p
+    with np.errstate(divide="ignore", invalid="ignore"):
+        k_round = np.floor(u / p * float(round_n))
+        k_crooked = np.floor((u - p) / (1.0 - p) * float(crooked_n))
+    proto = np.where(
+        is_round,
+        np.minimum(k_round, round_n - 1),
+        round_n + np.minimum(k_crooked, crooked_n - 1),
+    )
+    return proto.astype(np.int32)
 
 
 def _cone_orientation(
@@ -521,6 +554,11 @@ class _WbScatter(ctypes.Structure):
         ("radial_edge", ctypes.c_double),
         ("profile_n", ctypes.c_int32),
         ("profile", ctypes.c_void_p),
+        ("round_n", ctypes.c_int32),
+        ("round_table_n", ctypes.c_int32),
+        ("round_table", ctypes.c_void_p),
+        ("round_lo", ctypes.c_double),
+        ("round_hi", ctypes.c_double),
     ]
 
 
@@ -658,6 +696,10 @@ class Scatter:
         s.tumble_fraction = t.tumble_fraction
         s.keep_outs = len(t.keep_outs)
         s.keep_out = ptr(t.keep_outs)
+        s.round_n = self.spec.shapes.round_count
+        s.round_table_n = len(t.round_table)
+        s.round_table = ptr(t.round_table)
+        s.round_lo, s.round_hi = self.spec.sizes.lo, self.spec.sizes.hi
         return s
 
     # ── queries ───────────────────────────────────────────────────────────

@@ -63,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `terrain_min_radius` and `max_terrain_rocks`.
   `scripts/asteroid_bench.py --flight approach` flies into one, and
   `--terrain-rocks N` overrides their number. (#14)
+- Crooked asteroid shapes (`ShapeSpec.family`): besides round rocks (now
+  with big bulges), contact binaries (two lobes at an angle, a waist, as
+  Toutatis), bent and twisted rocks (as 54509 YORP) and angular fragments
+  (planes clipping the body). Small rocks are mostly crooked, big ones
+  mostly round (`ShapeSpec.round_share`, 15 % to 85 %), chosen by the
+  scatter in numpy and C alike (native interface 13). Lumps are evaluated
+  on the body's surface. `asteroid_gallery.py --family NAME --views N`.
+  (#14)
 - Ice in patches (`asteroids.shape.IcePatches`, `MaterialSpec.patch_scale`):
   a rock's ice covers its share of the surface where a smooth noise ranks
   highest, a few patches of ice on a rocky rock, a few of rock on an icy

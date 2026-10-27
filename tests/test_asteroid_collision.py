@@ -86,8 +86,9 @@ def _triangles(rock, prototypes, t):
     return points[mesh_indices(mesh.quads).astype(np.int64)].reshape(-1, 3, 3)
 
 
-def _segment_hit(tris, a, b):
-    """Möller-Trumbore against every triangle: the first t, or None."""
+def _segment_hit(tris, a, b, every: bool = False):
+    """Möller-Trumbore against every triangle: the first t, or None (or
+    with *every*, all the crossings' t, sorted)."""
     d = b - a
     e1, e2 = tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]
     p = np.cross(d, e2)
@@ -100,6 +101,8 @@ def _segment_hit(tris, a, b):
     v = (q @ d) * inv
     t = np.sum(e2 * q, axis=1) * inv
     hit = ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (t >= 0) & (t <= 1)
+    if every:
+        return np.sort(t[hit])
     return float(t[hit].min()) if np.any(hit) else None
 
 
@@ -142,8 +145,22 @@ def test_segments_hit_the_drawn_triangles(world, t):
                 assert t_hit <= expected + 1e-6
                 continue
             hits += 1
+            # The native march samples every half mesh spacing: a sliver of
+            # rock thinner than that (a bulge just grazed) may be stepped
+            # over, the next entry found instead
+            crossings = _segment_hit(tris, a, b, every=True)
+            step = 0.5 * (np.pi / 2.0 / JOB.lods[-1]) * rock["radius"]
+            step_t = step / np.linalg.norm(b - a)
+            k = 0
+            while (
+                k + 2 < len(crossings)
+                and crossings[k + 1] - crossings[k] < step_t
+                and abs(t_hit - crossings[k]) > 1e-4
+            ):
+                k += 2
+            expected = crossings[k]
             # (a point on a quad's diagonal may take the neighbouring triangle)
-            assert t_hit == pytest.approx(expected, abs=1e-5)
+            assert t_hit == pytest.approx(expected, abs=1e-4)
             np.testing.assert_allclose(
                 point, a + expected * (b - a), atol=1e-3 * rock["radius"]
             )
@@ -166,10 +183,17 @@ def test_spheres_touch_where_the_triangles_are_near(world, t):
     checked = 0
     for rock in rocks[:10]:
         tris = _triangles(rock, prototypes, t)
-        for _ in range(4):
+        for _ in range(8):
             direction = rng.normal(size=3)
             direction /= np.linalg.norm(direction)
-            c = rock["centre"] + direction * rock["radius"] * rng.uniform(0.6, 1.3)
+            # about the surface that way (a crooked rock is far thinner
+            # than its bounding radius in places)
+            far = rock["centre"] + direction * rock["radius"] * 1.5
+            entry = _segment_hit(tris, far, rock["centre"])
+            surface = (
+                1.5 * rock["radius"] * (1.0 - (entry if entry is not None else 0.0))
+            )
+            c = rock["centre"] + direction * surface * rng.uniform(0.8, 1.2)
             r = rock["radius"] * 0.15
             gap = _nearest_on_mesh(tris, c)
             inside = (

@@ -64,6 +64,10 @@ typedef struct {
   double radial_edge;      /* annulus */
   int32_t profile_n;       /* annulus: 0 = even */
   const double *profile;
+  int32_t round_n;         /* the round prototypes (the first ones) */
+  int32_t round_table_n;
+  const double *round_table; /* the chance of round, over the radius */
+  double round_lo, round_hi; /* that table's radii */
 } WbScatter;
 
 /* A candidate before the hard core. */
@@ -97,6 +101,31 @@ static double smoothstep01(double t) {
   if (t < 0.0) t = 0.0;
   if (t > 1.0) t = 1.0;
   return t * t * (3.0 - 2.0 * t);
+}
+
+/* scatter._prototype: the family by size (round or crooked, the round
+ * chance tabulated over the radius), then one of its prototypes, from one
+ * uniform. */
+static int32_t prototype(const WbScatter *s, uint64_t bits, double radius) {
+  int32_t round_n = s->round_n, crooked_n = s->prototypes - s->round_n;
+  double u = unit(bits), p, k;
+  if (round_n <= 0) {
+    p = 0.0;
+  } else if (crooked_n <= 0) {
+    p = 1.0;
+  } else {
+    double span = s->round_hi - s->round_lo;
+    double x = span > 0.0 ? (radius - s->round_lo) / span : 0.0;
+    if (x < 0.0) x = 0.0;
+    if (x > 1.0) x = 1.0;
+    p = table_lerp(s->round_table, s->round_table_n, x);
+  }
+  if (u < p) {
+    k = floor(u / p * (double)round_n);
+    return (int32_t)(k < round_n - 1 ? k : round_n - 1);
+  }
+  k = floor((u - p) / (1.0 - p) * (double)crooked_n);
+  return round_n + (int32_t)(k < crooked_n - 1 ? k : crooked_n - 1);
 }
 
 /* _Tables.density */
@@ -321,7 +350,7 @@ static void attributes(const WbScatter *s, int32_t cls, const Candidate *c,
   r->centre[1] = c->centre[1];
   r->centre[2] = c->centre[2];
   r->radius = c->radius;
-  r->proto = (int32_t)(draw(h, b + PROTO) % (uint64_t)s->prototypes);
+  r->proto = prototype(s, draw(h, b + PROTO), c->radius);
   r->ice = table_lerp(s->ice_table, s->table_n, unit(draw(h, b + ICE)));
   rate = table_lerp(s->rate_table, s->table_n, unit(draw(h, b + RATE)));
   rate = rate * pow(c->radius / s->rate_ref, -s->size_exponent);
