@@ -348,6 +348,7 @@ def main() -> None:
         None,
         settings=settings,
         clouds=not args.no_clouds,
+        ring=not args.no_ring,
         cloud_debug=args.cloud_debug,
     )
     demo.setFrameRateMeter(False)
