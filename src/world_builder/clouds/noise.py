@@ -18,6 +18,7 @@ docs/source/clouds.md.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -805,6 +806,187 @@ def sun_optical_depth_on_sphere(
     return _sun_depth(spec, optics, h, pair, shift, octave_mean)
 
 
+#: The ground shadow's march steps, in the layer's ``sun_step_length``
+#: (cloud_field.glsl's CLOUD_SHADOW_STEP_SCALE): twice the clouds' own, within
+#: 0.004 of the sun's share of a 10 m march on average.
+CLOUD_SHADOW_STEP_SCALE = 2.0
+
+
+def cloud_shadow_on_sphere(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    max_steps: int,
+    shift_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    octave_mean: float | None = None,
+) -> np.ndarray:
+    """The shader's ``cloudShadowDepth``: the planet's clouds between points
+    (below or in the slab) and the sun, along the chord the ray cuts through
+    the slab's shell, in steps of about ``sun_step_length`` (at most
+    *max_steps*; :data:`CLOUD_SHADOW_STEP_SCALE`), through the sun march's
+    calibrated two octaves. Its shadow is ``exp2(-depth)``.
+
+    :param volume: the noise octave (quantised, to match the GPU)
+    :param spec: a resolved field (the deck layer's)
+    :param optics: its optics (step length and shadow strength)
+    :param points: (..., 3) planet-frame positions
+    :param sun_dirs: (..., 3) unit directions toward the sun (broadcast)
+    :param radius: sea-level radius, metres
+    :param max_steps: the most steps a chord takes (0: no shadow)
+    :param shift_at: the weather's fbm shift at planet-frame positions
+        ((m, 3) -> (m,)), taken where each chord enters the slab; None = none
+    :param octave_mean: the noise's mean; None = *volume*'s
+    :returns: (...) optical depth, 0 above the slab
+    """
+    _require_resolved(spec)
+    points = np.asarray(points, dtype=np.float64)
+    depth = np.zeros(points.shape[:-1])
+    if max_steps <= 0:
+        return depth
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
+    dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
+    # Only what lies under the slab's top (the rest is never shaded): a
+    # camera or a ship above the clouds costs nothing.
+    under = np.linalg.norm(points, axis=-1) < radius + sum(spec.slab)
+    if not under.any():
+        return depth
+    march = _cloud_shadow_samples(
+        volume, spec, optics, points[under], dirs[under], radius, max_steps
+    )
+    start = march[-1]
+    shift = np.zeros(start.shape[:-1])
+    if shift_at is not None:
+        shift = np.reshape(shift_at(start.reshape(-1, 3)), start.shape[:-1])
+    depth[under] = _cloud_shadow_depth(spec, optics, march, shift, octave_mean)
+    return depth
+
+
+def _cloud_shadow_samples(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    max_steps: int,
+) -> tuple[np.ndarray, ...]:
+    """:func:`cloud_shadow_on_sphere`'s samples before the weather and the
+    calibration: their slab heights and two-octave sums (..., max_steps),
+    which steps count, each chord's step length and whether it crosses the
+    slab, and where it enters it (..., 3)."""
+    dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
+    base, thickness = spec.slab
+    inner, outer = radius + base, radius + base + thickness
+    r = np.linalg.norm(points, axis=-1)
+    b = np.sum(points * dirs, axis=-1)
+    leave = -b + np.sqrt(np.maximum((outer - r) * (outer + r) + b * b, 0.0))
+    enter = np.where(
+        r < inner,
+        -b + np.sqrt(np.maximum((inner - r) * (inner + r) + b * b, 0.0)),
+        0.0,
+    )
+    chord = leave - enter
+    alive = (r < outer) & (chord > 0.0)
+    target = max(optics.sun_step_length * CLOUD_SHADOW_STEP_SCALE, 1.0)
+    steps = np.clip(np.ceil(chord / target), 1, max_steps).astype(np.int64)
+    step_length = np.where(alive, chord, 0.0) / steps
+    start = points + dirs * enter[..., None]
+    k = np.arange(max_steps)
+    positions = (
+        start[..., None, :]
+        + dirs[..., None, :] * ((k + 0.5) * step_length[..., None])[..., None]
+    )
+    h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
+    coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    pair = fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
+    counted = k < steps[..., None]
+    return h, pair, counted, step_length, alive, start
+
+
+def _cloud_shadow_depth(
+    spec: DensityField,
+    optics: CloudOptics,
+    march: tuple[np.ndarray, ...],
+    shift: ArrayLike,
+    octave_mean: float,
+) -> np.ndarray:
+    """:func:`cloud_shadow_on_sphere` from :func:`_cloud_shadow_samples`."""
+    h, pair, counted, step_length, alive, _ = march
+    gain, bias = shadow_calibration(spec, octave_mean)
+    shift = np.asarray(shift, dtype=np.float64)[..., None]
+    density = _slab_density(spec, h, pair * gain + shift + bias)
+    density = np.where(counted, density, 0.0).sum(axis=-1)
+    depth = density * step_length * spec.density * optics.shadow_strength
+    return np.where(alive, depth, 0.0)
+
+
+def ground_shadow_table(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    radius: float,
+    shift_table: ArrayLike,
+    max_steps: int = 8,
+    octave_mean: float | None = None,
+    cosines: int = 32,
+    coverages: int = 17,
+    columns: int = 1024,
+    seed: int = 0,
+) -> np.ndarray:
+    """What the clouds' shadow on the ground (:func:`cloud_shadow_on_sphere`)
+    is on average, by the sun's elevation and the weather's coverage: where
+    a pixel of ground spans several clouds, the shadow is this, not its
+    detail (which would sparkle). The axes are :func:`deck_light_table`'s.
+
+    :param volume: the noise octave (quantised, to match the GPU)
+    :param spec: the deck's resolved field
+    :param optics: the deck's optics
+    :param radius: sea-level radius, metres
+    :param shift_table: coverage to fbm shift (:func:`weather.shift_table`)
+    :param max_steps: the march's most steps
+    :param octave_mean: the noise's mean; None = *volume*'s
+    :param cosines: sun cosines at the ground, evenly over
+        [:data:`DECK_LIGHT_COS_MIN`, 1] (none below the horizon)
+    :param coverages: weather coverages, evenly over [0, 1]
+    :param columns: ground points averaged, spread over the planet
+    :param seed: the sun's azimuth at each point
+    :returns: (coverages, cosines) float32: the mean of ``exp2(-depth)``
+    """
+    from world_builder.clouds.weather import coverage_to_shift
+
+    _require_resolved(spec)
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
+    up = _fibonacci_dirs(columns)
+    reference = np.where(
+        (np.abs(up[:, 2]) < 0.9)[:, None], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]
+    )
+    east = np.cross(reference, up)
+    east /= np.linalg.norm(east, axis=1, keepdims=True)
+    north = np.cross(up, east)
+    azimuth = np.random.default_rng(seed).uniform(0.0, 2.0 * np.pi, columns)
+    level = np.cos(azimuth)[:, None] * east + np.sin(azimuth)[:, None] * north
+    mu = np.linspace(DECK_LIGHT_COS_MIN, 1.0, cosines)
+    lit = np.maximum(mu, 0.0)  # the sun at the horizon at most
+    side = np.sqrt(1.0 - lit * lit)
+    sun = lit[:, None, None] * up[None] + side[:, None, None] * level[None]
+    ground = np.broadcast_to(up * radius, sun.shape)
+    march = _cloud_shadow_samples(volume, spec, optics, ground, sun, radius, max_steps)
+    shifts = coverage_to_shift(
+        np.linspace(0.0, 1.0, coverages), np.asarray(shift_table)
+    )
+    table = np.empty((coverages, cosines), dtype=np.float32)
+    for row, shift in enumerate(shifts):
+        depth = _cloud_shadow_depth(spec, optics, march, shift, octave_mean)
+        table[row] = np.exp2(-depth).mean(axis=1)
+    table[:, mu < 0.0] = 0.0  # below the horizon: the planet's shadow
+    return table
+
+
 #: The lowest sun cosine (at the cloud) of :func:`deck_light_table`: below
 #: it the planet's shadow has taken the sunlight at any cloud height.
 DECK_LIGHT_COS_MIN = -0.3
@@ -919,10 +1101,12 @@ def deck_light_table(
 
 def build_deck_light_texture(table: np.ndarray) -> Texture:
     """A :func:`deck_light_table` as an RG32F 2D texture (x: the sun's
-    cosine, y: the coverage), linearly filtered and clamped."""
-    coverages, cosines, _ = table.shape
+    cosine, y: the coverage), linearly filtered and clamped; with a third
+    channel (the ground's shadow, :func:`ground_shadow_table`), RGB32F."""
+    coverages, cosines, channels = table.shape
     tex = Texture("cloud_deck_light")
-    tex.setup_2d_texture(cosines, coverages, Texture.T_float, Texture.F_rg32)
+    layout = Texture.F_rgb32 if channels == 3 else Texture.F_rg32
+    tex.setup_2d_texture(cosines, coverages, Texture.T_float, layout)
     tex.set_ram_image(np.ascontiguousarray(table, dtype=np.float32).tobytes())
     tex.set_magfilter(SamplerState.FT_linear)
     tex.set_minfilter(SamplerState.FT_linear)

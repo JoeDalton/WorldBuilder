@@ -23,8 +23,20 @@ uniform samplerCube weatherMap;
 // A/B switches for profiling (bits, 0 = normal): 1 no sun march, 2 no
 // atmosphere, 4 two octaves only, 8 flat colour after the density.
 uniform int   uCloudDebug;
+// The far clouds' averages, by the sun's cosine (x, from deckLightCosMin to
+// 1) and the weather's coverage (y): the deck's lighting
+// (noise.deck_light_table; r: the sun term's shadowing, with the powder,
+// g: the shadowing alone), and b: the clouds' shadow on the ground
+// (noise.ground_shadow_table).
+uniform sampler2D deckLight;
+uniform float deckLightCosMin;
 
 const int LAYER_VEC4S = 12;
+// A noise lattice cell, in noise coordinates (noise.NOISE_FEATURE).
+const float NOISE_FEATURE = 4.0;
+// The ground shadow's march steps, in the layer's sunStepLength
+// (noise.CLOUD_SHADOW_STEP_SCALE): within 0.004 of a 10 m march on average.
+const float CLOUD_SHADOW_STEP_SCALE = 2.0;
 
 // The type's field and optics. The layer index is dynamically uniform over a draw,
 // so these are cached uniform reads.
@@ -193,21 +205,17 @@ float cloudDensity(Field f, vec3 p) {
     return slabDensity(f, h, raw + highOctaves(f, coord));
 }
 
-// Optical depth toward the sun through the same field, which is what lets clouds
-// shadow themselves AND each other. A depth, not a transmittance, so everything
-// derived from it stays a function of world position only. Two octaves,
-// calibrated onto the full field's distribution (noise.shadow_calibration).
-float sunOpticalDepth(Field f, vec3 p) {
-    if (f.sunSteps <= 0) {
-        return 0.0;
-    }
-    vec3 increment = sunDir * f.sunStepLength;
-    vec3 position = p + increment * 0.5;
+// Optical depth along a straight stretch of the field: steps samples
+// stepLength apart along dir (unit) from start, the first half a step out,
+// through the two lowest octaves calibrated onto the full field
+// (noise.shadow_calibration). The weather varies over kilometres: one fetch,
+// at start, for every step. noise.slab_optical_depth on the CPU.
+float slabOpticalDepth(Field f, vec3 start, vec3 dir, float stepLength, int steps) {
+    vec3 increment = dir * stepLength;
+    vec3 position = start + increment * 0.5;
     float density = 0.0;
-    // The weather varies over kilometres, the march spans a few hundred
-    // metres: one fetch for all its steps.
-    float shift = weatherShift(p) + f.shadowBias;
-    for (int i = 0; i < f.sunSteps; i++, position += increment) {
+    float shift = weatherShift(start) + f.shadowBias;
+    for (int i = 0; i < steps; i++, position += increment) {
         float h = slabHeight(f, heightOf(position));
         if (h <= 0.0 || h >= 1.0) {
             continue;
@@ -223,7 +231,102 @@ float sunOpticalDepth(Field f, vec3 p) {
                      * f.octaveWeights.y;
         density += slabDensity(f, h, (first + second) * f.shadowGain + shift);
     }
-    return density * f.sunStepLength * f.fieldExtinction * f.shadowStrength;
+    return density * stepLength * f.fieldExtinction * f.shadowStrength;
+}
+
+// Optical depth toward the sun through the same field, which is what lets clouds
+// shadow themselves AND each other. A depth, not a transmittance, so everything
+// derived from it stays a function of world position only.
+float sunOpticalDepth(Field f, vec3 p) {
+    if (f.sunSteps <= 0) {
+        return 0.0;
+    }
+    return slabOpticalDepth(f, p, sunDir, f.sunStepLength, f.sunSteps);
+}
+
+// The chord a ray from p (planet frame) toward dir (unit) cuts through the
+// slab's shell: where it enters it (or p, inside it) and its length to where
+// it leaves the top; false above the slab (nothing to cross).
+bool cloudShadowChord(Field f, vec3 p, vec3 dir, out vec3 start, out float chord) {
+    float inner = planetRadius + f.slabBase;
+    float outer = inner + f.slabThickness;
+    float r = length(p);
+    start = p;
+    chord = 0.0;
+    if (r >= outer) {
+        return false;
+    }
+    // Where the ray leaves each sphere: -b + sqrt(b^2 + R^2 - r^2), the
+    // difference of squares factored (centimetres in float32 at 600 km).
+    float b = dot(p, dir);
+    float leave = -b + sqrt(max((outer - r) * (outer + r) + b * b, 0.0));
+    float enter = r < inner ? -b + sqrt(max((inner - r) * (inner + r) + b * b, 0.0))
+                            : 0.0;
+    chord = leave - enter;
+    start = p + dir * enter;
+    return chord > 0.0;
+}
+
+// The steps of a chord: about CLOUD_SHADOW_STEP_SCALE sunStepLength long,
+// at most maxSteps (a long, low chord takes longer steps).
+int cloudShadowSteps(Field f, float chord, int maxSteps) {
+    float target = max(f.sunStepLength * CLOUD_SHADOW_STEP_SCALE, 1.0);
+    return clamp(int(ceil(chord / target)), 1, maxSteps);
+}
+
+// The planet's clouds between a point (planet frame) and the sun toward dir
+// (unit): the optical depth of their chord (cloudShadowChord), marched in
+// cloudShadowSteps. 0 above the slab, or where the weather leaves no cloud.
+// What a cloud's shadow on the ground is: exp2(-depth).
+// noise.cloud_shadow_on_sphere on the CPU.
+float cloudShadowDepth(Field f, vec3 p, vec3 dir, int maxSteps) {
+    vec3 start;
+    float chord;
+    if (maxSteps <= 0 || !cloudShadowChord(f, p, dir, start, chord)) {
+        return 0.0;
+    }
+    // Exact: where the two octaves at their most stay under the threshold,
+    // the march would find nothing (clear weather: most of a fair sky).
+    if ((f.octaveWeights.x + f.octaveWeights.y) * f.shadowGain + weatherShift(start)
+            + f.shadowBias <= f.threshLo) {
+        return 0.0;
+    }
+    int steps = cloudShadowSteps(f, chord, maxSteps);
+    return slabOpticalDepth(f, start, dir, chord / float(steps), steps);
+}
+
+// The clouds' shadow on what is under them (planet frame p), as a share of
+// the sun toward dir: the march (cloudShadowDepth) where it can follow the
+// clouds' shapes, their mean for the weather there (deckLight's b) where it
+// cannot, which costs nothing:
+// * where a pixel's footprint (metres) spans several clouds (the march
+//   would sparkle);
+// * where the steps are longer than the clouds (a grazing sun's long chord:
+//   the march would band, each height of ground stepping onto other
+//   clouds).
+// Faded over the second octave's cell.
+float cloudShadow(Field f, vec3 p, vec3 dir, int maxSteps, float footprint) {
+    vec3 start;
+    float chord;
+    if (maxSteps <= 0 || !cloudShadowChord(f, p, dir, start, chord)) {
+        return 1.0;
+    }
+    float cell = NOISE_FEATURE / (f.noiseScale.x * f.octaveScales.y);
+    float step = chord / float(cloudShadowSteps(f, chord, maxSteps));
+    float far = max(smoothstep(0.25 * cell, cell, footprint),
+                    smoothstep(0.5 * cell, cell, step));
+    float mean = 1.0;
+    if (far > 0.0) {
+        vec2 size = vec2(textureSize(deckLight, 0));
+        float cosSun = dot(normalize(p), dir);
+        vec2 at = vec2((cosSun - deckLightCosMin) / (1.0 - deckLightCosMin),
+                       texture(weatherMap, p).r);
+        mean = texture(deckLight, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size).b;
+    }
+    if (far >= 1.0) {
+        return mean;
+    }
+    return mix(exp2(-cloudShadowDepth(f, p, dir, maxSteps)), mean, far);
 }
 
 // ── Sunlight on a planet's clouds (planet mode, through its own air) ──────────

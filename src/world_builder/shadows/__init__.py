@@ -19,6 +19,12 @@ air's (``atmoSunlight``) or its day/night line.
 The sky's light dims with the sunlight that makes it, down to
 :data:`ECLIPSE_SKY_FLOOR` (the air outside the shadow still glows).
 
+The second term is the planet's clouds' shadow on what is under them,
+marched through their density field (cloud_field.glsl's
+``cloudShadowDepth``; :meth:`SphericalClouds.bind_shadow_inputs
+<world_builder.clouds.sphere.SphericalClouds.bind_shadow_inputs>` gives a
+node's shaders the field). :class:`ShadowSettings` sets what it costs.
+
 Most of the time no body's shadow is near another: :meth:`Shadows.set_sun`
 works out, per body, which others' penumbra cones can reach what it holds
 (its air, its mountains: its *reach*), and the shaders skip a body whose
@@ -40,13 +46,16 @@ Usage::
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import LVecBase4f, NodePath, PTA_float, PTA_int, PTA_LVecBase4f
 
 from world_builder.atmosphere import MAX_ATMOSPHERES
+from world_builder.quality import QualityLevel, QualitySettings, knob
 
 SHADER_PATH = Path(__file__).parent / "shaders"
 #: Bodies one shader can take (must match MAX_SHADOW_BODIES in the GLSL).
@@ -59,6 +68,33 @@ SUN_ANGULAR_RADIUS = math.radians(0.55)
 ECLIPSE_SKY_FLOOR = 0.15
 
 
+@dataclass(frozen=True)
+class ShadowSettings(QualitySettings):
+    """What the world's shadows cost (:mod:`world_builder.quality`). Live.
+
+    :ivar cloud_shadow_steps: the most samples a ground pixel takes through
+        the planet's clouds toward the sun (their shadow on the terrain and
+        the sea); 0 = no cloud shadows
+    """
+
+    cloud_shadow_steps: int = knob(
+        8,
+        "Cloud shadows",
+        unit="samples",
+        range=(0, 16),
+        help="Samples through the clouds toward the sun for each pixel of "
+        "ground and sea: fewer blur the shadows' detail at low sun; 0 leaves "
+        "them out. The cost is per pixel of terrain.",
+    )
+
+    LABEL: ClassVar = "Shadows"
+    PRESETS: ClassVar = {
+        QualityLevel.LOW: {"cloud_shadow_steps": 0},
+        QualityLevel.MID: {"cloud_shadow_steps": 4},
+        QualityLevel.ULTRA: {"cloud_shadow_steps": 12},
+    }
+
+
 class Shadows:
     """The world's sun occluders, as shader inputs shared by every node bound.
 
@@ -68,10 +104,20 @@ class Shadows:
     :class:`~world_builder.atmosphere.Atmospheres`).
     """
 
-    def __init__(self, sun_angular_radius: float = SUN_ANGULAR_RADIUS) -> None:
+    #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
+    SETTINGS_TYPE: ClassVar = ShadowSettings
+
+    def __init__(
+        self,
+        sun_angular_radius: float = SUN_ANGULAR_RADIUS,
+        settings: ShadowSettings | None = None,
+    ) -> None:
         """
         :param sun_angular_radius: the sun's angular radius, radians
+        :param settings: what the shadows cost; None = the HIGH preset
         """
+        self._cloud_steps = PTA_int.empty_array(1)
+        self.set_settings(settings or ShadowSettings())
         self._bodies: list[list] = []  # [radius, position, reach]
         self._sun = np.array([0.0, 0.0, 1.0])
         self._count = PTA_int.empty_array(1)
@@ -84,6 +130,17 @@ class Shadows:
         self._atmosphere_bodies = PTA_int.empty_array(MAX_ATMOSPHERES)
         for index in range(MAX_ATMOSPHERES):
             self._atmosphere_bodies[index] = -1
+
+    @property
+    def settings(self) -> ShadowSettings:
+        """What the shadows cost (:meth:`set_settings`)."""
+        return self._settings
+
+    def set_settings(self, settings: ShadowSettings) -> None:
+        """Change what the shadows cost, live on every bound node (the
+        step count is an array written in place)."""
+        self._settings = settings
+        self._cloud_steps[0] = settings.cloud_shadow_steps
 
     @property
     def sun_angular_radius(self) -> float:
@@ -186,6 +243,7 @@ class Shadows:
         node.set_shader_input("uShadowCasters", self._casters)
         node.set_shader_input("uSunAngularRadius", self._sun_radius)
         node.set_shader_input("uAtmoBody", self._atmosphere_bodies)
+        node.set_shader_input("uCloudShadowSteps", self._cloud_steps)
         node.set_shader_input("uShadowSelf", -1 if body is None else int(body))
 
     def update(self, camera_world: ArrayLike) -> None:
@@ -306,6 +364,7 @@ def bind_defaults(node: NodePath) -> None:
             "uShadowCasters": casters,
             "uSunAngularRadius": sun_radius,
             "uAtmoBody": owners,
+            "uCloudShadowSteps": 0,
             "uShadowSelf": -1,
         }
     for name, value in _DEFAULTS.items():

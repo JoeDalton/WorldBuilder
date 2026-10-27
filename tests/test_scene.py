@@ -298,6 +298,13 @@ def test_sea_light(sea):
     clear = made.refl_buffer.get_clear_color()
     lit = np.multiply(tuple(made._water_color), (0.5, 0.25, 0.0))
     np.testing.assert_allclose(tuple(clear)[:3], aces_tonemap(lit), atol=1e-6)
+    # The sun's share apart (the shadows dim it per pixel): the clear colour
+    # is the whole light's.
+    made.set_light((0.2, 0.1, 0.0), sun=(0.3, 0.15, 0.0))
+    sun = made._frame_inputs["iWaterSun"][0]
+    np.testing.assert_allclose(tuple(sun), (0.3, 0.15, 0.0))
+    clear = made.refl_buffer.get_clear_color()
+    np.testing.assert_allclose(tuple(clear)[:3], aces_tonemap(lit), atol=1e-6)
 
 
 def test_sea_settings_set_its_uniforms(sea):

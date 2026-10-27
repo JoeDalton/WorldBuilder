@@ -63,10 +63,14 @@ sun behind the moon's centre: the camera in the umbra's tip),
 eclipse_orbit (3 radii over the point under the moon, looking down: the
 moon's shadow on the planet, noon there), lunar_eclipse (the moon_orbit view,
 the sun behind the planet, 0.8 degrees off: the planet's umbra edge across
-the moon). The ring: ring_ground (the start area, 1.5 km up, looking south
-at its arc), ring_orbit (6 radii over latitude 35, looking down: the planet
-and its whole ring). Every other pose has the sun at azimuth 210, elevation
-35, as seen there.
+the moon). Cloud shadows: clouds_noon and clouds_low (6 km up, over the
+clouds, looking across the sun's azimuth: the sun 80 and 20 degrees up, the
+shadows under the clouds and offset from them), clouds_grazing (mountains
+under the cloud base, the sun 4 degrees up: no bands). The ring (with --ring):
+ring_ground (the start area, 1.5 km up, looking south at its arc),
+ring_orbit (6 radii over latitude 35, looking down: the planet and its
+whole ring). Every other pose has the sun at azimuth 210, elevation 35, as
+seen there.
 """
 
 from __future__ import annotations
@@ -125,6 +129,9 @@ SUNS = {
     "eclipse_total": AimedSun(1),
     "eclipse_orbit": AimedSun(1),
     "lunar_eclipse": AimedSun(0, 0.8),
+    "clouds_noon": (210.0, 80.0),
+    "clouds_low": (210.0, 20.0),
+    "clouds_grazing": (240.0, 4.0),
 }
 
 
@@ -180,6 +187,14 @@ def _poses(demo: TerrainDemo) -> dict:
     if demo.ring is not None:
         poses["ring_ground"] = (ref_lat, ref_lon, 1500.0, 180.0, 12.0, 0, 0)
         poses["ring_orbit"] = (35.0, lon0, 6.0 * radius, 0.0, -89.9, 0, 0)
+    # The clouds' shadows from above them, looking across the sun's azimuth
+    # (210): under the clouds at noon, offset from them by altitude / tan
+    # (elevation) at a low sun.
+    poses["clouds_noon"] = (ref_lat, ref_lon, 6000.0, -120.0, -35.0, 0, 0)
+    poses["clouds_low"] = poses["clouds_noon"]
+    # Mountains under the clouds' base at a grazing sun: their shadow must
+    # not band with the ground's height.
+    poses["clouds_grazing"] = (36.7391, -126.6355, 1897.0, -50.0, -7.0, 0, 0)
     # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     # At sea level by night: the sky's reflection must be as dark as the sky.

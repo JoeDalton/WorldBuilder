@@ -403,7 +403,7 @@ class World:
         # Every body's air and shadow first: the terrains and clouds bind
         # them all.
         self.atmospheres = Atmospheres(self.settings.atmosphere)
-        self.shadows = Shadows(sun.angular_radius)
+        self.shadows = Shadows(sun.angular_radius, self.settings.shadows)
         indices = []
         for look in bodies:
             # What the body holds reaches its highest ground, or its air's top.
@@ -447,6 +447,7 @@ class World:
             if look.clouds is not None:
                 body.clouds = self._make_clouds(look, index)
                 self.shadows.bind(body.clouds.root, len(self.bodies))
+                body.clouds.bind_shadow_inputs(terrain.root)  # their shadow
             if look.ocean is not None:
                 kwargs = {
                     name: getattr(look.ocean, name)
@@ -659,33 +660,42 @@ class World:
         direct, ambient = self.lights_at(np.asarray(point_world, float)[None, :])
         return direct[0], ambient[0]
 
-    def lights_at(self, points_world: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
+    def lights_at(
+        self, points_world: ArrayLike, clouds: bool | ArrayLike = True
+    ) -> tuple[np.ndarray, np.ndarray]:
         """:meth:`light_at` for many points at once, each by its nearest
         body.
 
         :param points_world: (n, 3) world frame, metres
+        :param clouds: whether the planet's clouds shade each point (one
+            flag, or one per point): False for what the shaders shade per
+            pixel (the near sea)
         :returns: (direct, ambient), (n, 3) each, linear rgb
         """
         points = np.asarray(points_world, dtype=np.float64).reshape(-1, 3)
         if not self.bodies:
-            n = len(points)
-            return np.tile(self._sun_color, (n, 1)), np.tile(
-                self._space_ambient, (n, 1)
+            shape = (len(points), 3)
+            return (
+                np.broadcast_to(self._sun_color, shape).copy(),
+                np.broadcast_to(self._space_ambient, shape).copy(),
             )
+        shaded = np.broadcast_to(np.asarray(clouds, dtype=bool), (len(points),))
         direct = np.empty((len(points), 3))
         ambient = np.empty((len(points), 3))
         nearest = self._nearest_indices(points)
         for index in np.unique(nearest):
             mask = nearest == index
-            direct[mask], ambient[mask] = self._lights_at(int(index), points[mask])
+            direct[mask], ambient[mask] = self._lights_at(
+                int(index), points[mask], shaded[mask]
+            )
         return direct, ambient
 
     def sun_visibility(self, points_world: ArrayLike) -> np.ndarray:
         """The share of the sun the world's shadows leave each point, each
         by its nearest body: the product of the shadow terms the shaders
-        draw (:mod:`world_builder.shadows`: so far, the other bodies'
-        eclipses). The nearest body's own shadow is not in it: that is its
-        air's or its day and night (:meth:`light_at` has both).
+        draw (:mod:`world_builder.shadows`: the other bodies' eclipses and
+        the planet's clouds). The nearest body's own shadow is not in it:
+        that is its air's or its day and night (:meth:`light_at` has both).
 
         :param points_world: (n, 3) world frame, metres
         :returns: (n,) in [0, 1]
@@ -697,7 +707,8 @@ class World:
         nearest = self._nearest_indices(points)
         for index in np.unique(nearest):
             mask = nearest == index
-            visible[mask] = self._sun_visibility(int(index), points[mask])
+            eclipse, clouds = self._sun_visibility(int(index), points[mask])
+            visible[mask] = eclipse * clouds
         return visible
 
     def _nearest_indices(self, points: np.ndarray) -> np.ndarray:
@@ -708,12 +719,22 @@ class World:
         gaps = np.linalg.norm(points[:, None, :] - centres[None], axis=-1) - radii
         return np.argmin(gaps, axis=1)
 
-    def _sun_visibility(self, index: int, points: np.ndarray) -> np.ndarray:
-        """:meth:`sun_visibility` for points of body *index*."""
-        return self.shadows.eclipse(points, self._sun, index)
+    def _sun_visibility(
+        self, index: int, points: np.ndarray, clouds: ArrayLike = True
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """:meth:`sun_visibility` for points of body *index*, as its terms:
+        (the eclipses, the clouds' shadow where *clouds*), (n,) each."""
+        eclipse = self.shadows.eclipse(points, self._sun, index)
+        shade = np.ones(len(points))
+        body = self.bodies[index]
+        steps = self.shadows.settings.cloud_shadow_steps
+        shaded = np.broadcast_to(np.asarray(clouds, dtype=bool), (len(points),))
+        if body.clouds is not None and steps > 0 and shaded.any():
+            shade[shaded] = body.clouds.sun_visibility(points[shaded], self._sun, steps)
+        return eclipse, shade
 
     def _lights_at(
-        self, index: int, points: np.ndarray
+        self, index: int, points: np.ndarray, clouds: ArrayLike = True
     ) -> tuple[np.ndarray, np.ndarray]:
         """:meth:`lights_at` for (n, 3) points of body *index*."""
         body = self.bodies[index]
@@ -725,10 +746,12 @@ class World:
         else:
             hidden = in_shadow(points - body.position, self._sun, body.radius)
             direct = np.where(np.asarray(hidden)[..., None], 0.0, self._sun_color)
-        visible = self._sun_visibility(index, points)[:, None]
-        sky = ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * visible
+        eclipse, shade = self._sun_visibility(index, points, clouds)
+        # The sky's light dims in an eclipse, not under a cloud (lit air
+        # all round).
+        sky = ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * eclipse[:, None]
         return (
-            np.broadcast_to(direct * visible, (len(points), 3)),
+            np.broadcast_to(direct * (eclipse * shade)[:, None], (len(points), 3)),
             np.broadcast_to(ambient * sky, (len(points), 3)),
         )
 
@@ -773,7 +796,7 @@ class World:
     def set_settings(self, settings: WorldSettings) -> None:
         """Change what every part costs (see :meth:`WorldSettings.apply`)."""
         self.settings = settings
-        parts: list = [self.atmospheres]
+        parts: list = [self.atmospheres, self.shadows]
         if self.sky is not None:
             parts.append(self.sky)
         for body in self.bodies:
@@ -903,7 +926,9 @@ class World:
         points += [
             (body.position + up * body.radius)[None, :] for body, up in zip(seas, ups)
         ]
-        direct, ambient = self.lights_at(np.concatenate(points))
+        # The near seas take the clouds' shadow per pixel (sea.glsl).
+        clouds = np.arange(1 + len(tracked) + len(seas)) < 1 + len(tracked)
+        direct, ambient = self.lights_at(np.concatenate(points), clouds)
         scale = self.light_scale
         if self.sun_light is not None:
             self.sun_light.node().set_color((*(direct[0] * scale), 1.0))
@@ -921,10 +946,12 @@ class World:
         self, body: Body, up: np.ndarray, direct: np.ndarray, ambient: np.ndarray
     ) -> None:
         """Light the sea's near look as the sea under the camera (*direct*
-        and *ambient* there), relative to the daylight its colour was tuned
-        in (dark at night)."""
+        and *ambient* there, the clouds' shadow left out), relative to the
+        daylight its colour was tuned in (dark at night): the sun's share
+        apart, which the clouds' shadow dims per pixel."""
         sea = body.position + up * body.radius
-        light = direct * max(float(self._sun @ up), 0.0) + ambient
+        sun_light = direct * max(float(self._sun @ up), 0.0)
+        light = sun_light + ambient
         if body.ocean_reference is None:
             elevation = math.radians(body.look.ocean.tuned_elevation)
             east = np.cross([0.0, 0.0, 1.0], up)
@@ -940,7 +967,11 @@ class World:
             body.ocean_reference = sun * math.sin(elevation) + np.asarray(
                 body.look.ambient
             )
-        body.ocean.set_light(np.clip(light / body.ocean_reference, 0.0, 1.5))
+        # As lit as before the split (the sum is clipped), shared as the
+        # sun and the sky share it.
+        total = np.clip(light / body.ocean_reference, 0.0, 1.5)
+        sun_share = np.divide(sun_light, light, out=np.zeros(3), where=light > 0.0)
+        body.ocean.set_light(total * (1.0 - sun_share), sun=total * sun_share)
 
     # ── teardown ────────────────────────────────────────────────────────────
 

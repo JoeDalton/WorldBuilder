@@ -363,6 +363,9 @@ in `cloud_field.glsl` (billboards per vertex, the deck per pixel) spread it:
 Another body's eclipse multiplies both, and the clouds' sky light dims with
 it (`eclipseVisibility`, see [Shadows](shadows.md)).
 
+The clouds' own shadow falls on the terrain, the far water and the near sea
+(`cloudShadowDepth`, through the deck's field: see [Shadows](shadows.md)).
+
 The terrain and Panda3D's lights still use the plain shadow: on the ground
 the sun has set long before, so there is no line to see there.
 
@@ -398,9 +401,6 @@ few samples of that air per vertex (as orange with 8 as with 4).
 ### Not yet
 
 - **Wind:** the clouds are static.
-- **Shadows on the ground:** clouds do not shade the terrain (planned:
-  [Shadows](shadows.md)). Eclipses by other bodies already darken the air,
-  the ground and the clouds.
 - **One cloud type per planet** (cumulus in the demo); the flat field mixes
   types, the planet field could take one per slab (the weather map could
   then say which).

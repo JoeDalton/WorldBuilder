@@ -163,7 +163,10 @@ and no look gets the far look only.
 - **Night.** The water's own colour was chosen in daylight. `Sea.set_light`
   scales it near the camera (and the reflection's clear colour) by the light
   on the sea there relative to that daylight; `World` computes it with
-  `Atmospheres.light_at`. The far look is lit per pixel.
+  `Atmospheres.light_at`. It takes the sky's share and the sun's apart
+  (`set_light(sky, sun=...)`, `iWaterLight` and `iWaterSun`): the world's
+  shadows dim the sun's share per pixel (`seaShade`'s `sunShade`: the
+  clouds', see [Shadows](shadows.md)). The far look is lit per pixel.
 - **Atmosphere.** Both looks are seen through the atmospheres like the
   terrain is, in linear light before the tonemap.
   `OceanLook.haze_color` / `haze_distance` are ignored, kept so older looks

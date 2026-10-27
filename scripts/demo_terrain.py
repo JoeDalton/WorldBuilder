@@ -69,6 +69,8 @@ Controls (AZERTY):
                     terrain, air, sky, clouds, ocean (each part's own
                     settings; a cloud or ocean change may refill a moment)
     F6              cycle every part's preset at once
+    F7              cycle the shadows' preset (the clouds' shadow on the
+                    ground: off at low, more samples above)
     F               print the camera pose and terrain stats
     ESC             quit
 
@@ -201,13 +203,15 @@ _CONTROLS = (
     "shift",
     *(key for row in (*_ROTATIONS, *_TRANSLATIONS, *_SUN_KEYS) for key in row[:2]),
 )
-#: F1 - F5 cycle these parts' presets (WorldSettings sections), F6 all.
+#: F1 - F5 and F7 cycle these parts' presets (WorldSettings sections), F6
+#: all.
 QUALITY_KEYS = (
     ("f1", "terrain"),
     ("f2", "atmosphere"),
     ("f3", "sky"),
     ("f4", "clouds"),
     ("f5", "ocean"),
+    ("f7", "shadows"),
 )
 QUALITY_ALL_KEY = "f6"
 _DEBUG_VIEWS = ("shaded", "LOD", "biomes", "slope", "normals", "skirts")
@@ -418,7 +422,7 @@ class TerrainDemo(ShowBase):
         self.atmospheres = Atmospheres(world.atmosphere)
         self.atmospheres.add(spec.radius, AtmosphereParams())
         # Each body eclipses the sun for the other (body 0 owns the air).
-        self.shadows = Shadows()
+        self.shadows = Shadows(settings=world.shadows)
         self.shadows.add(spec.radius, reach=spec.radius + AtmosphereParams().height)
         self.shadows.set_atmosphere(0, 0)
         self.terrain = Terrain(
@@ -719,9 +723,12 @@ class TerrainDemo(ShowBase):
             self.ring.set_sun(self._sun, SUN_COLOR, SPACE_AMBIENT)
         self._update_lights()
 
-    def _light_at(self, body: Body, point_world) -> tuple[np.ndarray, np.ndarray]:
+    def _light_at(
+        self, body: Body, point_world, shade: float = 1.0
+    ) -> tuple[np.ndarray, np.ndarray]:
         """:returns: (direct, ambient) light at a point near a body, eclipsed
-        by the other"""
+        by the other, its sunlight times *shade* (the planet's clouds' shadow
+        there: :meth:`_cloud_shades`)"""
         if body.atmosphere:
             direct, ambient = self.atmospheres.light_at(
                 0,
@@ -736,21 +743,35 @@ class TerrainDemo(ShowBase):
             ambient = np.asarray(SPACE_AMBIENT)
         own = next(i for i, other in enumerate(self.bodies) if other is body)
         eclipse = float(self.shadows.eclipse(point_world, self._sun, own))
-        return direct * eclipse, ambient * (
+        return direct * (eclipse * shade), ambient * (
             ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * eclipse
         )
+
+    def _cloud_shades(self, points: np.ndarray) -> np.ndarray:
+        """:returns: (n,) the planet's clouds' shadow at points near it, 1
+        near the moon (one call for them all: each costs ~0.2 ms)"""
+        shades = np.ones(len(points))
+        steps = self.shadows.settings.cloud_shadow_steps
+        near = [self._nearest_body(point) is self.home for point in points]
+        if self.clouds is not None and any(near):
+            shades[near] = self.clouds.sun_visibility(points[near], self._sun, steps)
+        return shades
 
     def _update_lights(self) -> None:
         """Panda3D's sun and ambient lights as they are at the camera, the
         tracked nodes' (the ball's) as they are at each, and the sea's near
         look lit as the sea under the camera."""
-        direct, ambient = self._light_at(self.body, self.cam_world)
+        points = np.concatenate(
+            [self.cam_world[None, :], self.cam_world + self.tracked.positions()]
+        )
+        shades = self._cloud_shades(points)
+        direct, ambient = self._light_at(self.body, self.cam_world, shades[0])
         self.sun_light.node().set_color((*direct, 1.0))
         self.sun_light.node().set_direction(Vec3(*(-self._sun)))
         self.ambient_light.node().set_color((*ambient, 1.0))
         lights = [
-            self._light_at(self._nearest_body(point), point)
-            for point in self.cam_world + self.tracked.positions()
+            self._light_at(self._nearest_body(point), point, shade)
+            for point, shade in zip(points[1:], shades[1:])
         ]
         if lights:
             self.tracked.apply(*zip(*lights), self._sun)
@@ -758,8 +779,10 @@ class TerrainDemo(ShowBase):
         # the sea now (sun on a level surface plus sky) over that day's.
         up = self._relative(self.home) / np.linalg.norm(self._relative(self.home))
         sea = self.home.position + up * self.radius
+        # The clouds' shadow is the shader's, per pixel, on the sun's share.
         direct, ambient = self._light_at(self.home, sea)
-        light = direct * max(float(self._sun @ up), 0.0) + ambient
+        sun_light = direct * max(float(self._sun @ up), 0.0)
+        light = sun_light + ambient
         if self._water_reference is None:
             elevation = math.radians(WATER_TUNED_ELEVATION)
             east = np.cross([0.0, 0.0, 1.0], up)
@@ -769,7 +792,9 @@ class TerrainDemo(ShowBase):
             self._water_reference = np.asarray(SUN_COLOR) * t * math.sin(
                 elevation
             ) + np.asarray(SKY_AMBIENT)
-        self.ocean.set_light(np.clip(light / self._water_reference, 0.0, 1.5))
+        total = np.clip(light / self._water_reference, 0.0, 1.5)
+        sun_share = np.divide(sun_light, light, out=np.zeros(3), where=light > 0.0)
+        self.ocean.set_light(total * (1.0 - sun_share), sun=total * sun_share)
 
     def set_local_sun(self, azimuth: float, elevation: float) -> None:
         """Put the sun at an azimuth/elevation (degrees) as seen from the
@@ -884,6 +909,7 @@ class TerrainDemo(ShowBase):
             channel="clouds",
         )
         self.shadows.bind(self.clouds.root, 0)
+        self.clouds.bind_shadow_inputs(self.terrain.root)  # their shadow on it
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
         if getattr(self, "half_res", None) is not None:
@@ -918,7 +944,9 @@ class TerrainDemo(ShowBase):
         """Hand every part its section. What only a restart changes (the
         terrain's texture size and workers) is logged and left as it is."""
         self.world = world
-        world.apply(*self._terrains(), self.atmospheres, self.sky, self.ocean)
+        world.apply(
+            *self._terrains(), self.atmospheres, self.shadows, self.sky, self.ocean
+        )
         if self.clouds is not None:
             world.apply(self.clouds)
         if self.ring is not None:

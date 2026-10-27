@@ -377,7 +377,9 @@ def test_one_light_call_lights_the_camera_the_nodes_and_the_sea():
     world.track_light(ball)
     calls = []
     lights_at = world.lights_at
-    world.lights_at = lambda points: calls.append(len(points)) or lights_at(points)
+    world.lights_at = lambda points, clouds=True: (
+        calls.append(len(points)) or lights_at(points, clouds)
+    )
 
     world._light(camera, camera)
 
@@ -392,10 +394,40 @@ def test_one_light_call_lights_the_camera_the_nodes_and_the_sea():
     sea = np.array([0.0, 0.0, R])
     direct, ambient = world.light_at(sea)
     light = direct * 0.8 + ambient
-    np.testing.assert_allclose(
-        planet.ocean.set_light.call_args[0][0],
-        np.clip(light / planet.ocean_reference, 0.0, 1.5),
+    (sky,), kwargs = planet.ocean.set_light.call_args
+    total = np.clip(light / planet.ocean_reference, 0.0, 1.5)
+    np.testing.assert_allclose(sky + kwargs["sun"], total)
+    np.testing.assert_allclose(kwargs["sun"], total * direct * 0.8 / light)
+
+
+def test_the_clouds_shade_the_sun_not_the_sky_nor_the_near_sea():
+    """A body's clouds dim the sunlight under them (their CPU twin, with
+    the world's step count), not the sky light; the near sea's light leaves
+    them out (its shader shades it per pixel); no steps, no cloud shadow."""
+    from world_builder.shadows import ShadowSettings
+
+    planet = _body(ambient=(0.2, 0.2, 0.2))
+    planet.clouds = MagicMock()
+    planet.clouds.sun_visibility.side_effect = lambda points, sun, steps: np.full(
+        len(points), 0.25
     )
+    world = _world(planet)
+    points = np.array([[0.0, 0.0, R + 10.0], [0.0, 1e3, R + 10.0]])
+
+    direct, ambient = world.lights_at(points)
+    np.testing.assert_allclose(direct, 0.25 * world._sun_color[None].repeat(2, 0))
+    np.testing.assert_allclose(ambient, 0.2)
+    steps = planet.clouds.sun_visibility.call_args[0][2]
+    assert steps == world.shadows.settings.cloud_shadow_steps > 0
+    np.testing.assert_allclose(world.sun_visibility(points), 0.25)
+    direct, _ = world.lights_at(points, clouds=[True, False])
+    np.testing.assert_allclose(direct[1], world._sun_color)
+    np.testing.assert_allclose(direct[0], 0.25 * world._sun_color)
+
+    world.shadows.set_settings(ShadowSettings(cloud_shadow_steps=0))
+    planet.clouds.sun_visibility.reset_mock()
+    np.testing.assert_allclose(world.sun_visibility(points), 1.0)
+    planet.clouds.sun_visibility.assert_not_called()
 
 
 def test_a_tracked_node_is_lit_where_it_is():

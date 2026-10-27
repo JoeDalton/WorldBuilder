@@ -32,11 +32,7 @@ uniform float earthCurvature;   // 1 / (2R); undone here, the field is flat
 uniform int   uDeck;            // 1: the deck surface, not a billboard
 uniform int   uOwnAtmosphere;   // the planet's atmosphere (reddens sunlight), -1 none
 uniform float uPixelAngle;      // radians per pixel (the far deck's footprint)
-// The far deck's lighting (noise.deck_light_table): x the sun's cosine at the
-// cloud, from deckLightCosMin to 1; y the weather's coverage. r: the sun
-// term's shadowing (with the powder), g: the shadowing alone.
-uniform sampler2D deckLight;
-uniform float deckLightCosMin;
+// The far deck's lighting: deckLight and deckLightCosMin (cloud_field.glsl).
 
 in  vec2  vUv;
 in  vec3  worldPos;

@@ -72,6 +72,7 @@ from panda3d.core import (
     NodePath,
     OmniBoundingVolume,
     Point3,
+    PTA_int,
     PTA_LVecBase3f,
     PTA_LVecBase4f,
     Shader,
@@ -99,9 +100,11 @@ from world_builder.clouds.noise import (
     DensityField,
     build_deck_light_texture,
     build_noise_texture,
+    cloud_shadow_on_sphere,
     deck_light_table,
     density_on_sphere,
     fbm_sigma,
+    ground_shadow_table,
     pack_layer_params,
     quantise,
     sphere_column_peaks,
@@ -111,6 +114,7 @@ from world_builder.clouds.noise import (
 from world_builder.clouds.weather import (
     WeatherSpec,
     build_weather_texture,
+    sample_cube,
     shift_table,
     weather_cube,
 )
@@ -227,6 +231,12 @@ class CloudTile:
     gen_ms: float
 
 
+#: SphericalClouds.sun_visibility keeps a point's shade per cube of this
+#: side, metres, and at most this many of them.
+SHADE_CELL = 25.0
+SHADE_CACHE_SIZE = 4096
+
+
 @functools.cache
 def _noise(seed: int) -> np.ndarray:
     return quantise(value_noise_volume(seed=seed))
@@ -263,11 +273,18 @@ def _deck_light(
     table: tuple,
     octaves: int,
 ) -> np.ndarray:
-    """The deck's far lighting (:func:`noise.deck_light_table`; ~0.4 s)."""
+    """The far clouds' averages (~0.6 s): the deck's lighting
+    (:func:`noise.deck_light_table`) and, a third channel, the clouds'
+    shadow on the ground (:func:`noise.ground_shadow_table`)."""
     volume = _noise(seed)
-    return deck_light_table(
-        volume, field, optics, radius, np.asarray(table), octaves, float(volume.mean())
+    mean = float(volume.mean())
+    deck = deck_light_table(
+        volume, field, optics, radius, np.asarray(table), octaves, mean
     )
+    ground = ground_shadow_table(
+        volume, field, optics, radius, np.asarray(table), octave_mean=mean
+    )
+    return np.dstack([deck, ground])
 
 
 def octave_offset(full: np.ndarray, fewer: np.ndarray) -> float:
@@ -675,6 +692,15 @@ class SphericalClouds:
         base_level = max(0, round(math.log2(BASE_TILE_SIZE / self.grid.chunk_size(0))))
         self._base_level = base_level
         self._settings = settings
+        # Nodes whose shaders the clouds shade (bind_shadow_inputs), and the
+        # weather they read, once made.
+        self._shadow_nodes: list[NodePath] = []
+        self._weather_texture = None
+        # Their uCloudShadowLayer, shared: the deck's layer once ready
+        self._shadow_layer = PTA_int.empty_array(1)
+        # sun_visibility's shades by cell, for one sun and step count
+        self._shade_key: tuple | None = None
+        self._shades: dict[tuple, float] = {}
         params, self._deck_job = self._configure(settings)
 
         # ── Nodes and shared inputs ──
@@ -710,6 +736,7 @@ class SphericalClouds:
         for row in params.reshape(-1, 4):
             layer_params.push_back(LVecBase4f(*(float(v) for v in row)))
         self._layer_params = layer_params
+        self._noise_texture = build_noise_texture(volume)
         bind_defaults(root)
         bind_shadow_defaults(root)
         if atmospheres is not None:
@@ -721,7 +748,7 @@ class SphericalClouds:
         self._sun[0] = LVecBase3f(0.0, 0.0, 1.0)
         root.set_shader_inputs(
             layerParams=layer_params,
-            cloudNoise=build_noise_texture(volume),
+            cloudNoise=self._noise_texture,
             noiseSize=float(NOISE_SIZE),
             noiseOffset=Vec3(0, 0, 0),
             deckLightCosMin=DECK_LIGHT_COS_MIN,
@@ -795,9 +822,9 @@ class SphericalClouds:
             self._shown.clear()
             self._wanted = []
             self._last_select = None
-            self.root.set_shader_input(
-                "deckLight", build_deck_light_texture(deck_light)
-            )
+            self._deck_light_texture = build_deck_light_texture(deck_light)
+            self.root.set_shader_input("deckLight", self._deck_light_texture)
+            self._update_shadow_nodes()
             self.deck.set_shader_input("uDeckLayer", self._deck_layer)
         for i, row in enumerate(params.reshape(-1, 4)):
             self._layer_params[i] = LVecBase4f(*(float(v) for v in row))
@@ -871,6 +898,7 @@ class SphericalClouds:
                 octaves=octaves,
             )
         self._deck_layer = shells
+        self._update_shadow_nodes()
         deck = ShellSpec(
             0,
             (0.0, 0.0),
@@ -879,6 +907,9 @@ class SphericalClouds:
             octave_offset(peaks, _peaks(seed, field, self.radius, schedule[-1])),
         )
         deck_optics = replace(preset.optics, max_optical_depth=DECK_MAX_OPTICAL_DEPTH)
+        # The deck's field: the one its shadow on the ground is marched in.
+        self._deck_field = deck.field_of(field)
+        self._deck_optics = deck_optics
         params[shells] = pack_layer_params(
             deck.field_of(field),
             extinction=field.density,  # per metre of the slab's path
@@ -1007,8 +1038,91 @@ class SphericalClouds:
         """
         self.root.set_shader_input("uCloudDebug", int(flags))
 
+    def bind_shadow_inputs(self, node: NodePath) -> None:
+        """Let the shaders on a node (the planet's terrain) darken the sun
+        under these clouds (cloud_field.glsl's ``cloudShadowDepth``, through
+        the deck's field: the shadow follows the clouds drawn): the field's
+        inputs, and ``uCloudShadowLayer``, its layer (-1, no shadow, until
+        the set-up is done or after :meth:`remove`). How many samples it
+        takes is the world's ``ShadowSettings.cloud_shadow_steps``.
+        """
+        node.set_shader_inputs(
+            cloudNoise=self._noise_texture,
+            layerParams=self._layer_params,
+            planetRadius=self.radius,
+            sunDir=self._sun,
+            noiseSize=float(NOISE_SIZE),
+            noiseOffset=Vec3(0, 0, 0),
+            deckLightCosMin=DECK_LIGHT_COS_MIN,
+            uSpherical=1,
+            uCloudDebug=0,
+            uCloudShadowLayer=self._shadow_layer,
+        )
+        self._shadow_nodes.append(node)
+        self._update_shadow_nodes()
+
+    def sun_visibility(
+        self, points_world: ArrayLike, sun_direction: ArrayLike, max_steps: int
+    ) -> np.ndarray:
+        """The share of the sun these clouds leave points under them (or in
+        them): the shader's cloud shadow on the CPU
+        (:func:`noise.cloud_shadow_on_sphere`), for what the CPU lights.
+
+        :param points_world: (..., 3) world frame, metres
+        :param sun_direction: toward the sun, world frame (any length)
+        :param max_steps: the most samples a chord takes
+            (``ShadowSettings.cloud_shadow_steps``; 0 = none)
+        :returns: (...) in [0, 1]; 1 everywhere until the set-up is done
+        """
+        points = np.asarray(points_world, dtype=np.float64)
+        if self.weather is None or max_steps <= 0:
+            return np.ones(points.shape[:-1])
+        sun = np.asarray(sun_direction, dtype=np.float64)
+        sun = sun / np.linalg.norm(sun)
+        # Each call costs ~0.2 ms (numpy on a few points), every frame: a
+        # point's shade is kept per SHADE_CELL of ground (a shadow's edge is
+        # hundreds of metres wide), until the sun or the steps change.
+        key = (tuple(sun), max_steps)
+        if key != self._shade_key:
+            self._shade_key, self._shades = key, {}
+        flat = (points - self.position).reshape(-1, 3)
+        cells = [tuple(c) for c in np.round(flat / SHADE_CELL).astype(np.int64)]
+        missing = [i for i, cell in enumerate(cells) if cell not in self._shades]
+        if missing:
+            plane = self.weather[..., 1]
+            depth = cloud_shadow_on_sphere(
+                _noise(self._seed),
+                self._deck_field,
+                self._deck_optics,
+                flat[missing],
+                sun,
+                self.radius,
+                max_steps,
+                shift_at=lambda p: sample_cube(plane, p),
+                octave_mean=self._octave_mean,
+            )
+            if len(self._shades) > SHADE_CACHE_SIZE:
+                self._shades = {}
+            for i, value in zip(missing, np.exp2(-depth)):
+                self._shades[cells[i]] = float(value)
+        shades = np.array([self._shades[cell] for cell in cells])
+        return shades.reshape(points.shape[:-1])
+
+    def _update_shadow_nodes(self) -> None:
+        """The shaded nodes' weather and layer: none until the set-up."""
+        ready = self._weather_texture is not None
+        self._shadow_layer[0] = self._deck_layer if ready else -1
+        self._shadow_nodes = [n for n in self._shadow_nodes if not n.is_empty()]
+        if ready:
+            for node in self._shadow_nodes:
+                node.set_shader_input("weatherMap", self._weather_texture)
+                node.set_shader_input("deckLight", self._deck_light_texture)
+
     def remove(self) -> None:
-        """Take the clouds off the scene and drop their queued tiles."""
+        """Take the clouds off the scene and drop their queued tiles (and
+        their shadow off the nodes they shaded)."""
+        self._shadow_layer[0] = -1
+        self._shadow_nodes = []
         self.executor.request([], self._channel)
         self.root.remove_node()
         if self._shared_shift is not None:
@@ -1030,11 +1144,13 @@ class SphericalClouds:
         self._version = self.executor.set_spec(
             self.spec, self._channel, generator=generate_cloud_tile
         )
+        self._weather_texture = build_weather_texture(self.weather)
+        self._deck_light_texture = build_deck_light_texture(deck_light)
         self.root.set_shader_inputs(
-            weatherMap=build_weather_texture(self.weather),
-            deckLight=build_deck_light_texture(deck_light),
+            weatherMap=self._weather_texture, deckLight=self._deck_light_texture
         )
         self.root.unstash()
+        self._update_shadow_nodes()
 
     # ── internals ─────────────────────────────────────────────────────────────
 

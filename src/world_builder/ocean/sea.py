@@ -93,7 +93,7 @@ class Sea:
     # changed: the clock the swell was handed over at, the light, and what
     # the reflection's lens follows (fov, margin, render size).
     _swell_time: float | None = None
-    _light: tuple[float, ...] | None = None
+    _light: tuple[tuple[float, ...], tuple[float, ...]] | None = None
     _lens_key: tuple | None = None
     _anchor_east: tuple[float, float, float] = (1.0, 0.0, 0.0)
 
@@ -191,6 +191,7 @@ class Sea:
             "uSeaReflMVP": PTA_LMatrix4f.empty_array(1),
             "uWavePhase": PTA_float.empty_array(_MAX_WAVE_ITER),
             "iWaterLight": PTA_LVecBase3f.empty_array(1),
+            "iWaterSun": PTA_LVecBase3f.empty_array(1),
             "uSwellRotA": PTA_LMatrix4f.empty_array(1),  # mat3s, as Panda takes them
             "uSwellRotB": PTA_LMatrix4f.empty_array(1),
         }
@@ -198,6 +199,7 @@ class Sea:
             self._frame_inputs[axis] = PTA_LVecBase3f.empty_array(1)
         frame = self._frame_inputs
         frame["iWaterLight"][0] = LVecBase3f(1.0, 1.0, 1.0)
+        frame["iWaterSun"][0] = LVecBase3f(0.0, 0.0, 0.0)
         frame["uSeaPixelAngle"][0] = 0.001
         frame["uSeaReflMVP"][0] = LMatrix4f.ident_mat()
         frame["uSwellRotA"][0] = LMatrix4f.ident_mat()
@@ -281,20 +283,29 @@ class Sea:
         self._phase_view[:] = wave_phases(self._directions, self._chart_xy, time)
         self._mirror()
 
-    def set_light(self, light: ArrayLike) -> None:
+    def set_light(self, light: ArrayLike, sun: ArrayLike = (0.0, 0.0, 0.0)) -> None:
         """How lit the water is near the camera, relative to the daylight its
         colour was chosen in: (r, g, b) multiplying the water's own colour
-        (``iWaterLight``) and the colour the reflection is cleared to (seen
-        where it renders nothing; 1 = as tuned, 0 = night).
+        and the colour the reflection is cleared to (seen where it renders
+        nothing; 1 = as tuned, 0 = night).
 
-        :param light: linear (r, g, b) factors
+        Given as the sky's share and the sun's, the world's shadows on the
+        water (the clouds') dim the sun's share per pixel (``iWaterSun``);
+        all in *light*, nothing is shadowed.
+
+        :param light: linear (r, g, b) factors: all the light, or the sky's
+            share of it
+        :param sun: the sun's share, (r, g, b)
         """
         light = tuple(float(c) for c in light)
-        if light == self._light:
+        sun = tuple(float(c) for c in sun)
+        if (light, sun) == self._light:
             return
-        self._light = light
+        self._light = (light, sun)
         self._frame_inputs["iWaterLight"][0] = LVecBase3f(*light)
-        self.refl_buffer.set_clear_color(self._clear_color(light))
+        self._frame_inputs["iWaterSun"][0] = LVecBase3f(*sun)
+        total = np.asarray(light) + np.asarray(sun)
+        self.refl_buffer.set_clear_color(self._clear_color(total))
 
     @property
     def settings(self) -> OceanSettings:

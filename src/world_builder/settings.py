@@ -38,6 +38,7 @@ from world_builder.atmosphere import AtmosphereSettings
 from world_builder.clouds.cloud import CloudSettings
 from world_builder.ocean.ocean import OceanSettings
 from world_builder.quality import Knob, QualityLevel, QualitySettings
+from world_builder.shadows import ShadowSettings
 from world_builder.sky.sky import SkySettings
 from world_builder.terrain.terrain import TerrainSettings
 
@@ -56,6 +57,7 @@ SECTIONS: dict[str, type[QualitySettings]] = {
     "clouds": CloudSettings,
     "ocean": OceanSettings,
     "asteroids": AsteroidSettings,
+    "shadows": ShadowSettings,
 }
 
 
@@ -74,6 +76,7 @@ class WorldSettings:
     clouds: CloudSettings = field(default_factory=CloudSettings)
     ocean: OceanSettings = field(default_factory=OceanSettings)
     asteroids: AsteroidSettings = field(default_factory=AsteroidSettings)
+    shadows: ShadowSettings = field(default_factory=ShadowSettings)
 
     @classmethod
     def preset(cls, level: QualityLevel | str) -> WorldSettings:

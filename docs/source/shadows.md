@@ -8,7 +8,7 @@ the sea's near look). Issues #11 and #13; the plan is `SHADOWS_PLAN.md`.
 | Term | Casters | Receivers | Status |
 |---|---|---|---|
 | Eclipse | spherical bodies (planets, moons) | terrain, far water, clouds, air, CPU light | done |
-| Cloud shadow | the planet's clouds | terrain, sea, objects | planned (C) |
+| Cloud shadow | the planet's clouds | terrain, sea, objects | done |
 | Terrain shadow | mountains | terrain, sea, clouds, objects | planned (D, E) |
 | Ring shadow | rings | planet, clouds, air, objects | planned (I) |
 | Object shadow | tracked models | terrain, sea, models | planned (H) |
@@ -88,6 +88,63 @@ annular eclipse).
 - **CPU light** (`World.light_at`, so Panda3D's lights and the sea's near
   look): the same eclipse, at the camera or the sea under it.
 
+## Cloud shadows
+
+The planet's clouds shade the ground, the far water and the near sea, read
+straight from their density field: the shadow depends on the world position
+only, so it lines up with the clouds drawn, and it moves with the sun.
+
+- **The march** (`cloud_field.glsl`). The clouds' own sun march is now a call
+  to `slabOpticalDepth(f, start, dir, stepLength, steps)`: samples along a
+  straight stretch of the field, through the two lowest octaves calibrated
+  onto the full field, the weather fetched once at the start.
+  `cloudShadowDepth(f, p, dir, maxSteps)` intersects the sun ray from `p`
+  with the slab's two spheres (`planetRadius + base`, `+ thickness`) and
+  marches the chord between them in steps of about the layer's
+  `sunStepLength`, at most `maxSteps` (a long, low chord takes longer steps
+  rather than more of them). The shadow is `exp2(-depth)`.
+- **The field.** The deck layer's (`SphericalClouds._deck_layer`, the full
+  field with per-metre extinction, and the cumulus's `shadow_strength`), so
+  the shadow matches the clouds as drawn.
+- **Inputs.** `SphericalClouds.bind_shadow_inputs(node)` gives a node (the
+  planet's terrain root) the field's inputs and `uCloudShadowLayer`, its
+  layer: -1 until the weather is made, or after `remove`.
+  `clouds.field.cloud_shadow_defaults` (the terrain binds it) is "no clouds
+  overhead". `World` binds each body's clouds to its terrain; the
+  hand-built demo does the same.
+- **Receivers.** The terrain's sunlight (`terrain_frag.glsl`, at the planet
+  frame position `uAtmoCam[own] + vRelPos`: clouds come with air), so land
+  and far water. The near sea takes a per-pixel `sunShade` in `seaShade`,
+  which dims the sun's share of its light (`Sea.set_light(sky, sun=...)`):
+  the CPU's light on the sea leaves the clouds out. The sky light is not
+  dimmed: under a cloud the air all round is still lit.
+- **CPU twin.** `noise.cloud_shadow_on_sphere`, and
+  `SphericalClouds.sun_visibility(points, sun, steps)`, which
+  `World.sun_visibility` and `lights_at` multiply in: Panda3D's lights and
+  the tracked models darken under a cloud.
+- **Knob.** `ShadowSettings.cloud_shadow_steps` (the `shadows` section of
+  `WorldSettings`, live): 0 (off) at LOW, 4, 8, 12 at ULTRA.
+- **Far away**, where a pixel spans several clouds, the march would
+  sparkle; **under a grazing sun**, the chord is kilometres long and its
+  steps longer than the clouds, so the march would band (each height of
+  ground on a slope stepping onto other clouds: stripes along the
+  contours). In both cases `cloudShadow` fades it, over the second octave's
+  cell, to the shadow's mean for the weather's coverage and the sun's
+  elevation (`noise.ground_shadow_table`, made with the deck's lighting, in
+  its texture's third channel), which costs one fetch. A long, low sun's
+  shadow is a smear anyway.
+- **Cost.** The ground's steps are twice the clouds' own
+  (`CLOUD_SHADOW_STEP_SCALE`: within 0.004 of a 10 m march on average), an
+  exact early-out skips clear weather, and pixels the sun cannot light skip
+  the march. The CPU side keeps each point's shade per 25 m cell
+  (`SHADE_CELL`), so a model at rest costs nothing. Still, marching per
+  pixel costs, on a GTX 1070 at 1600×900 (median frame ms, Part B then
+  HIGH, MID): ground 10.95, 12.70, 11.98; high 6.01, 7.37, 6.78; stratosphere
+  4.29, 5.15, 5.10; sea_surface 8.23, 9.27, 9.02; orbit 2.62, 2.84. A
+  shadow map (the march once per texel of a map around the camera, one
+  fetch per pixel) is the way to most of it back: see the
+  [performance backlog](performance_backlog.md).
+
 ## Objects
 
 Panda3D's lights on `render` are the light at the camera, wrong for a model
@@ -114,6 +171,9 @@ from 150 m away it looks the same. `tests/test_world.py` checks a ball in an
 umbra goes dark while the camera outside it keeps the sun.
 
 ## Demo and shots
+
+F7 in the terrain demos cycles the shadows' preset (`--shadows-quality` at
+start): LOW leaves the clouds' shadows out.
 
 `scripts/demo_terrain.py` puts the moon 21,000 km out: from the planet's
 ground it looks 0.56° wide, as wide as the sun, so a total eclipse has an

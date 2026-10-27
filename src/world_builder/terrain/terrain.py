@@ -62,6 +62,7 @@ from panda3d.core import (
 
 from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 from world_builder.atmosphere import Atmospheres, bind_defaults
+from world_builder.clouds.field import cloud_shadow_defaults
 from world_builder.depth import PASS_TAG, REFLECTION_CAMERA_MASK
 from world_builder.ocean.ocean import bind_sea_defaults
 from world_builder.ocean.swell import Swell
@@ -408,6 +409,7 @@ class Terrain:
         self.root.set_shader_input("uTonemap", int(tonemap))
         bind_defaults(self.root)
         bind_shadow_defaults(self.root)
+        cloud_shadow_defaults(self.root)  # no clouds overhead, until bound
         if atmospheres is not None:
             atmospheres.bind(self.root)
         self.root.set_shader_input(

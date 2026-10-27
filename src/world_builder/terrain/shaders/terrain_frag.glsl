@@ -4,6 +4,7 @@
 
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/display.glsl"
+#pragma include "../../clouds/shaders/cloud_field.glsl"
 #pragma include "../../ocean/shaders/water.glsl"
 #pragma include "cube_faces.glsl"
 #pragma include "terrain_material.glsl"
@@ -55,6 +56,9 @@ uniform vec3  uShallowWater;      // the sea surface's shallow tint, linear
 uniform float uShallowDepth;      // and its e-folding depth, metres
 
 uniform int   uDebugMode;  // 0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts
+// The planet's clouds' layer in layerParams whose shadow falls here, -1 none
+// (SphericalClouds.bind_shadow_inputs).
+uniform int   uCloudShadowLayer;
 uniform int   uMaxLevel;
 
 out vec4 fragColor;
@@ -73,6 +77,19 @@ vec3 hue(float t) {
     return clamp(abs(fract(t + vec3(0.0, 2.0, 1.0) / 3.0) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
 }
 
+// The share of the sun the planet's clouds leave here: their shadow, marched
+// through the deck's field toward the sun, or its mean where the pixel's
+// footprint (metres) spans several clouds (cloud_field.glsl's cloudShadow).
+// Clouds only come with air: the planet frame is the air's.
+float cloudShade(vec3 L, float footprint) {
+    if (uCloudShadowLayer < 0 || uCloudShadowSteps <= 0 || uOwnAtmosphere < 0) {
+        return 1.0;
+    }
+    vec3 planet = uAtmoCam[uOwnAtmosphere].xyz + vRelPos;
+    return cloudShadow(getField(uCloudShadowLayer), planet, L, uCloudShadowSteps,
+                       footprint);
+}
+
 void main() {
     float dist = length(vRelPos);
     vec3 N = normalize(vNormal);
@@ -83,6 +100,8 @@ void main() {
     // ground, whatever the local slope says. Used on an airless body only;
     // through an atmosphere, atmoSunlight below also does the reddening.
     float day = uRadialLight == 1 ? smoothstep(-0.12, 0.08, dot(up, L)) : 1.0;
+    // The ground a pixel spans, metres (taken here, out of any branch).
+    float footprint = max(length(dFdx(vRelPos)), length(dFdy(vRelPos)));
 
 #ifdef SEA_NEAR
     // Water wholly in its near look: none of the land's or the far water's
@@ -91,7 +110,7 @@ void main() {
         bool raw;
         vec3 near = seaShade(uCamPos + vRelPos, vSwell,
                              vRelPos / max(dist, 1e-3), dist,
-                             -vSeabed, vStep, raw);
+                             -vSeabed, vStep, cloudShade(L, footprint), raw);
         if (!raw) {
             near = aces_tonemap(applyAtmospheres(near, vRelPos / max(dist, 1e-3), dist, L)
                                 * uExposure);
@@ -175,7 +194,11 @@ void main() {
     // shadow. An airless body just has the day/night line. Other bodies
     // eclipse it.
     float eclipse = eclipseVisibility(vRelPos, L, uShadowSelf);
-    vec3 sunlight = uSunColor * eclipse;
+    // The clouds' shadow only where the sun can light this pixel at all
+    // (objectLight's terms go as N.L): the march is the dear part.
+    float shade = dot(surfaceN, L) > 0.0 && dot(up, L) > -0.05 ? cloudShade(L, footprint)
+                                                              : 1.0;
+    vec3 sunlight = uSunColor * (eclipse * shade);
     float sunDay = day;
     if (uOwnAtmosphere >= 0) {
         sunlight *= atmoSunlight(uOwnAtmosphere, uAtmoCam[uOwnAtmosphere].xyz + vRelPos, L);
@@ -196,8 +219,8 @@ void main() {
             // The near look, crossfaded in below the sea's altitude band.
             bool raw;
             vec3 near = seaShade(uCamPos + vRelPos, vSwell,
-                             vRelPos / max(dist, 1e-3), dist,
-                                 -vSeabed, vStep, raw);
+                                 vRelPos / max(dist, 1e-3), dist,
+                                 -vSeabed, vStep, shade, raw);
             if (raw) {
                 fragColor = vec4(near, 1.0);
                 return;

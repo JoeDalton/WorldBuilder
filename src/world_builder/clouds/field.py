@@ -237,6 +237,38 @@ def _no_deck_light() -> Texture:
     return build_deck_light_texture(np.ones((1, 1, 2), dtype=np.float32))
 
 
+@functools.cache
+def _no_noise() -> Texture:
+    """A 1-texel noise volume, for shaders that never read it."""
+    tex = Texture("no_cloud_noise")
+    tex.setup_3d_texture(1, 1, 1, Texture.T_unsigned_byte, Texture.F_red)
+    tex.set_ram_image(bytes(1))
+    return tex
+
+
+def cloud_shadow_defaults(node: NodePath) -> None:
+    """Give a node "no clouds overhead" inputs for cloud_field.glsl's
+    ``cloudShadowDepth`` (``uCloudShadowLayer`` -1), so a shader that
+    includes it (the terrain's) runs without clouds, until
+    :meth:`SphericalClouds.bind_shadow_inputs` overrides them.
+    """
+    params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
+    node.set_shader_inputs(
+        cloudNoise=_no_noise(),
+        layerParams=params,
+        weatherMap=_no_weather(),
+        deckLight=_no_deck_light(),
+        deckLightCosMin=0.0,
+        planetRadius=0.0,
+        sunDir=Vec3(0.0, 0.0, 1.0),
+        noiseSize=1.0,
+        noiseOffset=Vec3(0.0, 0.0, 0.0),
+        uSpherical=1,
+        uCloudDebug=0,
+        uCloudShadowLayer=-1,
+    )
+
+
 def flat_mode_inputs(node: NodePath) -> None:
     """The shaders' planet-mode inputs (cloud.frag, cloud_field.glsl), switched
     off for the flat field: the shader reads them, so they must be set even when

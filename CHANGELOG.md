@@ -21,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   airless moon in its planet's shadow goes dark. `Shadows.set_sun` works
   out which bodies' shadows can reach which, so a view with no eclipse
   costs about what it did (within ~0.2 ms). (#13)
+- Cloud shadows (#11): the planet's clouds shade the terrain, the far
+  water and the near sea, marched per pixel through the deck's density
+  field toward the sun (`cloud_field.glsl`'s `cloudShadowDepth`, its CPU twin
+  `noise.cloud_shadow_on_sphere`), so the shadow follows the clouds drawn
+  and the sun. `SphericalClouds.bind_shadow_inputs(node)` lets a node's
+  shaders read them (`World` binds each body's clouds to its terrain);
+  `SphericalClouds.sun_visibility` is the CPU side, in
+  `World.sun_visibility` and `lights_at`. `ShadowSettings`
+  (`cloud_shadow_steps`) is a new `shadows` section of `WorldSettings`.
+  `Sea.set_light(light, sun=...)` takes the sun's share apart, which the
+  shadow dims per pixel. Far away and under a grazing sun the march gives
+  way to its mean (`noise.ground_shadow_table`), which neither sparkles
+  nor bands. F7 in the terrain demos cycles the shadows' preset.
+  `terrain_shots.py` gains `clouds_noon`, `clouds_low` and
+  `clouds_grazing`.
 - `World.track_light(node, cast=False)` / `untrack_light(node)`: a game's
   model lit by the light where it is, not at the camera: its own Panda3D sun
   and ambient lights (`world_builder.lights.TrackedLights`), set every
