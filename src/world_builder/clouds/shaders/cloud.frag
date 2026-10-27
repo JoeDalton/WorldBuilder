@@ -143,7 +143,8 @@ void main() {
         planetCloudLight(uOwnAtmosphere, samplePos, sunlight, skylight, twilight);
         // Other bodies eclipsing the sun (as cloud_sphere.vert).
         float eclipse = eclipseVisibility(samplePos - camPos, sunDir, uShadowSelf);
-        sunlight *= eclipse;
+        sunlight *= eclipse
+                  * terrainShadow(normalize(samplePos), length(samplePos) - planetRadius);
         twilight *= eclipse;
         skylight *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
     }

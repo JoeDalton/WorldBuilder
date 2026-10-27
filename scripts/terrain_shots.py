@@ -78,7 +78,12 @@ the sun behind the planet, 0.8 degrees off: the planet's umbra edge across
 the moon). Cloud shadows: clouds_noon and clouds_low (6 km up, over the
 clouds, looking across the sun's azimuth: the sun 80 and 20 degrees up, the
 shadows under the clouds and offset from them), clouds_grazing (mountains
-under the cloud base, the sun 4 degrees up: no bands). The ring (with --ring):
+under the cloud base, the sun 4 degrees up: no bands). Mountain shadows:
+mountains_low (clouds_grazing's view, the sun 6 degrees up in the
+south-east),
+mountains_orbit (1
+radius up, the sun 8 degrees up), moon_terminator (1 moon radius up over
+its craters, the sun 4 degrees up). The ring (with --ring):
 ring_ground (the start area, 1.5 km up, looking south at its arc),
 ring_orbit (6 radii over latitude 35, looking down: the planet and its
 whole ring). Every other pose has the sun at azimuth 210, elevation 35, as
@@ -146,6 +151,9 @@ SUNS = {
     "clouds_noon": (210.0, 80.0),
     "clouds_low": (210.0, 20.0),
     "clouds_grazing": (240.0, 4.0),
+    "mountains_low": (140.0, 6.0),
+    "mountains_orbit": (210.0, 8.0),
+    "moon_terminator": (90.0, 4.0),
 }
 
 
@@ -198,6 +206,8 @@ def _poses(demo: TerrainDemo) -> dict:
         lat, lon = (float(v[0]) for v in latlon(under[None, :]))
         poses["eclipse_orbit"] = (lat, lon, 3.0 * radius, 0.0, -89.9, 0, 0)
         poses["lunar_eclipse"] = poses["moon_orbit"]
+        # The moon's craters at its terminator: their rims' shadows.
+        poses["moon_terminator"] = (lat, lon, 1.0 * moon.radius, 0.0, -89.9, 0, 1)
     # The cirrus (8-9 km) against the cumulus (2.2-3.2 km): under both, between,
     # above both, and at dusk (looking west, toward the set sun).
     poses["cirrus_up"] = (lat0, lon0, start.get("alt", 800.0), 0.0, 35.0, 0, 0)
@@ -215,6 +225,12 @@ def _poses(demo: TerrainDemo) -> dict:
     # Mountains under the clouds' base at a grazing sun: their shadow must
     # not band with the ground's height.
     poses["clouds_grazing"] = (36.7391, -126.6355, 1897.0, -50.0, -7.0, 0, 0)
+    # The mountains' shadows (their map): clouds_grazing's peaks with the
+    # sun low in the south-east (their shadows to the left, across the
+    # view), and from orbit, long shadows across the land under an 8 degree
+    # sun.
+    poses["mountains_low"] = poses["clouds_grazing"]
+    poses["mountains_orbit"] = (lat0, lon0, 1.0 * radius, 0.0, -89.9, 0, 0)
     # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     # At sea level by night: the sky's reflection must be as dark as the sky.
@@ -306,6 +322,7 @@ def _settle(demo: TerrainDemo, timeout: float) -> bool:
             demo.executor.pending
             or any(body.terrain.stats["wanted"] for body in demo.bodies)
             or (demo.ring is not None and demo.ring.loading)
+            or not all(body.shadow_map.current for body in demo.bodies)
         )
         quiet = 0 if busy else quiet + 1
         if quiet >= 10:
@@ -388,9 +405,11 @@ def main() -> None:
         s = demo.bodies[body].terrain.stats
         clouds = demo.clouds.stats if demo.clouds is not None else None
         billboards = f"{clouds['billboards'] / 1e3:.0f}k bb, " if clouds else ""
+        bake = demo.bodies[body].shadow_map.bake_seconds
         print(
             f"{name:<13} {'settled' if settled else 'TIMEOUT'}  {s['shown']} chunks, "
             f"finest {s['finest']}, {billboards}LOD {s['select_ms']:.1f} ms, "
+            f"shadow map {bake:.1f} s, "
             f"{median:.2f} ms ({1e3 / median:.0f} fps) -> {path}"
         )
     demo.destroy_terrain()

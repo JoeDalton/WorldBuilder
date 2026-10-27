@@ -214,6 +214,7 @@ labels and ranges below are what the schema gives.
 | Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
 |---|---|---|---|---|---|---|---|
 | `cloud_shadow_steps` | Cloud shadows | live | 0 to 16 samples | 0 | 4 | 8 | 12 |
+| `terrain_map_size` | Mountain shadows | rebuild | off, 256, 512, 1024, 2048 px | 256 | 512 | 1024 | 2048 |
 
 ## Notes
 
