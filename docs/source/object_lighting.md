@@ -1,10 +1,13 @@
 # Lighting on objects
 
 How models (ships, props, anything loaded with `loader.load_model`) are lit
-compared with the world, and what it would take to make them match (October
-2026). Nothing here is done yet: read it before working on how objects look.
-The terrain demo's white test ball (`TEST_BALL_DIAMETER` in
-`scripts/demo_terrain.py`, 150 m ahead of the start pose) is there to judge it.
+compared with the world, and the shader that makes them match: a model
+tracked with `World.track_light(node, shader=True)` is drawn by
+`world_builder.objects` (see [The model shader](#the-model-shader) below,
+part G of [Shadows](shadows.md)). The terrain demo's test balls (the white
+one, `TEST_BALL_DIAMETER` in `scripts/demo_terrain.py`, 150 m ahead of the
+start pose, and the textured smiley beside it) are there to judge it; M
+switches them between the shader and Panda3D's own lighting.
 
 ## What the world's shaders do
 
@@ -32,9 +35,9 @@ For example, [terrain.frag](../../src/world_builder/terrain/shaders/terrain.frag
 ends with `aces_tonemap(C * uExposure)`. Over the ground, they also add the
 air between the camera and the surface (aerial perspective, `applyAtmospheres`).
 
-## What models get
+## What models get without it
 
-Models have no shader. OpenGL's built-in lighting computes
+A model the world does not draw has no shader. OpenGL's built-in lighting computes
 `ambient + sun × cos(angle)` from Panda3D lights and **clips each channel at
 1.0**. The lights are either the world's (a `DirectionalLight` and an
 `AmbientLight` on `render`, set each frame from the light at the camera), or,
@@ -61,7 +64,7 @@ eclipses, see [Shadows](shadows.md)). At a 2° sun the ball's lit side is salmon
 its shadow side takes the blue sky light, as expected. Only the conversion to
 screen colours differs.
 
-## Making objects match
+## Why a shader of their own
 
 Panda3D's auto-shader (`render.set_shader_auto()`) does not help on its own:
 it lights per pixel but does no tone mapping. Models would need a small shader
@@ -85,3 +88,61 @@ on steep ground). The asteroids (issue #14) are drawn with both.
 
 Textured models would also need their textures decoded to linear light first
 (`pow(texel, 2.2)`) so they come out of the display encoding as authored.
+
+## The model shader
+
+`world_builder.objects` is that shader (`model.vert`, `model.frag`), with
+every world shadow per pixel:
+
+- **Colour.** `p3d_Texture0` (white without a texture) times the vertex
+  colour (or `set_color`), the colour scale and the material's diffuse
+  (1 without a material), authored as displayed: decoded with
+  `pow(2.2)`. The alpha is kept.
+- **Light.** `objectLight`, as the terrain lights its ground, with the
+  material's roughness (1, matte, without a material: no highlight) and
+  the body's vertical for the sky light's "up" (the normal in open space).
+- **The sun** at each pixel (`model_light.glsl`'s `modelSunlight`): the sun
+  above the air, through the body's air (`atmoSunlight`: reddened low, gone
+  past its terminator), the other bodies' eclipses, an airless body's own
+  horizon (`shadows.glsl`'s `ownShadow`, with the sun's penumbra), the
+  body's clouds' shadow (`cloudShadow`, through its shadow maps) and its
+  mountains' (`terrainShadow`, in the body's own axes). Its CPU twin is
+  `World.lights_at`'s direct light (`Shadows.own_shadow` for the airless
+  horizon).
+- **The sky light** is the node's own Panda3D ambient light, which
+  `TrackedLights` sets to the sky light where the model is (eclipses dim
+  it), less `light_scale`. A node with no light at all would read 1: the
+  shader is for tracked nodes.
+- **Then** the air between the camera and the model (`applyAtmospheres`),
+  the body's exposure, and the ACES tonemap: the terrain's.
+
+How a model gets its inputs: they belong to the body it is near (its air,
+its maps, its clouds). `ModelLighting` holds them on a node of its own,
+bound as the body's terrain root is (`World` makes one per body, and one
+for open space); every `update`, `World` gives each shaded node the
+`ShaderAttrib` of its nearest body's (`ModelLighting.apply`), so a texture
+a part swaps in (a new mountain bake) reaches it, and a model flying from
+the planet to the moon changes body. The node's own shader state is set
+aside, and put back by `untrack_light` or `track_light(node,
+shader=False)`. By hand (the terrain demo): make a `ModelLighting` per
+body, bind its parts to `lighting.inputs`, track the node with
+`TrackedLights.track(node, shader=True)` and call `lighting.update` and
+`lighting.apply(node)` every frame.
+
+On the test balls (`terrain_shots.py`'s `ball_*` poses, with
+`--panda-lights` for Panda3D's lighting): at noon the lit side has a
+gradient instead of a flat white disc, at sunset it is a graded warm light
+instead of a saturated yellow one, and the shadow side takes the sky's
+blue as the ground does.
+
+Cost: the bookkeeping is ~25 µs a frame (two balls); the balls cover a few
+thousand pixels. `flight_bench.py --flight low`, four alternating pairs
+(mean / p95 ms): the shader 10.2 / 17.3, 9.5 / 15.3, 10.0 / 16.4,
+9.9 / 16.2; Panda3D's lighting 9.5 / 14.9, 9.7 / 15.5, 9.6 / 16.0,
+9.9 / 16.7: within the runs' spread (on average 0.2 / 0.5 ms more with the
+shader). The shots' timed frames differ by less than their noise.
+
+Not done: normal maps, emission and metalness (the material's other
+fields), and the shadows models cast (part H). In the clouds'
+half-resolution pass a shaded model is drawn whole as an occluder, where
+the terrain swaps in a depth-only stage.

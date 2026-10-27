@@ -166,6 +166,41 @@ def test_only_shadows_that_can_reach_a_body_are_looked_at():
     assert shadows.casters(planet) == []
 
 
+def test_a_bodys_own_horizon_is_its_disc_over_the_sun():
+    """own_shadow: 1 with the sun up, 0 with it a disc below the horizon,
+    half at its centre on the horizon; above the ground, the exact cover of
+    the body's disc (its limb taken straight); a crater's floor under the
+    sea-level radius is lit as the ground there."""
+    shadows = Shadows()
+    body = shadows.add(170e3, (1e6, 0.0, 0.0))
+    sun = np.array([0.0, 0.0, 1.0])
+    radius = shadows.sun_angular_radius
+
+    def at(elevation, altitude):
+        """A point *altitude* up where the sun stands *elevation* up."""
+        up = np.array([math.cos(elevation), 0.0, math.sin(elevation)])
+        return np.array([1e6, 0.0, 0.0]) + up * (170e3 + altitude)
+
+    assert shadows.own_shadow(at(0.3, 0.0), sun, body) == 1.0
+    assert shadows.own_shadow(at(-1.01 * radius, 0.0), sun, body) == 0.0
+    assert shadows.own_shadow(at(0.0, 0.0), sun, body) == pytest.approx(0.5)
+    assert shadows.own_shadow(at(0.0, -2000.0), sun, body) == pytest.approx(0.5)
+    # 5 km up the horizon dips ~0.24 rad: the sun sets that far below.
+    dip = math.acos(170e3 / 175e3)
+    elevations = -dip + np.linspace(-1.5, 1.5, 31) * radius
+    points = np.array([at(e, 5000.0) for e in elevations])
+    centre = np.array([1e6, 0.0, 0.0]) - points
+    distance = np.linalg.norm(centre, axis=1)
+    exact = 1.0 - disc_coverage(
+        radius,
+        np.arcsin(170e3 / distance),
+        np.arccos(centre @ sun / distance),
+    )
+    got = shadows.own_shadow(points, sun, body)
+    np.testing.assert_allclose(got, exact, atol=2e-3)
+    assert np.all(np.diff(got) >= 0.0)  # the sun rising
+
+
 # ── shadows.glsl read back ─────────────────────────────────────────────────────
 
 

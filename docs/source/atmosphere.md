@@ -106,8 +106,9 @@ The demo uses them each frame for:
 
 - **Panda3D's lights**: a `DirectionalLight` (the sun) and an `AmbientLight`
   on `render`, as they are at the camera, for anything drawn without the
-  world's own shaders (models, ships). The white test ball ahead of the start
-  pose shows them; models skip the world's exposure and tonemap, see
+  world's own shaders (models, ships). Models drawn that way skip the
+  world's exposure and tonemap; the test balls ahead of the start pose are
+  drawn by the world's model shader instead (M switches), see
   [Lighting on objects](object_lighting.md);
 - **the sea's near look**: `Sea.set_light` scales its water colour (tuned
   in daylight) by the light on the sea under the camera over the daylight's,

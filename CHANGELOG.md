@@ -65,6 +65,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `noise.far_cloud_depth`). `ShadowSettings.cloud_far_reach` sets how far
   (0: off). `terrain_shots.py` gains `dusk_in_clouds` and
   `dusk_above_clouds`.
+- Models drawn as the world is (#13): `world_builder.objects`, a model
+  shader that decodes a model's colour, lights it as the terrain lights its
+  ground and tonemaps it alike, with the air in front, and shades it per
+  pixel by every world shadow (`model_light.glsl`'s `modelSunlight`: the
+  eclipses, the body's air, clouds and mountains). `World.track_light(node,
+  shader=True)` draws a model with it, by the inputs of the body nearest it
+  (`Body.models`, `ModelLighting`). On an airless body the sun sets at its
+  own horizon with a penumbra (`shadows.glsl`'s `ownShadow`, CPU twin
+  `Shadows.own_shadow`). The demos' test balls (now a white and a textured
+  one) use it; M switches them to Panda3D's lighting. `terrain_shots.py`
+  gains `ball_noon`, `ball_sunset`, `ball_eclipse`, `ball_cloud_edge`,
+  `ball_mountain_edge` and `--panda-lights`.
 - `World.track_light(node, cast=False)` / `untrack_light(node)`: a game's
   model lit by the light where it is, not at the camera: its own Panda3D sun
   and ambient lights (`world_builder.lights.TrackedLights`), set every
@@ -364,6 +376,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   move or for the 15-frame fallback before being shown. (#20)
 - `flight_bench.py`'s descent stopped only over dry land; over a calm sea it
   flew on to its time limit. (#20)
+- `SphericalClouds.sun_visibility` raised a `KeyError` once its cache of
+  shades had grown past its size, on a call with a cell already in it and
+  a new one (in flight, after a few thousand 25 m cells): the cache is now
+  dropped before the lookup, not in it. (#11)
 
 ## [0.2.0] 2026-10-23
 

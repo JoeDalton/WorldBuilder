@@ -1083,7 +1083,9 @@ class SphericalClouds:
         # point's shade is kept per SHADE_CELL of ground (a shadow's edge is
         # hundreds of metres wide), until the sun or the steps change.
         key = (tuple(sun), max_steps)
-        if key != self._shade_key:
+        if key != self._shade_key or len(self._shades) > SHADE_CACHE_SIZE:
+            # Dropped before the lookup, not after: the cells found in it
+            # must stay for this call.
             self._shade_key, self._shades = key, {}
         flat = (points - self.position).reshape(-1, 3)
         cells = [tuple(c) for c in np.round(flat / SHADE_CELL).astype(np.int64)]
@@ -1101,8 +1103,6 @@ class SphericalClouds:
                 shift_at=lambda p: sample_cube(plane, p),
                 octave_mean=self._octave_mean,
             )
-            if len(self._shades) > SHADE_CACHE_SIZE:
-                self._shades = {}
             for i, value in zip(missing, np.exp2(-depth)):
                 self._shades[cells[i]] = float(value)
         shades = np.array([self._shades[cell] for cell in cells])

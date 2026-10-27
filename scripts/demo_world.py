@@ -222,6 +222,7 @@ class WorldDemo(TerrainDemo):
             ("end", self._reset_camera, []),
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
+            ("m", self._toggle_model_shader, []),
             ("escape", self._quit, []),
             (QUALITY_ALL_KEY, self._cycle_all_quality, []),
         ]
@@ -243,8 +244,9 @@ class WorldDemo(TerrainDemo):
         )
         self._hud_time = -1.0
         self._reset_camera()
-        self._test_ball, self._test_ball_point = self._make_test_ball()
-        self.scene.track_light(self._test_ball)  # lit where it is
+        self._test_balls = self._make_test_balls()
+        self._model_shader = True
+        self._track_test_balls()  # lit where they are
         self.taskMgr.add(self._update, "terrain_demo_update")
         print(__doc__)
 
@@ -260,7 +262,7 @@ class WorldDemo(TerrainDemo):
             self._scene_sun = self._sun.copy()
 
         # The ball first: the world lights it where it is.
-        self._place_test_ball()
+        self._place_test_balls()
         self.depth.update(*self.scene.depth_ranges(self.cam_world))
         self.scene.update(self.cam_world, far=self.depth.far)
         now = self._clock.get_frame_time()
@@ -268,6 +270,11 @@ class WorldDemo(TerrainDemo):
             self._hud_time = now
             self._update_hud()
         return task.cont
+
+    def _track_test_balls(self) -> None:
+        """Light the balls where they are, by the model shader or not."""
+        for ball, _ in self._test_balls:
+            self.scene.track_light(ball, shader=self._model_shader)
 
     def _set_world(self, world: WorldSettings) -> None:
         """Hand every part its section (F1 - F6)."""

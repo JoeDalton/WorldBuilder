@@ -321,10 +321,37 @@ tracked model where it is:
   `untrack_light` puts back the node's own lights. `cast` is kept for the
   caster map (part H).
 
-The demos track the test ball. Its light only differs from the camera's
-over the scale of a shadow's edge: the moon's penumbra is ~400 km wide, so
-from 150 m away it looks the same. `tests/test_world.py` checks a ball in an
-umbra goes dark while the camera outside it keeps the sun.
+The demos track the test balls. Their light only differs from the
+camera's over the scale of a shadow's edge: the moon's penumbra is ~400 km
+wide, so from 150 m away it looks the same. `tests/test_world.py` checks a
+ball in an umbra goes dark while the camera outside it keeps the sun.
+
+## Models drawn with every shadow (part G)
+
+`World.track_light(node, shader=True)`: the model is drawn by the world's
+model shader (`world_builder.objects`, see
+[Lighting on objects](object_lighting.md)), lit and tonemapped as the
+terrain is, and shadowed per pixel, not by one CPU value at its centre:
+
+- `model_light.glsl`'s `modelSunlight`: the eclipses, the body's air, its
+  clouds' shadow and its mountains' (the maps, in the body's own axes:
+  `uPlanetAxes`, from `Terrain.rotation`);
+- on an airless body, its own horizon: `ownShadow`, the sun's elevation
+  against the horizon's dip, the limb a straight edge across the sun's
+  disc (`discCoverage` cancels away in float32 for a disc half the sky
+  wide), none under the sea-level radius (a crater's floor is not inside
+  the body). CPU twin `Shadows.own_shadow`.
+
+Each body has a `ModelLighting` (`Body.models`) bound as its terrain is;
+shaded nodes take their nearest body's every `update`. The read-back
+tests (`tests/test_objects.py`) draw the sunlight over a turned planet
+with air, in a moon's penumbra, under a hand-made ceiling map, and over an
+airless moon's terminator, against the CPU; and the whole shader on a card
+against the CPU's tonemap.
+
+Poses: `ball_noon`, `ball_sunset`, `ball_eclipse`, `ball_cloud_edge`,
+`ball_mountain_edge` (see [Demo and shots](#demo-and-shots));
+`--panda-lights` draws the balls by Panda3D's lighting, to compare.
 
 ## Demo and shots
 
@@ -338,6 +365,14 @@ prints the last bake's time.
 
 Long cloud shadows: `dusk_in_clouds` (2.7 km, in the deck, looking north)
 and `dusk_above_clouds` (4.5 km, over it), the sun 4° up in the west.
+
+The test balls (part G): `ball_noon` (the ground view, the sun 75° up),
+`ball_sunset` and `ball_eclipse` (3.7 km up, over the cloud deck, out of
+its shadow: the sun 3° up in the west, and 0.4° off the moon's centre),
+`ball_cloud_edge` and `ball_mountain_edge` (the balls moved onto the
+nearest edge of a cloud's or a mesa's shadow around the start, where the
+CPU twin leaves half the sun, seen from 150 m across the sun). A cloud's
+shadow edge is hundreds of metres wide: a ball on it is dimmed evenly.
 
 `scripts/demo_terrain.py` puts the moon 21,000 km out: from the planet's
 ground it looks 0.56° wide, as wide as the sun, so a total eclipse has an

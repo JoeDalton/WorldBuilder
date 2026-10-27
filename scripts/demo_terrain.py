@@ -71,6 +71,8 @@ Controls (AZERTY):
     F6              cycle every part's preset at once
     F7              cycle the shadows' preset (the clouds' shadow on the
                     ground: off at low, more samples above)
+    M               the test balls: the world's model shader / Panda3D's
+                    lighting
     F               print the camera pose and terrain stats
     ESC             quit
 
@@ -90,10 +92,13 @@ DirectionalLight and an AmbientLight on render, for anything drawn without
 the world's shaders) follow the light at the camera, and the sea's near look
 is lit as the sea under the camera (Sea.set_light), so it darkens at night.
 A white ball (Panda3D's smiley, untextured, 20 m across) floats ahead of the
-start pose, at its height, to judge how an object is lit: it has its own
-Panda3D lights, set to the light where it is, not at the camera
-(world_builder.lights.TrackedLights: it darkens in an eclipse or past the
-terminator whatever the camera's light).
+start pose, at its height, the textured smiley beside it, to judge how an
+object is lit: each has its own Panda3D lights, set to the light where it
+is, not at the camera (world_builder.lights.TrackedLights: it darkens in an
+eclipse or past the terminator whatever the camera's light), and is drawn
+by the world's model shader (world_builder.objects: lit and tonemapped as
+the terrain, every world shadow per pixel); M switches them to Panda3D's
+own lighting, to compare.
 
 Terrain is generated in background processes, coarse first: the world shows
 blurry for a second, then sharpens.
@@ -131,6 +136,7 @@ from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.lights import TrackedLights
+from world_builder.objects import ModelLighting
 from world_builder.ocean import Sea
 from world_builder.quality import QualityLevel
 from world_builder.settings import SECTIONS, WorldSettings
@@ -187,6 +193,7 @@ HUD_PERIOD = 0.2  # seconds between HUD refreshes
 # The white ball ahead of the start pose (judging the lights on objects).
 TEST_BALL_DIAMETER = 20.0
 TEST_BALL_DISTANCE = 150.0  # metres ahead of the start pose, level with it
+TEST_BALL_SPACING = 30.0  # the textured ball, this far right of the white one
 
 _ROTATIONS = (
     ("s", "z", "pitch", 40.0),
@@ -334,12 +341,14 @@ class Body:
     :ivar terrain: its terrain (which carries its world position)
     :ivar atmosphere: whether it has air (sky, haze, coloured sunlight)
     :ivar shadow_map: its mountains' shadow
+    :ivar models: the model shader's inputs near it
     """
 
     name: str
     terrain: object
     atmosphere: bool
     shadow_map: ShadowMap | None = None
+    models: ModelLighting | None = None
 
     @property
     def position(self) -> np.ndarray:
@@ -474,6 +483,15 @@ class TerrainDemo(ShowBase):
                 world.shadows.local_map_spacing,
             )
             body.shadow_map.bind(body.terrain.root)
+        # The models' shader's inputs near each (the clouds' are bound with
+        # them).
+        for index, body in enumerate(self.bodies):
+            body.models = ModelLighting(
+                atmosphere=0 if body.atmosphere else None, terrain=body.terrain
+            )
+            self.atmospheres.bind(body.models.inputs)
+            self.shadows.bind(body.models.inputs, index)
+            body.shadow_map.bind(body.models.inputs)
         self.ring = None
         if ring:
             self.ring = AsteroidField(
@@ -534,6 +552,7 @@ class TerrainDemo(ShowBase):
             ("end", self._reset_camera, []),
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
+            ("m", self._toggle_model_shader, []),
             ("escape", self._quit, []),
             (QUALITY_ALL_KEY, self._cycle_all_quality, []),
         ]
@@ -555,10 +574,12 @@ class TerrainDemo(ShowBase):
         )
         self._hud_time = -1.0
         self._reset_camera()
-        self._test_ball, self._test_ball_point = self._make_test_ball()
-        # Lit where it is, by its own lights (_update_lights).
+        self._test_balls = self._make_test_balls()
+        # Lit where they are, by their own lights (_update_lights), drawn by
+        # the model shader (_shade_models).
         self.tracked = TrackedLights(self.render)
-        self.tracked.track(self._test_ball)
+        self._model_shader = True
+        self._track_test_balls()
         self.taskMgr.add(self._update, "terrain_demo_update")
         print(__doc__)
 
@@ -613,29 +634,52 @@ class TerrainDemo(ShowBase):
 
     # ── scene pieces ───────────────────────────────────────────────────────────
 
-    def _make_test_ball(self):
-        """A white ball ahead of the start pose, level with it, lit by Panda3D's
-        lights as any model is (its own, set to the light where it is): for
-        judging them.
+    def _make_test_balls(self) -> list:
+        """A white ball and the textured smiley, hung ahead of the camera
+        (the start pose: :meth:`_test_ball_points`), each lit where it is:
+        for judging how objects are lit.
 
-        :returns: (node, its position in the planet frame)
+        :returns: [(node, its position in the planet frame)]
         """
-        ball = self.loader.load_model("models/smiley")
-        ball.set_texture_off(1)
-        ball.set_color(1.0, 1.0, 1.0, 1.0)
-        ball.set_scale(TEST_BALL_DIAMETER / 2.0)  # the model is a unit sphere
-        ball.reparent_to(self.render)
+        nodes = []
+        for textured in (False, True):
+            ball = self.loader.load_model("models/smiley")
+            if not textured:
+                ball.set_texture_off(1)
+                ball.set_color(1.0, 1.0, 1.0, 1.0)
+            ball.set_scale(TEST_BALL_DIAMETER / 2.0)  # the model is a unit sphere
+            ball.reparent_to(self.render)
+            nodes.append(ball)
+        return list(zip(nodes, self._test_ball_points()))
+
+    def _test_ball_points(self) -> list[np.ndarray]:
+        """Where the balls hang for the camera as it is (planet frame): the
+        white one TEST_BALL_DISTANCE ahead, level with it, the textured one
+        TEST_BALL_SPACING to its right."""
         start = self._relative(self.home)
         up = start / np.linalg.norm(start)
         ahead = self._forward() - up * float(self._forward() @ up)
         ahead /= max(np.linalg.norm(ahead), 1e-9)
-        return ball, start + ahead * TEST_BALL_DISTANCE
+        white = start + ahead * TEST_BALL_DISTANCE
+        return [white, white + np.cross(ahead, up) * TEST_BALL_SPACING]
 
-    def _place_test_ball(self) -> None:
-        """The ball where it hangs, this frame (before its light is set: the
-        camera is render's origin, and the planet does not turn)."""
-        ball = self.home.position + self._test_ball_point
-        self._test_ball.set_pos(*(ball - self.cam_world))
+    def _place_test_balls(self) -> None:
+        """The balls where they hang, this frame (before their light is set:
+        the camera is render's origin, and the planet does not turn)."""
+        for ball, point in self._test_balls:
+            ball.set_pos(*(self.home.position + point - self.cam_world))
+
+    def _track_test_balls(self) -> None:
+        """Light the balls where they are, by the model shader or not."""
+        for ball, _ in self._test_balls:
+            self.tracked.track(ball, shader=self._model_shader)
+
+    def _toggle_model_shader(self) -> None:
+        """M: the test balls by the world's model shader, or by Panda3D's
+        lighting (as any model without it)."""
+        self._model_shader = not self._model_shader
+        self._track_test_balls()
+        print("test balls:", "model shader" if self._model_shader else "Panda3D lights")
 
     # ── per frame ──────────────────────────────────────────────────────────────
 
@@ -680,8 +724,9 @@ class TerrainDemo(ShowBase):
             if self.cloud_maps is not None:
                 steps = self.shadows.settings.cloud_shadow_steps
                 self.cloud_maps.update(self.cam_world, self._sun, steps)
-        self._place_test_ball()
+        self._place_test_balls()
         self._update_sun()
+        self._shade_models()
         self.ocean.update(self.cam_world)
         # Text geometry is rebuilt on every change: a few times a second is
         # plenty to read, and saves ~1 ms a frame.
@@ -741,9 +786,21 @@ class TerrainDemo(ShowBase):
             ambient = SKY_AMBIENT if body.atmosphere else SPACE_AMBIENT
             body.terrain.set_sun(tuple(self._sun), SUN_COLOR, ambient)
             body.shadow_map.set_sun(self._sun)  # baked again if it moved
+            body.models.set_sun(self._sun, SUN_COLOR)
         if self.ring is not None:
             self.ring.set_sun(self._sun, SUN_COLOR, SPACE_AMBIENT)
         self._update_lights()
+
+    def _shade_models(self) -> None:
+        """The tracked nodes drawn by the model shader: each given the inputs
+        of the body nearest it, this frame's (the camera is render's
+        origin)."""
+        for body in self.bodies:
+            body.models.update((0.0, 0.0, 0.0))
+        points = self.cam_world + self.tracked.positions()
+        for node, shaded, point in zip(self.tracked.nodes, self.tracked.shaded, points):
+            if shaded:
+                self._nearest_body(point).models.apply(node)
 
     def _light_at(
         self, body: Body, point_world, shade: float = 1.0
@@ -898,7 +955,8 @@ class TerrainDemo(ShowBase):
             f"upload {s['upload_ms']:.2f} ms/chunk   LOD pass {s['select_ms']:.1f} ms"
             f"   depth split {split_km:,.1f} km, far {far_km:,.0f} km",
             clouds,
-            f"quality: {quality}",
+            f"quality: {quality}   test balls: "
+            + ("model shader" if self._model_shader else "Panda3D lights"),
         ]
         self._hud.setText("\n".join(lines))
 
@@ -940,6 +998,7 @@ class TerrainDemo(ShowBase):
         )
         self.shadows.bind(self.clouds.root, 0)
         self.clouds.bind_shadow_inputs(self.terrain.root)  # their shadow on it
+        self.clouds.bind_shadow_inputs(self.home.models.inputs)  # on the models
         if self.home.shadow_map is not None:  # the peaks' on them
             self.home.shadow_map.bind(self.clouds.root)
         # Their shadow marched once per texel of two maps (Shadows, part E).
@@ -947,6 +1006,7 @@ class TerrainDemo(ShowBase):
             self.win, self.clouds, self.world.shadows.cloud_map_size
         )
         self.cloud_maps.bind(self.terrain.root)
+        self.cloud_maps.bind(self.home.models.inputs)
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
         if getattr(self, "half_res", None) is not None:

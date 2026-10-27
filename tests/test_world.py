@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from panda3d.core import LPoint3f, NodePath
+from panda3d.core import LPoint3f, NodePath, Shader, ShaderAttrib
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
@@ -25,6 +25,7 @@ from world_builder.depth import (
     SplitDepthCameras,
 )
 from world_builder.lights import TrackedLights
+from world_builder.objects import ModelLighting, model_shader
 from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
 from world_builder.shadows import ECLIPSE_SKY_FLOOR, SUN_ANGULAR_RADIUS, Shadows
@@ -167,6 +168,7 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world.shadows.set_sun([0.0, 0.0, 1.0])  # as world._sun below
     world.tracked = TrackedLights(NodePath("render"))
     world.light_scale = 1.0
+    world.space_models = ModelLighting()
     world.atmospheres = MagicMock()
     world.atmospheres.light_at.return_value = (np.ones(3), np.full(3, 0.5))
     world.sky = MagicMock() if sky else None
@@ -474,6 +476,37 @@ def test_a_tracked_node_is_lit_where_it_is():
     np.testing.assert_allclose(tuple(ball_sky)[:3], expected, rtol=1e-4)
     world.untrack_light(ball)
     assert world.tracked.render.find("**/ball_sun").is_empty()
+
+
+def test_a_shaded_node_takes_its_nearest_bodys_inputs():
+    """World gives a node tracked with shader=True the inputs of the body
+    nearest it, every update; untracked, its own shader state is back."""
+    planet = _body()
+    moon = _body("moon", position=(0.0, 0.0, 5e6))
+    world = _world(planet, moon)
+    planet.models, moon.models = ModelLighting(), ModelLighting()
+    ball = world.tracked.render.attach_new_node("ball")
+    own = Shader.make(Shader.SL_GLSL, "#version 330\nvoid main(){}", "")
+    ball.set_shader(own)
+    ball.set_pos(0.0, 0.0, R + 10.0)
+    world.track_light(ball, shader=True)
+    origin = np.zeros(3)
+
+    world.update(origin)
+    attrib = ball.get_attrib(ShaderAttrib)
+    assert attrib.get_shader() == model_shader()
+    assert attrib == planet.models.inputs.get_attrib(ShaderAttrib)
+
+    ball.set_pos(0.0, 0.0, 5e6 - R - 10.0)  # by the moon
+    world.update(origin)
+    assert ball.get_attrib(ShaderAttrib) == moon.models.inputs.get_attrib(ShaderAttrib)
+
+    world.track_light(ball, shader=False)  # lit by its own lights only now
+    assert ball.get_attrib(ShaderAttrib).get_shader() == own
+    world.track_light(ball, shader=True)
+    world.update(origin)
+    world.untrack_light(ball)
+    assert ball.get_attrib(ShaderAttrib).get_shader() == own
 
 
 # ── loading, collision ─────────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ times a few frames, then saves a screenshot::
         [--size "1600 900"] [--offscreen]
         [--quality low|mid|high|ultra] [--<part>-quality LEVEL] [--no-clouds]
         [--workers N] [--cloud-debug BITS] [--frames N] [--ocean-debug MODE]
-        [--ring]
+        [--ring] [--panda-lights]
 
     --out            where the PNGs go (default ./terrain_shots)
     --level          the planet's level file (default: the demo level)
@@ -33,6 +33,8 @@ times a few frames, then saves a screenshot::
     --ocean-debug    Sea.set_debug_mode view (sea.glsl's uSeaDebug, on water
                      in its near look: 9 octaves resolved, 10 unresolved
                      slope spread, 12 depth, ...; default 0)
+    --panda-lights   the test balls lit by Panda3D's lighting, not the
+                     world's model shader (to compare)
 
 No multisampling, vsync off. Once a pose has settled, N frames are timed,
 each waiting for the GPU to finish (a one-pixel read back): CPU and GPU time
@@ -76,8 +78,15 @@ degrees up in the west: the mesas' shadows, near and far), mesa_above
 (straight down on the level's mesa from 6 km, the same sun). The clouds'
 long shadows: dusk_in_clouds and dusk_above_clouds (2.7 km, in the deck,
 and 4.5 km, over it, looking north, the sun 4 degrees up in the west).
-The ring (with --ring): ring_ground (the start area, 1.5 km up, looking
-south at its arc),
+The test balls (the white one and the textured smiley, as the model shader
+lights them): ball_noon (the ground view, the sun 75 degrees up),
+ball_sunset and ball_eclipse (3.7 km up, over the cloud deck, the balls
+150 m ahead: the sun 3 degrees up in the west, and 0.4 degrees off the
+moon's centre, to the right of the view), ball_cloud_edge and
+ball_mountain_edge (the balls moved onto the nearest edge of a cloud's or
+a mesa's shadow on the ground around the start, seen from 150 m across the
+sun: half in it). The ring (with
+--ring): ring_ground (the start area, 1.5 km up, looking south at its arc),
 ring_orbit (6 radii over latitude 35, looking down: the planet and its
 whole ring). Every other pose has the sun at azimuth 210, elevation 35, as
 seen there.
@@ -98,6 +107,7 @@ from panda3d.core import Filename
 sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import (  # noqa: E402
+    TEST_BALL_DIAMETER,
     TerrainDemo,
     add_world_arguments,
     describe_window,
@@ -149,7 +159,16 @@ SUNS = {
     "mesa_above": (270.0, 8.0),
     "dusk_in_clouds": (270.0, 4.0),
     "dusk_above_clouds": (270.0, 4.0),
+    "ball_noon": (210.0, 75.0),
+    "ball_sunset": (270.0, 3.0),
+    "ball_eclipse": AimedSun(1, 0.4),
+    "ball_mountain_edge": (270.0, 8.0),
 }
+#: Poses whose balls are moved onto a shadow's edge once settled: the
+#: shadow's kind (:func:`_balls_on_edge`).
+BALL_EDGES = {"ball_cloud_edge": "clouds", "ball_mountain_edge": "mountains"}
+#: Poses whose balls hang ahead of their camera, not of the start pose.
+BALLS_AHEAD = ("ball_sunset", "ball_eclipse")
 
 
 def _poses(demo: TerrainDemo) -> dict:
@@ -229,6 +248,16 @@ def _poses(demo: TerrainDemo) -> dict:
     # view: the clouds' long shadows on each other (Shadows, part F).
     poses["dusk_in_clouds"] = (ref_lat, ref_lon, 2700.0, 0.0, 0.0, 0, 0)
     poses["dusk_above_clouds"] = (ref_lat, ref_lon, 4500.0, 0.0, -10.0, 0, 0)
+    # The test balls, from the start view (they hang 150 m ahead of it),
+    # or moved onto a shadow's edge around it (BALL_EDGES), or over the
+    # cloud deck, out of its shadow at a low sun (BALLS_AHEAD).
+    for name in ("ball_noon", *BALL_EDGES):
+        poses[name] = poses["ground"]
+    poses["ball_sunset"] = (lat0, lon0, 3700.0, start.get("heading", 0.0), -2.0, 0, 0)
+    if len(demo.bodies) > 1:
+        # The sun behind the moon, to the right of the view.
+        heading, _ = _look_at(demo, lat0, lon0, 3700.0, demo.bodies[1].position)
+        poses["ball_eclipse"] = (lat0, lon0, 3700.0, heading + 90.0, -2.0, 0, 0)
     # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     # At sea level by night: the sky's reflection must be as dark as the sky.
@@ -307,6 +336,88 @@ def _beach_pose(demo: TerrainDemo) -> tuple | None:
     return (lat, lon, 40.0, heading, -8.0, 0, 0)
 
 
+def _balls_on_edge(demo: TerrainDemo, kind: str) -> bool:
+    """Move the test balls onto the edge of a shadow on the ground nearest
+    the camera's nadir (where the CPU's twin of it leaves half the sun),
+    the white one there and the textured one 25 m along the edge, and look
+    at them from 150 m across the sun, a little above.
+
+    :param kind: "clouds" (the clouds' shadow) or "mountains" (the shadow
+        maps')
+    :returns: whether an edge was found within 3 km (else they stay)
+    """
+    planet = demo.home.terrain.planet
+    relative = demo.cam_world - demo.home.position
+    up = relative / np.linalg.norm(relative)
+    lat, lon = latlon(up[None, :])
+    chart = AzimuthalEquidistantChart(float(lat[0]), float(lon[0]), demo.radius)
+    step = 50.0
+    axis = np.arange(-3000.0, 3000.0 + step, step)
+    x, y = np.meshgrid(axis, axis)
+    dirs = chart.to_dirs(x, y).reshape(-1, 3)
+    heights = planet.sample_dirs(dirs, apply_stamps=True)[0]
+    radius = TEST_BALL_DIAMETER / 2.0
+    centres = demo.home.position + dirs * (demo.radius + heights + radius)[:, None]
+
+    def visible(points: np.ndarray) -> np.ndarray:
+        if kind == "clouds":
+            steps = demo.shadows.settings.cloud_shadow_steps
+            return demo.clouds.sun_visibility(points, demo._sun, steps)
+        angular = demo.shadows.sun_angular_radius
+        return demo.home.shadow_map.visibility(points, angular)
+
+    lit = visible(centres).reshape(x.shape) > 0.5
+    dry = (heights > 2.0).reshape(x.shape)
+    # Neighbours across the edge, on land, nearest the nadir first.
+    edges = []
+    rows, cols = lit.shape
+    for di, dj in ((0, 1), (1, 0)):
+        across = (lit[: rows - di, : cols - dj] != lit[di:, dj:]) & (
+            dry[: rows - di, : cols - dj] & dry[di:, dj:]
+        )
+        for i, j in zip(*np.nonzero(across)):
+            edges.append((float(np.hypot(x[i, j], y[i, j])), (i, j), (i + di, j + dj)))
+    if not edges:
+        return False
+    edges.sort()
+
+    def bisect(index_a, index_b) -> np.ndarray:
+        """Where half the sun is left, between two grid nodes: a ball centre."""
+        t = np.linspace(0.0, 1.0, 21)
+        xs = x[index_a] + t * (x[index_b] - x[index_a])
+        ys = y[index_a] + t * (y[index_b] - y[index_a])
+        d = chart.to_dirs(xs, ys).reshape(-1, 3)
+        h = planet.sample_dirs(d, apply_stamps=True)[0]
+        points = demo.home.position + d * (demo.radius + h + radius)[:, None]
+        shade = visible(points)
+        return points[int(np.argmin(np.abs(shade - 0.5)))]
+
+    white = bisect(*edges[0][1:])
+    # The textured ball: the next edge crossing 25 m or more away.
+    textured = white
+    for _, index_a, index_b in edges[1:]:
+        point = bisect(index_a, index_b)
+        if np.linalg.norm(point - white) >= 25.0:
+            textured = point
+            break
+    for k, point in enumerate((white, textured)):
+        ball, _ = demo._test_balls[k]
+        demo._test_balls[k] = (ball, point - demo.home.position)
+    # The camera: 150 m from the white ball across the sun's azimuth, 25 m
+    # above it, looking at it.
+    ball_up = (white - demo.home.position) / np.linalg.norm(white - demo.home.position)
+    flat_sun = demo._sun - ball_up * float(demo._sun @ ball_up)
+    side = np.cross(ball_up, flat_sun / np.linalg.norm(flat_sun))
+    eye = white + side * 150.0 + ball_up * 25.0
+    eye_up = (eye - demo.home.position) / np.linalg.norm(eye - demo.home.position)
+    eye_lat, eye_lon = (float(v[0]) for v in latlon(eye_up[None, :]))
+    altitude = float(np.linalg.norm(eye - demo.home.position)) - demo.radius
+    target = (white + textured) / 2.0
+    heading, pitch = _look_at(demo, eye_lat, eye_lon, altitude, target)
+    demo._place_camera(eye_lat, eye_lon, altitude, heading, pitch)
+    return True
+
+
 def _settle(demo: TerrainDemo, timeout: float) -> bool:
     """Step frames until nothing is wanted or generating for 10 frames.
 
@@ -355,6 +466,11 @@ def main() -> None:
     parser.add_argument(
         "--ocean-debug", type=int, default=0, help="Sea.set_debug_mode view"
     )
+    parser.add_argument(
+        "--panda-lights",
+        action="store_true",
+        help="the test balls by Panda3D's lighting, not the model shader",
+    )
     args = parser.parse_args()
     window_config("Terrain shots", args.size, args.offscreen, vsync=False)
     args.out.mkdir(parents=True, exist_ok=True)
@@ -370,20 +486,31 @@ def main() -> None:
         ocean_debug=args.ocean_debug,
     )
     demo.setFrameRateMeter(False)
+    if args.panda_lights:
+        demo._toggle_model_shader()
     print(describe_window(demo), f"settings {settings.to_dict()}")
     win = demo.win
     probe = win.make_display_region(0, 1 / win.get_x_size(), 0, 1 / win.get_y_size())
     poses = _poses(demo)
+    balls = list(demo._test_balls)  # where they hang (edge poses move them)
     for name in args.pose or list(poses):
         lat, lon, alt, heading, pitch, view, body = poses[name]
+        demo._test_balls = list(balls)
         demo.set_debug_view(view)
         demo._place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])
+        if name in BALLS_AHEAD:
+            nodes = [ball for ball, _ in balls]
+            demo._test_balls = list(zip(nodes, demo._test_ball_points()))
         sun = SUNS.get(name, (210.0, 35.0))
         if isinstance(sun, AimedSun):
             _aim_sun(demo, sun)
         else:
             demo.set_local_sun(*sun)
         settled = _settle(demo, args.timeout)
+        if name in BALL_EDGES:
+            if not _balls_on_edge(demo, BALL_EDGES[name]):
+                print(f"{name}: no shadow edge found, the balls stay")
+            settled = _settle(demo, args.timeout)
         for _ in range(3):  # let the last uploads reach the screen
             demo.taskMgr.step()
         times = []

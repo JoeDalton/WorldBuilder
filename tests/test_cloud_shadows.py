@@ -31,7 +31,7 @@ from world_builder.clouds.noise import (
     sphere_column_peaks,
     with_threshold,
 )
-from world_builder.clouds.sphere import _noise
+from world_builder.clouds.sphere import SHADE_CACHE_SIZE, _noise
 from world_builder.clouds.weather import (
     WeatherSpec,
     build_weather_texture,
@@ -410,6 +410,12 @@ def test_clouds_shade_a_bound_node_once_ready_and_the_cpu_alike(showbase):
         assert len(clouds._shades) == 2
         assert np.abs(cells - points).max() <= SHADE_CELL / 2
         clouds.sun_visibility(points, -sun + 2 * up, 8)  # a new sun
+        assert len(clouds._shades) == 2
+        # A full cache is dropped before a call's lookup, not in it: a call
+        # with a cell kept and a new one.
+        clouds._shades.update({(k, 0, 0): 1.0 for k in range(SHADE_CACHE_SIZE)})
+        moved = points + [[0.0, 0.0, 0.0], [0.0, 4.0 * SHADE_CELL, 0.0]]
+        assert clouds.sun_visibility(moved, -sun + 2 * up, 8).shape == (2,)
         assert len(clouds._shades) == 2
     finally:
         clouds.remove()
