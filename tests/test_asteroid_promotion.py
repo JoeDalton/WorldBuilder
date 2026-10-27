@@ -27,6 +27,20 @@ from world_builder.terrain.workers import ChunkExecutor
 SHAPES = ShapeSpec(prototypes=2)
 
 
+def _native_collision() -> bool:
+    """:returns: whether the native collision library is built (fails where
+    it must be)"""
+    from world_builder.terrain.native import NativeCollisionError, NativeTerrain
+
+    try:
+        NativeTerrain(100.0, 0, 64, False).close()
+    except NativeCollisionError as error:
+        if os.environ.get("WORLD_BUILDER_REQUIRE_NATIVE"):
+            pytest.fail(str(error))
+        return False
+    return True
+
+
 def _native_or_skip():
     from world_builder.terrain.native import NativeCollisionError, NativeTerrain
 
@@ -161,7 +175,8 @@ def field(showbase):
         position=(5.0e4, 1.0e4, -2.0e4),
         orientation=axis_angle(np.array([0.0, 0.6, 0.8]), 0.7),
     )
-    made.enable_collision(BitMask32.bit(6), name="terrain")
+    if _native_collision():
+        made.enable_collision(BitMask32.bit(6), name="terrain")
     for _ in range(10):
         made.update(made.position, cameras=[])
         if not made.loading:
@@ -216,9 +231,10 @@ def test_a_near_rock_becomes_terrain(field):
     q = orientation(rock["q0"], rock["axis"], rock["precession"], rock["spin"], 2.0)
     expected = quat_multiply(made.orientation / np.linalg.norm(made.orientation), q)
     assert abs(np.dot(terrain.orientation, expected)) == pytest.approx(1.0, abs=1e-9)
-    # solid as terrain, not as an instance
-    assert terrain.collision is not None
-    assert not made.collision._registered[slot]
+    # solid as terrain, not as an instance (with the collision library)
+    if made.collision is not None:
+        assert terrain.collision is not None
+        assert not made.collision._registered[slot]
     # its spec is the rock's
     assert terrain.spec.radius == pytest.approx(rock["radius"])
     assert terrain.spec.index == rock["proto"]
@@ -233,7 +249,8 @@ def test_leaving_gives_the_rock_back_to_its_instance(field):
     assert made.terrain_rocks.promoted[slot]
     _fly(made, rock["centre"] + direction * (rock["radius"] + 1.5 * show), frames=2)
     assert not made.terrain_rocks.promoted[slot]  # hidden past the show distance
-    assert made.collision._registered[slot]  # solid as an instance again
+    if made.collision is not None:
+        assert made.collision._registered[slot]  # solid as an instance again
     pool = len(made.terrain_rocks._pool)
     _fly(made, [0.0, 0.0, 2.0e5], frames=2)
     assert made.terrain_rocks.terrains == []
