@@ -132,6 +132,7 @@ from world_builder.depth import (
     REFLECTION_CAMERA_MASK,
     SplitDepthCameras,
 )
+from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.cubesphere import grid_for
 from world_builder.terrain.planet import PlanetSpec
 
@@ -795,6 +796,7 @@ class CloudMarch:
         """Give a node every input the march and the deck read (kept in step
         by :meth:`_set_inputs`)."""
         bind_defaults(node)
+        bind_shadow_defaults(node)
         if self._atmospheres is not None:
             self._atmospheres.bind(node)
         node.set_shader_inputs(**self._inputs)

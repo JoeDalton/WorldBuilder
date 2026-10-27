@@ -9,6 +9,7 @@
 uniform mat4 p3d_ModelViewProjectionMatrix;
 uniform mat4 p3d_ModelViewMatrixInverse;
 uniform int uOwnAtmosphere;
+uniform vec3 camPos;         // the main camera, planet frame (eclipses)
 
 in vec4 p3d_Vertex;           // on the sheet, planet frame
 in vec2 p3d_MultiTexCoord0;   // in the atlas
@@ -52,4 +53,9 @@ void main() {
         vTwilight = cloudTwilight(uOwnAtmosphere, p, sunDir, vSunTint);
         vSkyTint = smoothstep(-0.3, 0.1, dot(normalize(p), sunDir));
     }
+    // Other bodies eclipsing the sun (as cloud_sphere.vert).
+    float eclipse = eclipseVisibility(p - camPos, sunDir, uShadowSelf);
+    vSunTint *= eclipse;
+    vTwilight *= eclipse;
+    vSkyTint *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
 }

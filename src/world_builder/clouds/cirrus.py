@@ -116,6 +116,7 @@ from world_builder.clouds.weather import (
     stream_vortices,
 )
 from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.sky.sky import SKY_BIN, ensure_sky_bin
 from world_builder.terrain.planet import PlanetSpec
 
@@ -758,10 +759,13 @@ class CloudSheet:
             )
         )
         bind_defaults(root)
+        bind_shadow_defaults(root)
         if atmospheres is not None:
             atmospheres.bind(root)
         self._sun = PTA_LVecBase3f.empty_array(1)
         self._sun[0] = LVecBase3f(0.0, 0.0, 1.0)
+        # The (main) camera, planet frame: what an eclipse is seen from.
+        self._camera = PTA_LVecBase3f.empty_array(1)
         o = spec.optics
         forward, backward, isotropic = phase_weights(o)
         root.set_shader_inputs(
@@ -772,6 +776,7 @@ class CloudSheet:
             uMaxOpticalDepth=float(spec.max_optical_depth),
             uOwnAtmosphere=-1 if atmosphere is None else int(atmosphere),
             sunDir=self._sun,
+            camPos=self._camera,
             sunColor=Vec3(1.0, 1.0, 1.0),
             skyColor=Vec3(0.45, 0.6, 0.85),
             sunBrightness=float(sun_brightness),
@@ -857,6 +862,7 @@ class CloudSheet:
             self._finish()
         cam = np.asarray(camera_world, dtype=np.float64) - self.position
         self.root.set_pos(*(np.asarray(camera_render, dtype=np.float64) - cam))
+        self._camera[0] = LVecBase3f(*cam)
 
     def remove(self) -> None:
         """Take the cirrus off the scene."""

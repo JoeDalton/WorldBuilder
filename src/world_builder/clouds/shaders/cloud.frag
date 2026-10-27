@@ -141,6 +141,11 @@ void main() {
         twilight = sunColor * vTwilight;
     } else {
         planetCloudLight(uOwnAtmosphere, samplePos, sunlight, skylight, twilight);
+        // Other bodies eclipsing the sun (as cloud_sphere.vert).
+        float eclipse = eclipseVisibility(samplePos - camPos, sunDir, uShadowSelf);
+        sunlight *= eclipse;
+        twilight *= eclipse;
+        skylight *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
     }
     vec3 colour = cloudRadiance(f, samplePos, density, V, shading, farCoverage,
                                 sunlight, skylight, twilight);

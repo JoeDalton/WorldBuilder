@@ -24,6 +24,7 @@ Design notes: docs/source/atmosphere.md, "Planet clouds" and "Cirrus".
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
@@ -228,6 +229,9 @@ class PlanetClouds:
         self._sky_light: float | None = None
         self._debug = 0
         self._half_res: HalfResClouds | None = None
+        # What every layer's shader also takes (bind_inputs), again for a
+        # new volume.
+        self._binders: list[Callable[[NodePath], None]] = []
         self.volume = self._make_volume(settings)
         #: The genera's stratus, under the convective volume; None = none
         self.stratus: CloudVolume | None = None
@@ -306,6 +310,7 @@ class PlanetClouds:
             if self._sky_light is not None:
                 self.volume.set_sky_light(self._sky_light)
             self.volume.set_debug(self._debug)
+            self._bind_layer(self.volume)
             if self._half_res is not None and isinstance(self.volume, CloudVolume):
                 self._half_res.add(self.volume.root)
             if self.sheet is not None:
@@ -313,6 +318,25 @@ class PlanetClouds:
             return
         for layer in self._layers():
             layer.set_settings(settings)
+
+    def bind_inputs(self, bind: Callable[[NodePath], None]) -> None:
+        """Have every layer's shader take more inputs (what shades the
+        clouds: the eclipses, a body's shadow maps): *bind* is called with
+        each layer's node now, and with a new volume's on a change of
+        renderer. Each layer binds its own defaults on its own node, which a
+        binding on :attr:`root` would not override.
+
+        :param bind: sets inputs on a node (e.g. ``Shadows.bind``)
+        """
+        self._binders.append(bind)
+        for layer in self._layers():
+            self._bind_layer(layer, (bind,))
+
+    def _bind_layer(self, layer, binders=None) -> None:
+        if isinstance(layer, CloudMarch):
+            return  # its passes' nodes: not yet
+        for bind in self._binders if binders is None else binders:
+            bind(layer.root)
 
     # ── live ──────────────────────────────────────────────────────────────────
 
