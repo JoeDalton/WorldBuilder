@@ -62,7 +62,7 @@ COST_FIELDS = {
         "texture_size",
         "max_terrain_rocks",
     ],
-    "shadows": ["cloud_shadow_steps"],
+    "shadows": ["cloud_shadow_steps", "terrain_map_size"],
 }
 
 

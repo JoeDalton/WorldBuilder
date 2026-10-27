@@ -21,6 +21,7 @@
 // without a Sea).
 
 in vec3 vRelPos;
+in vec3 vPlanetPos;  // from the planet's centre, its own axes (its shadow map's)
 in vec2 vUv;
 in float vHeight;
 in float vSeabed;
@@ -108,9 +109,11 @@ void main() {
     // work below.
     if (uSeaSurface == 1 && vSeabed < 0.0 && uSeaNear >= 1.0 && uDebugMode == 0) {
         bool raw;
+        float sunShade = cloudShade(L, footprint)
+                       * terrainShadow(normalize(vPlanetPos), vHeight);
         vec3 near = seaShade(uCamPos + vRelPos, vSwell,
                              vRelPos / max(dist, 1e-3), dist,
-                             -vSeabed, vStep, cloudShade(L, footprint), raw);
+                             -vSeabed, vStep, sunShade, raw);
         if (!raw) {
             near = aces_tonemap(applyAtmospheres(near, vRelPos / max(dist, 1e-3), dist, L)
                                 * uExposure);
@@ -198,6 +201,8 @@ void main() {
     // (objectLight's terms go as N.L): the march is the dear part.
     float shade = dot(surfaceN, L) > 0.0 && dot(up, L) > -0.05 ? cloudShade(L, footprint)
                                                               : 1.0;
+    // The mountains' (one fetch): what the sun clears from this height.
+    shade *= terrainShadow(normalize(vPlanetPos), vHeight);
     vec3 sunlight = uSunColor * (eclipse * shade);
     float sunDay = day;
     if (uOwnAtmosphere >= 0) {

@@ -70,7 +70,7 @@ User choices:
 | B | Lighting objects per node (CPU) | A | #13 |
 | C | Cloud shadows on ground and sea | A | #11 |
 | D | Terrain shadows: global ceiling map | A (C for the near sea) | #11 |
-| E | Terrain shadows: local ceiling map | D | #11 |
+| E | Terrain shadows: local ceiling map, and the cloud shadow map | D, C | #11 |
 | F | Long-range cloud-on-cloud shadows | C (its slab-march helper) | #11 |
 | G | Model shader with per-pixel world shadows | A, B (C, D, E for full effect) | #13 |
 | H | Objects cast shadows (caster map) | B, G | #13 |
@@ -268,7 +268,7 @@ the static sun.
 - **Visual.** Sunset over the mountains from the ground and from orbit, clouds
   lit and shadowed by peaks, the moon's terminator, and bake time at load.
 
-## E. Terrain shadows: local ceiling map around the camera
+## E. Terrain shadows: local ceiling map around the camera, and the cloud shadow map
 
 **Goal.** Nearby shadow detail (about 50 m texels within about 50 km), with no
 change to chunk generation or the LOD.
@@ -290,6 +290,37 @@ change to chunk generation or the LOD.
   hysteresis, and the twin vs a brute-force march.
 - **Visual.** Valley walls and small ridges at low sun, while flying, with no
   pops on rebuild.
+
+### The cloud shadow map (added after C)
+
+C marches the clouds per pixel: 0.8–1.7 ms at HIGH near the ground
+(`performance_backlog.md`, "A cloud shadow map"). The march depends on the
+sun ray alone, so it can be stored once per ray and shared by every pixel
+on it. It shares this part's machinery: a map around the camera, its
+re-centring and rebuild rules, and the fade to a coarser term.
+
+- **The map.** Keyed by where the sun ray enters the slab's base sphere
+  (`cloudShadowChord`'s `start`, analytic per pixel), on a tangent chart
+  around the camera. A render-to-texture pass marches each texel once
+  (`slabOpticalDepth`), on the GPU.
+- **Two extents.** Near detail at about 60 m texels, and a far map at about
+  500 m out to the horizon. They fade into each other and then into the
+  mean table (`ground_shadow_table`) where the march gives way today.
+- **Rebuild.** When the camera has moved a fraction of the map, or the sun
+  has turned more than a texel's worth: every frame while the sun swings,
+  which is still one march per texel, not per pixel. Same hysteresis as the
+  local ceiling map.
+- **Kept per pixel.** Ground inside the slab (mountain tops in the clouds),
+  where the ray starts at the point and not on the base sphere.
+- **Receivers.** Terrain, far water and the near sea's `sunShade`. The CPU
+  twin (`SphericalClouds.sun_visibility`) does not change.
+- **Knob.** Map sizes in `ShadowSettings`. `cloud_shadow_steps` becomes the
+  march's per texel.
+- **Tests.** The map against `cloud_shadow_on_sphere` at texel centres. The
+  near/far/mean seams. Rebuild on a moving camera and a moving sun.
+- **Visual and cost.** The C poses unchanged within a texel's blur;
+  `clouds_grazing` still without bands. Target 0.2–0.3 ms where C costs
+  0.8–1.7.
 
 ## F. Long-range cloud-on-cloud shadows
 

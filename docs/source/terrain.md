@@ -241,6 +241,9 @@ the sunlight *above any air* and the sky light, both linear.
   than lit by a blue sky.
 - **Aerial perspective** comes last, in linear light before the tonemap:
   the terrain is seen through every atmosphere the sight line crosses.
+- **Shadows.** Other bodies' eclipses, the planet's clouds' shadow and the
+  mountains' (a shadow map per body, `terrain.shadow_map.ShadowMap`) dim the
+  sunlight: see [Shadows](shadows.md).
 
 ## Several planets
 

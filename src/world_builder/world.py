@@ -90,6 +90,7 @@ from world_builder.sky import Sky
 from world_builder.sky.starfield import NebulaStyle, Starfield
 from world_builder.terrain.collision import TerrainCollision
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PlanetSpec
+from world_builder.terrain.shadow_map import ShadowMap
 from world_builder.terrain.terrain import Terrain
 from world_builder.terrain.workers import ChunkExecutor
 
@@ -273,6 +274,7 @@ class Body:
     :ivar ocean: its sea's near look, or None
     :ivar ocean_reference: the light its water's colour was tuned in (see
         :meth:`World._light_ocean`); set on the first update
+    :ivar shadow_map: its mountains' shadow (one per body)
     """
 
     look: BodyLook
@@ -281,6 +283,7 @@ class Body:
     clouds: SphericalClouds | None = None
     ocean: Sea | None = None
     ocean_reference: np.ndarray | None = None
+    shadow_map: ShadowMap | None = None
 
     @property
     def name(self) -> str:
@@ -444,10 +447,18 @@ class World:
             # One texture set for every body (they load once)
             materials = materials or terrain.materials
             body = Body(look=look, terrain=terrain, atmosphere=index)
+            body.shadow_map = ShadowMap(
+                terrain,
+                self.executor,
+                self.settings.shadows.terrain_map_size,
+                self._sun,
+            )
+            body.shadow_map.bind(terrain.root)
             if look.clouds is not None:
                 body.clouds = self._make_clouds(look, index)
                 self.shadows.bind(body.clouds.root, len(self.bodies))
                 body.clouds.bind_shadow_inputs(terrain.root)  # their shadow
+                body.shadow_map.bind(body.clouds.root)  # the peaks' on them
             if look.ocean is not None:
                 kwargs = {
                     name: getattr(look.ocean, name)
@@ -587,6 +598,7 @@ class World:
         return any(
             body.terrain.loading
             or (body.clouds is not None and body.clouds.stats["pending"] > 0)
+            or (body.shadow_map is not None and body.shadow_map.loading)
             for body in self.bodies
         ) or any(asteroids.loading for asteroids in self.fields)
 
@@ -661,15 +673,15 @@ class World:
         return direct[0], ambient[0]
 
     def lights_at(
-        self, points_world: ArrayLike, clouds: bool | ArrayLike = True
+        self, points_world: ArrayLike, local: bool | ArrayLike = True
     ) -> tuple[np.ndarray, np.ndarray]:
         """:meth:`light_at` for many points at once, each by its nearest
         body.
 
         :param points_world: (n, 3) world frame, metres
-        :param clouds: whether the planet's clouds shade each point (one
-            flag, or one per point): False for what the shaders shade per
-            pixel (the near sea)
+        :param local: whether the local shadows (the planet's clouds', its
+            mountains') shade each point (one flag, or one per point): False
+            for what the shaders shade per pixel (the near sea)
         :returns: (direct, ambient), (n, 3) each, linear rgb
         """
         points = np.asarray(points_world, dtype=np.float64).reshape(-1, 3)
@@ -679,7 +691,7 @@ class World:
                 np.broadcast_to(self._sun_color, shape).copy(),
                 np.broadcast_to(self._space_ambient, shape).copy(),
             )
-        shaded = np.broadcast_to(np.asarray(clouds, dtype=bool), (len(points),))
+        shaded = np.broadcast_to(np.asarray(local, dtype=bool), (len(points),))
         direct = np.empty((len(points), 3))
         ambient = np.empty((len(points), 3))
         nearest = self._nearest_indices(points)
@@ -720,21 +732,28 @@ class World:
         return np.argmin(gaps, axis=1)
 
     def _sun_visibility(
-        self, index: int, points: np.ndarray, clouds: ArrayLike = True
+        self, index: int, points: np.ndarray, local: ArrayLike = True
     ) -> tuple[np.ndarray, np.ndarray]:
         """:meth:`sun_visibility` for points of body *index*, as its terms:
-        (the eclipses, the clouds' shadow where *clouds*), (n,) each."""
+        (the eclipses, the local shadows where *local*: the clouds', the
+        mountains'), (n,) each."""
         eclipse = self.shadows.eclipse(points, self._sun, index)
         shade = np.ones(len(points))
         body = self.bodies[index]
+        shaded = np.broadcast_to(np.asarray(local, dtype=bool), (len(points),))
+        if not shaded.any():
+            return eclipse, shade
         steps = self.shadows.settings.cloud_shadow_steps
-        shaded = np.broadcast_to(np.asarray(clouds, dtype=bool), (len(points),))
-        if body.clouds is not None and steps > 0 and shaded.any():
+        if body.clouds is not None and steps > 0:
             shade[shaded] = body.clouds.sun_visibility(points[shaded], self._sun, steps)
+        if body.shadow_map is not None:
+            shade[shaded] *= body.shadow_map.visibility(
+                points[shaded], self.shadows.sun_angular_radius
+            )
         return eclipse, shade
 
     def _lights_at(
-        self, index: int, points: np.ndarray, clouds: ArrayLike = True
+        self, index: int, points: np.ndarray, local: ArrayLike = True
     ) -> tuple[np.ndarray, np.ndarray]:
         """:meth:`lights_at` for (n, 3) points of body *index*."""
         body = self.bodies[index]
@@ -746,7 +765,7 @@ class World:
         else:
             hidden = in_shadow(points - body.position, self._sun, body.radius)
             direct = np.where(np.asarray(hidden)[..., None], 0.0, self._sun_color)
-        eclipse, shade = self._sun_visibility(index, points, clouds)
+        eclipse, shade = self._sun_visibility(index, points, local)
         # The sky's light dims in an eclipse, not under a cloud (lit air
         # all round).
         sky = ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * eclipse[:, None]
@@ -789,6 +808,8 @@ class World:
             )
             if body.clouds is not None:
                 body.clouds.set_sun(self._sun)
+            if body.shadow_map is not None:
+                body.shadow_map.set_sun(self._sun)  # baked again, in the pool
         for look, built in zip(self._field_looks, self.fields):
             ambient = self._space_ambient if look.ambient is None else look.ambient
             built.set_sun(self._sun, self._sun_color, ambient)
@@ -803,6 +824,9 @@ class World:
             parts += body.parts()
         parts += self.fields
         settings.apply(*parts)
+        for body in self.bodies:
+            if body.shadow_map is not None:
+                body.shadow_map.set_size(settings.shadows.terrain_map_size)
         self._sync_half_res()
 
     def use_split_depth(self, depth: SplitDepthCameras) -> None:
@@ -873,6 +897,8 @@ class World:
 
         for body in self.bodies:
             body.terrain.update(camera, camera_render, camera_forward=forward)
+            if body.shadow_map is not None:
+                body.shadow_map.update()
         for asteroids in self.fields:
             asteroids.update(camera, camera_render)
         self.atmospheres.update(camera)
@@ -926,9 +952,9 @@ class World:
         points += [
             (body.position + up * body.radius)[None, :] for body, up in zip(seas, ups)
         ]
-        # The near seas take the clouds' shadow per pixel (sea.glsl).
-        clouds = np.arange(1 + len(tracked) + len(seas)) < 1 + len(tracked)
-        direct, ambient = self.lights_at(np.concatenate(points), clouds)
+        # The near seas take the local shadows per pixel (sea.glsl).
+        local = np.arange(1 + len(tracked) + len(seas)) < 1 + len(tracked)
+        direct, ambient = self.lights_at(np.concatenate(points), local)
         scale = self.light_scale
         if self.sun_light is not None:
             self.sun_light.node().set_color((*(direct[0] * scale), 1.0))

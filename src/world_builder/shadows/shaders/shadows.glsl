@@ -20,6 +20,12 @@ uniform int   uShadowCasters[MAX_SHADOW_BODIES];
 uniform float uSunAngularRadius;
 // The receiver's own body, which never eclipses it (-1: none).
 uniform int   uShadowSelf;
+// The mountains' shadow (world_builder.terrain.shadow_map.ShadowMap): by
+// direction from the receiver's body's centre, in its own frame, r the
+// lowest altitude the sun clears every occluder from (the ceiling) and g
+// the distance to the occluder that sets it, both km; off (0) until baked.
+uniform samplerCube uTerrainShadow;
+uniform int   uTerrainShadowOn;
 // The most samples a ground pixel takes through the planet's clouds toward
 // the sun (cloud_field.glsl's cloudShadowDepth), 0 = no cloud shadows: a
 // quality knob (world_builder.shadows.ShadowSettings).
@@ -98,4 +104,19 @@ float eclipseVisibility(vec3 rel, vec3 L, int self) {
         visible *= 1.0 - discCoverage(uSunAngularRadius, occR, atan(across, along));
     }
     return visible;
+}
+
+// The share of the sun the mountains leave a point of the body's frame,
+// planetDir (unit) from its centre, altitude metres above sea level: the
+// ray toward the sun clears the occluder that sets the ceiling by
+// (altitude - ceiling) / distance radians, and the penumbra is a smoothstep
+// of that over the sun's angular radius. shadow_map.terrain_visibility on
+// the CPU.
+float terrainShadow(vec3 planetDir, float altitude) {
+    if (uTerrainShadowOn == 0) {
+        return 1.0;
+    }
+    vec2 ceiling = texture(uTerrainShadow, planetDir).rg * 1000.0;
+    float margin = (altitude - ceiling.x) / max(ceiling.y, 1.0);
+    return smoothstep(-uSunAngularRadius, uSunAngularRadius, margin);
 }

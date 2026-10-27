@@ -121,7 +121,8 @@ In order, it updates:
    solid, its haze);
 2. the air (`Atmospheres.update`) and the bodies as sun occluders
    (`World.shadows`, a `Shadows`: each body eclipses the sun for the others,
-   see [Shadows](shadows.md));
+   see [Shadows](shadows.md)); with the terrain, each body's mountain
+   shadow map (`Body.shadow_map`) collects what the pool baked;
 3. the sky;
 4. each body's clouds, with the angle one pixel spans, taken from the
    camera's own output (a window, or a game's offscreen buffer);
@@ -178,8 +179,10 @@ band (see `world_builder.depth`).
 - **`set_sun(direction)`**: moves the sun; every part follows.
 - **`light_at(point)`, `lights_at(points)`**: the light (direct, ambient)
   at one point or many, each by its nearest body, in the world's shadows;
-  **`sun_visibility(points)`** is those shadows' share alone (so far, the
-  eclipses: see [Shadows](shadows.md)).
+  **`sun_visibility(points)`** is those shadows' share alone (the
+  eclipses, the clouds', the mountains': see [Shadows](shadows.md)).
+  `lights_at(points, local=False)` leaves the clouds' and the mountains'
+  out, for what a shader shades per pixel (the near sea).
 - **`track_light(node, cast=False)`, `untrack_light(node)`**: a model lit by
   the light where it is, not at the camera: its own Panda3D sun and ambient
   lights (the world's off on it), set at every `update` in one vectorised

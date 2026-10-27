@@ -33,6 +33,7 @@ uniform int   uSeaSurface;      // 1: the planet has a sea: the seabed is lifted
 uniform sampler2D uChunkTable;
 
 out vec3 vRelPos;     // position relative to the camera, render frame
+out vec3 vPlanetPos;  // position relative to the planet's centre, its own axes
 out vec2 vUv;         // ground-anchored texture coordinate, metres
 out float vHeight;    // height above sea level as drawn, metres
 out float vSeabed;    // ground height before the sea-surface lift, metres
@@ -116,6 +117,7 @@ void main() {
         ? -1.0 : dot(p3d_ClipPlane[0], p3d_ModelViewMatrix * local);
 
     vRelPos = world - uCamPos;
+    vPlanetPos = uChunkCentre.xyz + local.xyz;  // the lifted sea, skirts: as drawn
     vUv = uChunk.xy + gridCoord(gl_VertexID) * uChunk.z;
     vHeight = drawn;
     vSeabed = ground;

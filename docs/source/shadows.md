@@ -9,7 +9,8 @@ the sea's near look). Issues #11 and #13; the plan is `SHADOWS_PLAN.md`.
 |---|---|---|---|
 | Eclipse | spherical bodies (planets, moons) | terrain, far water, clouds, air, CPU light | done |
 | Cloud shadow | the planet's clouds | terrain, sea, objects | done |
-| Terrain shadow | mountains | terrain, sea, clouds, objects | planned (D, E) |
+| Terrain shadow, global | mountains | terrain, sea, clouds, objects | done |
+| Terrain shadow, local | nearby ridges | terrain, sea, clouds, objects | planned (E) |
 | Ring shadow | rings | planet, clouds, air, objects | planned (I) |
 | Object shadow | tracked models | terrain, sea, models | planned (H) |
 
@@ -145,6 +146,64 @@ only, so it lines up with the clouds drawn, and it moves with the sun.
   fetch per pixel) is the way to most of it back: see the
   [performance backlog](performance_backlog.md).
 
+## Mountain shadows (the global map)
+
+`world_builder.terrain.shadow_map`: each body's mountains' shadow, at
+planetary scale, as a cube map over the body (its own frame) baked for one
+sun.
+
+- **The ceiling.** Per texel, the lowest altitude from which the sun clears
+  every occluder toward it, and the distance to the occluder that sets it.
+  Shadow on a heightfield only lessens with altitude, so that says it all:
+  a receiver at altitude `a` clears the occluder by `(a - ceiling) /
+  distance` radians, and `terrainShadow` (shadows.glsl, one fetch) is a
+  smoothstep of that over the sun's angular radius: the physical penumbra,
+  sharp near the occluder, soft far from it.
+- **The bake** (`ceiling_cube`). A point's ceiling only depends on the
+  point a step toward the sub-solar point: `ceiling(P) = max(height(P'),
+  ceiling(P')) - gain`, the gain the sun's ray climbs over the step
+  (closed form, curvature included). On a grid aligned with the sun
+  (columns along great circles through the sub-solar point, rows half a
+  texel apart in angle from it) `P'` is the node a row up, exactly: one
+  pass over the rows, every column at once, ~2.3 s at 1024 in numpy, no
+  native code. Interpolating at each step instead (a sweep over the cube's
+  own texels) rounded the ceiling's crest down every step: shadows ~20 %
+  short. Against a march toward the sun over the same ground: within ~40 m
+  at 1024.
+- **Heights** (`height_cube`): `Planet.sample_dirs` at the texel centres,
+  band-limited to two texels, stamps in, the sea flat at 0. Six jobs (a
+  face each, ~2.5 us a texel: ~16 s of CPU at 1024 in all), once per body
+  and size.
+- **The near gap.** The nearest occluder counted is two texels away (1.8 km
+  at 1024 on a 600 km planet): a texel's own slope never shadows it, and a
+  ridge nearer than that casts nothing here. Part E's local map covers
+  that; the demo's 750 m mesas show only the far ends of their shadows.
+- **`ShadowMap`** (one per body: `Body.shadow_map` in `World`). Bakes in
+  the worker pool: the heights once, the ceiling for each sun
+  (`set_sun`; the last map stays until the new one is in, so a swinging
+  sun gets a new map every ~2-3 s). One half-float cube texture in km,
+  mipmapped (read across a whole face from orbit, it thrashed the texture
+  cache without), uploaded in place: `bind(node)` once. `loading` until
+  the first map (`World.loading` counts it), `current` once the map is the
+  sun's (the shots wait for it).
+- **Receivers.** The terrain (land, far water) per pixel at its planet-frame
+  position (a varying from terrain.vert: an airless moon has its craters'
+  shadows too) and its drawn height; the near sea through `sunShade`; the
+  clouds (billboards per vertex, the deck per fragment: peaks between a
+  low sun and the clouds). The CPU twin, `ShadowMap.visibility` (kept per
+  25 m cell until the next bake), is in `World.sun_visibility` and
+  `lights_at`.
+- **Knob.** `ShadowSettings.terrain_map_size` (rebuild): 256 at LOW, 512,
+  1024, 2048 at ULTRA (16 s of heights and ~9 s a bake), off.
+- **Cost.** One cube fetch per pixel: 0.0-0.3 ms (orbit, where every pixel
+  is terrain, the most; stratosphere 5.39 → 5.62 ms, orbit 2.85 → 3.08,
+  moon_orbit 1.74 → 1.98, ground within noise).
+
+The clouds' `grazingLight` (the sun's path below a cloud's altitude dims it
+toward the terminator) is kept: it stands for the haze and the clouds on
+that path, which the map does not hold, and the map only darkens the
+clouds behind real peaks.
+
 ## Objects
 
 Panda3D's lights on `render` are the light at the camera, wrong for a model
@@ -152,8 +211,8 @@ elsewhere (a ship in an eclipse the camera is outside of). `World` lights a
 tracked model where it is:
 
 - `World.sun_visibility(points)`: the product of the CPU shadow terms at
-  each point, by its nearest body (so far the eclipse; the cloud and terrain
-  terms join it in later parts).
+  each point, by its nearest body: the eclipses, the planet's clouds' and
+  its mountains' shadows (part E's local map will join them).
 - `World.lights_at(points)`: the light at many points in one vectorised call
   (the air's `Atmospheres.light_at`, `in_shadow` and `twilight` take arrays
   of points), times that visibility; `light_at(point)` is its single-point
@@ -173,7 +232,12 @@ umbra goes dark while the camera outside it keeps the sun.
 ## Demo and shots
 
 F7 in the terrain demos cycles the shadows' preset (`--shadows-quality` at
-start): LOW leaves the clouds' shadows out.
+start): LOW leaves the clouds' shadows out and makes a coarse mountain map.
+
+Mountain shadow poses: `mountains_low` (clouds_grazing's peaks, the sun 6°
+up in the south-east), `mountains_orbit` (1 radius up, the sun 8° up),
+`moon_terminator` (the moon's craters at its terminator). Each pose's line
+prints the last bake's time.
 
 `scripts/demo_terrain.py` puts the moon 21,000 km out: from the planet's
 ground it looks 0.56° wide, as wide as the sun, so a total eclipse has an

@@ -125,7 +125,9 @@ void main() {
     // Other bodies eclipsing the sun, at the billboard's centre: the sun,
     // the lit air above (twilight) and the sky dim together.
     float eclipse = eclipseVisibility(centre - uCamRender, sunDir, uShadowSelf);
-    vSunTint *= eclipse;
+    // And the mountains between the cloud and a low sun (the body's map).
+    vec3 planet = centre - uPlanetCentre;
+    vSunTint *= eclipse * terrainShadow(normalize(planet), length(planet) - planetRadius);
     vTwilight *= eclipse;
     vSkyTint *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
 }

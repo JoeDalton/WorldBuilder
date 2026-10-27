@@ -144,6 +144,7 @@ from world_builder.terrain.cubesphere import FACE_NAMES, dirs_to_face
 from world_builder.terrain.level import DEMO_LEVEL, load_level
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
+from world_builder.terrain.shadow_map import ShadowMap
 
 INITIAL_FAR_M = 600000.0  # the lens the sea's reflection camera copies
 SPEED = 300.0  # metres/second at low altitude
@@ -331,11 +332,13 @@ class Body:
     :ivar name: shown in the HUD
     :ivar terrain: its terrain (which carries its world position)
     :ivar atmosphere: whether it has air (sky, haze, coloured sunlight)
+    :ivar shadow_map: its mountains' shadow
     """
 
     name: str
     terrain: object
     atmosphere: bool
+    shadow_map: ShadowMap | None = None
 
     @property
     def position(self) -> np.ndarray:
@@ -459,6 +462,12 @@ class TerrainDemo(ShowBase):
         self.body = self.home  # the nearest body, updated every frame
 
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
+        # Each body's mountains' shadow, baked in the pool for each sun.
+        for body in self.bodies:
+            body.shadow_map = ShadowMap(
+                body.terrain, self.executor, world.shadows.terrain_map_size, self._sun
+            )
+            body.shadow_map.bind(body.terrain.root)
         self.ring = None
         if ring:
             self.ring = AsteroidField(
@@ -653,6 +662,8 @@ class TerrainDemo(ShowBase):
 
         self.atmospheres.update(self.cam_world)
         self.shadows.update(self.cam_world)
+        for body in self.bodies:
+            body.shadow_map.update()
         self.sky.update((0.0, 0.0, 0.0), far)
         if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
@@ -719,6 +730,7 @@ class TerrainDemo(ShowBase):
         for body in self.bodies:
             ambient = SKY_AMBIENT if body.atmosphere else SPACE_AMBIENT
             body.terrain.set_sun(tuple(self._sun), SUN_COLOR, ambient)
+            body.shadow_map.set_sun(self._sun)  # baked again if it moved
         if self.ring is not None:
             self.ring.set_sun(self._sun, SUN_COLOR, SPACE_AMBIENT)
         self._update_lights()
@@ -728,7 +740,7 @@ class TerrainDemo(ShowBase):
     ) -> tuple[np.ndarray, np.ndarray]:
         """:returns: (direct, ambient) light at a point near a body, eclipsed
         by the other, its sunlight times *shade* (the planet's clouds' shadow
-        there: :meth:`_cloud_shades`)"""
+        there: :meth:`_local_shades`)"""
         if body.atmosphere:
             direct, ambient = self.atmospheres.light_at(
                 0,
@@ -747,14 +759,19 @@ class TerrainDemo(ShowBase):
             ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * eclipse
         )
 
-    def _cloud_shades(self, points: np.ndarray) -> np.ndarray:
-        """:returns: (n,) the planet's clouds' shadow at points near it, 1
-        near the moon (one call for them all: each costs ~0.2 ms)"""
+    def _local_shades(self, points: np.ndarray) -> np.ndarray:
+        """:returns: (n,) the local shadows at points: the planet's clouds'
+        near it (one call for them all: each costs ~0.2 ms), and the nearest
+        body's mountains'"""
         shades = np.ones(len(points))
         steps = self.shadows.settings.cloud_shadow_steps
-        near = [self._nearest_body(point) is self.home for point in points]
-        if self.clouds is not None and any(near):
+        nearest = [self._nearest_body(point) for point in points]
+        near = np.array([body is self.home for body in nearest])
+        if self.clouds is not None and near.any():
             shades[near] = self.clouds.sun_visibility(points[near], self._sun, steps)
+        radius = self.shadows.sun_angular_radius
+        for i, body in enumerate(nearest):
+            shades[i] *= float(body.shadow_map.visibility(points[i], radius))
         return shades
 
     def _update_lights(self) -> None:
@@ -764,7 +781,7 @@ class TerrainDemo(ShowBase):
         points = np.concatenate(
             [self.cam_world[None, :], self.cam_world + self.tracked.positions()]
         )
-        shades = self._cloud_shades(points)
+        shades = self._local_shades(points)
         direct, ambient = self._light_at(self.body, self.cam_world, shades[0])
         self.sun_light.node().set_color((*direct, 1.0))
         self.sun_light.node().set_direction(Vec3(*(-self._sun)))
@@ -910,6 +927,8 @@ class TerrainDemo(ShowBase):
         )
         self.shadows.bind(self.clouds.root, 0)
         self.clouds.bind_shadow_inputs(self.terrain.root)  # their shadow on it
+        if self.home.shadow_map is not None:  # the peaks' on them
+            self.home.shadow_map.bind(self.clouds.root)
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
         if getattr(self, "half_res", None) is not None:
@@ -947,6 +966,8 @@ class TerrainDemo(ShowBase):
         world.apply(
             *self._terrains(), self.atmospheres, self.shadows, self.sky, self.ocean
         )
+        for body in self.bodies:
+            body.shadow_map.set_size(world.shadows.terrain_map_size)
         if self.clouds is not None:
             world.apply(self.clouds)
         if self.ring is not None:

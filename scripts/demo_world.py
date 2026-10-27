@@ -194,7 +194,7 @@ class WorldDemo(TerrainDemo):
         self.clouds = planet.clouds
         self.ocean = planet.ocean
         self.bodies = [
-            Body(b.name, b.terrain, atmosphere=b.atmosphere is not None)
+            Body(b.name, b.terrain, b.atmosphere is not None, b.shadow_map)
             for b in self.scene.bodies
         ]
         self.home = self.bodies[0]

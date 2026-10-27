@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nor bands. F7 in the terrain demos cycles the shadows' preset.
   `terrain_shots.py` gains `clouds_noon`, `clouds_low` and
   `clouds_grazing`.
+- Mountain shadows (#11): each body's shadow ceiling cube map
+  (`world_builder.terrain.shadow_map`: per texel the lowest altitude from
+  which the sun clears every occluder, and how far the occluder is),
+  baked in the worker pool for each sun in one pass over a sun-aligned grid
+  (~2.3 s at 1024), its heights sampled once. `ShadowMap` (one per body in
+  `World`, `Body.shadow_map`) swaps it in when ready; shadows.glsl's
+  `terrainShadow` reads it with a physical penumbra, on the terrain (the
+  moon's craters too), the near sea and the clouds; its CPU twin is in
+  `World.sun_visibility` and `lights_at`. `ShadowSettings.terrain_map_size`
+  sets its size. `terrain_shots.py` gains `mountains_low`,
+  `mountains_orbit` and `moon_terminator`.
 - `World.track_light(node, cast=False)` / `untrack_light(node)`: a game's
   model lit by the light where it is, not at the camera: its own Panda3D sun
   and ambient lights (`world_builder.lights.TrackedLights`), set every

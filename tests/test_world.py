@@ -377,8 +377,8 @@ def test_one_light_call_lights_the_camera_the_nodes_and_the_sea():
     world.track_light(ball)
     calls = []
     lights_at = world.lights_at
-    world.lights_at = lambda points, clouds=True: (
-        calls.append(len(points)) or lights_at(points, clouds)
+    world.lights_at = lambda points, local=True: (
+        calls.append(len(points)) or lights_at(points, local)
     )
 
     world._light(camera, camera)
@@ -420,7 +420,7 @@ def test_the_clouds_shade_the_sun_not_the_sky_nor_the_near_sea():
     steps = planet.clouds.sun_visibility.call_args[0][2]
     assert steps == world.shadows.settings.cloud_shadow_steps > 0
     np.testing.assert_allclose(world.sun_visibility(points), 0.25)
-    direct, _ = world.lights_at(points, clouds=[True, False])
+    direct, _ = world.lights_at(points, local=[True, False])
     np.testing.assert_allclose(direct[1], world._sun_color)
     np.testing.assert_allclose(direct[0], 0.25 * world._sun_color)
 
@@ -428,6 +428,25 @@ def test_the_clouds_shade_the_sun_not_the_sky_nor_the_near_sea():
     planet.clouds.sun_visibility.reset_mock()
     np.testing.assert_allclose(world.sun_visibility(points), 1.0)
     planet.clouds.sun_visibility.assert_not_called()
+
+
+def test_the_mountains_shade_the_sun_where_asked():
+    """A body's shadow map dims its sunlight with the clouds' term, at the
+    sun's angular radius, but not the near sea's (shaded per pixel)."""
+    planet = _body(ambient=(0.2, 0.2, 0.2))
+    planet.shadow_map = MagicMock()
+    planet.shadow_map.visibility.side_effect = lambda points, radius: np.full(
+        len(points), 0.5
+    )
+    world = _world(planet)
+    points = np.array([[0.0, 0.0, R + 10.0], [0.0, 1e3, R + 10.0]])
+    direct, ambient = world.lights_at(points, local=[True, False])
+    np.testing.assert_allclose(direct[0], 0.5 * world._sun_color)
+    np.testing.assert_allclose(direct[1], world._sun_color)
+    np.testing.assert_allclose(ambient, 0.2)
+    radius = planet.shadow_map.visibility.call_args[0][1]
+    assert radius == world.shadows.sun_angular_radius
+    np.testing.assert_allclose(world.sun_visibility(points), 0.5)
 
 
 def test_a_tracked_node_is_lit_where_it_is():

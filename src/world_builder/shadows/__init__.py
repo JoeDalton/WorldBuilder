@@ -52,10 +52,17 @@ from typing import ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
-from panda3d.core import LVecBase4f, NodePath, PTA_float, PTA_int, PTA_LVecBase4f
+from panda3d.core import (
+    LVecBase4f,
+    NodePath,
+    PTA_float,
+    PTA_int,
+    PTA_LVecBase4f,
+    Texture,
+)
 
 from world_builder.atmosphere import MAX_ATMOSPHERES
-from world_builder.quality import QualityLevel, QualitySettings, knob
+from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 
 SHADER_PATH = Path(__file__).parent / "shaders"
 #: Bodies one shader can take (must match MAX_SHADOW_BODIES in the GLSL).
@@ -75,6 +82,9 @@ class ShadowSettings(QualitySettings):
     :ivar cloud_shadow_steps: the most samples a ground pixel takes through
         the planet's clouds toward the sun (their shadow on the terrain and
         the sea); 0 = no cloud shadows
+    :ivar terrain_map_size: the mountains' shadow map, texels per cube face
+        edge (:class:`~world_builder.terrain.shadow_map.ShadowMap`; 1024 is
+        0.9 km texels on a 600 km planet); 0 = no mountain shadows
     """
 
     cloud_shadow_steps: int = knob(
@@ -87,11 +97,22 @@ class ShadowSettings(QualitySettings):
         "them out. The cost is per pixel of terrain.",
     )
 
+    terrain_map_size: int = knob(
+        1024,
+        "Mountain shadows",
+        REBUILD,
+        unit="px",
+        choices={"off": 0, "256": 256, "512": 512, "1024": 1024, "2048": 2048},
+        help="The mountains' shadow map, per cube face: finer draws smaller "
+        "ridges' shadows. Made in the background at load and whenever the "
+        "sun moves (~2 s at 1024, four times that at 2048).",
+    )
+
     LABEL: ClassVar = "Shadows"
     PRESETS: ClassVar = {
-        QualityLevel.LOW: {"cloud_shadow_steps": 0},
-        QualityLevel.MID: {"cloud_shadow_steps": 4},
-        QualityLevel.ULTRA: {"cloud_shadow_steps": 12},
+        QualityLevel.LOW: {"cloud_shadow_steps": 0, "terrain_map_size": 256},
+        QualityLevel.MID: {"cloud_shadow_steps": 4, "terrain_map_size": 512},
+        QualityLevel.ULTRA: {"cloud_shadow_steps": 12, "terrain_map_size": 2048},
     }
 
 
@@ -339,6 +360,14 @@ def disc_coverage(sun: ArrayLike, body: ArrayLike, separation: ArrayLike) -> np.
 _DEFAULTS: dict | None = None
 
 
+def _no_terrain_shadow() -> Texture:
+    """A 1-texel cube map for shaders with no mountain shadow (off)."""
+    tex = Texture("no_terrain_shadow")
+    tex.setup_cube_map(1, Texture.T_half_float, Texture.F_rg16)
+    tex.set_ram_image(bytes(6 * 4))
+    return tex
+
+
 def bind_defaults(node: NodePath) -> None:
     """Give a node "nothing casts a shadow" inputs, so shaders including
     shadows.glsl (every one including atmosphere.glsl) run unchanged until
@@ -366,6 +395,8 @@ def bind_defaults(node: NodePath) -> None:
             "uAtmoBody": owners,
             "uCloudShadowSteps": 0,
             "uShadowSelf": -1,
+            "uTerrainShadow": _no_terrain_shadow(),
+            "uTerrainShadowOn": 0,
         }
     for name, value in _DEFAULTS.items():
         node.set_shader_input(name, value)
