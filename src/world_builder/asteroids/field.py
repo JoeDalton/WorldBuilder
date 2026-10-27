@@ -237,6 +237,7 @@ class AsteroidField:
         self._settings = settings
         self._min_pixels = settings.min_pixels
         self.root.set_shader_input("uDetailFar", float(settings.detail_far))
+        self.root.set_shader_input("uNormalSize", float(settings.normal_size))
         if "max_lod" in changes or "normal_size" in changes:
             self._clear_draws()
             self._request_prototypes()
@@ -443,7 +444,11 @@ class AsteroidField:
     def _request_prototypes(self) -> None:
         s = self._settings
         job = PrototypeJob(
-            self.spec.shapes, self.spec.seed, _LODS[s.max_lod], s.normal_size
+            self.spec.shapes,
+            self.spec.seed,
+            _LODS[s.max_lod],
+            s.normal_size,
+            self.spec.material.patch_scale,
         )
         self._prototypes = {}
         self._errors = None
@@ -633,15 +638,12 @@ class AsteroidField:
         root.set_shader_input("uNormRA", self.rock_textures[1])
         tile = PTA_float.empty_array(6)
         mean = PTA_LVecBase3f.empty_array(6)
-        mean_height = PTA_float.empty_array(6)
-        heights = m.albedo_height[:2, ..., 3].reshape(2, -1).mean(axis=1) / 255.0
         for i in range(6):
             tile[i] = float(m.tile_m[min(i, 1)])
             mean[i] = LVecBase3f(*m.mean_albedo[min(i, 1)])
-            mean_height[i] = float(heights[min(i, 1)])
         root.set_shader_input("uTileM", tile)
         root.set_shader_input("uMeanAlbedo", mean)
-        root.set_shader_input("uMeanHeight", mean_height)
+        root.set_shader_input("uNormalSize", float(s.normal_size))
         root.set_shader_input("uBlendDepth", 0.3)
         root.set_shader_input("uDetailFar", float(s.detail_far))
         root.set_shader_input("uExposure", float(exposure))

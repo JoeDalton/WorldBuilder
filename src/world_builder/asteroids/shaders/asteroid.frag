@@ -1,8 +1,10 @@
 #version 330
 
 // A rock's surface: its prototype's normal map (the full-detail shape) turned
-// with it, the terrain's rock and snow textures blended by its ice
-// (terrain_material.glsl: rock projected from the sides on steep flanks),
+// with it, the terrain's rock and snow textures where its ice patches lie
+// (the normal map's fourth channel, shape.IcePatches: ice on the share of
+// the surface ranked above 1 - its ice; terrain_material.glsl: rock
+// projected from the sides on steep flanks),
 // lit as the terrain lights its ground (object_light.glsl), then either the
 // world's exposure and tonemap or a plain display encoding (for scenes lit
 // by Panda's fixed-function lights). The field's haze between the camera
@@ -16,7 +18,7 @@
 uniform sampler2DArray uRockNormals;  // six layers per prototype
 uniform mat3 uFieldRot;
 uniform vec3 uMeanAlbedo[6];          // linear; drawn instead of textures far away
-uniform float uMeanHeight[6];         // the textures' mean height
+uniform float uNormalSize;            // the normal maps' texels per face side
 uniform float uDetailFar;             // textures fade to the mean colour by here
 uniform vec3 uSunDir;                 // toward the sun, render frame
 uniform vec3 uSunColor;
@@ -42,6 +44,14 @@ out vec4 fragColor;
 
 const float PI = 3.141592653589793;
 const int VEIL_SAMPLES = 8;
+const float PATCH_EDGE = 0.02;  // shape.PATCH_EDGE
+
+// shape.ice_weight: ice above rank 1 - ice, a narrow ramp between.
+float iceWeight(float rank, float ice) {
+    if (ice <= 0.0) return 0.0;
+    if (ice >= 1.0) return 1.0;
+    return smoothstep(1.0 - ice - PATCH_EDGE, 1.0 - ice + PATCH_EDGE, rank);
+}
 
 vec3 qrot(vec4 q, vec3 v) {
     vec3 t = 2.0 * cross(q.yzw, v);
@@ -65,13 +75,19 @@ void main() {
 
     // The full-detail normal, from the body frame.
     vec3 layer = vec3((vFaceUv.xy + 1.0) * 0.5, float(int(vRock.z + 0.5) * 6 + face));
-    vec3 body = texture(uRockNormals, layer).rgb * 2.0 - 1.0;
+    vec4 normalRank = texture(uRockNormals, layer);
+    vec3 body = normalRank.rgb * 2.0 - 1.0;
     vec3 N = normalize(uFieldRot * qrot(vQuat, body));
     vec3 up = normalize(vUp);
 
-    // Rock and snow, the two first layers (biomes.BIOMES).
-    float w[6] = float[6](ice, 1.0 - ice, 0.0, 0.0, 0.0, 0.0);
-    vec3 meanAlbedo = meanLayeredAlbedo(w, uMeanAlbedo, uMeanHeight);
+    // Snow on the rock's ice patches, rock elsewhere (biomes.BIOMES' two
+    // first layers). Where a texel covers many pixels' worth of patches
+    // (far: the mipmaps average the ranks), the ice's share instead.
+    vec2 texels = (vFaceUv.xy + 1.0) * (0.5 * uNormalSize);
+    float footprint = max(length(dFdx(texels)), length(dFdy(texels)));
+    float snow = mix(iceWeight(normalRank.a, ice), ice, smoothstep(4.0, 16.0, footprint));
+    float w[6] = float[6](snow, 1.0 - snow, 0.0, 0.0, 0.0, 0.0);
+    vec3 meanAlbedo = mix(uMeanAlbedo[1], uMeanAlbedo[0], snow);
     float far = smoothstep(0.6 * uDetailFar, uDetailFar, dist);
     vec3 albedo = meanAlbedo;
     vec3 surfaceN = N;

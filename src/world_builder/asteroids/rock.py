@@ -13,7 +13,8 @@ prototype, its radius, its ice, its own detail's seed); its evaluator,
   metre-scale detail of its own (fbm, seeded per rock), less the radius;
   band-limited as a planet is, so a coarse chunk is a smoothed rock and the
   instanced meshes are the same rock, coarser;
-- **biomes**: snow (ice) and rock in the rock's proportions, set directly;
+- **biomes**: snow on the rock's ice patches, rock elsewhere (the patches
+  its instance shows: :class:`~world_builder.asteroids.shape.IcePatches`);
 - **textures** repeat every :data:`ROCK_UV_PERIOD` metres along a face, so a
   small body's textures are not stretched;
 - **height bounds** from its shape: the LOD pass culls behind its smallest
@@ -31,7 +32,12 @@ from typing import ClassVar
 
 import numpy as np
 
-from world_builder.asteroids.shape import face_grid_dirs, prototype_shape
+from world_builder.asteroids.shape import (
+    face_grid_dirs,
+    ice_patches,
+    ice_weight,
+    prototype_shape,
+)
 from world_builder.asteroids.spec import ShapeSpec
 from world_builder.terrain import noise
 from world_builder.terrain.biomes import BIOMES
@@ -55,6 +61,7 @@ class RockSpec:
     :ivar index: the rock's prototype
     :ivar radius: its bounding radius (before its detail), metres
     :ivar ice: its share of ice
+    :ivar patch_scale: its ice patches' size (``MaterialSpec.patch_scale``)
     :ivar detail_seed: its own detail's seed (its id, say)
     :ivar detail_m: that detail's amplitude, metres
     :ivar detail_wavelength_m: its largest wavelength, metres
@@ -68,6 +75,7 @@ class RockSpec:
     index: int
     radius: float
     ice: float = 0.0
+    patch_scale: float = 1.5
     detail_seed: int = 0
     detail_m: float = 1.5
     detail_wavelength_m: float = 24.0
@@ -137,11 +145,16 @@ class RockBody:
             )
         return surface - r
 
-    def weights(self, count: int) -> np.ndarray:
-        """:returns: (count, 6) the rock's biome weights"""
-        w = np.zeros((count, len(BIOMES)))
-        w[:, _SNOW] = self.spec.ice
-        w[:, _ROCK] = 1.0 - self.spec.ice
+    def weights(self, dirs: np.ndarray) -> np.ndarray:
+        """:param dirs: (n, 3) unit directions, body frame
+        :returns: (n, 6) the rock's biome weights there: snow on its ice
+            patches, rock elsewhere"""
+        spec = self.spec
+        patches = ice_patches(spec.seed, spec.index, spec.patch_scale)
+        snow = ice_weight(patches.rank(dirs), spec.ice)
+        w = np.zeros((len(snow), len(BIOMES)))
+        w[:, _SNOW] = snow
+        w[:, _ROCK] = 1.0 - snow
         return w
 
     def sample_dirs(
@@ -176,5 +189,5 @@ class RockBody:
             elevation=elevation.reshape(shape),
             temperature=zeros,
             humidity=zeros,
-            weights=self.weights(len(dirs)).reshape(*shape, len(BIOMES)),
+            weights=self.weights(dirs).reshape(*shape, len(BIOMES)),
         )

@@ -226,6 +226,7 @@ class TerrainRocks:
             index=int(rock["proto"]),
             radius=float(rock["radius"]),
             ice=float(rock["ice"]),
+            patch_scale=spec.material.patch_scale,
             detail_seed=int(rock["id"]) & 0x7FFFFFFF,
             lowest=float(self._field.lowest[int(rock["proto"])]),
         )

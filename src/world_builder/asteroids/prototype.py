@@ -35,7 +35,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from world_builder.asteroids.shape import face_grid_dirs, prototype_shape
+from world_builder.asteroids.shape import face_grid_dirs, ice_patches, prototype_shape
 from world_builder.asteroids.spec import ShapeSpec
 
 #: Quads per face side of each level of detail, coarse to fine.
@@ -56,12 +56,14 @@ class PrototypeJob:
     :ivar seed: the field's seed
     :ivar lods: quads per face side of each level of detail, coarse to fine
     :ivar normal_size: texels per face side of the normal map
+    :ivar patch_scale: the ice patches' size (``MaterialSpec.patch_scale``)
     """
 
     shape: ShapeSpec
     seed: int
     lods: tuple[int, ...] = LODS
     normal_size: int = NORMAL_SIZE
+    patch_scale: float = 1.5
 
 
 @dataclass
@@ -101,8 +103,9 @@ class Prototype:
     :ivar meshes: its levels of detail, coarse to fine
     :ivar radius_grid: (6, n, n) float32, the finest mesh's vertex radii
         [face, row (v), column (u)]
-    :ivar normal_map: (6, size, size, 3) uint8 body-frame normals,
-        (n + 1) / 2 * 255 [face, row (v), column (u)]
+    :ivar normal_map: (6, size, size, 4) uint8 body-frame normals,
+        (n + 1) / 2 * 255, and the ice patches' rank (:class:`IcePatches`)
+        * 255 [face, row (v), column (u)]
     :ivar lowest: the full-detail shape's smallest radius (on the normal
         map's samples), in units of the bounding radius
     :ivar gen_ms: generation time
@@ -219,7 +222,13 @@ def generate_prototype(job: PrototypeJob, key: int, version: int = 0) -> Prototy
     dv = points[:, 2:, 1:-1] - points[:, :-2, 1:-1]
     normal = np.cross(du, dv)
     normal /= np.linalg.norm(normal, axis=-1)[..., None]
-    normal_map = np.rint((normal * 0.5 + 0.5) * 255.0).astype(np.uint8)
+    rank = ice_patches(job.seed, key, job.patch_scale).rank(
+        texel_dirs[:, 1:-1, 1:-1].reshape(-1, 3)
+    )
+    normal_map = np.rint(
+        np.concatenate((normal * 0.5 + 0.5, rank.reshape(6, size, size, 1)), axis=-1)
+        * 255.0
+    ).astype(np.uint8)
     # Where the error is measured: the texel centres.
     centres = -1.0 + (2.0 * np.arange(size) + 1.0) / size
     ta, tb = np.meshgrid(centres, centres)

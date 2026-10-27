@@ -35,7 +35,8 @@ from panda3d.core import (
     NodePath,
 )
 
-from world_builder.asteroids.motion import angular_velocity
+from world_builder.asteroids.motion import angular_velocity, orientation, rotate
+from world_builder.asteroids.shape import ice_patches, ice_weight
 from world_builder.terrain.native import NativeAsteroids
 
 if TYPE_CHECKING:
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
 
 #: The node's origin snaps to this grid (metres) around the camera.
 ORIGIN_SNAP = 4096.0
-#: A rock is "icy" past this share of ice.
+#: A hit point is snow past this much of ice (the patches' edges ramp).
 ICE_MATERIAL = 0.5
 
 
@@ -69,8 +70,8 @@ class AsteroidSurface:
 
         :param point: a point on a rock, in *relative_to*'s frame
         :param relative_to: the frame of *point*; None = render
-        :returns: "snow" for an icy rock, "rock" otherwise, None where no
-            rock is
+        :returns: "snow" on the rock's ice patches, "rock" elsewhere, None
+            where no rock is
         """
         collision = self._collision()
         return None if collision is None else collision.material_at(point, relative_to)
@@ -207,11 +208,23 @@ class AsteroidCollision:
     def material_at(self, point: ArrayLike, relative_to: NodePath | None) -> str | None:
         if self._origin is None:
             return None
-        slot = self._rock_at(self._field_point(point, relative_to))
+        p = self._field_point(point, relative_to)
+        slot = self._rock_at(p)
         if slot is None:
             return None
-        ice = float(self._field().population.rocks["ice"][slot])
-        return "snow" if ice > ICE_MATERIAL else "rock"
+        field = self._field()
+        rock = field.population.rocks[slot]
+        # The point's direction in the rock's body frame, at the frame's time
+        q = orientation(
+            rock["q0"], rock["axis"], rock["precession"], rock["spin"], self._time
+        )
+        inverse = q * np.array([1.0, -1.0, -1.0, -1.0])
+        body = rotate(inverse, p - rock["centre"])
+        patches = ice_patches(
+            field.spec.seed, int(rock["proto"]), field.spec.material.patch_scale
+        )
+        snow = ice_weight(patches.rank(body / np.linalg.norm(body)), rock["ice"])
+        return "snow" if float(snow[0]) > ICE_MATERIAL else "rock"
 
     def velocity_at(self, point: ArrayLike, relative_to: NodePath | None) -> np.ndarray:
         if self._origin is None:

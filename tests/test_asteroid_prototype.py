@@ -96,10 +96,43 @@ def test_the_normal_map_faces_out(prototypes):
     size = JOB.normal_size
     dirs = face_grid_dirs(size, centred=True)
     for prototype in prototypes:
-        assert prototype.normal_map.shape == (6, size, size, 3)
-        normal = prototype.normal_map.astype(np.float64) / 255.0 * 2.0 - 1.0
+        assert prototype.normal_map.shape == (6, size, size, 4)
+        normal = prototype.normal_map[..., :3].astype(np.float64) / 255.0 * 2.0 - 1.0
         np.testing.assert_allclose(np.linalg.norm(normal, axis=-1), 1.0, atol=0.02)
         assert np.mean(np.sum(normal * dirs, axis=-1) > 0.0) > 0.99
+
+
+def test_the_normal_map_carries_the_ice_patches(prototypes):
+    """Its fourth channel is the ice patches' rank: uniform over the
+    surface, the same function a rock's terrain and collision read."""
+    from world_builder.asteroids.shape import ice_patches
+
+    size = JOB.normal_size
+    dirs = face_grid_dirs(size, centred=True).reshape(-1, 3)
+    for prototype in prototypes:
+        rank = prototype.normal_map[..., 3].ravel() / 255.0
+        expected = ice_patches(JOB.seed, prototype.key, JOB.patch_scale).rank(dirs)
+        np.testing.assert_allclose(rank, expected, atol=0.5 / 255.0 + 1e-9)
+        # about uniform (the cube's texels are not quite equal areas)
+        assert abs(np.mean(rank > 0.8) - 0.2) < 0.05
+
+
+def test_ice_patches_cover_the_ice_share():
+    """A rock of ice f is ice on the share f of its surface, in patches:
+    a few of ice on a rocky one, a few of rock on an icy one."""
+    from world_builder.asteroids.shape import _fibonacci, ice_patches, ice_weight
+
+    patches = ice_patches(3, 1, 0.8)
+    dirs = _fibonacci(20_000)
+    rank = patches.rank(dirs)
+    for ice in (0.0, 0.1, 0.5, 0.9, 1.0):
+        assert ice_weight(rank, ice).mean() == pytest.approx(ice, abs=0.01)
+        # pure patches: little of the surface in between
+        w = ice_weight(rank, ice)
+        assert np.mean((w > 0.05) & (w < 0.95)) < 0.05
+    # deterministic, and another prototype's differ
+    np.testing.assert_array_equal(rank, ice_patches(3, 1, 0.8).rank(dirs))
+    assert not np.allclose(rank, ice_patches(3, 2, 0.8).rank(dirs))
 
 
 def test_prototypes_are_deterministic_and_distinct():

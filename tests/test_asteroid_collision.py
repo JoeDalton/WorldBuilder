@@ -313,7 +313,25 @@ def test_the_traverser_sees_the_rocks(showbase, field):
         normal = np.array(hit.get_surface_normal(render))
         np.testing.assert_allclose(normal, made.rotation @ native[2], atol=1e-4)
         # material and the surface's speed
-        expected = "snow" if rock["ice"] > 0.5 else "rock"
+        # snow on the rock's ice patches: the hit's direction, body frame
+        from world_builder.asteroids.motion import orientation, rotate
+        from world_builder.asteroids.shape import ice_patches, ice_weight
+
+        q = orientation(
+            rock["q0"],
+            rock["axis"],
+            rock["precession"],
+            rock["spin"],
+            made.collision._time,
+        )
+        body = rotate(
+            q * [1.0, -1.0, -1.0, -1.0], np.asarray(native[1]) - rock["centre"]
+        )
+        patches = ice_patches(
+            made.spec.seed, int(rock["proto"]), made.spec.material.patch_scale
+        )
+        snow = ice_weight(patches.rank(body / np.linalg.norm(body)), rock["ice"])
+        expected = "snow" if float(snow[0]) > 0.5 else "rock"
         assert owner.material_at(point, render) == expected
         assert owner.material_at(point + [1e5, 0, 0], render) is None
     finally:

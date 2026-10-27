@@ -11,7 +11,12 @@ import numpy as np
 import pytest
 
 from world_builder.asteroids.rock import ROCK_UV_PERIOD, RockSpec
-from world_builder.asteroids.shape import face_grid_dirs, prototype_shape
+from world_builder.asteroids.shape import (
+    face_grid_dirs,
+    ice_patches,
+    ice_weight,
+    prototype_shape,
+)
 from world_builder.asteroids.spec import ShapeSpec
 from world_builder.terrain import noise
 from world_builder.terrain.biomes import BIOMES
@@ -70,9 +75,16 @@ def test_the_rock_sets_its_own_biomes():
     ka = kb = np.arange(0, grid.n0 + 1, grid.n0 // 8)
     sample = body.sample_face_grid(2, ka, kb, grid.n0 // 8)
     assert sample.weights.shape == (len(kb), len(ka), len(BIOMES))
-    np.testing.assert_allclose(sample.weights[..., BIOMES.index("snow")], 0.3)
-    np.testing.assert_allclose(sample.weights[..., BIOMES.index("rock")], 0.7)
+    # snow on the ice patches (its instance's), rock elsewhere
+    patches = ice_patches(2, 1, 1.5)
+    expected = ice_weight(patches.rank(sample.dirs.reshape(-1, 3)), 0.3)
+    snow = sample.weights[..., BIOMES.index("snow")].ravel()
+    np.testing.assert_allclose(snow, expected)
     np.testing.assert_allclose(sample.weights.sum(axis=-1), 1.0)
+    assert np.all(sample.weights[..., 2:] == 0.0)
+    # over the whole rock, the ice's share
+    every = body.weights(face_grid_dirs(32).reshape(-1, 3))
+    assert every[:, BIOMES.index("snow")].mean() == pytest.approx(0.3, abs=0.05)
 
 
 @pytest.mark.parametrize("radius", [200.0, 2000.0])
@@ -84,9 +96,9 @@ def test_its_chunks_stay_within_its_bounds(radius):
     for key in body.grid.roots():
         chunk = generate_chunk(spec, key)
         assert lo <= chunk.h_min <= chunk.h_max <= hi
-        # snow and rock in the rock's share (as bytes)
+        # snow and rock only (as bytes)
         w = chunk.weights.reshape(-1, len(BIOMES)).astype(int)
-        assert abs(int(w[0, BIOMES.index("snow")]) - round(0.4 * 255)) <= 1
+        assert np.all(np.abs(w[:, :2].sum(axis=1) - 255) <= 1)
         assert np.all(w[:, 2:] == 0)
 
 

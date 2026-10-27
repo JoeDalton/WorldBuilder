@@ -19,6 +19,10 @@ coarse mesh is a smoothed rock, not an aliased one.
 
 A radius function is star-shaped: no overhangs, arches or caves.
 
+Where a rock's ice lies (:class:`IcePatches`) is a function of the direction
+too, per prototype: a rock of ice fraction f is ice on the share f of its
+surface where a smooth noise ranks highest.
+
 Pure numpy (and the native noise when built), for worker processes.
 """
 
@@ -27,6 +31,7 @@ from __future__ import annotations
 import functools
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 from world_builder.asteroids.spec import ShapeSpec
 from world_builder.terrain import noise
@@ -40,6 +45,12 @@ RIDGE_SCALE = 0.45
 #: A rim's height over its crater's diameter, and its width over the radius.
 RIM_HEIGHT = 0.04
 RIM_WIDTH = 0.35
+#: Octaves of the ice patches' noise.
+PATCH_OCTAVES = 3
+#: Directions the patches' noise is ranked on (equal areas).
+PATCH_SAMPLES = 8192
+#: Half the rank over which ice turns to rock at a patch's edge.
+PATCH_EDGE = 0.02
 #: The sampling the bounding radius is measured on (per face side), and the
 #: margin left over it for what that sampling misses.
 SCALE_SAMPLES = 96
@@ -153,3 +164,57 @@ class PrototypeShape:
 def prototype_shape(spec: ShapeSpec, seed: int, index: int) -> PrototypeShape:
     """:returns: a cached :class:`PrototypeShape` (one per worker process)"""
     return PrototypeShape(spec, seed, index)
+
+
+class IcePatches:
+    """Where a prototype's ice lies: a smooth noise of the direction, ranked
+    over the surface (0 to 1, uniform by area). A rock of ice fraction f is
+    ice where the rank is above 1 - f: that share of its surface, in
+    patches, a few of ice on a rocky body, a few of rock on an icy one. Its
+    instances (the normal map's fourth channel), its terrain and its
+    collision all read it.
+
+    :ivar quantiles: (PATCH_SAMPLES,) the noise's values over the sphere,
+        sorted: the rank's table
+    """
+
+    def __init__(self, seed: int, index: int, scale: float):
+        self.scale = float(scale)
+        self._seed = (seed * 6151 + index * 3079 + 41) & 0x7FFFFFFF
+        self.quantiles = np.sort(self._noise(_fibonacci(PATCH_SAMPLES)))
+        self._ranks = (np.arange(PATCH_SAMPLES) + 0.5) / PATCH_SAMPLES
+
+    def _noise(self, dirs: np.ndarray) -> np.ndarray:
+        return noise.fbm(dirs, self.scale, PATCH_OCTAVES, self._seed)
+
+    def rank(self, dirs: ArrayLike) -> np.ndarray:
+        """:param dirs: (n, 3) unit directions, body frame
+        :returns: (n,) the share of the surface ranking lower, 0 to 1"""
+        dirs = np.asarray(dirs, dtype=np.float64).reshape(-1, 3)
+        return np.interp(self._noise(dirs), self.quantiles, self._ranks, 0.0, 1.0)
+
+
+def ice_weight(rank: ArrayLike, ice: ArrayLike) -> np.ndarray:
+    """:returns: how much of ice at surface ranks *rank* of a rock of ice
+    fraction *ice*: 1 above 1 - ice, 0 below, a narrow ramp between
+    (asteroid.frag's)"""
+    rank = np.asarray(rank, dtype=np.float64)
+    ice = np.asarray(ice, dtype=np.float64)
+    t = np.clip((rank - (1.0 - ice - PATCH_EDGE)) / (2.0 * PATCH_EDGE), 0.0, 1.0)
+    w = t * t * (3.0 - 2.0 * t)
+    return np.where(ice <= 0.0, 0.0, np.where(ice >= 1.0, 1.0, w))
+
+
+@functools.lru_cache(maxsize=256)
+def ice_patches(seed: int, index: int, scale: float) -> IcePatches:
+    """:returns: a cached :class:`IcePatches` (one per process)"""
+    return IcePatches(seed, index, scale)
+
+
+def _fibonacci(n: int) -> np.ndarray:
+    """:returns: (n, 3) directions of equal areas (a Fibonacci sphere)"""
+    i = np.arange(n) + 0.5
+    z = 1.0 - 2.0 * i / n
+    r = np.sqrt(1.0 - z * z)
+    phi = np.pi * (3.0 - np.sqrt(5.0)) * i
+    return np.column_stack((r * np.cos(phi), r * np.sin(phi), z))

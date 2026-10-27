@@ -353,20 +353,12 @@ def optical_depth(
     return float(np.sum(model.spec.shape.profile(points) * sigma * np.diff(edges)))
 
 
-def mean_rock_albedo(
-    ice: ArrayLike, mean_albedo: np.ndarray, mean_height: np.ndarray, blend: float
-) -> np.ndarray:
-    """:returns: the rocks' mean colour (linear): each rock's far colour
-    (terrain_material.glsl's meanLayeredAlbedo of snow and rock, by its
-    ice), averaged over *ice* (the rocks' ice fractions)"""
-    ice = np.asarray(ice, dtype=np.float64)
-    w = np.stack((ice, 1.0 - ice), axis=1)
-    present = w >= 0.02
-    a = mean_height[None, :2] + w
-    best = np.where(present, a, -1.0).max(axis=1, keepdims=True)
-    b = np.where(present, np.maximum(a - (best - blend), 0.0) * w, 0.0)
-    colour = (b @ mean_albedo[:2]) / np.maximum(b.sum(axis=1, keepdims=True), 1e-5)
-    return colour.mean(axis=0)
+def mean_rock_albedo(ice: ArrayLike, mean_albedo: np.ndarray) -> np.ndarray:
+    """:returns: the rocks' mean colour (linear): each rock is snow on the
+    share of its surface its ice is (in patches), rock elsewhere; averaged
+    over *ice* (the rocks' ice fractions)"""
+    share = float(np.mean(np.asarray(ice, dtype=np.float64)))
+    return share * mean_albedo[0] + (1.0 - share) * mean_albedo[1]
 
 
 # ── drawing ─────────────────────────────────────────────────────────────────
@@ -554,14 +546,8 @@ class FieldHaze:
         self.model.cover = float(cover)
 
     def set_albedo(self, materials, spec: FieldSpec) -> None:
-        heights = (
-            materials.albedo_height[:2, ..., 3].reshape(2, -1).mean(axis=1) / 255.0
-        )
         self.albedo = mean_rock_albedo(
-            spec.material.ice_fraction.table_values(257),
-            materials.mean_albedo,
-            heights,
-            0.3,
+            spec.material.ice_fraction.table_values(257), materials.mean_albedo
         )
         self.field.root.set_shader_input("uHazeAlbedo", LVecBase3f(*self.albedo))
 

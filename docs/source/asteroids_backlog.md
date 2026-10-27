@@ -3,6 +3,25 @@
 Improvements found but not made, so the fields could move on (October 2026).
 The design is in [Asteroid fields](asteroids.md).
 
+## Decisions pending
+
+- **Clump pockets in the haze.** The haze averages the clumps (see Clumps
+  under Haze). Proposed: the scatter's own clumping function, computed
+  natively on a few camera-centred grids (each level twice as wide; in the
+  ring's plane, 3D for a box or a ball), recomputed on the workers as the
+  camera moves, read by the haze's samples. Its pockets would match the
+  rocks' exactly; a GLSL noise could not (the CPU's 64-bit hash). Waiting
+  for a go.
+- **The far plane in open space.** `World`'s far plane there is 1,000 km
+  (`SPACE_FAR_M`), but at 2 pixels the biggest rocks are drawn out to about
+  2,600 km (1600×900): past the far plane they are cut hard. Either
+  `World.depth_ranges` reaches the fields' reach (2 × largest radius ×
+  pixels per radian / `min_pixels`; with the 2 km split, depth steps at
+  2,600 km are about 200 m: plenty for 2-pixel rocks; with planets, a far
+  plane farther coarsens their far range a little), or the fields' `far` is
+  capped at the camera's far plane, so those rocks fade into the haze (the
+  farthest are lost). Recommended: reach. First suspect for the front below.
+
 ## Rock shapes
 
 The prototypes are potatoes: an ellipsoid, lumpy noise, faint ridges and
@@ -64,23 +83,9 @@ Ways to make them better:
   pattern turns at the face edges of every rock; triplanar mapping in the
   body frame would hide it (needed anyway for hero rocks).
 
-- **Ice in patches, not blended.** A rock's ice fraction now weights a
-  rock/snow blend over its whole surface: a uniform beige at low fractions,
-  with artefacts where the two textures meet, and a far colour that was
-  hard to match. Instead, lay out separate patches: a mostly-rock body gets
-  a few patches of ice, a mostly-ice body a few patches of rock, the
-  fraction setting how much of the surface each covers. This gives
-  contrast and variety rather than a blend.
-  - The patches come from a noise of the direction, thresholded at the
-    fraction's quantile (as the field's clumping coverage is). Per
-    prototype, the patches go in a fourth channel of the normal map (RGB8
-    today, RGBA8 then), so the instance shader reads them in the same
-    fetch. The rock's terrain
-    (`RockBody.weights`) uses the same function, so the swap does not
-    change them.
-  - The far colour becomes each patch's mean colour: the pixels' share,
-    not the weights' blend.
-  - The same idea fits planets' biome borders.
+- **Biome patches on planets.** The ice patches' idea (a ranked noise,
+  thresholded at each share) would give planets' biome borders crisp,
+  patchy edges where they now blend by weight.
 
 ## Haze
 

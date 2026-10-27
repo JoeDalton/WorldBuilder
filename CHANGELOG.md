@@ -63,9 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `terrain_min_radius` and `max_terrain_rocks`.
   `scripts/asteroid_bench.py --flight approach` flies into one, and
   `--terrain-rocks N` overrides their number. (#14)
-- Far asteroids keep the colour their textures average to (the rock/snow
-  height blend of the layers' mean colours and heights): rocks with a little
-  ice no longer turn pale grey past 0.6 × `detail_far`. (#14)
+- Ice in patches (`asteroids.shape.IcePatches`, `MaterialSpec.patch_scale`):
+  a rock's ice covers its share of the surface where a smooth noise ranks
+  highest, a few patches of ice on a rocky rock, a few of rock on an icy
+  one, each pure (no rock/snow blend, no beige). The rank is the normal
+  map's fourth channel (RGBA8); the rock's terrain and `material_at` read
+  the same function. Far rocks keep the patches' mean colours. (#14)
 - The terrain draws any body (`spec.evaluator()`; a `Planet` or a rock), with
   per-body height bounds for the LOD pass (a small body was mostly culled
   by the planets' -7 km), a texture period per grid (`grid_for(radius,

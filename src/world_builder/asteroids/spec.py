@@ -292,9 +292,15 @@ class ShapeSpec:
 
 @dataclass(frozen=True)
 class MaterialSpec:
-    """:ivar ice_fraction: each rock's share of ice (0 bare rock, 1 all ice)"""
+    """:ivar ice_fraction: each rock's share of ice (0 bare rock, 1 all
+        ice): that share of its surface is ice, in patches (a few of ice on
+        a rocky body, a few of rock on an icy one;
+        :class:`~world_builder.asteroids.shape.IcePatches`)
+    :ivar patch_scale: the patches' size: their noise's largest
+        wavelength, in rock radii (smaller: more and smaller patches)"""
 
     ice_fraction: Distribution = Distribution.constant(0.0)
+    patch_scale: float = 1.5
 
 
 @dataclass(frozen=True)

@@ -87,16 +87,17 @@ def normal_map_texture(
     prototypes: list[Prototype], name: str = "rock_normals"
 ) -> Texture:
     """:returns: the prototypes' normal maps as one mipmapped 2D texture
-    array, six layers each, in the list's order"""
-    maps = np.concatenate([p.normal_map for p in prototypes])  # (6 k, s, s, 3)
+    array, six layers each, in the list's order: the normal in RGB, the ice
+    patches' rank in A"""
+    maps = np.concatenate([p.normal_map for p in prototypes])  # (6 k, s, s, 4)
     count, size = maps.shape[0], maps.shape[1]
     tex = Texture(name)
     tex.setup_2d_texture_array(
-        size, size, count, Texture.T_unsigned_byte, Texture.F_rgb8
+        size, size, count, Texture.T_unsigned_byte, Texture.F_rgba8
     )
     # Row 0 of a layer is the face's v = -1 edge: already Panda's bottom row.
-    # Panda keeps RGB RAM images in BGR order.
-    tex.set_ram_image(np.ascontiguousarray(maps[..., ::-1]).tobytes())
+    # Panda keeps RGBA RAM images in BGRA order.
+    tex.set_ram_image(np.ascontiguousarray(maps[..., [2, 1, 0, 3]]).tobytes())
     tex.set_wrap_u(SamplerState.WM_clamp)
     tex.set_wrap_v(SamplerState.WM_clamp)
     tex.set_minfilter(SamplerState.FT_linear_mipmap_linear)

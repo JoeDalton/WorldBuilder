@@ -35,7 +35,7 @@ frame**: the field's own centre and axes.
 | Sizes | a `Distribution` | The rocks' bounding radii. |
 | Spin | `SpinSpec(rate, axis, size_exponent, tumble)` | How they turn. |
 | Shapes | `ShapeSpec(prototypes)` | How many distinct shapes. |
-| Material | `MaterialSpec(ice_fraction)` | Each rock's share of ice. |
+| Material | `MaterialSpec(ice_fraction, patch_scale)` | Each rock's share of ice, laid out in patches of that size. See [Ice patches](#ice-patches). |
 | Keep-outs | `KeepOut(centre, radius, end=None)` | Balls or capsules no rock enters. |
 
 `FieldSpec.summary()` gives what a spec amounts to: the expected rock count,
@@ -245,9 +245,9 @@ sits at `position` with `orientation` (world from field) in the world.
 - **Fade.** Rocks fade out by dithering over the last quarter of their
   drawing distance.
 - **Shading** (`asteroids/shaders/asteroid.frag`): the prototype's normal map
-  (the full-detail shape) turned with the rock, the terrain's rock and snow
-  textures blended by the rock's ice (`terrain_material.glsl`: rock
-  projected from the sides on steep flanks), lit as the terrain lights its
+  (the full-detail shape) turned with the rock, the terrain's snow textures
+  on the rock's ice patches and its rock textures elsewhere
+  (`terrain_material.glsl`: rock projected from the sides on steep flanks), lit as the terrain lights its
   ground (`object_light.glsl`), no shadows. Then either the world's exposure
   and ACES tonemap, or, with `tonemap=False`, a plain display encoding to
   match models lit by Panda's fixed-function lights. Last, the haze between
@@ -273,6 +273,27 @@ one is the `cube` preset, about 3,400 rocks, at HIGH.
 The field's own main-thread work is about 1–1.5 ms a frame, most of it the
 visible pass in numpy (see the [backlog](asteroids_backlog.md)).
 
+### Ice patches
+
+A rock's ice is not spread over it: it lies in patches
+(`shape.IcePatches`). Each prototype has a smooth noise of the direction (3
+octaves, its largest wavelength `MaterialSpec.patch_scale` radii, 1.5 by
+default), ranked over its surface: the rank is the share of the surface
+lower, 0 to 1, measured on 8,192 directions of equal area. A rock of ice
+fraction f is ice where the rank is above 1 - f, so on the share f of its
+surface: a few patches of ice on a rocky rock, a few of rock on an icy one,
+each pure (the edge ramps over 0.04 of rank).
+
+- **Instances** read the rank in the normal map's fourth channel. Far
+  away, where a texel spans many pixels (the mipmaps average the ranks),
+  they take the ice's share instead; past `detail_far` the patches keep
+  their two mean colours.
+- **The rock's terrain** (`RockBody.weights`) and **collision**
+  (`material_at`) read the same function: the swap keeps the patches, and a
+  ship hits the snow it sees.
+- **The haze** takes the rocks' mean colour: snow on the mean ice share,
+  rock on the rest.
+
 ## Collision
 
 `field.enable_collision(into_mask, name="asteroids", owner_tag="owner",
@@ -296,8 +317,8 @@ terrain's).
   collider per frame: the deepest sphere contact, the first segment hit, with
   the surface point and the triangle's normal.
 - **The owner** (`AsteroidSurface`, the node's python tag):
-  `material_at(point, relative_to)` gives "snow" for a rock more than half
-  ice, else "rock"; `velocity_at(point, relative_to)` gives how fast the
+  `material_at(point, relative_to)` gives "snow" on the rock's ice
+  patches, else "rock"; `velocity_at(point, relative_to)` gives how fast the
   surface moves there (the rock's angular velocity crossed with the point's
   offset from its centre), for a game whose handlers take the obstacle's
   motion into account.
