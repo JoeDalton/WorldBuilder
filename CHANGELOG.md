@@ -106,6 +106,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- More realistic planet relief (#9). The same seed now gives a different
+  planet, and the demo level moved to keep a coast to its north and a range
+  to its south:
+  - tectonic plates (`terrain.plates`, `ElevationParams.plates`, 14 by
+    default, none on the moon): mountain belts where plates close, mid-ocean
+    ridges and rift valleys where they open, long straight coasts where they
+    slide, and continents pulled onto plate edges. The noise mask still
+    raises a few ranges inside plates;
+  - ranges are massifs: a summit level that rises and falls along a range,
+    and a crest profile with broad valleys and sharp ridges instead of
+    `crest**3`, so a range is mostly mountain rather than a few spikes;
+  - plains: a regional character field scales hills and detail, from flat
+    plains to rough country (flat land at 100 m: 0-4 % of earthlike land
+    patches before, 30-55 % now);
+  - coasts: a regional coast style, smooth (the shore follows the
+    continental field) or rugged (islets and inlets);
+  - desert landforms on arid land (`terrain.landforms`, each a toggle in
+    `ElevationParams` and only computed where it is): sand seas of
+    Sandastray's dunes (its nine layered noises, combined by min, add and
+    multiply: rounded dunes with sharp crests, 100-150 m high) on every
+    arid plain, at any height (most plains of the desert planet), and
+    tablelands in some upland regions: tables on a warped Voronoi noise cut
+    by valleys that widen with a regional erosion stage, from narrow
+    canyons to plains with rounded mesas, buttes and spires, their walls
+    shaped by the planet's rock strata (`terrain.strata`: hard layers in
+    cliffs with ledges shedding gently outward, soft ones in slopes, a
+    talus at the foot; the wall rises straight on from the talus' top) and
+    tinted by them in bands (a strata mask in each vertex's sixth biome
+    byte). All band limited: coarse chunks keep their mean height.
+    Tableland chunks cost about 4 times the others (23 ms against 6 ms);
+  - rock starts at 35 degrees, not 30 (`biomes.ROCK_SLOPE`);
+  - cost: fine chunks as before; coarse chunks (level 7 and up at 600 km,
+    which evaluate the low band directly) about 25 ms instead of 13 ms; the
+    pool's throughput in `terrain.bench` 340 chunks/s instead of 399.
+    `plates=0` saves most of it.
+  `scripts/terrain_metrics.py` measures flatness, slopes, coast roughness
+  and peaks per preset. `scripts/find_landforms.py` finds places over each
+  desert landform (sand seas, canyons by depth, mesas by relief), and the demos (`demo_terrain.py`, `demo_world.py`,
+  `terrain_shots.py`) take `--planet PRESET`, `--seed N` and
+  `--start LAT LON`.
 - Asteroid fields without thresholds (#14):
   - each size class holds a ball of cells around the camera (not a box),
     moved by its difference and grown over frames (about 30,000 new cells a

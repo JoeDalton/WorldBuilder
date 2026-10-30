@@ -411,6 +411,23 @@ def make_noise_texture() -> Texture:
     return tex
 
 
+def make_strata_texture(lut: np.ndarray | None) -> Texture:
+    """:param lut: (N, 3) albedo multipliers by altitude (strata.strata_lut),
+        or None for no strata (one white texel)
+    :returns: the one-row float texture the shader's strata tint reads"""
+    from panda3d.core import SamplerState, Texture
+
+    lut = np.ones((1, 3), np.float32) if lut is None else lut.astype(np.float32)
+    tex = Texture("terrain_strata")
+    tex.setup_2d_texture(len(lut), 1, Texture.T_float, Texture.F_rgb32)
+    tex.set_ram_image(np.ascontiguousarray(lut[:, [2, 1, 0]]).tobytes())
+    tex.set_wrap_u(SamplerState.WM_clamp)
+    tex.set_wrap_v(SamplerState.WM_clamp)
+    tex.set_minfilter(SamplerState.FT_linear_mipmap_linear)
+    tex.set_magfilter(SamplerState.FT_linear)
+    return tex
+
+
 def _set_sampling(tex, sampler_state):
     tex.set_wrap_u(sampler_state.WM_repeat)
     tex.set_wrap_v(sampler_state.WM_repeat)

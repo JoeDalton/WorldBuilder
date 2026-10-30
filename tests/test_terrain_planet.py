@@ -5,16 +5,23 @@ Unit tests for the terrain prototype's planet, biomes, chunks and LOD
 
 import math
 import pickle
-import time
 from dataclasses import replace
 
 import numpy as np
 import pytest
+from timing import TIME_SCALE, wait_until
 
 from world_builder.terrain import biomes
-from world_builder.terrain.chart import AzimuthalEquidistantChart, TangentFrame
+from world_builder.terrain.bench import _best_ms
+from world_builder.terrain.chart import (
+    AzimuthalEquidistantChart,
+    TangentFrame,
+    dirs_from_latlon,
+    latlon,
+)
 from world_builder.terrain.chunkgen import (
     QUADS,
+    VERTEX_DTYPE,
     VERTS,
     generate_chunk,
     parent_interpolation,
@@ -23,6 +30,10 @@ from world_builder.terrain.chunkgen import (
 )
 from world_builder.terrain.cubesphere import CubeGrid, face_dirs, grid_for
 from world_builder.terrain.planet import (
+    LOW_CHARACTER,
+    LOW_CONTINENT,
+    LOW_RANGE,
+    PLANET_HEIGHT_BOUNDS,
     PRESETS,
     REFERENCE_RADIUS_M,
     Planet,
@@ -61,7 +72,7 @@ def test_sea_bias_sets_the_ocean_fraction(spec, planet):
     rng = np.random.default_rng(99)
     dirs = rng.normal(size=(20000, 3))
     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
-    continent = planet.low_band(dirs)[:, 3]
+    continent = planet.low_band(dirs)[:, LOW_CONTINENT]
     assert np.mean(continent < 0.0) == pytest.approx(
         spec.elevation.ocean_fraction, abs=0.03
     )
@@ -99,6 +110,85 @@ def test_temperature_falls_with_altitude(planet):
     t = np.array([15.0, 15.0])
     cooled = planet.lapse(t, np.array([0.0, 2000.0]))
     assert cooled[1] == pytest.approx(15.0 - 13.0)
+
+
+def _random_dirs(n, seed=0):
+    dirs = np.random.default_rng(seed).normal(size=(n, 3))
+    return dirs / np.linalg.norm(dirs, axis=1, keepdims=True)
+
+
+@pytest.mark.parametrize("radius", [600e3, 2400e3])
+@pytest.mark.parametrize("preset", sorted(PRESETS))
+def test_heights_stay_within_the_bounds(preset, radius):
+    """The LOD pass assumes ungenerated ground lies within these."""
+    planet = Planet(replace(PRESETS[preset], seed=3, radius=radius))
+    elevation, _, _ = planet.sample_dirs(_random_dirs(60000), 400.0)
+    lo, hi = PLANET_HEIGHT_BOUNDS
+    assert lo < elevation.min() and elevation.max() < hi
+
+
+def test_plains_are_flat_and_ranges_rough(planet):
+    """Plains (low character, no range) are nearly flat; ranges are not."""
+    dirs = _random_dirs(4000, seed=5)
+    low = planet.low_band(dirs)
+    land = low[:, LOW_CONTINENT] > 0.1
+    plains = dirs[land & (low[:, LOW_CHARACTER] < 0.05) & (low[:, LOW_RANGE] < 0.01)]
+    ranges = dirs[land & (low[:, LOW_RANGE] > 0.7)]
+    assert len(plains) > 20 and len(ranges) > 20
+
+    def median_slope(centres):
+        lat, lon = latlon(centres[:20])
+        coords = 100.0 * (np.arange(24) - 12)
+        gx, gy = np.meshgrid(coords, coords)
+        slopes = []
+        for a, b in zip(lat, lon):
+            chart = AzimuthalEquidistantChart(a, b, planet.spec.radius)
+            z, _, _ = planet.sample_dirs(chart.to_dirs(gx, gy), 400.0)
+            slope = biomes.slope_degrees(z.reshape(24, 24), 100.0)
+            slopes.append(np.median(slope[1:-1, 1:-1]))
+        return float(np.median(slopes))
+
+    assert median_slope(plains) < 2.0
+    assert median_slope(ranges) > 10.0
+
+
+def test_dunes_cover_the_desert_plains_only():
+    """Sand seas cover most plains of the desert planet, at any height, and
+    only otherwise flat ground: no range, no tablelands."""
+    planet = Planet(replace(PRESETS["desert"], seed=19))
+    dirs = _random_dirs(40000, seed=7)
+    masks = planet.landform_masks(dirs)
+    low = planet.low_band(dirs)
+    plains = (
+        (low[:, LOW_CONTINENT] > 0.1)
+        & (low[:, LOW_CHARACTER] < 0.1)
+        & (low[:, LOW_RANGE] < 0.01)
+    )
+    assert np.mean(masks["dunes"][plains] > 0.5) > 0.6
+    sand = masks["dunes"] > 0.01
+    assert low[sand, LOW_CHARACTER].max() < 0.3
+    assert low[sand, LOW_RANGE].max() < 0.05
+    # Sand and tablelands share the ground at a region's edge, never more.
+    assert np.all(masks["tablelands"] + masks["dunes"] <= 1.0 + 1e-9)
+    deep = masks["tablelands"] > 0.99
+    assert deep.any() and masks["dunes"][deep].max() < 0.01
+
+
+def test_landforms_and_plates_can_be_turned_off():
+    """Every optional landform off: the elevation is still a sane, repeatable
+    function, and arid land loses its dunes."""
+    desert = replace(PRESETS["desert"], seed=4)
+    off = replace(
+        desert,
+        elevation=replace(desert.elevation, plates=0, dunes=False, tablelands=False),
+    )
+    dirs = _random_dirs(20000, seed=6)
+    a, _, _ = Planet(off).sample_dirs(dirs, 8.0)
+    b, _, _ = Planet(off).sample_dirs(dirs, 8.0)
+    np.testing.assert_array_equal(a, b)
+    assert np.all(np.isfinite(a))
+    on, _, _ = Planet(desert).sample_dirs(dirs, 8.0)
+    assert not np.allclose(a, on)
 
 
 def test_planetary_features_scale_with_the_radius():
@@ -199,6 +289,20 @@ def test_slope_from_normals():
 
 def _positions(chunk):
     return chunk.vertices()["vertex"].astype(np.float64) + chunk.centre
+
+
+def test_vertices_carry_five_weights_and_the_strata_mask():
+    """Beach travels as the rest of the weights; the sixth byte is where the
+    strata tint the ground (a canyon of the desert planet, seed 19)."""
+    desert = replace(PRESETS["desert"], seed=19).resolved()
+    planet = Planet(desert)
+    face, i, j, _, _ = planet.grid.locate(dirs_from_latlon(-0.423, 11.1071), 4)
+    chunk = generate_chunk(desert, (4, int(face[0]), int(i[0]), int(j[0])), 0)
+    vertices = np.frombuffer(chunk.vertex_bytes, VERTEX_DTYPE)[: VERTS * VERTS]
+    stored = np.column_stack([vertices["biome_a"], vertices["biome_b"][:, :1]])
+    beach = 1.0 - stored.sum(axis=1) / 255.0
+    np.testing.assert_allclose(beach, chunk.weights[:, 5] / 255.0, atol=3 / 255)
+    assert vertices["biome_b"][:, 1].max() > 200  # in the tablelands
 
 
 def test_chunk_layout(spec):
@@ -412,12 +516,15 @@ def test_thread_executor_completes(spec):
     keys = [(10, 3, ix, 0) for ix in range(3)]
     executor.request(keys)
     done = []
-    for _ in range(400):
-        done += executor.collect()
-        if len(done) == len(keys):
-            break
-        time.sleep(0.01)
-    executor.shutdown()
+
+    def all_done():
+        done.extend(executor.collect())
+        return len(done) == len(keys)
+
+    try:
+        wait_until(all_done, timeout=10.0, msg="chunks never arrived")
+    finally:
+        executor.shutdown()
     assert sorted(c.key for c in done) == keys
 
 
@@ -525,9 +632,8 @@ def test_lod_pass_cost_is_bounded():
     """Guards the LOD pass from regressing badly (it runs in the frame)."""
     selector = LodSelector(GRID)
     camera = camera_at(40.0, 20.0, 10.0)
-    selector.select(camera, **ALL_READY)  # warm the per-key boxes
-    start = time.perf_counter()
-    selection = selector.select(camera, **ALL_READY)
-    elapsed = time.perf_counter() - start
+    selection = selector.select(camera, **ALL_READY)  # warm the per-key boxes
     assert 300 < len(selection.draw) < 900
-    assert elapsed < 0.05
+    # The best of a few runs: one sample also times the scheduler, a GC pause
+    # or another xdist worker.
+    assert _best_ms(lambda: selector.select(camera, **ALL_READY)) < 50.0 * TIME_SCALE

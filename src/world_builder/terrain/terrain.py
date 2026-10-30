@@ -50,6 +50,7 @@ from panda3d.core import (
     CullBinManager,
     LPoint3f,
     LQuaternionf,
+    LVecBase2f,
     LVecBase3f,
     NodePath,
     PTA_float,
@@ -73,6 +74,7 @@ from world_builder.terrain.materials import (
     MaterialSet,
     load_materials,
     make_noise_texture,
+    make_strata_texture,
     make_texture_array,
 )
 from world_builder.terrain.mesh import build_chunk_node
@@ -83,6 +85,9 @@ from world_builder.terrain.quadtree import (
     make_selector,
 )
 from world_builder.terrain.query import TerrainQuery
+from world_builder.terrain.strata import HIGH as STRATA_HIGH
+from world_builder.terrain.strata import LOW as STRATA_LOW
+from world_builder.terrain.strata import strata_lut
 from world_builder.terrain.workers import ChunkExecutor
 
 SHADER_PATH = Path(__file__).parent / "shaders"
@@ -519,6 +524,11 @@ class Terrain:
         self.root.set_shader_input(
             "uRadialLight", int(getattr(self.spec, "radial_light", True))
         )
+        # The rock strata's tints, by altitude (none: a white texel)
+        strata = getattr(self.planet, "strata", None)
+        lut = None if strata is None else strata_lut(strata)
+        self.root.set_shader_input("uStrata", make_strata_texture(lut))
+        self.root.set_shader_input("uStrataRange", LVecBase2f(STRATA_LOW, STRATA_HIGH))
         for node in self.nodes.values():
             node.remove_node()
         self.nodes.clear()

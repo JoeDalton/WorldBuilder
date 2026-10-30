@@ -7,13 +7,20 @@ each pose it waits until the terrain has finished refining (or a timeout),
 times a few frames, then saves a screenshot::
 
     python scripts/terrain_shots.py [--out DIR] [--level FILE]
-        [--radius METRES] [--pose NAME ...] [--timeout SECONDS]
+        [--planet PRESET] [--seed N] [--start LAT LON] [--radius METRES]
+        [--pose NAME ...]
+        [--timeout SECONDS]
         [--size "1600 900"] [--offscreen]
         [--quality low|mid|high|ultra] [--<part>-quality LEVEL] [--no-clouds]
         [--workers N] [--cloud-debug BITS] [--frames N] [--ocean-debug MODE]
 
     --out            where the PNGs go (default ./terrain_shots)
     --level          the planet's level file (default: the demo level)
+    --planet         overrides the level's planet preset (earthlike, desert,
+                     forest, moon, ice)
+    --seed           overrides the level's seed
+    --start          the ground pose over this latitude and longitude
+                     (degrees), 400 m above the ground
     --radius         overrides the level's planet radius
     --pose           the poses to shoot (default: all, in the order below)
     --timeout        seconds to wait for a pose to settle (default 90)
@@ -71,6 +78,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import (  # noqa: E402
     TerrainDemo,
+    add_planet_arguments,
     add_world_arguments,
     describe_window,
     settings_from_args,
@@ -206,6 +214,7 @@ def main() -> None:
     parser.add_argument(
         "--radius", type=float, default=None, help="planet radius, metres"
     )
+    add_planet_arguments(parser)
     parser.add_argument("--pose", nargs="*", default=None, help="default: all")
     parser.add_argument(
         "--timeout", type=float, default=90.0, help="seconds to settle a pose"
@@ -236,6 +245,9 @@ def main() -> None:
         clouds=not args.no_clouds,
         cloud_debug=args.cloud_debug,
         ocean_debug=args.ocean_debug,
+        preset=args.planet,
+        seed=args.seed,
+        start=args.start,
     )
     demo.setFrameRateMeter(False)
     print(describe_window(demo), f"settings {settings.to_dict()}")

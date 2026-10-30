@@ -37,8 +37,9 @@ BIOME_COLORS = np.array(
     ]
 )
 
-#: Slopes, in degrees, over which ground turns to rock.
-ROCK_SLOPE = (30.0, 48.0)
+#: Slopes, in degrees, over which ground turns to rock. Above dunes' slip
+#: faces (about 33), so sand stays sand.
+ROCK_SLOPE = (35.0, 48.0)
 #: Altitude, in metres, below which the coast is beach. Above zero, to clear
 #: the ocean swell, which lifts the water near the camera.
 BEACH_TOP = 6.0
@@ -79,6 +80,17 @@ def slope_from_normals(normals: np.ndarray, up: np.ndarray) -> np.ndarray:
     return np.degrees(np.arccos(cos))
 
 
+def aridity(temperature: np.ndarray, humidity: np.ndarray) -> np.ndarray:
+    """How much of a desert the climate makes: dryness, sparing only the
+    cold (steppe, tundra). Also what shapes the planet's desert landforms.
+
+    :param temperature: degrees Celsius
+    :param humidity: in [0, 1]
+    :returns: in [0, 1]
+    """
+    return smoothstep(6.0, 14.0, temperature) * (1.0 - smoothstep(0.16, 0.38, humidity))
+
+
 def weights(
     temperature: np.ndarray,
     humidity: np.ndarray,
@@ -104,8 +116,7 @@ def weights(
     w = np.zeros((t.size, len(BIOMES)))
 
     snow = 1.0 - smoothstep(-8.0, 1.5, t)
-    # Dryness makes desert; only the cold (steppe, tundra) is spared.
-    desert = smoothstep(6.0, 14.0, t) * (1.0 - smoothstep(0.16, 0.38, h))
+    desert = aridity(t, h)
     # Trees need water, and neither frost nor scorching heat: the cold edge is
     # the tree line on mountain flanks.
     forest = (

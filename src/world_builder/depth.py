@@ -215,7 +215,7 @@ class SplitDepthCameras:
     :ivar far: the current far distance, metres
     """
 
-    def __init__(self, app: Any, near: float = 1.0, overlap: float = 1.02) -> None:
+    def __init__(self, app: Any, near: float = 1.0, overlap: float = 1.0001) -> None:
         """
         :param app: the ShowBase (``camera``, ``cam``, ``camLens``, ``win``)
         :param near: near plane of the near camera, metres
