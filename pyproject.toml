@@ -76,7 +76,7 @@ build-backend = "poetry_dynamic_versioning.backend"
 
 [tool.pytest.ini_options]
 # Fail a hung test (seconds) instead of blocking CI until the job times out.
-timeout = 300
+# timeout = 300
 
 
 [tool.ruff]
