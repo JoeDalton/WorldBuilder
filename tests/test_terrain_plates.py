@@ -165,20 +165,21 @@ def test_cells_are_a_voronoi_partition():
 def test_strata_shape_walls():
     layers = strata.make_strata(11)
     assert np.all(np.diff(layers.runs) > 0.0)
-    assert np.all(np.diff(layers.heights) >= 0.0)
+    assert np.all(np.diff(layers.heights) > 0.0)
     assert 0.2 < layers.hard.mean() < 0.5
     # A wall climbs from its foot to the ceiling, never past either.
     foot = np.full(4000, 300.0)
     s = np.linspace(-50.0, 3000.0, 4000)
     wall = layers.profile(foot, s, foot + 600.0)
     assert np.all(np.diff(wall) >= -1e-9)
-    assert wall[0] == 300.0 and wall[-1] == pytest.approx(900.0)
+    assert wall[0] == pytest.approx(300.0) and wall[-1] == pytest.approx(900.0)
     # Hard layers stand steeper than soft ones; their tops are ledges.
     slope = np.degrees(np.arctan(np.gradient(wall, s)))
     layer = np.searchsorted(layers.tops, wall)
     rising = (wall > 300.5) & (wall < 899.5)
-    hard = rising & layers.hard[layer] & (slope > 1.0)
-    soft = rising & ~layers.hard[layer] & (slope > 1.0)
+    walls = rising & (slope > strata.LEDGE_SLOPE + 1.0)
+    hard = walls & layers.hard[layer]
+    soft = walls & ~layers.hard[layer]
     assert np.median(slope[hard]) == pytest.approx(strata.HARD_SLOPE, abs=1.0)
     assert np.median(slope[soft]) == pytest.approx(strata.SOFT_SLOPE, abs=1.0)
     # A talus at the foot: the gentler debris slope first.
@@ -187,10 +188,42 @@ def test_strata_shape_walls():
     talus_slope = np.degrees(np.arctan(np.gradient(talus, s)))[debris]
     assert np.median(talus_slope) == pytest.approx(strata.TALUS_SLOPE, abs=1.0)
     assert talus[-1] == pytest.approx(900.0)
-    ledges = np.isin(np.round(wall, 6), np.round(layers.tops[layers.hard], 6))
-    assert np.any(ledges & (slope < 1.0))
+    # Each hard layer's top is a ledge, shedding gently outward.
+    ledges = rising & (np.abs(slope - strata.LEDGE_SLOPE) < 1.0)
+    assert np.any(ledges)
+    assert np.all(layers.hard[layer[ledges]])
+    assert np.all(layers.tops[layer[ledges]] - wall[ledges] < 5.0)
     lut = strata.strata_lut(layers)
     assert lut.shape == (1024, 3) and lut.min() >= 0.5
+
+
+@pytest.mark.parametrize("seed", [11, 19131, 4])
+def test_strata_run_inverts_rise(seed):
+    """A wall's run and its rise are inverses at every altitude. Where they
+    were not (above each ledge), a talus ended in a slot, its wall rising
+    from below the talus' top."""
+    layers = strata.make_strata(seed)
+    altitude = np.linspace(strata.LOW, strata.HIGH, 200001)
+    np.testing.assert_allclose(layers.rise(layers.run(altitude)), altitude, atol=1e-6)
+
+
+def test_strata_walls_are_continuous():
+    """No step anywhere on a wall: not at its talus' top, nor where its foot
+    crosses a ledge's altitude."""
+    layers = strata.make_strata(11)
+    cliff = math.tan(math.radians(strata.HARD_SLOPE))
+    ledge = math.tan(math.radians(strata.LEDGE_SLOPE))
+    step = 0.1
+    s = np.arange(-20.0, 1500.0, step)
+    for foot in np.linspace(0.0, 3000.0, 13):
+        wall = layers.profile(np.full(len(s), foot), s, foot + 600.0, 100.0)
+        rise = np.diff(wall)
+        assert rise.min() >= -1e-9 and rise.max() <= step * cliff + 1e-6
+    # Across the walls, their feet rising: at most a cliff over a ledge.
+    feet = np.arange(0.0, 3000.0, step)
+    for into in (50.0, 200.0, 600.0):
+        wall = layers.profile(feet, np.full(len(feet), into), feet + 600.0, 100.0)
+        assert np.abs(np.diff(wall)).max() <= step * cliff / ledge + 1e-6
 
 
 def _tableland(points, stage, min_wavelength=None):
@@ -212,14 +245,35 @@ def _tableland(points, stage, min_wavelength=None):
 
 @pytest.mark.parametrize("stage", [0.1, 0.9])
 def test_tablelands_are_continuous(stage):
-    """No jump anywhere: cell edges, dropped tables and spires included."""
+    """No jump anywhere: cell edges, dropped tables and spires included,
+    and the talus' top at every altitude (the valley floor rises across the
+    country, through the strata)."""
     dirs, points = _chart_grid(400, 50.0)
-    step = np.array([1.0, 0.0, 0.0]) * 2.0
-    h = _tableland(points, stage)
-    moved = _tableland(points + step, stage)
-    # 2 m apart: a steep wall's rise over 2 m (an 80 degree cliff: 11 m,
-    # steeper where the walls are crenellated), never a table's height.
-    assert np.abs(moved - h).max() < 30.0
+    n = len(points)
+    floor = 400.0 + 0.05 * (points[:, 1] - points[:, 1].min())
+
+    def heights(points):
+        return landforms.tablelands(
+            points,
+            floor,
+            np.ones(n),
+            np.full(n, stage),
+            np.full(n, 500.0),
+            strata.make_strata(11),
+            4000.0,
+            1200.0,
+            25.0,
+            7,
+            None,
+        )
+
+    step = 0.5
+    h = heights(points)
+    moved = heights(points + np.array([step, 0.0, 0.0]))
+    # Half a metre apart: an 80 degree cliff's rise (steeper where the walls
+    # are crenellated: twice at most), never a step.
+    cliff = math.tan(math.radians(strata.HARD_SLOPE))
+    assert np.abs(moved - h).max() < 2.0 * cliff * step
     assert h.min() >= 0.0 and h.max() <= 525.0 + 1e-6
 
 

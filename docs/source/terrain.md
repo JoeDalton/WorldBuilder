@@ -68,8 +68,8 @@ The elevation is built up in stages:
    a few inside plates, from a noise mask).
 5. Hills, then detail, scaled by the region's character and, near the sea,
    its coast style.
-6. Desert landforms on arid land (`terrain.landforms`): dunes, mesas,
-   canyons.
+6. Desert landforms on arid land (`terrain.landforms`): dunes, and
+   tablelands (canyons, mesas, buttes, spires).
 7. Stamps.
 
 **Plates.** A planet has `ElevationParams.plates` of them (14; 0 for none,
@@ -101,7 +101,7 @@ field) to rugged (islets and inlets).
 only where it is:
 
 - `dunes`: sand seas on every arid plain, at any height, but only on
-  otherwise flat ground: no range, no mesas, no canyons (the hills are
+  otherwise flat ground: no range, no tablelands (the hills are
   flattened under them). On the desert planet they cover most plains. The
   dunes are those of the Sandastray game: nine stretched noise layers, 42 m
   to 1.4 km, combined in order by min (sharp crests), add and multiply, with
@@ -116,9 +116,10 @@ only where it is:
   where whole tables have gone, leaving rounded mesas, and buttes and
   spires (`spire_cell`) standing on the plain. The walls take their shape
   from the planet's rock strata (`terrain.strata`): level layers 20-250 m
-  thick, hard ones standing as 80° cliffs with a ledge on top, soft ones as
-  50° slopes, and a 30° talus at the foot. Coarse chunks average the
-  cross-section over their spacing, so the cliffs blur instead of stepping.
+  thick, hard ones standing as 80° cliffs with a ledge on top (shedding
+  outward at 8°), soft ones as 50° slopes, and a 30° talus at the foot.
+  Coarse chunks average the cross-section over their spacing, so the cliffs
+  blur instead of stepping.
 
 **Strata colours.** The layers are tinted (placeholder colours: grey, red,
 ochre, buff, pale, brown), and the shader tints the ground by altitude from
@@ -132,8 +133,8 @@ dimension, peaks per area of mountains, and land heights.
 
 Detail is band-limited to the chunk's vertex spacing: octaves shorter than
 about four samples fade out, so coarse chunks never alias. Dunes fade by
-harmonic, the same way; mesa and canyon edges widen with the spacing, then
-fade to their mean height; terraces fade out. Fields with nothing
+harmonic, the same way; the tablelands average their walls' cross-section
+over the spacing, so the cliffs blur instead of stepping. Fields with nothing
 shorter than about 10 km (the "low band") are sampled on a lattice of each
 cube face (230 m at 600 km, scaled with the features) and interpolated. That
 costs under 5 cm of error and saves about half the time.

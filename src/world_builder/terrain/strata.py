@@ -2,9 +2,10 @@
 Rock strata: the level layers a planet's tablelands are cut into.
 
 One table per planet: from :data:`LOW` to :data:`HIGH` metres above sea
-level, layers 30 to 220 m thick, about one in three hard. A tableland's
+level, layers 20 to 250 m thick, about one in three hard. A tableland's
 walls take their shape from it: a hard layer stands as a cliff with a narrow
-ledge on its top, a soft one weathers back to a slope. The layers are level
+ledge on its top, shedding gently outward, a soft one weathers back to a
+slope. The layers are level
 and shared, so the same cliff and the same ledge stand at the same height on
 every mesa and butte, and the shader tints the ground by the same table
 (:func:`strata_lut`): bands that line up across the whole country.
@@ -29,6 +30,10 @@ LOW, HIGH = -500.0, 6000.0
 #: Wall slopes, degrees: hard layers stand as cliffs, soft ones as steep
 #: slopes; the debris at a wall's foot (its talus) lies at a gentler one.
 HARD_SLOPE, SOFT_SLOPE, TALUS_SLOPE = 80.0, 50.0, 30.0
+#: A hard layer's ledge sheds outward at this slope, degrees: a wall's
+#: altitude then rises strictly with its run, so :meth:`Strata.run` is the
+#: exact inverse of :meth:`Strata.rise` (a level ledge has no single run).
+LEDGE_SLOPE = 8.0
 #: Placeholder tints of the layers (albedo multipliers): grey, red, ochre,
 #: buff, pale, brown.
 PALETTE = np.array(
@@ -50,8 +55,8 @@ class Strata:
     :ivar tops: (L,) each layer's top, metres above sea level
     :ivar hard: (L,) bool, whether the layer stands as a cliff
     :ivar tints: (L, 3) albedo multipliers
-    :ivar heights: (M,) altitudes of the run's nodes, non-decreasing (a
-        ledge repeats its altitude)
+    :ivar heights: (M,) altitudes of the run's nodes, increasing (a ledge
+        climbs its last metres)
     :ivar runs: (M,) the run at each node, increasing
     """
 
@@ -63,10 +68,8 @@ class Strata:
 
     def run(self, altitude: np.ndarray) -> np.ndarray:
         """:returns: the horizontal run of a wall from :data:`LOW` up to
-        *altitude*, metres (to the foot of a ledge at that altitude)"""
-        # A ledge's two nodes share an altitude: interpolate on the first.
-        first = np.r_[True, np.diff(self.heights) > 0.0]
-        return np.interp(altitude, self.heights[first], self.runs[first])
+        *altitude*, metres"""
+        return np.interp(altitude, self.heights, self.runs)
 
     def rise(self, run: np.ndarray) -> np.ndarray:
         """:returns: the altitude a wall reaches after *run* metres"""
@@ -119,12 +122,15 @@ def make_strata(seed: int) -> Strata:
     heights, runs = [LOW], [0.0]
     bottom = LOW
     for top, is_hard in zip(tops, hard):
-        slope = HARD_SLOPE if is_hard else SOFT_SLOPE
-        runs.append(runs[-1] + (top - bottom) / math.tan(math.radians(slope)))
+        if is_hard:  # a cliff, then its ledge up to the top
+            ledge = rng.uniform(10.0, 30.0)
+            lip = top - ledge * math.tan(math.radians(LEDGE_SLOPE))
+            runs.append(runs[-1] + (lip - bottom) / math.tan(math.radians(HARD_SLOPE)))
+            heights.append(lip)
+            runs.append(runs[-1] + ledge)
+        else:
+            runs.append(runs[-1] + (top - bottom) / math.tan(math.radians(SOFT_SLOPE)))
         heights.append(top)
-        if is_hard:  # its ledge
-            runs.append(runs[-1] + rng.uniform(10.0, 30.0))
-            heights.append(top)
         bottom = top
     return Strata(
         tops=tops,

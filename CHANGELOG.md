@@ -131,7 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     by valleys that widen with a regional erosion stage, from narrow
     canyons to plains with rounded mesas, buttes and spires, their walls
     shaped by the planet's rock strata (`terrain.strata`: hard layers in
-    cliffs with ledges, soft ones in slopes, a talus at the foot) and
+    cliffs with ledges shedding gently outward, soft ones in slopes, a
+    talus at the foot; the wall rises straight on from the talus' top) and
     tinted by them in bands (a strata mask in each vertex's sixth biome
     byte). All band limited: coarse chunks keep their mean height.
     Tableland chunks cost about 4 times the others (23 ms against 6 ms);
@@ -142,7 +143,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `plates=0` saves most of it.
   `scripts/terrain_metrics.py` measures flatness, slopes, coast roughness
   and peaks per preset. `scripts/find_landforms.py` finds places over each
-  desert landform (sand seas, canyons, mesas), and the demos (`demo_terrain.py`, `demo_world.py`,
+  desert landform (sand seas, canyons by depth, mesas by relief), and the demos (`demo_terrain.py`, `demo_world.py`,
   `terrain_shots.py`) take `--planet PRESET`, `--seed N` and
   `--start LAT LON`.
 - Asteroid fields without thresholds (#14):
