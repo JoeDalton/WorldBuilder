@@ -12,7 +12,11 @@ import numpy as np
 import pytest
 
 from world_builder.terrain import biomes
-from world_builder.terrain.chart import AzimuthalEquidistantChart, TangentFrame
+from world_builder.terrain.chart import (
+    AzimuthalEquidistantChart,
+    TangentFrame,
+    latlon,
+)
 from world_builder.terrain.chunkgen import (
     QUADS,
     VERTS,
@@ -23,6 +27,10 @@ from world_builder.terrain.chunkgen import (
 )
 from world_builder.terrain.cubesphere import CubeGrid, face_dirs, grid_for
 from world_builder.terrain.planet import (
+    LOW_CHARACTER,
+    LOW_CONTINENT,
+    LOW_RANGE,
+    PLANET_HEIGHT_BOUNDS,
     PRESETS,
     REFERENCE_RADIUS_M,
     Planet,
@@ -61,7 +69,7 @@ def test_sea_bias_sets_the_ocean_fraction(spec, planet):
     rng = np.random.default_rng(99)
     dirs = rng.normal(size=(20000, 3))
     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
-    continent = planet.low_band(dirs)[:, 3]
+    continent = planet.low_band(dirs)[:, LOW_CONTINENT]
     assert np.mean(continent < 0.0) == pytest.approx(
         spec.elevation.ocean_fraction, abs=0.03
     )
@@ -99,6 +107,65 @@ def test_temperature_falls_with_altitude(planet):
     t = np.array([15.0, 15.0])
     cooled = planet.lapse(t, np.array([0.0, 2000.0]))
     assert cooled[1] == pytest.approx(15.0 - 13.0)
+
+
+def _random_dirs(n, seed=0):
+    dirs = np.random.default_rng(seed).normal(size=(n, 3))
+    return dirs / np.linalg.norm(dirs, axis=1, keepdims=True)
+
+
+@pytest.mark.parametrize("radius", [600e3, 2400e3])
+@pytest.mark.parametrize("preset", sorted(PRESETS))
+def test_heights_stay_within_the_bounds(preset, radius):
+    """The LOD pass assumes ungenerated ground lies within these."""
+    planet = Planet(replace(PRESETS[preset], seed=3, radius=radius))
+    elevation, _, _ = planet.sample_dirs(_random_dirs(60000), 400.0)
+    lo, hi = PLANET_HEIGHT_BOUNDS
+    assert lo < elevation.min() and elevation.max() < hi
+
+
+def test_plains_are_flat_and_ranges_rough(planet):
+    """Plains (low character, no range) are nearly flat; ranges are not."""
+    dirs = _random_dirs(4000, seed=5)
+    low = planet.low_band(dirs)
+    land = low[:, LOW_CONTINENT] > 0.1
+    plains = dirs[land & (low[:, LOW_CHARACTER] < 0.05) & (low[:, LOW_RANGE] < 0.01)]
+    ranges = dirs[land & (low[:, LOW_RANGE] > 0.7)]
+    assert len(plains) > 20 and len(ranges) > 20
+
+    def median_slope(centres):
+        lat, lon = latlon(centres[:20])
+        coords = 100.0 * (np.arange(24) - 12)
+        gx, gy = np.meshgrid(coords, coords)
+        slopes = []
+        for a, b in zip(lat, lon):
+            chart = AzimuthalEquidistantChart(a, b, planet.spec.radius)
+            z, _, _ = planet.sample_dirs(chart.to_dirs(gx, gy), 400.0)
+            slope = biomes.slope_degrees(z.reshape(24, 24), 100.0)
+            slopes.append(np.median(slope[1:-1, 1:-1]))
+        return float(np.median(slopes))
+
+    assert median_slope(plains) < 2.0
+    assert median_slope(ranges) > 10.0
+
+
+def test_landforms_and_plates_can_be_turned_off():
+    """Every optional landform off: the elevation is still a sane, repeatable
+    function, and arid land loses its dunes."""
+    desert = replace(PRESETS["desert"], seed=4)
+    off = replace(
+        desert,
+        elevation=replace(
+            desert.elevation, plates=0, dunes=False, mesas=False, canyons=False
+        ),
+    )
+    dirs = _random_dirs(20000, seed=6)
+    a, _, _ = Planet(off).sample_dirs(dirs, 8.0)
+    b, _, _ = Planet(off).sample_dirs(dirs, 8.0)
+    np.testing.assert_array_equal(a, b)
+    assert np.all(np.isfinite(a))
+    on, _, _ = Planet(desert).sample_dirs(dirs, 8.0)
+    assert not np.allclose(a, on)
 
 
 def test_planetary_features_scale_with_the_radius():

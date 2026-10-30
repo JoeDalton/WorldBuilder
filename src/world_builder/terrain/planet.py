@@ -9,13 +9,20 @@ Elevation, in metres above sea level, sums these layers at the sample point
 
 1. **warp**: displace p by a smooth vector field, which bends coastlines and
    ranges into meanders
-2. **continents**: low-frequency fBm through a smooth curve (abyss, shelf,
-   coast, plains, highlands). The sea bias is set so ``ocean_fraction`` of the
-   sphere lies below sea level
-3. **mountains**: ridged multifractal, masked into ranges, on land only
+2. **continents**: low-frequency fBm, plus the tectonic plates' crust and
+   belts (:mod:`plates`), through a smooth curve (abyss, shelf, coast,
+   plains, highlands). The sea bias is set so ``ocean_fraction`` of the
+   sphere lies below sea level. Plates also add mid-ocean ridges and rifts
+3. **mountains**: ridged multifractal through a crest profile, under a
+   summit level that varies along each range (massifs), masked into ranges
+   (the plates' closing belts, and a few from a noise mask), on land only
 4. **hills**, then **detail**: fBm down to the sampling resolution (band
-   limited, so coarse samples never alias detail they cannot represent)
-5. **stamps**: hand-made heightmaps, in list order
+   limited, so coarse samples never alias detail they cannot represent),
+   scaled by the region's character (plains to rough country) and, near the
+   sea, its coast style (smooth to rugged)
+5. **desert landforms** on arid land (:mod:`landforms`): dunes, mesas and
+   terraces, canyons
+6. **stamps**: hand-made heightmaps, in list order
 
 Planet scale: the radius is the one knob. :class:`ElevationParams` and
 :class:`ClimateParams` hold the planetary-scale lengths (warp, continents,
@@ -24,8 +31,9 @@ multiplies them by ``feature_scale`` (radius / reference unless set), so a
 bigger planet gets bigger continents. Ground-level character (hills, detail,
 local climate patches) stays in absolute metres at every radius.
 
-Fields with no wavelength below ~10 km (warp, continents, the mountain mask,
-the base climate) are the "low band". :meth:`Planet.sample_face_grid` evaluates
+Fields with no wavelength below ~10 km (warp, continents, plates, the range
+mask, character, coast style, the base climate and the desert masks) are the
+"low band". :meth:`Planet.sample_face_grid` evaluates
 them on a fixed lattice of each cube face (see :mod:`cubesphere`) and
 interpolates (Catmull-Rom), which halves the cost of a fine chunk. The lattice
 is global, so every LOD level interpolates the same nodes and the levels agree.
@@ -40,9 +48,12 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+from world_builder.terrain import landforms
+from world_builder.terrain.biomes import aridity
 from world_builder.terrain.chart import dirs_from_latlon, latlon
 from world_builder.terrain.cubesphere import face_dirs, grid_for
 from world_builder.terrain.noise import fbm, native_library, ridged, smoothstep, warp
+from world_builder.terrain.plates import PlateFields, make_plates, plate_fields
 
 #: Default terrain planet radius, metres (a small, Kerbin-like world).
 TERRAIN_RADIUS_M = 600e3
@@ -69,6 +80,44 @@ _SEED_DETAIL = 67
 _SEED_TEMPERATURE = 79
 _SEED_HUMIDITY = 83
 _SEED_JITTER = 97
+_SEED_CHARACTER = 101
+_SEED_COAST = 103
+_SEED_PLATES = 107
+_SEED_MASSIF = 109
+_SEED_ERG = 113
+_SEED_DUNES = 127
+_SEED_MESAS = 131
+_SEED_CANYONS = 137
+
+# Columns of the low band (:meth:`Planet.low_band`).
+LOW_WARP = slice(0, 3)
+LOW_CONTINENT = 3
+LOW_RANGE = 4
+LOW_TEMPERATURE = 5
+LOW_HUMIDITY = 6
+LOW_CHARACTER = 7
+LOW_COAST = 8
+LOW_TECTONIC = 9
+LOW_ARID = 10
+LOW_ERG = 11
+LOW_CHANNELS = 12
+
+#: Mountain height (fraction of the range's summit level) against the ridged
+#: crest field: broad valley floors, steep flanks, sharp crests. The crest
+#: field's median is about 0.47, so a range is mostly mountain, not spikes.
+MOUNTAIN_PROFILE = (
+    (0.0, 0.0),
+    (0.1, 0.05),
+    (0.3, 0.18),
+    (0.5, 0.42),
+    (0.7, 0.72),
+    (0.9, 0.97),
+    (1.0, 1.0),
+)
+
+#: Continental-field distance from the coast over which the coast style
+#: replaces the inland relief (about 4 km of shelf and shore)
+COAST_ZONE = 0.06
 
 
 @dataclass(frozen=True)
@@ -107,14 +156,54 @@ class ElevationParams:
     )
     mountain_wavelength: float = 40e3
     mountain_octaves: int = 8
-    #: Height of the tallest crests (the ridged field cubed, so most of a
-    #: range is far lower and the peaks stand out); scaled by sqrt(feature
-    #: scale) within :data:`MOUNTAIN_SCALE_RANGE`
+    #: Height of the tallest crests (through :data:`MOUNTAIN_PROFILE`, under
+    #: a summit level that varies from massif to massif); scaled by
+    #: sqrt(feature scale) within :data:`MOUNTAIN_SCALE_RANGE`
     mountain_height: float = 4800.0
     #: At least ~3x the mountain wavelength, or a range is a single ridge
     mountain_mask_wavelength: float = 140e3
     #: Raises (positive) or lowers the share of land that is mountain range
     mountain_coverage: float = 0.0
+    #: Tectonic plates (:mod:`plates`); 0 = none, the ranges then come from
+    #: the noise mask alone
+    plates: int = 14
+    #: The warp bending plate edges (scaled); keep the ratio near 0.06
+    plate_warp_wavelength: float = 500e3
+    plate_warp_amplitude: float = 30e3
+    #: Half-width of the belt along a plate boundary: mountains where plates
+    #: close, a ridge or rift where they open (scaled)
+    belt_width: float = 80e3
+    #: Pull of each plate's crust on the continental field, so that some
+    #: coasts follow plate edges
+    plate_crust: float = 0.2
+    #: Rise of the continental field along closing plate edges: their
+    #: mountain belts stand on land (island arcs, coastal ranges)
+    plate_uplift: float = 0.15
+    #: Mid-ocean ridge height and rift valley depth where plates open, metres
+    ridge_height: float = 1200.0
+    rift_depth: float = 500.0
+    #: Size of the regions of plains or rough country (scaled)
+    character_wavelength: float = 250e3
+    #: Size of the stretches of smooth or rugged coast (scaled)
+    coast_wavelength: float = 200e3
+    #: Desert landforms on arid land (:mod:`landforms`); each costs only
+    #: where it is. Sand seas (ergs) of dunes on arid plains:
+    dunes: bool = True
+    #: Size of the patches of arid plain that are sand seas (scaled)
+    erg_wavelength: float = 150e3
+    #: Dune crest spacing, metres, and slip-face slope, degrees (their
+    #: height follows: about 49 m at 450 m and 32 degrees)
+    dune_wavelength: float = 450.0
+    dune_slip: float = 28.0
+    #: Mesas and terraced slopes on arid uplands
+    mesas: bool = True
+    mesa_wavelength: float = 8e3
+    mesa_height: float = 300.0
+    terrace_step: float = 80.0
+    #: Canyons cut into arid uplands
+    canyons: bool = True
+    canyon_wavelength: float = 40e3
+    canyon_depth: float = 900.0
     hills_wavelength: float = 14e3
     hills_octaves: int = 5
     hills_height: float = 320.0
@@ -239,6 +328,10 @@ PRESETS: dict[str, PlanetSpec] = {
         has_vegetation=False,
         elevation=ElevationParams(
             ocean_fraction=0.4,
+            plates=0,
+            dunes=False,
+            mesas=False,
+            canyons=False,
             mountain_coverage=-0.1,
             hills_height=260.0,
             detail_height=30.0,
@@ -289,6 +382,12 @@ def scaled_params(spec: PlanetSpec) -> tuple[ElevationParams, ClimateParams]:
         continent_wavelength=e.continent_wavelength * s,
         mountain_wavelength=e.mountain_wavelength * s,
         mountain_mask_wavelength=e.mountain_mask_wavelength * s,
+        plate_warp_wavelength=e.plate_warp_wavelength * s,
+        plate_warp_amplitude=e.plate_warp_amplitude * s,
+        belt_width=e.belt_width * s,
+        character_wavelength=e.character_wavelength * s,
+        coast_wavelength=e.coast_wavelength * s,
+        erg_wavelength=e.erg_wavelength * s,
         mountain_height=e.mountain_height * min(max(s**0.5, lo), hi),
         feature_scale=s,
     )
@@ -354,6 +453,8 @@ class Planet:
         points = np.array(self.elevation.continent_curve)
         self._continent_curve = Pchip(points[:, 0], points[:, 1])
         self._curve_range = (points[0, 0], points[-1, 0])
+        profile = np.array(MOUNTAIN_PROFILE)
+        self._mountain_profile = Pchip(profile[:, 0], profile[:, 1])
         self._stamp_bases: dict[int, float] = {}
 
     # ── low band ───────────────────────────────────────────────────────────────
@@ -362,15 +463,44 @@ class Planet:
         """Fields with no detail below ~10 km, safe to interpolate.
 
         :param dirs: (N, 3) unit vectors
-        :returns: (N, 7): warp displacement xyz (metres), continental field
-            (sea bias removed), mountain mask, base temperature, base humidity
+        :returns: (N, :data:`LOW_CHANNELS`), columns ``LOW_*``: warp
+            displacement xyz (metres), continental field (sea bias removed),
+            range mask in [0, 1], base temperature, base humidity, character
+            (0 plains, 1 rough country), coast style (0 smooth, 1 rugged) and
+            the plates' ridges and rifts (metres), arid land and sand seas
+            (both in [0, 1])
         """
         spec = self.spec
         e, c = self.elevation, self.climate
         seed = spec.seed * 1000
-        p, q, continent = self._continental(dirs)
+        p, q, continent, plates = self._continental(dirs)
         continent = continent - spec.sea_bias
         mask = fbm(q, e.mountain_mask_wavelength, 3, seed + _SEED_MASK)
+        character = smoothstep(
+            -0.3, 0.3, fbm(q, e.character_wavelength, 2, seed + _SEED_CHARACTER)
+        )
+        coast = smoothstep(
+            -0.25, 0.25, fbm(q, e.coast_wavelength, 2, seed + _SEED_COAST)
+        )
+        cover = e.mountain_coverage
+        # Massifs: a range's summit level rises and falls along it, so it is
+        # a row of mountain groups with lower passes between.
+        massif = ridged(q, 2.5 * e.mountain_wavelength, 2, seed + _SEED_MASSIF)
+        if plates is None:
+            ranges = smoothstep(-0.05 - cover, 0.3 - cover, mask)
+            tectonic = np.zeros(len(dirs))
+        else:
+            # Belts along closing plate edges, broken where the mask is low;
+            # the mask alone still raises a few ranges inside the plates.
+            belts = plates.convergent * smoothstep(-0.45, -0.2, mask + cover)
+            ranges = np.maximum(belts, smoothstep(0.25 - cover, 0.5 - cover, mask))
+            sea = 1.0 - smoothstep(-0.1, 0.0, continent)
+            tectonic = plates.divergent * (
+                e.ridge_height * sea - e.rift_depth * (1.0 - sea)
+            )
+            # Plates sliding past each other leave long, straight coasts.
+            coast = coast * (1.0 - plates.transform)
+        ranges = ranges * (0.45 + 0.55 * massif)
         lat, _ = latlon(dirs)
         temperature = (
             c.temperature_mean
@@ -387,13 +517,37 @@ class Planet:
         humidity = c.humidity_mean + c.humidity_spread * 2.0 * fbm(
             p, c.humidity_wavelength, c.humidity_octaves, seed + _SEED_HUMIDITY
         )
-        return np.column_stack([q - p, continent, mask, temperature, humidity])
+        # Arid land, from the climate at sea level (the altitude's cooling
+        # would make the shape depend on itself), and its sand seas: plains,
+        # away from ranges.
+        arid = aridity(temperature, humidity) * smoothstep(0.0, 0.08, continent)
+        erg = (
+            arid
+            * (1.0 - character)
+            * (1.0 - smoothstep(0.0, 0.3, ranges))
+            * smoothstep(-0.1, 0.15, fbm(q, e.erg_wavelength, 2, seed + _SEED_ERG))
+        )
+        return np.column_stack(
+            [
+                q - p,
+                continent,
+                ranges,
+                temperature,
+                humidity,
+                character,
+                coast,
+                tectonic,
+                arid,
+                erg,
+            ]
+        )
 
     def _continental(
         self, dirs: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """:returns: the sample points p (metres), the warped points q, and
-        the continental field at q, sea bias not removed"""
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, PlateFields | None]:
+        """:returns: the sample points p (metres), the warped points q, the
+        continental field at q (sea bias not removed, plate crust included)
+        and the plates' fields (None without plates)"""
         e = self.elevation
         seed = self.spec.seed * 1000
         p = dirs * self.spec.radius
@@ -401,7 +555,24 @@ class Planet:
         continent = fbm(
             q, e.continent_wavelength, e.continent_octaves, seed + _SEED_CONTINENT
         )
-        return p, q, continent
+        if e.plates <= 0:
+            return p, q, continent, None
+        x = warp(
+            q, e.plate_warp_wavelength, e.plate_warp_amplitude, 2, seed + _SEED_PLATES
+        )
+        x /= np.linalg.norm(x, axis=1, keepdims=True)
+        plates = plate_fields(
+            make_plates(seed + _SEED_PLATES, e.plates),
+            x,
+            self.spec.radius,
+            e.belt_width,
+        )
+        continent = (
+            continent
+            + e.plate_crust * plates.crust
+            + e.plate_uplift * plates.convergent
+        )
+        return p, q, continent, plates
 
     # ── full evaluation ────────────────────────────────────────────────────────
 
@@ -413,7 +584,8 @@ class Planet:
         Stamps are not applied here; see :meth:`sample_face_grid`.
 
         :param dirs: (N, 3) unit vectors
-        :param low: (N, 7) low band at the same points (:meth:`low_band`)
+        :param low: (N, :data:`LOW_CHANNELS`) low band at the same points
+            (:meth:`low_band`)
         :param min_wavelength: shortest wavelength to keep, metres; None = all
         :returns: elevation (metres), base temperature, humidity; each (N,)
         """
@@ -421,15 +593,22 @@ class Planet:
         e = self.elevation
         seed = spec.seed * 1000
         p = dirs * spec.radius
-        q = p + low[:, 0:3]
-        continent = low[:, 3]
+        q = p + low[:, LOW_WARP]
+        continent = low[:, LOW_CONTINENT]
         lo, hi = self._curve_range
-        base = self._continent_curve(np.clip(continent, lo, hi))
+        base = self._continent_curve(np.clip(continent, lo, hi)) + low[:, LOW_TECTONIC]
         land = smoothstep(0.0, 0.08, continent)
+        range_mask = low[:, LOW_RANGE]
 
-        range_mask = smoothstep(
-            -0.05 - e.mountain_coverage, 0.3 - e.mountain_coverage, low[:, 4]
-        )
+        # Relief of hills and detail: low on plains, high in rough country
+        # and ranges; near the coast the coast style takes over, so a smooth
+        # coast follows the continental field and a rugged one keeps islets.
+        rough = np.maximum(low[:, LOW_CHARACTER], range_mask * land)
+        shore = 1.0 - smoothstep(0.0, COAST_ZONE, np.abs(continent))
+        coast = low[:, LOW_COAST]
+        relief = (0.12 + 1.08 * rough) * (1.0 - shore) + (0.04 + 1.16 * coast) * shore
+        fine = (0.3 + 0.7 * rough) * (1.0 - shore) + (0.1 + 0.9 * coast) * shore
+
         mountains = np.zeros(len(dirs))
         active = range_mask * land > 1e-4
         if np.any(active):
@@ -441,7 +620,9 @@ class Planet:
                 min_wavelength=min_wavelength,
             )
             mountains[active] = (
-                e.mountain_height * crest**3 * (range_mask * land)[active]
+                e.mountain_height
+                * self._mountain_profile(np.clip(crest, 0.0, 1.0))
+                * (range_mask * land)[active]
             )
 
         hills = (
@@ -453,7 +634,7 @@ class Planet:
                 seed + _SEED_HILLS,
                 min_wavelength=min_wavelength,
             )
-            * (0.4 + 0.6 * land)
+            * relief
         )
         detail = (
             e.detail_height
@@ -464,16 +645,86 @@ class Planet:
                 seed + _SEED_DETAIL,
                 min_wavelength=min_wavelength,
             )
+            * fine
             * (1.0 + 2.0 * range_mask * land)
+            # Sand seas are smooth.
+            * (1.0 - 0.8 * low[:, LOW_ERG])
         )
-        elevation = base + mountains + hills + detail
+        elevation = self._desert(
+            base + mountains + hills, dirs, q, base, low, min_wavelength
+        )
+        elevation = elevation + detail
 
         # Local climate patches: a few km, so low flight crosses biome edges.
         jitter_t = fbm(p, 5e3, 1, seed + _SEED_JITTER)
         jitter_h = fbm(p, 7e3, 2, seed + _SEED_JITTER + 1)
-        temperature = low[:, 5] + 3.0 * jitter_t
-        humidity = np.clip(low[:, 6] + 0.12 * jitter_h, 0.0, 1.0)
+        temperature = low[:, LOW_TEMPERATURE] + 3.0 * jitter_t
+        humidity = np.clip(low[:, LOW_HUMIDITY] + 0.12 * jitter_h, 0.0, 1.0)
         return elevation, temperature, humidity
+
+    def _desert(
+        self,
+        elevation: np.ndarray,
+        dirs: np.ndarray,
+        q: np.ndarray,
+        base: np.ndarray,
+        low: np.ndarray,
+        min_wavelength: float | None,
+    ) -> np.ndarray:
+        """Dunes on sand seas; mesas, canyons and terraces on arid uplands.
+        Each is evaluated only where it is, and only if the spec has it on.
+
+        :returns: *elevation* with them (a new array)
+        """
+        e = self.elevation
+        seed = self.spec.seed * 1000
+        elevation = elevation.copy()
+        erg = low[:, LOW_ERG]
+        on = erg > 1e-3
+        if e.dunes and np.any(on):
+            elevation[on] += erg[on] * landforms.dunes(
+                q[on],
+                dirs[on],
+                e.dune_wavelength,
+                e.dune_slip,
+                seed + _SEED_DUNES,
+                min_wavelength,
+            )
+        upland = low[:, LOW_ARID] * smoothstep(200.0, 500.0, base)
+        on = upland > 1e-3
+        if not (e.mesas or e.canyons) or not np.any(on):
+            return elevation
+        z, weight, qs = elevation[on], upland[on], q[on]
+        # Where cliffs stand, they are terraced (flat ground stays flat).
+        cliffs = np.zeros(len(z))
+        if e.mesas:
+            # Tables stand in rough upland; flat upland is tableland already.
+            mesa = weight * low[on, LOW_CHARACTER]
+            tops = landforms.mesa_tops(
+                qs, e.mesa_wavelength, seed + _SEED_MESAS, min_wavelength
+            )
+            z = z + mesa * e.mesa_height * tops
+            cliffs = np.maximum(cliffs, mesa * smoothstep(0.0, 0.2, tops))
+        if e.canyons:
+            # In some regions only; deeper into higher plateaus, never down
+            # to the sea.
+            region = smoothstep(
+                0.0,
+                0.2,
+                fbm(qs, 8.0 * e.canyon_wavelength, 2, seed + _SEED_CANYONS + 1),
+            )
+            canyon = weight * region
+            cut = landforms.canyons(
+                qs, e.canyon_wavelength, seed + _SEED_CANYONS, min_wavelength
+            )
+            depth = e.canyon_depth * smoothstep(200.0, 1500.0, base[on])
+            z = z - canyon * depth * cut
+            cliffs = np.maximum(cliffs, canyon * smoothstep(0.0, 0.2, cut))
+        fade = landforms.terrace_fade(e.terrace_step, min_wavelength)
+        if e.mesas and fade > 0.0:
+            z = z + fade * cliffs * (landforms.terrace(z, e.terrace_step) - z)
+        elevation[on] = z
+        return elevation
 
     def lapse(self, temperature: np.ndarray, elevation: np.ndarray) -> np.ndarray:
         """:returns: *temperature* cooled by altitude above sea level"""
@@ -701,5 +952,5 @@ def _sea_bias(spec: PlanetSpec) -> float:
     unbiased.spec = spec
     unbiased.elevation, unbiased.climate = scaled_params(spec)
     # The continental field alone (the low band's other fields cost as much)
-    _, _, continent = unbiased._continental(dirs)
+    _, _, continent, _ = unbiased._continental(dirs)
     return float(np.quantile(continent, spec.elevation.ocean_fraction))

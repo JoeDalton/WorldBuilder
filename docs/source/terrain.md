@@ -60,12 +60,59 @@ The elevation is built up in stages:
 
 1. A domain warp.
 2. Continents, with a sea bias set so that `ocean_fraction` of the planet lies below sea level.
-3. Ridged mountains, masked into ranges.
-4. Hills, then detail.
-5. Stamps.
+3. Tectonic plates (`terrain.plates`): mountain belts, ridges, rifts and the
+   pull of each plate's crust on the continents.
+4. Mountain ranges: massifs of ridged mountains along the plates' belts (and
+   a few inside plates, from a noise mask).
+5. Hills, then detail, scaled by the region's character and, near the sea,
+   its coast style.
+6. Desert landforms on arid land (`terrain.landforms`): dunes, mesas,
+   canyons.
+7. Stamps.
+
+**Plates.** A planet has `ElevationParams.plates` of them (14; 0 for none,
+as on the moon): the Voronoi cells of jittered Fibonacci points, their edges
+bent by a warp, each turning about its own Euler pole. Where two plates meet,
+their relative motion makes the boundary:
+
+- **closing**: a mountain belt (`belt_width` either side), lifting the
+  continental field so it stands on land: coastal ranges and island arcs;
+- **opening**: a mid-ocean ridge at sea, a rift valley on land;
+- **sliding**: long, smooth coasts.
+
+Each plate's crust (continental or oceanic) pulls the continental field, so
+some coasts follow plate edges. All of it is in the low band: every pair of
+nearby plates adds its belt with a weight that is zero before the pair stops
+being nearby, so nothing jumps at triple junctions.
+
+**Ranges.** A range's summit level rises and falls along it (massifs and
+passes), and the ridged crest field goes through a profile with broad valley
+floors, steep flanks and sharp crests.
+
+**Character and coasts.** Two regional fields: *character* runs from plains
+(hills and detail almost gone) to rough country; *coast style* runs from
+smooth (near the shore the hills fade, so the coast follows the continental
+field) to rugged (islets and inlets).
+
+**Deserts.** Arid land is where the climate at sea level would make desert
+(`biomes.aridity`). Each landform is a toggle in `ElevationParams` and costs
+only where it is:
+
+- `dunes`: sand seas on arid plains, transverse dunes 450 m apart with 33°
+  slip faces (under the rock slope, so they stay sand);
+- `mesas`: flat-topped tables with cliffs in rough arid uplands, their cliffs
+  terraced;
+- `canyons`: flat-floored canyons cut into arid uplands in some regions,
+  their walls terraced.
+
+`scripts/terrain_metrics.py` prints numbers for the look of each preset:
+the share of flat land, slope percentiles, the coastline's box-count
+dimension, peaks per area of mountains, and land heights.
 
 Detail is band-limited to the chunk's vertex spacing: octaves shorter than
-about four samples fade out, so coarse chunks never alias. Fields with nothing
+about four samples fade out, so coarse chunks never alias. Dunes fade by
+harmonic, the same way; mesa and canyon edges widen with the spacing, then
+fade to their mean height; terraces fade out. Fields with nothing
 shorter than about 10 km (the "low band") are sampled on a lattice of each
 cube face (230 m at 600 km, scaled with the features) and interpolated. That
 costs under 5 cm of error and saves about half the time.
@@ -77,7 +124,7 @@ Temperature and humidity come from low-frequency noise. Each planet preset sets 
 On top of that:
 
 - Altitude cools the temperature at 6.5 °C/km, so peaks get snow.
-- Slopes steeper than about 30–48° turn to rock. The slope is measured against the local vertical.
+- Slopes steeper than about 35–48° turn to rock. The slope is measured against the local vertical.
 - On planets with an ocean, ground up to 6 m above sea level becomes beach.
 - Paint masks are applied last.
 

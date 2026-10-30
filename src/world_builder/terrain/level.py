@@ -256,12 +256,13 @@ def write_sample_stamps(folder: Path = LEVELS_PATH / "stamps") -> None:
 def cliff_lake(n: int = 1024) -> tuple[np.ndarray, np.ndarray]:
     """A lake whose north shore is a sheer cliff and whose other shores are beaches.
 
-    Meant for ``blend: replace`` with ``height_scale: 600`` and
-    ``height_offset: -60``: pixel value v is height -60 + 600 v metres, so
-    v = 0.1 is sea level, where the game's water surface lies. The lake bed
-    goes to -60 m; it is deep right up to the cliff and shelves gently
-    elsewhere. The cliff rises from the waterline to about 310 m within a few
-    pixels, onto a plateau that slopes back down northwards.
+    Meant for ``blend: replace`` with ``height_offset`` = -``height_scale``
+    / 10: pixel value v is height scale * (v - 0.1) metres, so v = 0.1 is
+    sea level, where the game's water surface lies. The lake bed goes to a
+    tenth of the scale below it; it is deep right up to the cliff and
+    shelves gently elsewhere. The cliff rises from the waterline to about
+    half the scale within a few pixels (155 m for the demo's 300), onto a
+    plateau that slopes back down northwards.
 
     :param n: image side, pixels
     :returns: (heightmap (n, n) in [0, 1], paint (n, n, 3) uint8: forest on

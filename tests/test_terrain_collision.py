@@ -29,7 +29,7 @@ from world_builder.terrain.planet import PRESETS, Planet
 from world_builder.terrain.query import TerrainQuery
 
 #: The demo level's reference point: a coast, with a range to the south.
-REFERENCE = (38.85, -125.72)
+REFERENCE = (20.91, 30.4)
 MASK = BitMask32.bit(5)
 
 
@@ -87,7 +87,7 @@ def _inside(planet, chunk, rng, count):
 def land(planet, chart):
     """One level-2 chunk inland (7 m spacing), as both the query and the
     native solid see it."""
-    direction = chart.to_dirs(np.array([0.0]), np.array([-8000.0]))[0]
+    direction = chart.to_dirs(np.array([0.0]), np.array([1000.0]))[0]
     key = _key_at(planet, direction, 2)
     chunk = generate_chunk(planet.spec, key, 0)
     assert chunk.h_min > 0.0, "the test chunk should be dry land"

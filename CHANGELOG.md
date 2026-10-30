@@ -106,6 +106,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- More realistic planet relief (#9). The same seed now gives a different
+  planet, and the demo level moved to keep a coast to its north and a range
+  to its south:
+  - tectonic plates (`terrain.plates`, `ElevationParams.plates`, 14 by
+    default, none on the moon): mountain belts where plates close, mid-ocean
+    ridges and rift valleys where they open, long straight coasts where they
+    slide, and continents pulled onto plate edges. The noise mask still
+    raises a few ranges inside plates;
+  - ranges are massifs: a summit level that rises and falls along a range,
+    and a crest profile with broad valleys and sharp ridges instead of
+    `crest**3`, so a range is mostly mountain rather than a few spikes;
+  - plains: a regional character field scales hills and detail, from flat
+    plains to rough country (flat land at 100 m: 0-4 % of earthlike land
+    patches before, 30-55 % now);
+  - coasts: a regional coast style, smooth (the shore follows the
+    continental field) or rugged (islets and inlets);
+  - desert landforms on arid land (`terrain.landforms`, each a toggle in
+    `ElevationParams` and only computed where it is): dunes on sand seas
+    (33 degree slip faces), mesas and terraced cliffs in rough uplands,
+    canyons in some upland regions. All band limited: coarse chunks blur
+    them to their mean height;
+  - rock starts at 35 degrees, not 30 (`biomes.ROCK_SLOPE`), so dunes stay
+    sand;
+  - cost: fine chunks as before; coarse chunks (level 7 and up at 600 km,
+    which evaluate the low band directly) about 25 ms instead of 13 ms; the
+    pool's throughput in `terrain.bench` 340 chunks/s instead of 399.
+    `plates=0` saves most of it.
+  `scripts/terrain_metrics.py` measures flatness, slopes, coast roughness
+  and peaks per preset.
 - Asteroid fields without thresholds (#14):
   - each size class holds a ball of cells around the camera (not a box),
     moved by its difference and grown over frames (about 30,000 new cells a

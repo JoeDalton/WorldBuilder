@@ -329,7 +329,8 @@ def test_cyclone_cores_are_cloudier_than_their_surroundings(weather):
         # Just off the centre: a tropical cyclone's eye is clear.
         core = c + 0.4 * v.radius * frame_east
         values = coverage_at(weather, np.vstack([core, ring]), planet)
-        assert values[0] > values[1:].mean() + 0.2, v
+        # The median: the ring may cross a neighbouring system.
+        assert values[0] > np.median(values[1:]) + 0.2, v
 
 
 def test_tropical_cyclones_stay_over_the_sea(weather):

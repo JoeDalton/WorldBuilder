@@ -126,8 +126,9 @@ void main() {
     }
     if (uDebugMode == 3) {
         float slope = degrees(acos(clamp(upN, 0.0, 1.0)));
-        vec3 ramp = slope < 30.0 ? mix(vec3(0.1, 0.5, 0.1), vec3(0.9, 0.9, 0.1), slope / 30.0)
-                                 : mix(vec3(0.9, 0.5, 0.1), vec3(0.8, 0.0, 0.0), clamp((slope - 30.0) / 18.0, 0.0, 1.0));
+        // biomes.ROCK_SLOPE: rock from 35 degrees, all rock by 48
+        vec3 ramp = slope < 35.0 ? mix(vec3(0.1, 0.5, 0.1), vec3(0.9, 0.9, 0.1), slope / 35.0)
+                                 : mix(vec3(0.9, 0.5, 0.1), vec3(0.8, 0.0, 0.0), clamp((slope - 35.0) / 13.0, 0.0, 1.0));
         fragColor = vec4(ramp, 1.0);
         return;
     }

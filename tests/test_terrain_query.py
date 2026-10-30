@@ -24,7 +24,7 @@ from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.stamps import Paint, Placement, Stamp
 
 #: The demo level's reference point: a coast, with a range to the south.
-REFERENCE = (38.85, -125.72)
+REFERENCE = (20.91, 30.4)
 
 
 @pytest.fixture(scope="module")
@@ -201,7 +201,7 @@ def test_segment_starting_underground_hits_at_once(query, chart):
 
 def test_ocean_surface_is_solid_when_included(planet, chart):
     wet = TerrainQuery(planet, include_ocean=True)
-    offshore = at(chart, -10000.0, 30000.0, 100.0)  # about 1 km deep for seed 19
+    offshore = at(chart, 5000.0, 30000.0, 100.0)  # about 2.9 km deep for seed 19
     assert float(wet.ground_height_at(offshore)) < -500.0
     # The drawn water: a triangle of sea-level corners (its chord a hair
     # under the sphere), facing up.
@@ -397,18 +397,18 @@ def test_cliff_lake():
     chart = AzimuthalEquidistantChart(
         spec.reference_lat, spec.reference_lon, spec.radius
     )
-    y = np.arange(4000.0, 5600.0, 2.0)
+    y = np.arange(2000.0, 3600.0, 2.0)
     line = at(chart, np.full_like(y, -4500.0), y, 1000.0)
     h = query.ground_height_at(line)
-    assert h.min() < -50.0  # the lake bed
+    assert h.min() < -25.0  # the lake bed
     shore = int(np.argmax(h > 0.0))
-    assert h[shore - 4] < -20.0  # still deep 8 m from the foot of the wall
-    assert np.max(h) > 300.0
-    rim = int(np.argmax(h > 290.0))
+    assert h[shore - 4] < -10.0  # still deep 8 m from the foot of the wall
+    assert np.max(h) > 150.0
+    rim = int(np.argmax(h > 145.0))
     assert (rim - shore) * 2.0 <= 16.0  # waterline to rim within 16 m
     wall = int(np.argmax(np.diff(h)))
     assert query.material_at(at(chart, -4500.0, y[wall] + 1.0, 500.0)) == "rock"
-    assert query.material_at(at(chart, -4500.0, 5900.0, 500.0)) == "forest"  # painted
+    assert query.material_at(at(chart, -4500.0, 3900.0, 500.0)) == "forest"  # painted
 
 
 def test_level_rejects_unknown_fields(tmp_path):
