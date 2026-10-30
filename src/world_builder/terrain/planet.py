@@ -84,7 +84,6 @@ _SEED_CHARACTER = 101
 _SEED_COAST = 103
 _SEED_PLATES = 107
 _SEED_MASSIF = 109
-_SEED_ERG = 113
 _SEED_DUNES = 127
 _SEED_MESAS = 131
 _SEED_CANYONS = 137
@@ -100,7 +99,8 @@ LOW_COAST = 8
 LOW_TECTONIC = 9
 LOW_ARID = 10
 LOW_ERG = 11
-LOW_CHANNELS = 12
+LOW_CANYON = 12
+LOW_CHANNELS = 13
 
 #: Mountain height (fraction of the range's summit level) against the ridged
 #: crest field: broad valley floors, steep flanks, sharp crests. The crest
@@ -187,14 +187,14 @@ class ElevationParams:
     #: Size of the stretches of smooth or rugged coast (scaled)
     coast_wavelength: float = 200e3
     #: Desert landforms on arid land (:mod:`landforms`); each costs only
-    #: where it is. Sand seas (ergs) of dunes on arid plains:
+    #: where it is. Sand seas (ergs) of dunes on every arid plain, at any
+    #: height: wherever the ground is otherwise flat (no range, no mesas, no
+    #: canyons)
     dunes: bool = True
-    #: Size of the patches of arid plain that are sand seas (scaled)
-    erg_wavelength: float = 150e3
-    #: Dune crest spacing, metres, and slip-face slope, degrees (their
-    #: height follows: about 49 m at 450 m and 32 degrees)
-    dune_wavelength: float = 450.0
-    dune_slip: float = 28.0
+    #: Dune size, times Sandastray's (layers 42 m to 1.4 km), and height
+    #: scale, metres (Sandastray's 200: 100-150 m from trough to crest)
+    dune_scale: float = 1.0
+    dune_height: float = 200.0
     #: Mesas and terraced slopes on arid uplands
     mesas: bool = True
     mesa_wavelength: float = 8e3
@@ -387,7 +387,6 @@ def scaled_params(spec: PlanetSpec) -> tuple[ElevationParams, ClimateParams]:
         belt_width=e.belt_width * s,
         character_wavelength=e.character_wavelength * s,
         coast_wavelength=e.coast_wavelength * s,
-        erg_wavelength=e.erg_wavelength * s,
         mountain_height=e.mountain_height * min(max(s**0.5, lo), hi),
         feature_scale=s,
     )
@@ -467,8 +466,8 @@ class Planet:
             displacement xyz (metres), continental field (sea bias removed),
             range mask in [0, 1], base temperature, base humidity, character
             (0 plains, 1 rough country), coast style (0 smooth, 1 rugged) and
-            the plates' ridges and rifts (metres), arid land and sand seas
-            (both in [0, 1])
+            the plates' ridges and rifts (metres), arid land, sand seas and
+            canyon regions (all three in [0, 1])
         """
         spec = self.spec
         e, c = self.elevation, self.climate
@@ -518,14 +517,15 @@ class Planet:
             p, c.humidity_wavelength, c.humidity_octaves, seed + _SEED_HUMIDITY
         )
         # Arid land, from the climate at sea level (the altitude's cooling
-        # would make the shape depend on itself), and its sand seas: plains,
-        # away from ranges.
+        # would make the shape depend on itself), and its sand seas: on every
+        # plain, away from ranges (and from canyons: see _erg).
         arid = aridity(temperature, humidity) * smoothstep(0.0, 0.08, continent)
-        erg = (
-            arid
-            * (1.0 - character)
-            * (1.0 - smoothstep(0.0, 0.3, ranges))
-            * smoothstep(-0.1, 0.15, fbm(q, e.erg_wavelength, 2, seed + _SEED_ERG))
+        erg = arid * smoothstep(0.3, 0.1, character) * smoothstep(0.05, 0.0, ranges)
+        # Where canyons may cut (into arid uplands): some regions only.
+        canyon = smoothstep(
+            0.0,
+            0.2,
+            fbm(q, 8.0 * e.canyon_wavelength, 2, seed + _SEED_CANYONS + 1),
         )
         return np.column_stack(
             [
@@ -539,6 +539,7 @@ class Planet:
                 tectonic,
                 arid,
                 erg,
+                canyon,
             ]
         )
 
@@ -595,8 +596,7 @@ class Planet:
         p = dirs * spec.radius
         q = p + low[:, LOW_WARP]
         continent = low[:, LOW_CONTINENT]
-        lo, hi = self._curve_range
-        base = self._continent_curve(np.clip(continent, lo, hi)) + low[:, LOW_TECTONIC]
+        base = self._base(low)
         land = smoothstep(0.0, 0.08, continent)
         range_mask = low[:, LOW_RANGE]
 
@@ -608,6 +608,9 @@ class Planet:
         coast = low[:, LOW_COAST]
         relief = (0.12 + 1.08 * rough) * (1.0 - shore) + (0.04 + 1.16 * coast) * shore
         fine = (0.3 + 0.7 * rough) * (1.0 - shore) + (0.1 + 0.9 * coast) * shore
+
+        # Under the sand seas the ground is otherwise flat.
+        erg = self._erg(low, base)
 
         mountains = np.zeros(len(dirs))
         active = range_mask * land > 1e-4
@@ -635,6 +638,7 @@ class Planet:
                 min_wavelength=min_wavelength,
             )
             * relief
+            * (1.0 - 0.85 * erg)
         )
         detail = (
             e.detail_height
@@ -647,11 +651,10 @@ class Planet:
             )
             * fine
             * (1.0 + 2.0 * range_mask * land)
-            # Sand seas are smooth.
-            * (1.0 - 0.8 * low[:, LOW_ERG])
+            * (1.0 - 0.8 * erg)
         )
         elevation = self._desert(
-            base + mountains + hills, dirs, q, base, low, min_wavelength
+            base + mountains + hills, q, base, erg, low, min_wavelength
         )
         elevation = elevation + detail
 
@@ -665,32 +668,31 @@ class Planet:
     def _desert(
         self,
         elevation: np.ndarray,
-        dirs: np.ndarray,
         q: np.ndarray,
         base: np.ndarray,
+        erg: np.ndarray,
         low: np.ndarray,
         min_wavelength: float | None,
     ) -> np.ndarray:
-        """Dunes on sand seas; mesas, canyons and terraces on arid uplands.
-        Each is evaluated only where it is, and only if the spec has it on.
+        """Dunes on sand seas (*erg*, in [0, 1]); mesas, canyons and terraces
+        on arid uplands. Each is evaluated only where it is, and only if the
+        spec has it on.
 
         :returns: *elevation* with them (a new array)
         """
         e = self.elevation
         seed = self.spec.seed * 1000
         elevation = elevation.copy()
-        erg = low[:, LOW_ERG]
         on = erg > 1e-3
         if e.dunes and np.any(on):
             elevation[on] += erg[on] * landforms.dunes(
                 q[on],
-                dirs[on],
-                e.dune_wavelength,
-                e.dune_slip,
+                e.dune_scale,
+                e.dune_height,
                 seed + _SEED_DUNES,
                 min_wavelength,
             )
-        upland = low[:, LOW_ARID] * smoothstep(200.0, 500.0, base)
+        upland = self._upland(low, base)
         on = upland > 1e-3
         if not (e.mesas or e.canyons) or not np.any(on):
             return elevation
@@ -698,22 +700,17 @@ class Planet:
         # Where cliffs stand, they are terraced (flat ground stays flat).
         cliffs = np.zeros(len(z))
         if e.mesas:
-            # Tables stand in rough upland; flat upland is tableland already.
-            mesa = weight * low[on, LOW_CHARACTER]
+            # Tables stand in rough upland; flat upland is tableland already
+            # (or sand sea).
+            mesa = weight * self._rough(low[on])
             tops = landforms.mesa_tops(
                 qs, e.mesa_wavelength, seed + _SEED_MESAS, min_wavelength
             )
             z = z + mesa * e.mesa_height * tops
             cliffs = np.maximum(cliffs, mesa * smoothstep(0.0, 0.2, tops))
         if e.canyons:
-            # In some regions only; deeper into higher plateaus, never down
-            # to the sea.
-            region = smoothstep(
-                0.0,
-                0.2,
-                fbm(qs, 8.0 * e.canyon_wavelength, 2, seed + _SEED_CANYONS + 1),
-            )
-            canyon = weight * region
+            # Deeper into higher plateaus, never down to the sea.
+            canyon = weight * low[on, LOW_CANYON]
             cut = landforms.canyons(
                 qs, e.canyon_wavelength, seed + _SEED_CANYONS, min_wavelength
             )
@@ -725,6 +722,45 @@ class Planet:
             z = z + fade * cliffs * (landforms.terrace(z, e.terrace_step) - z)
         elevation[on] = z
         return elevation
+
+    def _base(self, low: np.ndarray) -> np.ndarray:
+        """:returns: the continental base height and the plates' ridges and
+        rifts, metres: the ground before mountains, hills and detail"""
+        lo, hi = self._curve_range
+        curve = self._continent_curve(np.clip(low[:, LOW_CONTINENT], lo, hi))
+        return curve + low[:, LOW_TECTONIC]
+
+    @classmethod
+    def _erg(cls, low: np.ndarray, base: np.ndarray) -> np.ndarray:
+        """:returns: the sand seas, in [0, 1]: arid plains at any height,
+        but never where canyons cut (mesas stand on rougher ground)"""
+        return low[:, LOW_ERG] * (1.0 - cls._upland(low, base) * low[:, LOW_CANYON])
+
+    @staticmethod
+    def _upland(low: np.ndarray, base: np.ndarray) -> np.ndarray:
+        """:returns: arid upland, in [0, 1], where mesas and canyons may be"""
+        return low[:, LOW_ARID] * smoothstep(300.0, 500.0, base)
+
+    @staticmethod
+    def _rough(low: np.ndarray) -> np.ndarray:
+        """:returns: country rough enough for mesas, in [0, 1]: from where
+        the sand seas' plains end"""
+        return smoothstep(0.3, 0.5, low[:, LOW_CHARACTER])
+
+    def landform_masks(self, dirs: np.ndarray) -> dict[str, np.ndarray]:
+        """Where the desert landforms are, whether or not the spec has them on.
+
+        :param dirs: (N, 3) unit vectors
+        :returns: {"dunes", "mesas", "canyons"}: (N,) weights in [0, 1]
+        """
+        low = self.low_band(dirs)
+        base = self._base(low)
+        upland = self._upland(low, base)
+        return {
+            "dunes": self._erg(low, base),
+            "mesas": upland * self._rough(low),
+            "canyons": upland * low[:, LOW_CANYON],
+        }
 
     def lapse(self, temperature: np.ndarray, elevation: np.ndarray) -> np.ndarray:
         """:returns: *temperature* cooled by altitude above sea level"""

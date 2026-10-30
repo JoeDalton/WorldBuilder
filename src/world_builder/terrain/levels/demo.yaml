@@ -1,6 +1,6 @@
 # Demo level: a dry subtropical coast (sea to the north, a range to the south)
-# with four hand-made features near the start. F1-F4 in the demo swap the
-# planet preset under them; the stamps and paints stay put.
+# with four hand-made features near the start. The demo's --planet swaps the
+# planet preset under them (and --seed the seed); the stamps and paints stay put.
 planet:
   preset: earthlike
   seed: 19

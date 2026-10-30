@@ -4,13 +4,12 @@ Desert landforms, as pure functions of position: dunes, mesas, terraces, canyons
 They are shaped to stay band limited, as the rest of the elevation: a coarse
 chunk gets a smoothed version, never aliased steps.
 
-* **Dunes**: transverse ridges with a gentle windward side and a steep slip
-  face. The profile is a short Fourier series of an asymmetric sawtooth, and
-  each harmonic fades out as the octaves of :func:`noise.fbm` do. Crests are
-  straight lines of the planet frame, bent by noise; the direction comes from
-  three fixed axes blended by how flat each lies on the ground there, so the
-  pattern turns from region to region (and crosses itself into star dunes
-  where two axes meet) without a singular point anywhere on the sphere.
+* **Dunes**: Sandastray's sand sea (a Panda3D game by entikan): nine
+  stretched noise layers at sizes from 40 m to 1.4 km, combined in order by
+  min, add and multiply. The min of two layers makes a sharp crest, so the
+  dunes are rounded with knife-edge ridges, at several scales, all with one
+  grain. The grain is a fixed axis of the planet frame, so on the ground it
+  turns slowly from region to region, without a singular point anywhere.
 * **Terraces**: a staircase of the elevation, flat treads and steep risers,
   faded in as the sampling gets fine enough to show the risers.
 * **Mesas**: flat-topped tables with cliff edges, from a thresholded noise.
@@ -20,102 +19,149 @@ chunk gets a smoothed version, never aliased steps.
 
 from __future__ import annotations
 
-import functools
-import math
-
 import numpy as np
 
-from world_builder.terrain.noise import fbm, octave_frame, octave_weight, smoothstep
+from world_builder.terrain.noise import (
+    fbm,
+    octave_frame,
+    octave_weight,
+    simplex3,
+    smoothstep,
+)
 
-#: Share of a dune's wavelength on its windward (stoss) side.
-DUNE_STOSS = 0.8
-#: Harmonics of the dune profile at full resolution.
-DUNE_HARMONICS = 8
+#: Sandastray's dune layers, in order: (period along the grain, period across
+#: it, amount, op), periods in metres. Its images are 1 m a pixel, and a
+#: perlin_noise_fill(sx, sy) layer has a period of sx * 8192 px, its (x, y)
+#: scales times 168 m here. As PNMImage does it, with h starting at 1 and
+#: clamped to [0, 1] after each: "min" is h = min(h, 1 - amount (1 - n))
+#: (darken_sub_image), "add" h += amount n, "mult" h *= amount n.
+DUNE_LAYERS = (
+    (1428.0, 840.0, 0.8, "min"),
+    (336.0, 302.0, 0.8, "add"),
+    (134.0, 168.0, 0.5, "min"),
+    (101.0, 84.0, 0.5, "min"),
+    (67.0, 42.0, 0.005, "add"),
+    (76.0, 92.0, 0.4, "min"),
+    (504.0, 470.0, 0.2, "min"),
+    (44.0, 76.0, 0.005, "add"),
+    (336.0, 470.0, 1.0, "mult"),
+)
+#: Simplex frequency, per metre of Perlin period, giving the same feature
+#: size (their autocorrelations first cross zero at 0.5 lattice unit and at
+#: 0.757 period), and the gain giving Panda's Perlin spread (std 0.16 against
+#: the simplex's 0.388) about its mean, 0.5.
+_DUNE_FREQUENCY = 0.5 / 0.757
+_DUNE_GAIN = 0.16 / 0.388
+#: How round the crests are, in units of the dunes' height: Sandastray blurs
+#: its image by 3 px; this smooth minimum does the same to each crest.
+DUNE_CREST = 0.015
+#: How much each layer, fading out after the finer ones, lowers the mean
+#: height (units of the dunes' height): added back as it fades, so a coarse
+#: chunk keeps the right average. Measured by :func:`dune_layer_offsets`
+#: (tested).
+DUNE_OFFSETS = (
+    -0.0243,
+    -0.0083,
+    -0.0621,
+    -0.0200,
+    0.0,
+    -0.0034,
+    -0.0328,
+    0.0,
+    -0.0006,
+)
 
 
-@functools.lru_cache(maxsize=1)
-def _dune_series() -> tuple[np.ndarray, np.ndarray, float, float]:
-    """The dune profile's Fourier series.
+def _smooth_min(a: np.ndarray, b: np.ndarray, k: float) -> np.ndarray:
+    """min(a, b), rounded where they are within *k* of each other."""
+    h = np.maximum(k - np.abs(a - b), 0.0) / k
+    return np.minimum(a, b) - 0.25 * k * h * h
 
-    :returns: amplitudes and phases of harmonics 1..K, the series' mean, and
-        its steepest slope (per unit of phase) relative to its height
+
+def _dune_stack(
+    points: np.ndarray,
+    scale: float,
+    seed: int,
+    weights: tuple[float, ...],
+) -> np.ndarray:
+    """Sandastray's layers combined, each layer *weights*[i] of the way from
+    neutral (0, faded out) to itself (1).
+
+    :returns: (N,) in [0, 1]
     """
-    n = 8192
-    theta = np.arange(n) / n
-    sawtooth = np.where(
-        theta < DUNE_STOSS, theta / DUNE_STOSS, (1.0 - theta) / (1.0 - DUNE_STOSS)
-    )
-    spectrum = np.fft.rfft(sawtooth) / n
-    k = np.arange(1, DUNE_HARMONICS + 1)
-    amplitude = 2.0 * np.abs(spectrum[k])
-    phase = np.angle(spectrum[k])
-    profile = spectrum[0].real + np.sum(
-        amplitude[:, None] * np.cos(2.0 * np.pi * k[:, None] * theta + phase[:, None]),
-        axis=0,
-    )
-    slope = np.abs(np.gradient(profile, 1.0 / n)).max()
-    return amplitude, phase, float(spectrum[0].real), float(slope / np.ptp(profile))
-
-
-def dune_height(wavelength: float, slip: float) -> float:
-    """:returns: crest-to-trough height, metres, of dunes of this wavelength
-    whose slip face is *slip* degrees"""
-    *_, steepest = _dune_series()
-    return math.tan(math.radians(slip)) * wavelength / steepest
+    axes, _ = octave_frame(seed, 0)
+    along, across, normal = (points @ axes.T).T
+    h = np.ones(len(points))
+    for index, ((p_along, p_across, amount, op), w) in enumerate(
+        zip(DUNE_LAYERS, weights)
+    ):
+        if op == "min" and w <= 0.0:
+            continue
+        f_along = _DUNE_FREQUENCY / (p_along * scale)
+        f_across = _DUNE_FREQUENCY / (p_across * scale)
+        coords = np.column_stack(
+            [along * f_along, across * f_across, normal * f_across]
+        )
+        n = 0.5 + _DUNE_GAIN * simplex3(coords, seed + 1 + index)
+        if op == "min":
+            # Panda's darken_sub_image scales the layer toward white.
+            low = 1.0 - amount * (1.0 - n)
+            h = h + w * (_smooth_min(h, low, DUNE_CREST) - h)
+        elif op == "add":
+            h = h + amount * (0.5 + w * (n - 0.5))
+        else:
+            h = h * amount * (0.5 + w * (n - 0.5))
+        h = np.clip(h, 0.0, 1.0)
+    return h
 
 
 def dunes(
     points: np.ndarray,
-    dirs: np.ndarray,
-    wavelength: float,
-    slip: float,
+    scale: float,
+    height: float,
     seed: int,
     min_wavelength: float | None,
 ) -> np.ndarray:
-    """Dune relief, in metres, about 0 to the dunes' full height.
+    """Dune relief, in metres, from 0 to *height*.
 
     :param points: (N, 3) positions, metres (warped, as the other fields)
-    :param dirs: (N, 3) unit vectors at the same points
-    :param wavelength: crest spacing, metres
-    :param slip: steepest slope, degrees, at full resolution
+    :param scale: times Sandastray's layer sizes
+    :param height: the relief's full range, metres
     :param seed: field seed
-    :param min_wavelength: shortest wavelength to keep, metres; None = all
+    :param min_wavelength: shortest wavelength to keep, metres; None = all.
+        Each layer fades out (to neutral, its mean effect added back) as its
+        shorter period gets too short to sample
     :returns: (N,) heights
     """
-    amplitude, phase, mean, _ = _dune_series()
     max_frequency = None if min_wavelength is None else 1.0 / min_wavelength
-    height = dune_height(wavelength, slip)
-    # Crests bend over a few wavelengths: the phase is pushed by noise.
-    bend = (
-        0.15
-        * wavelength
-        * fbm(points, 6.0 * wavelength, 2, seed + 1, min_wavelength=min_wavelength)
+    weights = tuple(
+        octave_weight(1.0 / (min(p_along, p_across) * scale), max_frequency)
+        for p_along, p_across, _, _ in DUNE_LAYERS
     )
-    axes, _ = octave_frame(seed, 0)
-    # How flat each axis lies on the ground: 1 - (axis.up)^2. The three values
-    # sum to 2, so the largest is at least 2/3. The flattest axis sets the
-    # crests; two blend (star dunes) only where they nearly tie.
-    flat = 1.0 - (dirs @ axes.T) ** 2
-    flattest = flat.max(axis=1)
-    total = np.zeros(len(points))
-    weights = np.zeros(len(points))
-    for column, axis in enumerate(axes):
-        weight = smoothstep(-0.06, 0.0, flat[:, column] - flattest)
-        on = weight > 0.0
-        if not np.any(on):
-            continue
-        theta = (points[on] @ axis + bend[on]) / wavelength
-        profile = np.full(np.count_nonzero(on), mean)
-        for k in range(1, DUNE_HARMONICS + 1):
-            fade = octave_weight(k / wavelength, max_frequency)
-            if fade <= 0.0:
-                break
-            profile += (
-                fade * amplitude[k - 1] * np.cos(2.0 * np.pi * k * theta + phase[k - 1])
-            )
-        total[on] += weight[on] * profile
-        weights[on] += weight[on]
-    return height * total / weights
+    h = _dune_stack(points, scale, seed, weights)
+    h = h + sum((1.0 - w) * offset for w, offset in zip(weights, DUNE_OFFSETS))
+    return height * h
+
+
+def dune_layer_offsets(samples: int = 200000, seed: int = 5) -> tuple[float, ...]:
+    """Measure :data:`DUNE_OFFSETS`. Layers fade finest first, so each
+    layer's offset is the mean height lost when it fades after every finer
+    one has: once all have faded, the offsets add up to the full mean.
+
+    :returns: one offset per layer (in :data:`DUNE_LAYERS` order), units of
+        the dunes' height
+    """
+    points = np.random.default_rng(seed).uniform(-2e5, 2e5, size=(samples, 3))
+    order = sorted(range(len(DUNE_LAYERS)), key=lambda i: min(DUNE_LAYERS[i][:2]))
+    weights = [1.0] * len(DUNE_LAYERS)
+    mean = _dune_stack(points, 1.0, seed, tuple(weights)).mean()
+    offsets = [0.0] * len(DUNE_LAYERS)
+    for index in order:
+        weights[index] = 0.0
+        faded = _dune_stack(points, 1.0, seed, tuple(weights)).mean()
+        offsets[index] = float(mean - faded)
+        mean = faded
+    return tuple(offsets)
 
 
 def terrace(elevation: np.ndarray, step: float, riser: float = 0.35) -> np.ndarray:

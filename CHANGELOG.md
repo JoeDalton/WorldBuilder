@@ -123,18 +123,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - coasts: a regional coast style, smooth (the shore follows the
     continental field) or rugged (islets and inlets);
   - desert landforms on arid land (`terrain.landforms`, each a toggle in
-    `ElevationParams` and only computed where it is): dunes on sand seas
-    (33 degree slip faces), mesas and terraced cliffs in rough uplands,
-    canyons in some upland regions. All band limited: coarse chunks blur
-    them to their mean height;
-  - rock starts at 35 degrees, not 30 (`biomes.ROCK_SLOPE`), so dunes stay
-    sand;
+    `ElevationParams` and only computed where it is): sand seas of
+    Sandastray's dunes (its nine layered noises, combined by min, add and
+    multiply: rounded dunes with sharp crests, 100-150 m high) on every
+    arid plain, at any height (most plains of the desert planet), mesas and terraced cliffs in rough uplands, canyons in some
+    upland regions. All band limited: coarse chunks keep their mean height;
+  - rock starts at 35 degrees, not 30 (`biomes.ROCK_SLOPE`);
   - cost: fine chunks as before; coarse chunks (level 7 and up at 600 km,
     which evaluate the low band directly) about 25 ms instead of 13 ms; the
     pool's throughput in `terrain.bench` 340 chunks/s instead of 399.
     `plates=0` saves most of it.
   `scripts/terrain_metrics.py` measures flatness, slopes, coast roughness
-  and peaks per preset.
+  and peaks per preset. `scripts/find_landforms.py` finds places over each
+  desert landform (canyons by depth), and the demos (`demo_terrain.py`, `demo_world.py`,
+  `terrain_shots.py`) take `--planet PRESET`, `--seed N` and
+  `--start LAT LON`.
 - Asteroid fields without thresholds (#14):
   - each size class holds a ball of cells around the camera (not a box),
     moved by its difference and grown over frames (about 30,000 new cells a

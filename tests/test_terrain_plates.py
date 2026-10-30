@@ -7,6 +7,7 @@ import math
 
 import numpy as np
 import pytest
+from scipy import ndimage
 
 from world_builder.terrain import biomes, landforms
 from world_builder.terrain.chart import AzimuthalEquidistantChart
@@ -100,25 +101,46 @@ def _chart_grid(n, spacing, lat=20.0, lon=30.0):
     return dirs, dirs * R
 
 
-def test_dune_slip_faces_stay_sand():
-    """Slip faces near 33 degrees, under the rock threshold, measured as the
-    chunks measure slope."""
-    dirs, points = _chart_grid(500, 2.0)
-    z = landforms.dunes(points, dirs, 450.0, 28.0, 7, None).reshape(500, 500)
-    step = round(biomes.SLOPE_SCALE / 2.0 / 2.0)
-    slope = biomes.slope_degrees(z, 2.0, step)[8:-8, 8:-8]
-    assert 28.0 < slope.max() < biomes.ROCK_SLOPE[0]
-    assert np.median(slope) < 12.0  # the windward sides are gentle
-    assert 30.0 < np.ptp(z) < 70.0
+def test_dunes_match_sandastray():
+    """The layer stack gives Sandastray's heights: its PNMImage version, 1 m a
+    pixel, spans 0.10 / 0.35 / 0.63 at the 1st / 50th / 99th percentiles."""
+    points = np.random.default_rng(1).uniform(-2e5, 2e5, size=(60000, 3))
+    full = (1.0,) * len(landforms.DUNE_LAYERS)
+    h = landforms._dune_stack(points, 1.0, 5, full)
+    np.testing.assert_allclose(
+        np.percentile(h, [1, 50, 99]), [0.10, 0.35, 0.63], atol=0.03
+    )
 
 
-def test_dunes_fade_to_their_mean_when_coarse():
-    """A coarse chunk gets the dunes' mean, not an aliased pattern."""
-    dirs, points = _chart_grid(300, 7.0)
-    fine = landforms.dunes(points, dirs, 450.0, 28.0, 7, None)
-    coarse = landforms.dunes(points, dirs, 450.0, 28.0, 7, 4000.0)
-    assert np.ptp(coarse) < 1e-6
-    assert float(coarse[0]) == pytest.approx(fine.mean(), abs=2.0)
+def test_dunes_have_sharp_crests_at_several_scales():
+    dirs, points = _chart_grid(512, 4.0)
+    z = landforms.dunes(points, 1.0, 200.0, 7, None).reshape(512, 512)
+    assert 100.0 < np.ptp(z) < 170.0
+    # Big dunes (a few hundred metres) and small ones on them (tens).
+    large = ndimage.gaussian_filter(z, 300.0 / 8.0)
+    small = z - ndimage.gaussian_filter(z, 50.0 / 8.0)
+    assert large.std() > 6.0 and small.std() > 1.5
+    # Crests sharp enough that the steepest are rock.
+    slope = biomes.slope_degrees(z, 4.0, 1)[2:-2, 2:-2]
+    assert np.median(slope) < 25.0
+    assert np.percentile(slope, 99.5) > biomes.ROCK_SLOPE[0]
+
+
+def test_dune_offsets_are_measured():
+    measured = landforms.dune_layer_offsets(samples=60000, seed=8)
+    np.testing.assert_allclose(measured, landforms.DUNE_OFFSETS, atol=0.004)
+
+
+def test_dunes_keep_their_mean_when_coarse():
+    """Coarser, the layers fade finest first, the mean height kept: flat
+    once all have faded."""
+    dirs, points = _chart_grid(200, 40.0)
+    fine = landforms.dunes(points, 1.0, 200.0, 7, None).mean()
+    for min_wavelength in (100.0, 400.0, 1600.0):
+        coarse = landforms.dunes(points, 1.0, 200.0, 7, min_wavelength)
+        assert coarse.mean() == pytest.approx(fine, abs=5.0)
+    flat = landforms.dunes(points, 1.0, 200.0, 7, 1e5)
+    assert np.ptp(flat) < 1e-9
 
 
 def test_terraces_are_steps_that_keep_the_mean():

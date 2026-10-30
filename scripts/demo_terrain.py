@@ -8,13 +8,25 @@ weather) and its sea, an airless sand moon 10,000 km away,
 and a procedural star field, from orbit down to the ground of either. Run it
 from an environment where world_builder is importable::
 
-    python scripts/demo_terrain.py [--level FILE] [--radius METRES]
+    python scripts/demo_terrain.py [--level FILE] [--planet PRESET]
+        [--seed N] [--start LAT LON] [--radius METRES]
         [--moon-distance METRES] [--no-moon] [--workers N]
         [--backend process|thread|inline] [--quality low|mid|high|ultra]
         [--terrain-quality L] [--atmosphere-quality L] [--sky-quality L]
         [--clouds-quality L] [--ocean-quality L] [--no-clouds]
 
     --level          the planet's level file (default: the demo level)
+    --planet         overrides the level's planet preset: earthlike, desert,
+                     forest, moon or ice (the stamps and paints stay put)
+    --seed           overrides the level's seed
+    --start          start over this latitude and longitude (degrees), 400 m
+                     above the ground (or above a canyon's rim), instead of
+                     the level's start; R and END come back here.
+                     scripts/find_landforms.py finds places over each desert
+                     landform; on the desert preset, seed 19:
+                         dunes    --start -29.0857 148.6776
+                         mesas    --start -63.9922 79.9485
+                         canyons  --start -25.3564 -90.5113
     --radius         overrides the level's planet radius
     --moon-distance  centre to centre (default 10,000 km)
     --no-moon        the planet alone
@@ -120,6 +132,7 @@ from world_builder.sky import Sky, Starfield
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import (
     TangentFrame,
+    dirs_from_latlon,
     latlon,
 )
 from world_builder.terrain.cubesphere import FACE_NAMES, dirs_to_face
@@ -321,6 +334,9 @@ class TerrainDemo(ShowBase):
         clouds: bool = True,
         cloud_debug: int = 0,
         ocean_debug: int = 0,
+        preset: str | None = None,
+        seed: int | None = None,
+        start: tuple[float, float] | None = None,
     ) -> None:
         """
         :param level_path: the planet's level file
@@ -333,6 +349,10 @@ class TerrainDemo(ShowBase):
         :param cloud_debug: the clouds' profiling switches
             (:meth:`SphericalClouds.set_debug`)
         :param ocean_debug: the sea's debug view (:meth:`Sea.set_debug_mode`)
+        :param preset: overrides the level's planet preset (PRESETS)
+        :param seed: overrides the level's seed
+        :param start: (lat, lon) in degrees to start over instead of the
+            level's start (:func:`start_pose`)
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -349,7 +369,10 @@ class TerrainDemo(ShowBase):
         self._orientation = LQuaternionf()
         self.speed = SPEED
 
-        spec, self.start_pose = load_level(level_path, radius=radius)
+        spec, self.start_pose = load_level(
+            level_path, preset=preset, seed=seed, radius=radius
+        )
+        self.start_pose = start_pose(spec, self.start_pose, start)
 
         from world_builder.terrain.terrain import Terrain
         from world_builder.terrain.workers import ChunkExecutor
@@ -885,10 +908,7 @@ class TerrainDemo(ShowBase):
             pose.get("heading", 0.0),
             pose.get("pitch", 0.0),
         )
-        # The sun stands where the original flat demo had it, at the start.
-        frame = TangentFrame.at(spec.reference_lat, spec.reference_lon)
-        d, _, _ = sun_lighting(210.0, 35.0)
-        self._sun = d[0] * frame.east + d[1] * frame.north + d[2] * frame.up
+        self._sun = start_sun(spec, pose)
 
     def _jump_over(self, body: Body, direction: np.ndarray) -> None:
         """3 radii above a body, along *direction* from its centre, looking down."""
@@ -952,6 +972,7 @@ def main() -> None:
         choices=("process", "thread", "inline"),
         help="where chunks and cloud tiles are generated",
     )
+    add_planet_arguments(parser)
     add_world_arguments(parser)
     args = parser.parse_args()
     # No vsync: the frame rate shows what a frame costs, not the display.
@@ -964,7 +985,70 @@ def main() -> None:
         moon,
         settings=settings_from_args(args),
         clouds=not args.no_clouds,
+        preset=args.planet,
+        seed=args.seed,
+        start=args.start,
     ).run()
+
+
+#: Height of a --start pose above the ground there, metres.
+START_CLEARANCE = 400.0
+#: Shortest wavelength of the coarse ground a --start pose also clears,
+#: metres: about what the first chunks drawn there resolve.
+START_COARSE_M = 20e3
+
+
+def start_pose(spec, pose: dict | None, start: tuple[float, float] | None):
+    """The level's start *pose*, or one over *start* (lat, lon in degrees):
+    :data:`START_CLEARANCE` above the ground there, the level's heading and
+    pitch. :returns: the pose dict (``load_level``'s), or None"""
+    if start is None:
+        return pose
+    from world_builder.terrain.planet import Planet
+
+    lat, lon = start
+    planet = Planet(spec)
+    dirs = dirs_from_latlon(lat, lon)
+    # Over the full detail, and over the coarse ground first drawn there (in
+    # a canyon, near the rim): the flight keeps the camera above the drawn
+    # ground, so it would lift a start under that while the detail loads.
+    fine, _, _ = planet.sample_dirs(dirs, None, apply_stamps=True)
+    coarse, _, _ = planet.sample_dirs(dirs, START_COARSE_M, apply_stamps=True)
+    ground = max(float(fine[0]), float(coarse[0]), 0.0)
+    pose = dict(pose or {})
+    pose.update(lat=lat, lon=lon, alt=ground + START_CLEARANCE)
+    return pose
+
+
+def start_sun(spec, pose: dict | None) -> np.ndarray:
+    """:returns: the sun where the original flat demo had it (azimuth 210,
+    elevation 35), as seen at the start *pose* (the reference without one)"""
+    pose = pose or {}
+    frame = TangentFrame.at(
+        pose.get("lat", spec.reference_lat), pose.get("lon", spec.reference_lon)
+    )
+    d, _, _ = sun_lighting(210.0, 35.0)
+    return d[0] * frame.east + d[1] * frame.north + d[2] * frame.up
+
+
+def add_planet_arguments(parser: argparse.ArgumentParser) -> None:
+    """The planet arguments every script built on the demo takes:
+    ``--planet`` (a preset over the level's), ``--seed`` and ``--start``."""
+    parser.add_argument(
+        "--planet",
+        default=None,
+        choices=sorted(PRESETS),
+        help="planet preset, over the level's",
+    )
+    parser.add_argument("--seed", type=int, default=None, help="over the level's")
+    parser.add_argument(
+        "--start",
+        type=float,
+        nargs=2,
+        default=None,
+        metavar=("LAT", "LON"),
+        help="start over this place, degrees (the level's start otherwise)",
+    )
 
 
 def add_world_arguments(parser: argparse.ArgumentParser) -> None:

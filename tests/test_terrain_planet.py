@@ -149,6 +149,28 @@ def test_plains_are_flat_and_ranges_rough(planet):
     assert median_slope(ranges) > 10.0
 
 
+def test_dunes_cover_the_desert_plains_only():
+    """Sand seas cover most plains of the desert planet, at any height, and
+    only otherwise flat ground: no range, no mesas, no canyons."""
+    planet = Planet(replace(PRESETS["desert"], seed=19))
+    dirs = _random_dirs(40000, seed=7)
+    masks = planet.landform_masks(dirs)
+    low = planet.low_band(dirs)
+    plains = (
+        (low[:, LOW_CONTINENT] > 0.1)
+        & (low[:, LOW_CHARACTER] < 0.1)
+        & (low[:, LOW_RANGE] < 0.01)
+    )
+    assert np.mean(masks["dunes"][plains] > 0.5) > 0.6
+    sand = masks["dunes"] > 0.01
+    assert low[sand, LOW_CHARACTER].max() < 0.3
+    assert low[sand, LOW_RANGE].max() < 0.05
+    assert masks["mesas"][sand].max() == 0.0
+    assert np.all(masks["canyons"][sand] + masks["dunes"][sand] <= 1.0 + 1e-9)
+    deep_canyon = masks["canyons"] > 0.99
+    assert masks["dunes"][deep_canyon].max() < 0.01
+
+
 def test_landforms_and_plates_can_be_turned_off():
     """Every optional landform off: the elevation is still a sane, repeatable
     function, and arid land loses its dunes."""

@@ -59,16 +59,17 @@ from demo_terrain import (  # noqa: E402
     WATER_TUNED_ELEVATION,
     Body,
     TerrainDemo,
+    add_planet_arguments,
     add_world_arguments,
     settings_from_args,
-    sun_lighting,
+    start_pose,
+    start_sun,
     window_config,
 )
 
 from world_builder.atmosphere import AtmosphereParams  # noqa: E402
 from world_builder.depth import SplitDepthCameras  # noqa: E402
 from world_builder.settings import WorldSettings  # noqa: E402
-from world_builder.terrain.chart import TangentFrame  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL, load_level  # noqa: E402
 from world_builder.terrain.planet import PRESETS  # noqa: E402
 from world_builder.world import (  # noqa: E402
@@ -118,13 +119,6 @@ def moon_look(spec, distance: float) -> BodyLook:
     )
 
 
-def start_sun(spec) -> np.ndarray:
-    """Where the original flat demo had the sun, at the level's start."""
-    frame = TangentFrame.at(spec.reference_lat, spec.reference_lon)
-    d, _, _ = sun_lighting(210.0, 35.0)
-    return d[0] * frame.east + d[1] * frame.north + d[2] * frame.up
-
-
 # ── the demo ────────────────────────────────────────────────────────────────
 
 
@@ -148,6 +142,9 @@ class WorldDemo(TerrainDemo):
         clouds: bool = True,
         cloud_debug: int = 0,
         ocean_debug: int = 0,
+        preset: str | None = None,
+        seed: int | None = None,
+        start: tuple[float, float] | None = None,
     ) -> None:
         ShowBase.__init__(self)
         self.setFrameRateMeter(True)
@@ -161,11 +158,14 @@ class WorldDemo(TerrainDemo):
         self._orientation = LQuaternionf()
         self.speed = SPEED
 
-        spec, self.start_pose = load_level(level_path, radius=radius)
+        spec, self.start_pose = load_level(
+            level_path, preset=preset, seed=seed, radius=radius
+        )
+        self.start_pose = start_pose(spec, self.start_pose, start)
         self.world = settings or WorldSettings()
         self._clouds_on = clouds
         self._cloud_debug = cloud_debug
-        self._sun = start_sun(spec)
+        self._sun = start_sun(spec, self.start_pose)
         looks = [planet_look(spec, clouds)]
         if moon_distance is not None:
             looks.append(moon_look(spec, moon_distance))
@@ -292,6 +292,7 @@ def main() -> None:
         choices=("process", "thread", "inline"),
         help="where chunks and cloud tiles are generated",
     )
+    add_planet_arguments(parser)
     add_world_arguments(parser)
     args = parser.parse_args()
     window_config("Procedural terrain demo (World)", vsync=False)
@@ -303,6 +304,9 @@ def main() -> None:
         moon,
         settings=settings_from_args(args),
         clouds=not args.no_clouds,
+        preset=args.planet,
+        seed=args.seed,
+        start=args.start,
     ).run()
 
 

@@ -8,6 +8,8 @@ yet.
 
 ```
 python scripts/demo_terrain.py            # 3D flight: planet, moon, orbit to ground (controls in the script)
+python scripts/demo_terrain.py --planet desert --start LAT LON   # another preset, from another place
+python scripts/find_landforms.py          # --start places over dunes, mesas and canyons
 python scripts/terrain_shots.py           # the demo from fixed poses, to PNG
 python -m world_builder.terrain.preview   # globe and top-down maps of every preset, to PNG
 python -m world_builder.terrain.preview --weather   # each globe under its clouds' weather
@@ -98,10 +100,16 @@ field) to rugged (islets and inlets).
 (`biomes.aridity`). Each landform is a toggle in `ElevationParams` and costs
 only where it is:
 
-- `dunes`: sand seas on arid plains, transverse dunes 450 m apart with 33°
-  slip faces (under the rock slope, so they stay sand);
-- `mesas`: flat-topped tables with cliffs in rough arid uplands, their cliffs
-  terraced;
+- `dunes`: sand seas on every arid plain, at any height, but only on
+  otherwise flat ground: no range, no mesas, no canyons (the hills are
+  flattened under them). On the desert planet they cover most plains. The
+  dunes are those of the Sandastray game: nine stretched noise layers, 42 m
+  to 1.4 km, combined in order by min (sharp crests), add and multiply, with
+  one grain; 100-150 m from trough to crest (`dune_scale`, `dune_height`).
+  The steepest crests turn to rock. Coarse chunks fade the layers finest
+  first, keeping the mean height;
+- `mesas`: flat-topped tables with cliffs in rough arid uplands (rougher
+  than the sand seas' plains), their cliffs terraced;
 - `canyons`: flat-floored canyons cut into arid uplands in some regions,
   their walls terraced.
 
