@@ -20,6 +20,7 @@ from panda3d.core import (
     CollisionTraverser,
     GeomNode,
 )
+from timing import unbudgeted
 
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import AzimuthalEquidistantChart, TangentFrame
@@ -290,7 +291,7 @@ def moon(showbase):
         showbase.render,
         PRESETS["moon"],
         executor=executor,
-        settings=TerrainSettings(min_level=7),
+        settings=unbudgeted(TerrainSettings(min_level=7)),
     )
     camera = TangentFrame.at(10.0, 20.0).up * (terrain.radius + 2000.0)
     _settle(terrain, camera)
@@ -307,10 +308,9 @@ def moon(showbase):
 
 
 def _settle(terrain, camera, frames=60):
-    """Step a fixed number of frames. The count is a speed assumption:
-    ``Terrain._upload`` stops at ``upload_ms_per_frame`` of wall-clock time, so
-    a slow machine may not be done (issue #28; see ``_settle_until_loaded`` in
-    test_terrain_multibody.py)."""
+    """Step a fixed number of frames. ``Terrain._upload`` also stops at
+    ``upload_ms_per_frame`` of wall-clock time, so the count only does the same
+    work on every machine for :func:`timing.unbudgeted` settings (issue #28)."""
     for _ in range(frames):
         terrain.update(camera)
 
@@ -508,7 +508,10 @@ def ocean_terrain(showbase):
     assert heights.min() < -1500.0
     executor = ChunkExecutor(backend="inline", inline_budget=16)
     terrain = Terrain(
-        showbase.render, spec, executor=executor, settings=TerrainSettings(min_level=7)
+        showbase.render,
+        spec,
+        executor=executor,
+        settings=unbudgeted(TerrainSettings(min_level=7)),
     )
     camera = deep * (terrain.radius + 2000.0)
     _settle(terrain, camera)

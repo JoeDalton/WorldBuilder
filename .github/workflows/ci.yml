@@ -19,6 +19,8 @@ jobs:
       - run: pip install poetry invoke poetry-dynamic-versioning
       - run: poetry install
       - run: invoke coverage
+        env:
+          WB_TEST_TIME_SCALE: "2"  # coverage tracing slows the code
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-report
@@ -34,6 +36,7 @@ jobs:
           - runner: windows-latest  # x86_64
           - runner: macos-latest  # arm64
           - runner: macos-15-intel  # x86_64
+            time_scale: "4"  # shared and slow: stretch the tests' time limits
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +46,8 @@ jobs:
       - run: pip install poetry invoke poetry-dynamic-versioning
       - run: poetry install
       - run: invoke test
+        env:
+          WB_TEST_TIME_SCALE: ${{ matrix.time_scale || '1' }}
 
   quality:
     runs-on: ubuntu-latest
@@ -182,6 +187,7 @@ jobs:
             runner: macos-15-intel
             wheel: macos-universal2
             bin: bin
+            time_scale: "4"
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -196,7 +202,7 @@ jobs:
           name: wheel-${{ matrix.wheel }}
           path: wheelhouse/
       - run: python -m venv "$RUNNER_TEMP/venv"
-      - run: '"$RUNNER_TEMP/venv/${{ matrix.bin }}/python" -m pip install wheelhouse/*.whl pytest pytest-xdist typing-extensions'
+      - run: '"$RUNNER_TEMP/venv/${{ matrix.bin }}/python" -m pip install wheelhouse/*.whl pytest pytest-xdist pytest-timeout typing-extensions'
       - name: The package comes from the wheel
         run: '"$RUNNER_TEMP/venv/${{ matrix.bin }}/python" -c "import world_builder; assert ''site-packages'' in world_builder.__file__, world_builder.__file__"'
       - name: The library finds Panda's next to it
@@ -217,6 +223,7 @@ jobs:
       - run: '"$RUNNER_TEMP/venv/${{ matrix.bin }}/python" -m pytest tests -n auto'
         env:
           WORLD_BUILDER_REQUIRE_NATIVE: "1"
+          WB_TEST_TIME_SCALE: ${{ matrix.time_scale || '1' }}
 
   # On a version tag, attach the tested platform wheels and the sdist to its
   # GitHub release (created if missing). Depend on a wheel's URL, not the tag's

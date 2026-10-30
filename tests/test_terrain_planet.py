@@ -5,13 +5,14 @@ Unit tests for the terrain prototype's planet, biomes, chunks and LOD
 
 import math
 import pickle
-import time
 from dataclasses import replace
 
 import numpy as np
 import pytest
+from timing import TIME_SCALE, wait_until
 
 from world_builder.terrain import biomes
+from world_builder.terrain.bench import _best_ms
 from world_builder.terrain.chart import (
     AzimuthalEquidistantChart,
     TangentFrame,
@@ -515,12 +516,15 @@ def test_thread_executor_completes(spec):
     keys = [(10, 3, ix, 0) for ix in range(3)]
     executor.request(keys)
     done = []
-    for _ in range(400):
-        done += executor.collect()
-        if len(done) == len(keys):
-            break
-        time.sleep(0.01)
-    executor.shutdown()
+
+    def all_done():
+        done.extend(executor.collect())
+        return len(done) == len(keys)
+
+    try:
+        wait_until(all_done, timeout=10.0, msg="chunks never arrived")
+    finally:
+        executor.shutdown()
     assert sorted(c.key for c in done) == keys
 
 
@@ -628,9 +632,8 @@ def test_lod_pass_cost_is_bounded():
     """Guards the LOD pass from regressing badly (it runs in the frame)."""
     selector = LodSelector(GRID)
     camera = camera_at(40.0, 20.0, 10.0)
-    selector.select(camera, **ALL_READY)  # warm the per-key boxes
-    start = time.perf_counter()
-    selection = selector.select(camera, **ALL_READY)
-    elapsed = time.perf_counter() - start
+    selection = selector.select(camera, **ALL_READY)  # warm the per-key boxes
     assert 300 < len(selection.draw) < 900
-    assert elapsed < 0.05
+    # The best of a few runs: one sample also times the scheduler, a GC pause
+    # or another xdist worker.
+    assert _best_ms(lambda: selector.select(camera, **ALL_READY)) < 50.0 * TIME_SCALE

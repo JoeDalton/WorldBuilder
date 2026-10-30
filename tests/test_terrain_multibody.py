@@ -9,6 +9,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from timing import TIME_SCALE, unbudgeted, wait_until
 
 from world_builder.terrain import biomes, workers
 from world_builder.terrain.chart import TangentFrame
@@ -55,12 +56,13 @@ def _stub(key, version):
 
 def _drain(executor, channels, count, timeout=10.0):
     done = {c: [] for c in channels}
-    start = time.perf_counter()
-    while sum(len(v) for v in done.values()) < count:
-        assert time.perf_counter() - start < timeout, "chunks never arrived"
+
+    def all_done():
         for channel in channels:
             done[channel] += executor.collect(channel)
-        time.sleep(0.005)
+        return sum(len(v) for v in done.values()) >= count
+
+    wait_until(all_done, timeout, "chunks never arrived", interval=0.005)
     return done
 
 
@@ -143,7 +145,7 @@ def two_bodies(showbase, planet_spec, moon_spec):
 
     # Coarse (no level finer than 7) to keep the inline generation short.
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    coarse = TerrainSettings(min_level=7)
+    coarse = unbudgeted(TerrainSettings(min_level=7))
     planet = Terrain(showbase.render, planet_spec, executor=executor, settings=coarse)
     moon_position = np.array([3.0e6, 9.0e6, 1.0e6])
     moon = Terrain(
@@ -163,12 +165,9 @@ def _settle(terrains, camera, frames=60):
     """Step frames (a pass every few frames while uploads arrive, and six
     uploads a frame: refining takes a few frames per level).
 
-    The frame count is a speed assumption: ``Terrain._upload`` stops at
-    ``upload_ms_per_frame`` of wall-clock time, so on a slow machine a fixed
-    count can stop before refinement ends (issue #28). Possible fix for the
-    callers that need a finished terrain: use ``_settle_until_loaded`` (or give
-    this an ``until_loaded`` option); callers that rely on a fixed count (e.g.
-    the eviction test's 15 frames per stop) must be reviewed one by one."""
+    ``Terrain._upload`` also stops at ``upload_ms_per_frame`` of wall-clock
+    time, so a fixed count only does the same work on every machine for a
+    terrain built with :func:`timing.unbudgeted` settings (issue #28)."""
     for _ in range(frames):
         for terrain in terrains:
             terrain.update(camera)
@@ -178,7 +177,7 @@ def _settle_until_loaded(terrain, camera, timeout=60.0, stable_frames=5):
     """Update until ``terrain.loading`` has stayed False for ``stable_frames``
     frames. Waits on the state, not a frame count (the uploads' wall-clock budget
     makes the frames needed depend on the machine). Fails after ``timeout`` s."""
-    deadline = time.perf_counter() + timeout
+    deadline = time.perf_counter() + timeout * TIME_SCALE
     stable = 0
     while stable < stable_frames:
         assert time.perf_counter() < deadline, "terrain still loading"
@@ -240,7 +239,7 @@ def test_chunks_a_query_generates_join_the_terrain_store(
         showbase.render,
         moon_spec,
         executor=executor,
-        settings=TerrainSettings(min_level=7),
+        settings=unbudgeted(TerrainSettings(min_level=7)),
     )
     try:
         camera = TangentFrame.at(30.0, 20.0).up * (terrain.radius + 2000.0)
@@ -365,12 +364,15 @@ def test_a_channel_runs_its_own_generator(planet_spec):
     executor.set_spec(3, "custom", generator=_square)
     executor.request([(4, 0, 0, 0)], "custom")
     done = []
-    for _ in range(400):
-        done += executor.collect("custom")
-        if done:
-            break
-        time.sleep(0.01)
-    executor.shutdown()
+
+    def arrived():
+        done.extend(executor.collect("custom"))
+        return bool(done)
+
+    try:
+        wait_until(arrived, timeout=10.0, msg="chunk never arrived")
+    finally:
+        executor.shutdown()
     assert done[0].value == 12
 
 
