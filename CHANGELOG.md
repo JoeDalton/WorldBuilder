@@ -126,8 +126,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `ElevationParams` and only computed where it is): sand seas of
     Sandastray's dunes (its nine layered noises, combined by min, add and
     multiply: rounded dunes with sharp crests, 100-150 m high) on every
-    arid plain, at any height (most plains of the desert planet), mesas and terraced cliffs in rough uplands, canyons in some
-    upland regions. All band limited: coarse chunks keep their mean height;
+    arid plain, at any height (most plains of the desert planet), and
+    tablelands in some upland regions: tables on a warped Voronoi noise cut
+    by valleys that widen with a regional erosion stage, from narrow
+    canyons to plains with rounded mesas, buttes and spires, their walls
+    shaped by the planet's rock strata (`terrain.strata`: hard layers in
+    cliffs with ledges, soft ones in slopes, a talus at the foot) and
+    tinted by them in bands (a strata mask in each vertex's sixth biome
+    byte). All band limited: coarse chunks keep their mean height.
+    Tableland chunks cost about 4 times the others (23 ms against 6 ms);
   - rock starts at 35 degrees, not 30 (`biomes.ROCK_SLOPE`);
   - cost: fine chunks as before; coarse chunks (level 7 and up at 600 km,
     which evaluate the low band directly) about 25 ms instead of 13 ms; the
@@ -135,7 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `plates=0` saves most of it.
   `scripts/terrain_metrics.py` measures flatness, slopes, coast roughness
   and peaks per preset. `scripts/find_landforms.py` finds places over each
-  desert landform (canyons by depth), and the demos (`demo_terrain.py`, `demo_world.py`,
+  desert landform (sand seas, canyons, mesas), and the demos (`demo_terrain.py`, `demo_world.py`,
   `terrain_shots.py`) take `--planet PRESET`, `--seed N` and
   `--start LAT LON`.
 - Asteroid fields without thresholds (#14):

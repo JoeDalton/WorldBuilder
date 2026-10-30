@@ -8,8 +8,9 @@ in vec4 p3d_Vertex;     // relative to the chunk centre, planet axes (metres)
 in vec3 p3d_Normal;
 in float height;        // metres above sea level (a skirt's own, below its edge)
 in vec4 biome_a;        // snow, rock, grass, forest
-in vec4 biome_b;        // desert, beach, then the chunk's slot (low byte; high
-                        // 7 bits) with the skirt flag (top bit), set at upload
+in vec4 biome_b;        // desert, the strata mask (beach is the rest of the
+                        // weights), then the chunk's slot (low byte; high 7
+                        // bits) with the skirt flag (top bit), set at upload
 
 #pragma include "../../ocean/shaders/swell.glsl"
 #pragma include "cube_faces.glsl"

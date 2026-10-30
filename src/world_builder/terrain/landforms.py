@@ -1,5 +1,5 @@
 """
-Desert landforms, as pure functions of position: dunes, mesas, terraces, canyons.
+Desert landforms, as pure functions of position: dunes and tablelands.
 
 They are shaped to stay band limited, as the rest of the elevation: a coarse
 chunk gets a smoothed version, never aliased steps.
@@ -10,24 +10,35 @@ chunk gets a smoothed version, never aliased steps.
   dunes are rounded with knife-edge ridges, at several scales, all with one
   grain. The grain is a fixed axis of the planet frame, so on the ground it
   turns slowly from region to region, without a singular point anywhere.
-* **Terraces**: a staircase of the elevation, flat treads and steep risers,
-  faded in as the sampling gets fine enough to show the risers.
-* **Mesas**: flat-topped tables with cliff edges, from a thresholded noise.
-* **Canyons**: flat-floored, steep-walled cuts along the zero lines of a
-  noise.
+* **Tablelands**: a layered plateau dissected by erosion, from young
+  country (narrow canyons between broad tables) to old (wide valleys and
+  plains, with isolated mesas, buttes and spires). The tables are the cells
+  of a warped Voronoi noise (:func:`cells`); the valleys between them widen
+  with the erosion stage, whole cells go to make plains, and small cells keep
+  spires there. The walls' cross-section comes from the planet's rock strata
+  (:mod:`strata`): cliffs in hard layers, slopes in soft ones, a ledge on
+  each hard layer's top.
 """
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 
 from world_builder.terrain.noise import (
+    _hash,
+    _mix_seed,
     fbm,
     octave_frame,
     octave_weight,
     simplex3,
     smoothstep,
+    warp,
 )
+from world_builder.terrain.strata import Strata
+
+_MASK21 = np.uint64((1 << 21) - 1)
 
 #: Sandastray's dune layers, in order: (period along the grain, period across
 #: it, amount, op), periods in metres. Its images are 1 m a pixel, and a
@@ -164,93 +175,131 @@ def dune_layer_offsets(samples: int = 200000, seed: int = 5) -> tuple[float, ...
     return tuple(offsets)
 
 
-def terrace(elevation: np.ndarray, step: float, riser: float = 0.35) -> np.ndarray:
-    """A staircase of *elevation*: flat treads, risers over *riser* of each step.
+def cells(
+    points: np.ndarray, size: float, seed: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Cellular (Voronoi) noise: one jittered site per lattice cube.
 
-    :param elevation: (N,) metres
-    :param step: height of a step, metres
-    :param riser: share of each step's height range the riser takes
-    :returns: (N,) terraced elevation, within half a step of the input
+    :param points: (N, 3) positions, metres
+    :param size: lattice spacing (the cells' mean size), metres
+    :param seed: field seed
+    :returns: (N,) each: the distance to the nearest site and to the edge of
+        its cell (the bisector with the second nearest), metres, and the
+        nearest site's id, uniform in [0, 1)
     """
-    level = elevation / step
-    floor = np.floor(level)
-    rise = smoothstep(0.5 - 0.5 * riser, 0.5 + 0.5 * riser, level - floor)
-    return step * (floor + rise)
+    u = points / size
+    base = np.floor(u).astype(np.int64)
+    mixed = _mix_seed(seed)
+    offsets = np.array(list(itertools.product((-1, 0, 1), repeat=3)), dtype=np.int64)
+    cell = base[:, None, :] + offsets[None, :, :]  # (N, 27, 3)
+    h = _hash(cell[..., 0].ravel(), cell[..., 1].ravel(), cell[..., 2].ravel(), mixed)
+    jitter = np.stack(
+        [
+            ((h >> np.uint64(shift)) & _MASK21).astype(np.float64)
+            for shift in (0, 21, 42)
+        ],
+        axis=1,
+    ).reshape(cell.shape)
+    site = cell + jitter / float(1 << 21)
+    d2 = np.einsum("nkj,nkj->nk", site - u[:, None, :], site - u[:, None, :])
+    nearest = np.argmin(d2, axis=1)
+    rows = np.arange(len(points))
+    best1 = d2[rows, nearest]
+    site1 = site[rows, nearest]
+    # Distance to the cell's edge: to the nearest bisector plane with any
+    # other site (the second nearest alone jumps where the second and third
+    # swap).
+    gap = np.linalg.norm(site - site1[:, None, :], axis=2)
+    to_bisector = (d2 - best1[:, None]) / (2.0 * np.maximum(gap, 1e-12))
+    to_bisector[rows, nearest] = np.inf
+    edge = to_bisector.min(axis=1)
+    cell1 = cell[rows, nearest]
+    ident = _hash(cell1[:, 0], cell1[:, 1], cell1[:, 2], _mix_seed(seed + 1))
+    ident = (ident >> np.uint64(11)).astype(np.float64) / float(1 << 53)
+    return np.sqrt(best1) * size, edge * size, ident
 
 
-def terrace_fade(step: float, min_wavelength: float | None) -> float:
-    """:returns: how much of the terraces to show, 1 down to 0 as the
-    sampling gets too coarse for their risers (a few steps wide)"""
-    if min_wavelength is None:
-        return 1.0
-    return float(1.0 - smoothstep(1.5 * step, 6.0 * step, min_wavelength))
-
-
-#: Share of the ground a mesa noise tops (n above :data:`MESA_LEVEL`), and
-#: of a canyon region a canyon covers (abs(n) under :data:`CANYON_LEVEL`),
-#: for a 3-octave fbm (measured over 400k points; the same for any seed).
-MESA_LEVEL, MESA_SHARE = 0.145, 0.285
-CANYON_LEVEL, CANYON_SHARE = 0.04, 0.125
-
-
-def _band_limited_step(
-    n: np.ndarray,
-    level: float,
-    width: float,
-    metres: float,
-    share: float,
+def tablelands(
+    points: np.ndarray,
+    floor: np.ndarray,
+    weight: np.ndarray,
+    stage: np.ndarray,
+    stack: np.ndarray,
+    strata: Strata,
+    cell: float,
+    spire_cell: float,
+    top_relief: float,
+    seed: int,
     min_wavelength: float | None,
 ) -> np.ndarray:
-    """A smooth step of a noise *n* at *level*, 0 below and 1 above, as a
-    coarse chunk should see it.
+    """Tables, valleys and spires cut into the strata, as heights above the
+    valley floor.
 
-    :param width: the step's width, in units of n
-    :param metres: about how wide that is on the ground
-    :param share: the share of the ground above the step (its mean)
-    :param min_wavelength: shortest wavelength to keep, metres
-    :returns: in [0, 1]. Coarser than the step, it widens (up to 4 times),
-        then fades to its mean, so coarse chunks keep the right average
-        height instead of aliasing a cliff or losing the feature.
-    """
-    blur = 1.0 if min_wavelength is None else max(1.0, min_wavelength / metres)
-    half = 0.5 * width * min(blur, 4.0)
-    step = smoothstep(level - half, level + half, n)
-    fade = float(smoothstep(4.0, 16.0, np.float64(blur)))
-    return step + fade * (share - step)
-
-
-def mesa_tops(
-    points: np.ndarray, wavelength: float, seed: int, min_wavelength: float | None
-) -> np.ndarray:
-    """Flat-topped tables: 1 on a mesa, 0 around it, cliffs between.
-
-    :param points: (N, 3) positions, metres
-    :param wavelength: size of the mesas' noise, metres
+    :param points: (N, 3) positions, metres (warped, as the other fields)
+    :param floor: (N,) the valley floor's altitude, metres
+    :param weight: (N,) how much tableland there is, in [0, 1] (scales the
+        stack, so tables sink into the plain at a region's edge)
+    :param stage: (N,) erosion stage in [0, 1]: 0 narrow canyons between
+        broad tables, 1 plains with a few mesas, buttes and spires
+    :param stack: (N,) height of the tables above the floor, metres
+    :param strata: the planet's layers (the walls' cross-section)
+    :param cell: the tables' size, metres
+    :param spire_cell: the spacing of spires and buttes, metres
+    :param top_relief: the gentle hills on the tables' tops, metres
     :param seed: field seed
-    :param min_wavelength: shortest wavelength to keep, metres
-    :returns: (N,) in [0, 1]; mesas cover about 30 % of the ground, their
-        cliffs about 1/40 of the wavelength wide
+    :param min_wavelength: shortest wavelength to keep, metres; None = all.
+        Coarser, the walls' cross-section is averaged over the sampling
+        (a tent), so cliffs blur instead of stepping
+    :returns: (N,) metres above *floor*, at least 0
     """
-    n = fbm(points, wavelength, 3, seed, min_wavelength=min_wavelength)
-    return _band_limited_step(
-        n, MESA_LEVEL, 0.05, wavelength / 40.0, MESA_SHARE, min_wavelength
+    # Cell edges bend, at two scales (each warp under the 0.06 ratio that
+    # keeps space from folding).
+    q = warp(points, 5.0 * cell, 0.25 * cell, 2, seed)
+    q = warp(q, 1.5 * cell, 0.08 * cell, 2, seed + 1)
+
+    # Tables: the valleys between them widen with the stage, their walls
+    # crenellated; as erosion goes on, whole tables go (their walls retreat
+    # to nothing once the cell's id falls under the stage's share).
+    centre, edge, ident = cells(q, cell, seed + 2)
+    # Old tables round off: their cell, cut by a disc about its site.
+    rounded = np.minimum(edge, 0.45 * cell - centre + (1.0 - stage) * cell)
+    width = 60.0 + (0.15 * cell - 60.0) * stage
+    crenel = np.clip(fbm(q, 600.0, 2, seed + 3, min_wavelength=min_wavelength), -1, 1)
+    gone = smoothstep(-0.05, 0.05, 0.6 * stage**2 - ident)
+    # Crenellated walls: never more than the valley's half-width (so a
+    # valley stays open) nor steep enough to undercut the strata's slopes.
+    crenel = 0.8 * np.minimum(width, 60.0) * crenel
+    s = rounded - width + crenel - 2.0 * cell * gone
+
+    # Spires and buttes: small cells keep one, only where a table has gone
+    # and away from its cell's edge (so no spire is cut by it). Computed
+    # there only: elsewhere they would stand below the ground.
+    away = gone * smoothstep(150.0, 300.0, edge)
+    on = away > 0.0
+    if np.any(on):
+        f1, small_edge, small_ident = cells(q[on], spire_cell, seed + 4)
+        radius = 150.0 + 250.0 * np.modf(small_ident * 4096.0)[0]
+        kept = smoothstep(-0.05, 0.05, 0.35 * stage[on] - small_ident)
+        spire = (
+            np.minimum(radius - f1, 0.5 * small_edge)
+            - 2.0 * spire_cell * (1.0 - kept)
+            - 2.0 * cell * (1.0 - away[on])
+        )
+        s[on] = np.maximum(s[on], spire)
+
+    # The tops: the stack's height, gently hilly above it.
+    hills = 0.5 + 0.5 * np.clip(
+        fbm(q, 1500.0, 3, seed + 5, min_wavelength=min_wavelength), -1.0, 1.0
     )
-
-
-def canyons(
-    points: np.ndarray, wavelength: float, seed: int, min_wavelength: float | None
-) -> np.ndarray:
-    """Canyon cuts: 1 on a canyon floor, 0 outside, steep walls between.
-
-    :param points: (N, 3) positions, metres
-    :param wavelength: spacing of the canyon network's noise, metres
-    :param seed: field seed
-    :param min_wavelength: shortest wavelength to keep, metres
-    :returns: (N,) in [0, 1]; canyons about 1/20 of the wavelength wide, a
-        third of that their floor, along the noise's zero lines
-    """
-    n = np.abs(fbm(points, wavelength, 3, seed, min_wavelength=min_wavelength))
-    outside = _band_limited_step(
-        n, CANYON_LEVEL, 0.04, wavelength / 60.0, 1.0 - CANYON_SHARE, min_wavelength
+    ceiling = floor + weight * (stack + top_relief * hills)
+    # Debris at the walls' foot, up to a fifth of their height.
+    talus = 0.2 * weight * stack
+    if not min_wavelength:
+        return strata.profile(floor, s, ceiling, talus) - floor
+    r = 0.25 * min_wavelength
+    height = (
+        0.25 * strata.profile(floor, s - r, ceiling, talus)
+        + 0.5 * strata.profile(floor, s, ceiling, talus)
+        + 0.25 * strata.profile(floor, s + r, ceiling, talus)
     )
-    return 1.0 - outside
+    return height - floor

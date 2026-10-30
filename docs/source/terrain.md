@@ -108,10 +108,23 @@ only where it is:
   one grain; 100-150 m from trough to crest (`dune_scale`, `dune_height`).
   The steepest crests turn to rock. Coarse chunks fade the layers finest
   first, keeping the mean height;
-- `mesas`: flat-topped tables with cliffs in rough arid uplands (rougher
-  than the sand seas' plains), their cliffs terraced;
-- `canyons`: flat-floored canyons cut into arid uplands in some regions,
-  their walls terraced.
+- `tablelands`: in some regions of the arid uplands, a layered plateau cut
+  up by erosion. The tables are the cells of a warped Voronoi noise (about
+  4 km, `table_cell`), 200-700 m above their valleys (`stack_height`), with
+  gently hilly tops. A regional erosion stage widens the valleys: young
+  country is narrow canyons between broad tables, old country is plains
+  where whole tables have gone, leaving rounded mesas, and buttes and
+  spires (`spire_cell`) standing on the plain. The walls take their shape
+  from the planet's rock strata (`terrain.strata`): level layers 20-250 m
+  thick, hard ones standing as 80° cliffs with a ledge on top, soft ones as
+  50° slopes, and a 30° talus at the foot. Coarse chunks average the
+  cross-section over their spacing, so the cliffs blur instead of stepping.
+
+**Strata colours.** The layers are tinted (placeholder colours: grey, red,
+ochre, buff, pale, brown), and the shader tints the ground by altitude from
+the same table, only in the tablelands (a mask in each vertex: the sixth
+biome byte, beach being the rest of the weights): the same bands at the
+same height on every wall, faint on the flat floors and tops.
 
 `scripts/terrain_metrics.py` prints numbers for the look of each preset:
 the share of flat land, slope percentiles, the coastline's box-count

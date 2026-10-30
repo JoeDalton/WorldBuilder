@@ -15,10 +15,12 @@ from world_builder.terrain import biomes
 from world_builder.terrain.chart import (
     AzimuthalEquidistantChart,
     TangentFrame,
+    dirs_from_latlon,
     latlon,
 )
 from world_builder.terrain.chunkgen import (
     QUADS,
+    VERTEX_DTYPE,
     VERTS,
     generate_chunk,
     parent_interpolation,
@@ -151,7 +153,7 @@ def test_plains_are_flat_and_ranges_rough(planet):
 
 def test_dunes_cover_the_desert_plains_only():
     """Sand seas cover most plains of the desert planet, at any height, and
-    only otherwise flat ground: no range, no mesas, no canyons."""
+    only otherwise flat ground: no range, no tablelands."""
     planet = Planet(replace(PRESETS["desert"], seed=19))
     dirs = _random_dirs(40000, seed=7)
     masks = planet.landform_masks(dirs)
@@ -165,10 +167,10 @@ def test_dunes_cover_the_desert_plains_only():
     sand = masks["dunes"] > 0.01
     assert low[sand, LOW_CHARACTER].max() < 0.3
     assert low[sand, LOW_RANGE].max() < 0.05
-    assert masks["mesas"][sand].max() == 0.0
-    assert np.all(masks["canyons"][sand] + masks["dunes"][sand] <= 1.0 + 1e-9)
-    deep_canyon = masks["canyons"] > 0.99
-    assert masks["dunes"][deep_canyon].max() < 0.01
+    # Sand and tablelands share the ground at a region's edge, never more.
+    assert np.all(masks["tablelands"] + masks["dunes"] <= 1.0 + 1e-9)
+    deep = masks["tablelands"] > 0.99
+    assert deep.any() and masks["dunes"][deep].max() < 0.01
 
 
 def test_landforms_and_plates_can_be_turned_off():
@@ -177,9 +179,7 @@ def test_landforms_and_plates_can_be_turned_off():
     desert = replace(PRESETS["desert"], seed=4)
     off = replace(
         desert,
-        elevation=replace(
-            desert.elevation, plates=0, dunes=False, mesas=False, canyons=False
-        ),
+        elevation=replace(desert.elevation, plates=0, dunes=False, tablelands=False),
     )
     dirs = _random_dirs(20000, seed=6)
     a, _, _ = Planet(off).sample_dirs(dirs, 8.0)
@@ -288,6 +288,20 @@ def test_slope_from_normals():
 
 def _positions(chunk):
     return chunk.vertices()["vertex"].astype(np.float64) + chunk.centre
+
+
+def test_vertices_carry_five_weights_and_the_strata_mask():
+    """Beach travels as the rest of the weights; the sixth byte is where the
+    strata tint the ground (a canyon of the desert planet, seed 19)."""
+    desert = replace(PRESETS["desert"], seed=19).resolved()
+    planet = Planet(desert)
+    face, i, j, _, _ = planet.grid.locate(dirs_from_latlon(-0.423, 11.1071), 4)
+    chunk = generate_chunk(desert, (4, int(face[0]), int(i[0]), int(j[0])), 0)
+    vertices = np.frombuffer(chunk.vertex_bytes, VERTEX_DTYPE)[: VERTS * VERTS]
+    stored = np.column_stack([vertices["biome_a"], vertices["biome_b"][:, :1]])
+    beach = 1.0 - stored.sum(axis=1) / 255.0
+    np.testing.assert_allclose(beach, chunk.weights[:, 5] / 255.0, atol=3 / 255)
+    assert vertices["biome_b"][:, 1].max() > 200  # in the tablelands
 
 
 def test_chunk_layout(spec):

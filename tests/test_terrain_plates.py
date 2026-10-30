@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from scipy import ndimage
 
-from world_builder.terrain import biomes, landforms
+from world_builder.terrain import biomes, landforms, strata
 from world_builder.terrain.chart import AzimuthalEquidistantChart
 from world_builder.terrain.plates import Plates, make_plates, plate_fields
 
@@ -143,31 +143,107 @@ def test_dunes_keep_their_mean_when_coarse():
     assert np.ptp(flat) < 1e-9
 
 
-def test_terraces_are_steps_that_keep_the_mean():
-    h = np.linspace(0.0, 800.0, 80001)
-    t = landforms.terrace(h, 80.0)
-    assert np.abs(t - h).max() <= 40.0 + 1e-9
-    assert t.mean() == pytest.approx(h.mean(), abs=0.5)
-    flat = np.abs(np.diff(t)) < 1e-6
-    assert flat.mean() > 0.5  # mostly treads
-    assert landforms.terrace_fade(80.0, None) == 1.0
-    assert landforms.terrace_fade(80.0, 1000.0) == 0.0
+# ── tablelands ────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("shape", [landforms.mesa_tops, landforms.canyons])
-def test_mesas_and_canyons_keep_their_mean_when_coarse(shape):
-    """Sharp when fine; coarser, blurred, then flat at the same mean: never a
-    whole region raised or sunk by a step it cannot resolve."""
-    dirs, points = _chart_grid(300, 100.0)
-    fine = shape(points, 8e3, 5, None)
-    assert 0.0 <= fine.min() and fine.max() <= 1.0
-    edges = [np.mean((fine > 0.05) & (fine < 0.95))]
-    for min_wavelength in (400.0, 1600.0):
-        blurred = shape(points, 8e3, 5, min_wavelength)
-        edges.append(np.mean((blurred > 0.05) & (blurred < 0.95)))
-    assert edges[0] < edges[1] < edges[2]
-    far = shape(points, 8e3, 5, 20000.0)
-    assert np.ptp(far) < 1e-9
-    big_dirs, big_points = _chart_grid(400, 400.0)
-    mean = shape(big_points, 8e3, 5, None).mean()
-    assert float(far[0]) == pytest.approx(mean, abs=0.06)
+def test_cells_are_a_voronoi_partition():
+    points = np.random.default_rng(2).uniform(-2e4, 2e4, size=(20000, 3))
+    f1, edge, ident = landforms.cells(points, 1000.0, 5)
+    again = landforms.cells(points, 1000.0, 5)
+    for a, b in zip((f1, edge, ident), again):
+        np.testing.assert_array_equal(a, b)
+    assert np.all(edge >= 0.0) and np.all(f1 >= 0.0)
+    assert np.all((ident >= 0.0) & (ident < 1.0))
+    assert abs(ident.mean() - 0.5) < 0.05  # one id per cell, uniform
+    # The edge distance is continuous: a 5 m step changes it by at most 5 m.
+    step = np.random.default_rng(3).normal(size=points.shape)
+    step *= 5.0 / np.linalg.norm(step, axis=1, keepdims=True)
+    _, moved, _ = landforms.cells(points + step, 1000.0, 5)
+    assert np.abs(moved - edge).max() <= 5.0 + 1e-6
+
+
+def test_strata_shape_walls():
+    layers = strata.make_strata(11)
+    assert np.all(np.diff(layers.runs) > 0.0)
+    assert np.all(np.diff(layers.heights) >= 0.0)
+    assert 0.2 < layers.hard.mean() < 0.5
+    # A wall climbs from its foot to the ceiling, never past either.
+    foot = np.full(4000, 300.0)
+    s = np.linspace(-50.0, 3000.0, 4000)
+    wall = layers.profile(foot, s, foot + 600.0)
+    assert np.all(np.diff(wall) >= -1e-9)
+    assert wall[0] == 300.0 and wall[-1] == pytest.approx(900.0)
+    # Hard layers stand steeper than soft ones; their tops are ledges.
+    slope = np.degrees(np.arctan(np.gradient(wall, s)))
+    layer = np.searchsorted(layers.tops, wall)
+    rising = (wall > 300.5) & (wall < 899.5)
+    hard = rising & layers.hard[layer] & (slope > 1.0)
+    soft = rising & ~layers.hard[layer] & (slope > 1.0)
+    assert np.median(slope[hard]) == pytest.approx(strata.HARD_SLOPE, abs=1.0)
+    assert np.median(slope[soft]) == pytest.approx(strata.SOFT_SLOPE, abs=1.0)
+    # A talus at the foot: the gentler debris slope first.
+    talus = layers.profile(foot, s, foot + 600.0, 100.0)
+    debris = (talus > 300.5) & (talus < 399.5)
+    talus_slope = np.degrees(np.arctan(np.gradient(talus, s)))[debris]
+    assert np.median(talus_slope) == pytest.approx(strata.TALUS_SLOPE, abs=1.0)
+    assert talus[-1] == pytest.approx(900.0)
+    ledges = np.isin(np.round(wall, 6), np.round(layers.tops[layers.hard], 6))
+    assert np.any(ledges & (slope < 1.0))
+    lut = strata.strata_lut(layers)
+    assert lut.shape == (1024, 3) and lut.min() >= 0.5
+
+
+def _tableland(points, stage, min_wavelength=None):
+    n = len(points)
+    return landforms.tablelands(
+        points,
+        np.full(n, 400.0),
+        np.ones(n),
+        np.full(n, stage),
+        np.full(n, 500.0),
+        strata.make_strata(11),
+        4000.0,
+        1200.0,
+        25.0,
+        7,
+        min_wavelength,
+    )
+
+
+@pytest.mark.parametrize("stage", [0.1, 0.9])
+def test_tablelands_are_continuous(stage):
+    """No jump anywhere: cell edges, dropped tables and spires included."""
+    dirs, points = _chart_grid(400, 50.0)
+    step = np.array([1.0, 0.0, 0.0]) * 2.0
+    h = _tableland(points, stage)
+    moved = _tableland(points + step, stage)
+    # 2 m apart: a steep wall's rise over 2 m (an 80 degree cliff: 11 m,
+    # steeper where the walls are crenellated), never a table's height.
+    assert np.abs(moved - h).max() < 30.0
+    assert h.min() >= 0.0 and h.max() <= 525.0 + 1e-6
+
+
+def test_tablelands_have_tables_canyons_and_hilly_tops():
+    dirs, points = _chart_grid(300, 40.0)
+    young = _tableland(points, 0.05).reshape(300, 300)
+    old = _tableland(points, 0.95).reshape(300, 300)
+    top = young >= 500.0
+    assert 0.4 < top.mean() < 0.95  # broad tables, narrow canyons
+    assert (young < 5.0).mean() > 0.01  # canyon floors
+    assert (old < 5.0).mean() > 0.6  # mostly plain once old
+    assert (old > 300.0).mean() > 0.005  # with mesas and buttes
+    # The tops: gently hilly, within the relief above the stack.
+    tops = young[top]
+    assert 5.0 < np.ptp(tops) <= 25.0 + 1e-6
+    slope = biomes.slope_degrees(young, 40.0)[2:-2, 2:-2]
+    assert np.percentile(slope[top[2:-2, 2:-2]], 95) < 15.0
+
+
+def test_tablelands_blur_when_coarse():
+    """Coarse, the walls are averaged over the sampling: the mean height
+    stays, the cliffs soften."""
+    dirs, points = _chart_grid(300, 40.0)
+    fine = _tableland(points, 0.3)
+    coarse = _tableland(points, 0.3, 400.0)
+    assert coarse.mean() == pytest.approx(fine.mean(), rel=0.05)
+    assert np.abs(coarse - fine).max() < 500.0

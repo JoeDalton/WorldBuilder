@@ -26,7 +26,7 @@ in float vSeabed;
 in vec3 vNormal;
 in vec3 vUp;
 in vec4 vBiomeA;   // snow, rock, grass, forest
-in vec4 vBiomeB;   // desert, beach, the chunk's slot; skirt flag (a >= 0.5)
+in vec4 vBiomeB;   // desert, strata mask, the chunk's slot; skirt flag (a >= 0.5)
 in vec4 vSwell;    // the swell: gradient per metre (planet axes), field
 flat in int vFace;
 flat in vec3 vFaceU;   // the face's texture axes, render frame
@@ -54,6 +54,8 @@ uniform int   uSeaSurface;
 uniform vec3  uShallowWater;      // the sea surface's shallow tint, linear
 uniform float uShallowDepth;      // and its e-folding depth, metres
 
+uniform sampler2D uStrata;        // the rock strata's tints by altitude (one row)
+uniform vec2  uStrataRange;       // the altitudes its first and last texels span
 uniform int   uDebugMode;  // 0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts
 uniform int   uMaxLevel;
 
@@ -101,7 +103,11 @@ void main() {
     }
 #endif
 
-    float w[6] = float[6](vBiomeA.r, vBiomeA.g, vBiomeA.b, vBiomeA.a, vBiomeB.r, vBiomeB.g);
+    // Five weights travel; beach is the rest. The sixth byte is where the
+    // rock strata tint the ground (terrain.strata, the tablelands).
+    float beach = max(0.0, 1.0 - vBiomeA.r - vBiomeA.g - vBiomeA.b - vBiomeA.a - vBiomeB.r);
+    float w[6] = float[6](vBiomeA.r, vBiomeA.g, vBiomeA.b, vBiomeA.a, vBiomeB.r, beach);
+    float strata = vBiomeB.g;
 
     // World-anchored noise wobbles the weights, so biome edges are ragged
     // rather than following the vertex grid. Multiplicative: a pure biome
@@ -169,6 +175,14 @@ void main() {
     } else {
         layeredMaterial(w, vUv, vHeight, N, Tu, Tv, upN, dist, meanAlbedo, far,
                         albedo, surfaceN, roughness, ao);
+    }
+    if (!water && strata > 0.0) {
+        // The same bands at the same altitude on every wall (mipmapped, so
+        // they blur rather than shimmer far away); on the flat floors and
+        // tops, sand and debris hide the rock: a faint tint only.
+        float t = (vHeight - uStrataRange.x) / (uStrataRange.y - uStrataRange.x);
+        float exposed = mix(0.35, 1.0, smoothstep(0.95, 0.75, upN));
+        albedo *= mix(vec3(1.0), texture(uStrata, vec2(t, 0.5)).rgb, strata * exposed);
     }
 
     vec3 V = normalize(-vRelPos);

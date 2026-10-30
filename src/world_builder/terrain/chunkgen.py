@@ -32,7 +32,8 @@ from world_builder.terrain.planet import Planet, PlanetSpec
 __all__ = ["QUADS", "VERTS", "VERTEX_DTYPE", "ChunkData", "generate_chunk"]
 
 #: Interleaved vertex record. Biome weights are normalised bytes:
-#: a = snow, rock, grass, forest; b = desert, beach, unused, skirt flag.
+#: a = snow, rock, grass, forest; b = desert, the strata tint's mask (the
+#: shader takes beach as the rest of the weights), then the chunk's slot.
 #: ``height`` is metres above sea level (the skirt's own, below its edge).
 VERTEX_DTYPE = np.dtype(
     [
@@ -207,6 +208,14 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
     for paint in spec.paints:
         w = paint.apply(inner_dirs, w, radius)
     w_bytes = np.clip(np.rint(w * 255.0), 0, 255).astype(np.uint8)
+    # The vertices carry five weights (the shader takes beach as the rest)
+    # and, in the sixth byte, where the rock strata tint the ground.
+    packed = w_bytes.copy()
+    if sample.strata is None:
+        packed[:, 5] = 0
+    else:
+        strata = sample.strata[inner].ravel()
+        packed[:, 5] = np.clip(np.rint(strata * 255.0), 0, 255).astype(np.uint8)
 
     geometric_error = float(np.max(np.abs(elevation - parent_interpolation(elevation))))
     h_min, h_max = float(elevation.min()), float(elevation.max())
@@ -222,7 +231,7 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
             inner_dirs,
             elevation.ravel(),
             normals.reshape(-1, 3),
-            w_bytes,
+            packed,
             centre,
             radius,
             skirt_depth,
@@ -230,7 +239,7 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         )
     else:
         vertices = _pack_vertices(
-            points[inner], inner_dirs, centre, elevation, normals, w_bytes, skirt_depth
+            points[inner], inner_dirs, centre, elevation, normals, packed, skirt_depth
         )
         local = vertices["vertex"]
         if spec.has_ocean:

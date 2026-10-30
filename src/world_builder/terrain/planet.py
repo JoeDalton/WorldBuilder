@@ -20,8 +20,9 @@ Elevation, in metres above sea level, sums these layers at the sample point
    limited, so coarse samples never alias detail they cannot represent),
    scaled by the region's character (plains to rough country) and, near the
    sea, its coast style (smooth to rugged)
-5. **desert landforms** on arid land (:mod:`landforms`): dunes, mesas and
-   terraces, canyons
+5. **desert landforms** on arid land (:mod:`landforms`): dunes on the
+   plains; tablelands (canyons, mesas, buttes, spires, cut into the
+   planet's rock strata, :mod:`strata`) in some upland regions
 6. **stamps**: hand-made heightmaps, in list order
 
 Planet scale: the radius is the one knob. :class:`ElevationParams` and
@@ -54,6 +55,7 @@ from world_builder.terrain.chart import dirs_from_latlon, latlon
 from world_builder.terrain.cubesphere import face_dirs, grid_for
 from world_builder.terrain.noise import fbm, native_library, ridged, smoothstep, warp
 from world_builder.terrain.plates import PlateFields, make_plates, plate_fields
+from world_builder.terrain.strata import Strata, make_strata
 
 #: Default terrain planet radius, metres (a small, Kerbin-like world).
 TERRAIN_RADIUS_M = 600e3
@@ -85,8 +87,9 @@ _SEED_COAST = 103
 _SEED_PLATES = 107
 _SEED_MASSIF = 109
 _SEED_DUNES = 127
-_SEED_MESAS = 131
-_SEED_CANYONS = 137
+_SEED_TABLES = 131
+_SEED_STAGE = 137
+_SEED_STACK = 139
 
 # Columns of the low band (:meth:`Planet.low_band`).
 LOW_WARP = slice(0, 3)
@@ -99,8 +102,10 @@ LOW_COAST = 8
 LOW_TECTONIC = 9
 LOW_ARID = 10
 LOW_ERG = 11
-LOW_CANYON = 12
-LOW_CHANNELS = 13
+LOW_TABLE = 12
+LOW_STAGE = 13
+LOW_STACK = 14
+LOW_CHANNELS = 15
 
 #: Mountain height (fraction of the range's summit level) against the ridged
 #: crest field: broad valley floors, steep flanks, sharp crests. The crest
@@ -188,22 +193,28 @@ class ElevationParams:
     coast_wavelength: float = 200e3
     #: Desert landforms on arid land (:mod:`landforms`); each costs only
     #: where it is. Sand seas (ergs) of dunes on every arid plain, at any
-    #: height: wherever the ground is otherwise flat (no range, no mesas, no
-    #: canyons)
+    #: height: wherever the ground is otherwise flat (no range, no
+    #: tablelands)
     dunes: bool = True
     #: Dune size, times Sandastray's (layers 42 m to 1.4 km), and height
     #: scale, metres (Sandastray's 200: 100-150 m from trough to crest)
     dune_scale: float = 1.0
     dune_height: float = 200.0
-    #: Mesas and terraced slopes on arid uplands
-    mesas: bool = True
-    mesa_wavelength: float = 8e3
-    mesa_height: float = 300.0
-    terrace_step: float = 80.0
-    #: Canyons cut into arid uplands
-    canyons: bool = True
-    canyon_wavelength: float = 40e3
-    canyon_depth: float = 900.0
+    #: Tablelands in some regions of the arid uplands: tables cut into the
+    #: rock strata by valleys, from narrow canyons to plains with buttes and
+    #: spires as the erosion stage goes on (:func:`landforms.tablelands`)
+    tablelands: bool = True
+    #: Size of the regions that are tablelands or not (scaled), and of the
+    #: regions of one erosion stage and one height (scaled)
+    table_region_wavelength: float = 320e3
+    stage_wavelength: float = 120e3
+    #: The tables' size and the spires' spacing, metres
+    table_cell: float = 4000.0
+    spire_cell: float = 1200.0
+    #: The tables' height above their valleys, metres, from region to region
+    stack_height: tuple[float, float] = (200.0, 700.0)
+    #: Gentle hills on the tables' tops, metres
+    table_top_relief: float = 25.0
     hills_wavelength: float = 14e3
     hills_octaves: int = 5
     hills_height: float = 320.0
@@ -330,8 +341,7 @@ PRESETS: dict[str, PlanetSpec] = {
             ocean_fraction=0.4,
             plates=0,
             dunes=False,
-            mesas=False,
-            canyons=False,
+            tablelands=False,
             mountain_coverage=-0.1,
             hills_height=260.0,
             detail_height=30.0,
@@ -386,6 +396,8 @@ def scaled_params(spec: PlanetSpec) -> tuple[ElevationParams, ClimateParams]:
         plate_warp_amplitude=e.plate_warp_amplitude * s,
         belt_width=e.belt_width * s,
         character_wavelength=e.character_wavelength * s,
+        table_region_wavelength=e.table_region_wavelength * s,
+        stage_wavelength=e.stage_wavelength * s,
         coast_wavelength=e.coast_wavelength * s,
         mountain_height=e.mountain_height * min(max(s**0.5, lo), hi),
         feature_scale=s,
@@ -408,6 +420,8 @@ class GridSample:
     :ivar humidity: (rows, columns) in [0, 1]
     :ivar weights: (rows, columns, 6) biome weights summing to 1, for a body
         that sets them itself; None = from the climate (biomes.weights)
+    :ivar strata: (rows, columns) in [0, 1], where the rock strata tint the
+        ground (the tablelands); None = nowhere
     """
 
     dirs: np.ndarray
@@ -415,6 +429,7 @@ class GridSample:
     temperature: np.ndarray
     humidity: np.ndarray
     weights: np.ndarray | None = None
+    strata: np.ndarray | None = None
 
 
 #: The heights a planet's ground can take, metres above sea level: before a
@@ -467,7 +482,8 @@ class Planet:
             range mask in [0, 1], base temperature, base humidity, character
             (0 plains, 1 rough country), coast style (0 smooth, 1 rugged) and
             the plates' ridges and rifts (metres), arid land, sand seas and
-            canyon regions (all three in [0, 1])
+            tableland regions (all three in [0, 1]), erosion stage in [0, 1]
+            and the tables' height (metres)
         """
         spec = self.spec
         e, c = self.elevation, self.climate
@@ -518,14 +534,18 @@ class Planet:
         )
         # Arid land, from the climate at sea level (the altitude's cooling
         # would make the shape depend on itself), and its sand seas: on every
-        # plain, away from ranges (and from canyons: see _erg).
+        # plain, away from ranges (and from tablelands: see _erg).
         arid = aridity(temperature, humidity) * smoothstep(0.0, 0.08, continent)
         erg = arid * smoothstep(0.3, 0.1, character) * smoothstep(0.05, 0.0, ranges)
-        # Where canyons may cut (into arid uplands): some regions only.
-        canyon = smoothstep(
-            0.0,
-            0.2,
-            fbm(q, 8.0 * e.canyon_wavelength, 2, seed + _SEED_CANYONS + 1),
+        # Tablelands (in arid uplands): some regions only, each at its own
+        # erosion stage and height.
+        tables = smoothstep(
+            0.0, 0.2, fbm(q, e.table_region_wavelength, 2, seed + _SEED_TABLES)
+        )
+        stage = smoothstep(-0.3, 0.3, fbm(q, e.stage_wavelength, 2, seed + _SEED_STAGE))
+        low_stack, high_stack = e.stack_height
+        stack = low_stack + (high_stack - low_stack) * smoothstep(
+            -0.3, 0.3, fbm(q, e.stage_wavelength, 2, seed + _SEED_STACK)
         )
         return np.column_stack(
             [
@@ -539,7 +559,9 @@ class Planet:
                 tectonic,
                 arid,
                 erg,
-                canyon,
+                tables,
+                stage,
+                stack,
             ]
         )
 
@@ -609,8 +631,11 @@ class Planet:
         relief = (0.12 + 1.08 * rough) * (1.0 - shore) + (0.04 + 1.16 * coast) * shore
         fine = (0.3 + 0.7 * rough) * (1.0 - shore) + (0.1 + 0.9 * coast) * shore
 
-        # Under the sand seas the ground is otherwise flat.
+        # Under the sand seas and in the tablelands' valleys the ground is
+        # otherwise flat.
         erg = self._erg(low, base)
+        tables = self._tables(low, base)
+        flat = 1.0 - np.maximum(0.85 * erg, 0.7 * tables)
 
         mountains = np.zeros(len(dirs))
         active = range_mask * land > 1e-4
@@ -638,7 +663,7 @@ class Planet:
                 min_wavelength=min_wavelength,
             )
             * relief
-            * (1.0 - 0.85 * erg)
+            * flat
         )
         detail = (
             e.detail_height
@@ -652,9 +677,10 @@ class Planet:
             * fine
             * (1.0 + 2.0 * range_mask * land)
             * (1.0 - 0.8 * erg)
+            * (1.0 - 0.6 * tables)
         )
         elevation = self._desert(
-            base + mountains + hills, q, base, erg, low, min_wavelength
+            base + mountains + hills, q, erg, tables, low, min_wavelength
         )
         elevation = elevation + detail
 
@@ -669,14 +695,14 @@ class Planet:
         self,
         elevation: np.ndarray,
         q: np.ndarray,
-        base: np.ndarray,
         erg: np.ndarray,
+        tables: np.ndarray,
         low: np.ndarray,
         min_wavelength: float | None,
     ) -> np.ndarray:
-        """Dunes on sand seas (*erg*, in [0, 1]); mesas, canyons and terraces
-        on arid uplands. Each is evaluated only where it is, and only if the
-        spec has it on.
+        """Dunes on sand seas (*erg*, in [0, 1]), tablelands (*tables*, in
+        [0, 1]) in some arid uplands. Each is evaluated only where it is, and
+        only if the spec has it on.
 
         :returns: *elevation* with them (a new array)
         """
@@ -692,35 +718,21 @@ class Planet:
                 seed + _SEED_DUNES,
                 min_wavelength,
             )
-        upland = self._upland(low, base)
-        on = upland > 1e-3
-        if not (e.mesas or e.canyons) or not np.any(on):
-            return elevation
-        z, weight, qs = elevation[on], upland[on], q[on]
-        # Where cliffs stand, they are terraced (flat ground stays flat).
-        cliffs = np.zeros(len(z))
-        if e.mesas:
-            # Tables stand in rough upland; flat upland is tableland already
-            # (or sand sea).
-            mesa = weight * self._rough(low[on])
-            tops = landforms.mesa_tops(
-                qs, e.mesa_wavelength, seed + _SEED_MESAS, min_wavelength
+        on = tables > 1e-3
+        if e.tablelands and np.any(on):
+            elevation[on] += landforms.tablelands(
+                q[on],
+                elevation[on],
+                tables[on],
+                low[on, LOW_STAGE],
+                low[on, LOW_STACK],
+                self.strata,
+                e.table_cell,
+                e.spire_cell,
+                e.table_top_relief,
+                seed + _SEED_TABLES,
+                min_wavelength,
             )
-            z = z + mesa * e.mesa_height * tops
-            cliffs = np.maximum(cliffs, mesa * smoothstep(0.0, 0.2, tops))
-        if e.canyons:
-            # Deeper into higher plateaus, never down to the sea.
-            canyon = weight * low[on, LOW_CANYON]
-            cut = landforms.canyons(
-                qs, e.canyon_wavelength, seed + _SEED_CANYONS, min_wavelength
-            )
-            depth = e.canyon_depth * smoothstep(200.0, 1500.0, base[on])
-            z = z - canyon * depth * cut
-            cliffs = np.maximum(cliffs, canyon * smoothstep(0.0, 0.2, cut))
-        fade = landforms.terrace_fade(e.terrace_step, min_wavelength)
-        if e.mesas and fade > 0.0:
-            z = z + fade * cliffs * (landforms.terrace(z, e.terrace_step) - z)
-        elevation[on] = z
         return elevation
 
     def _base(self, low: np.ndarray) -> np.ndarray:
@@ -733,33 +745,38 @@ class Planet:
     @classmethod
     def _erg(cls, low: np.ndarray, base: np.ndarray) -> np.ndarray:
         """:returns: the sand seas, in [0, 1]: arid plains at any height,
-        but never where canyons cut (mesas stand on rougher ground)"""
-        return low[:, LOW_ERG] * (1.0 - cls._upland(low, base) * low[:, LOW_CANYON])
+        but never in the tablelands"""
+        return low[:, LOW_ERG] * (1.0 - cls._tables(low, base))
 
     @staticmethod
-    def _upland(low: np.ndarray, base: np.ndarray) -> np.ndarray:
-        """:returns: arid upland, in [0, 1], where mesas and canyons may be"""
-        return low[:, LOW_ARID] * smoothstep(300.0, 500.0, base)
+    def _tables(low: np.ndarray, base: np.ndarray) -> np.ndarray:
+        """:returns: the tablelands, in [0, 1]: arid upland in their regions"""
+        upland = low[:, LOW_ARID] * smoothstep(300.0, 500.0, base)
+        return upland * low[:, LOW_TABLE]
 
-    @staticmethod
-    def _rough(low: np.ndarray) -> np.ndarray:
-        """:returns: country rough enough for mesas, in [0, 1]: from where
-        the sand seas' plains end"""
-        return smoothstep(0.3, 0.5, low[:, LOW_CHARACTER])
+    @functools.cached_property
+    def strata(self) -> Strata:
+        """The planet's rock strata (:mod:`strata`)."""
+        return make_strata(self.spec.seed * 1000 + _SEED_TABLES)
 
     def landform_masks(self, dirs: np.ndarray) -> dict[str, np.ndarray]:
         """Where the desert landforms are, whether or not the spec has them on.
 
         :param dirs: (N, 3) unit vectors
-        :returns: {"dunes", "mesas", "canyons"}: (N,) weights in [0, 1]
+        :returns: {"dunes", "tablelands", "canyons", "mesas"}: (N,) weights
+            in [0, 1]; canyons and mesas are tablelands at a young (narrow
+            valleys) and an old (plains with mesas, buttes, spires) erosion
+            stage
         """
         low = self.low_band(dirs)
         base = self._base(low)
-        upland = self._upland(low, base)
+        tables = self._tables(low, base)
+        stage = low[:, LOW_STAGE]
         return {
             "dunes": self._erg(low, base),
-            "mesas": upland * self._rough(low),
-            "canyons": upland * low[:, LOW_CANYON],
+            "tablelands": tables,
+            "canyons": tables * (1.0 - smoothstep(0.25, 0.45, stage)),
+            "mesas": tables * smoothstep(0.55, 0.75, stage),
         }
 
     def lapse(self, temperature: np.ndarray, elevation: np.ndarray) -> np.ndarray:
@@ -822,11 +839,15 @@ class Planet:
             elevation = self._apply_stamps(dirs, elevation, spacing)
         temperature = self.lapse(temperature, elevation)
         shape = (len(kb), len(ka))
+        strata = None
+        if self.elevation.tablelands:
+            strata = self._tables(low, self._base(low)).reshape(shape)
         return GridSample(
             dirs=dirs,
             elevation=elevation.reshape(shape),
             temperature=temperature.reshape(shape),
             humidity=humidity.reshape(shape),
+            strata=strata,
         )
 
     def stamp_base(self, index: int) -> float:
