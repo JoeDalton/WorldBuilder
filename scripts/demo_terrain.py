@@ -3,10 +3,10 @@ Standalone flythrough demo for the procedural planet terrain.
 
 Flies a free camera around a small planetary system: a Kerbin-sized planet
 (600 km) with hand-made stamps (world_builder/terrain/levels/demo.yaml), its
-atmosphere, its clouds (cumulus over the whole planet, following its
-weather) and its sea, an airless sand moon 10,000 km away,
-and a procedural star field, from orbit down to the ground of either. Run it
-from an environment where world_builder is importable::
+atmosphere, its clouds (cumulus over the whole planet, following its weather,
+and high cirrus streaming along its jets) and its sea, an airless sand moon
+10,000 km away, and a procedural star field, from orbit down to the ground of
+either. Run it from an environment where world_builder is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--planet PRESET]
         [--seed N] [--start LAT LON] [--radius METRES]
@@ -37,7 +37,7 @@ from an environment where world_builder is importable::
     --quality        every part's quality preset at start (default high;
                      world_builder.settings.WorldSettings)
     --<part>-quality one part's preset, over --quality
-    --no-clouds      no clouds at all
+    --no-clouds      no clouds at all (neither cumulus nor cirrus)
 
 The default backend generates terrain in spawned worker processes, which
 re-import this script: keep the ``if __name__ == "__main__"`` guard. All
@@ -76,6 +76,7 @@ Controls (AZERTY):
                     terrain, air, sky, clouds, ocean (each part's own
                     settings; a cloud or ocean change may refill a moment)
     F6              cycle every part's preset at once
+    C               show / hide the high cirrus
     F               print the camera pose and terrain stats
     ESC             quit
 
@@ -122,8 +123,9 @@ from panda3d.core import (
 )
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
+from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.half_res import HalfResClouds
-from world_builder.clouds.sphere import SphericalClouds
+from world_builder.clouds.planet import PlanetClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.ocean import Sea
 from world_builder.quality import QualityLevel
@@ -163,7 +165,7 @@ OCEAN_ANCHOR_RANGE = 50000.0
 SUN_COLOR = (2.6, 2.5, 2.35)
 SKY_AMBIENT = (0.34, 0.44, 0.64)
 SPACE_AMBIENT = (0.025, 0.025, 0.03)
-# The clouds' share of the sky light (SphericalClouds' sky_strength).
+# The clouds' share of the sky light (PlanetClouds' sky_strength).
 CLOUD_SKY_LIGHT = 0.35
 # The sun's elevation the ocean's water colour was tuned in (the start pose).
 WATER_TUNED_ELEVATION = 35.0
@@ -347,7 +349,7 @@ class TerrainDemo(ShowBase):
             F1 - F6 change it); None = HIGH
         :param clouds: draw the planet's clouds
         :param cloud_debug: the clouds' profiling switches
-            (:meth:`SphericalClouds.set_debug`)
+            (:meth:`PlanetClouds.set_debug`)
         :param ocean_debug: the sea's debug view (:meth:`Sea.set_debug_mode`)
         :param preset: overrides the level's planet preset (PRESETS)
         :param seed: overrides the level's seed
@@ -464,6 +466,7 @@ class TerrainDemo(ShowBase):
             ("end", self._reset_camera, []),
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
+            ("c", self._toggle_cirrus, []),
             ("escape", self._quit, []),
             (QUALITY_ALL_KEY, self._cycle_all_quality, []),
         ]
@@ -587,7 +590,9 @@ class TerrainDemo(ShowBase):
         if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
             scale = self.half_res.pixel_scale if self.half_res is not None else 1.0
-            self.clouds.set_pixel_angle(scale * fov / max(self.win.get_y_size(), 1))
+            self.clouds.set_pixel_angle(
+                fov / max(self.win.get_y_size(), 1), volume_scale=scale
+            )
             self.clouds.update(self.cam_world)
         self._update_sun()
         self.ocean.update(self.cam_world)
@@ -736,6 +741,9 @@ class TerrainDemo(ShowBase):
             if cs is not None
             else "clouds off"
         )
+        if self.clouds is not None and self.clouds.sheet is not None:
+            shown = not self.clouds.sheet.root.is_hidden()
+            clouds += f"   cirrus {'on' if shown else 'off'} (C)"
         quality = "   ".join(
             f"{SECTIONS[name].LABEL.lower()} {_level_name(self.world, name)}"
             for _, name in QUALITY_KEYS
@@ -789,13 +797,14 @@ class TerrainDemo(ShowBase):
             self.clouds = None
         if not self._clouds_on:
             return
-        self.clouds = SphericalClouds(
+        self.clouds = PlanetClouds(
             self.render,
             self.radius,
             self.executor,
             atmospheres=self.atmospheres,
             atmosphere=0,
             altitude=CLOUD_BASE,
+            cirrus=CirrusSpec(),
             planet=self.terrain.spec,
             settings=self.world.clouds,
             channel="clouds",
@@ -803,7 +812,17 @@ class TerrainDemo(ShowBase):
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
         if getattr(self, "half_res", None) is not None:
-            self.half_res.add(self.clouds.root)
+            self.clouds.use_half_res(self.half_res)
+
+    def _toggle_cirrus(self) -> None:
+        """Show or hide the high cirrus (a look toggle)."""
+        if self.clouds is None or self.clouds.sheet is None:
+            return
+        root = self.clouds.sheet.root
+        if root.is_hidden():
+            root.show()
+        else:
+            root.hide()
 
     def _sync_half_res(self) -> None:
         """Build or remove the clouds' half-resolution pass as the settings
@@ -813,7 +832,7 @@ class TerrainDemo(ShowBase):
             self.half_res = HalfResClouds(self, self.depth)
             self.half_res.exclude(self.sky.node)
             if self.clouds is not None:
-                self.half_res.add(self.clouds.root)
+                self.clouds.use_half_res(self.half_res)
         elif not wanted and self.half_res is not None:
             self.half_res.destroy()
             self.half_res = None
@@ -1021,8 +1040,8 @@ def start_pose(spec, pose: dict | None, start: tuple[float, float] | None):
 
 
 def start_sun(spec, pose: dict | None) -> np.ndarray:
-    """:returns: the sun where the original flat demo had it (azimuth 210,
-    elevation 35), as seen at the start *pose* (the reference without one)"""
+    """:returns: the demo's sun (azimuth 210, elevation 35), as seen at the
+    start *pose* (the reference without one)"""
     pose = pose or {}
     frame = TangentFrame.at(
         pose.get("lat", spec.reference_lat), pose.get("lon", spec.reference_lon)

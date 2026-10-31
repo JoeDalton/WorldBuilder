@@ -18,7 +18,8 @@ from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
 from world_builder.asteroids.spec import Annulus, Density, FieldSpec, ShapeSpec
 from world_builder.atmosphere import AtmosphereParams
-from world_builder.clouds.sphere import SphericalClouds
+from world_builder.clouds.cirrus import CirrusSpec
+from world_builder.clouds.planet import PlanetClouds
 from world_builder.depth import (
     FAR_CAMERA_MASK,
     NEAR_CAMERA_MASK,
@@ -74,7 +75,7 @@ def _same(a, b) -> bool:
 @pytest.mark.parametrize(
     "look,part,own",
     [
-        (CloudLook, SphericalClouds.__init__, ()),
+        (CloudLook, PlanetClouds.__init__, ()),
         (OceanLook, Sea.__init__, OceanLook.WORLD_FIELDS),
         (SkyLook, Sky.__init__, ("stars",)),
         (FieldLook, AsteroidField.__init__, ("name", "spec", "ambient")),
@@ -106,6 +107,32 @@ def test_looks_are_their_parts_arguments(look, part, own):
             "need an atmosphere",
         ),
         ([BodyLook("a", PRESETS["desert"], ocean=OceanLook(), mass=1.0)], "has_ocean"),
+        (
+            # Its base inside the clouds' slab (2.2-3.2 km): its draw order
+            # would not hold
+            [
+                BodyLook(
+                    "a",
+                    EARTHLIKE,
+                    atmosphere=AtmosphereParams(),
+                    clouds=CloudLook(altitude=2200.0, cirrus=CirrusSpec(base=3000.0)),
+                    mass=1.0,
+                )
+            ],
+            "above the clouds",
+        ),
+        (
+            [
+                BodyLook(
+                    "a",
+                    EARTHLIKE,
+                    atmosphere=AtmosphereParams(height=8500.0),
+                    clouds=CloudLook(cirrus=CirrusSpec()),
+                    mass=1.0,
+                )
+            ],
+            "inside the air",
+        ),
     ],
 )
 def test_a_world_refuses_what_it_cannot_build(bodies, message):
@@ -312,6 +339,21 @@ def test_loading_waits_for_every_terrain_and_cloud_layer():
     assert world.loading
 
 
+def test_the_far_plane_reaches_the_cirrus_above_the_mountains():
+    """The far plane reaches the cirrus's far limb when it is higher than
+    any ground."""
+    planet = _body()
+    planet.terrain.planet.height_bounds = (-1000.0, 3000.0)
+    world = _world(planet)
+    origin = np.array([0.0, 0.0, R + 800.0])
+    _, bare = world.depth_ranges(origin)
+    planet.clouds = SimpleNamespace(sheet=SimpleNamespace(spec=CirrusSpec()))
+    _, far = world.depth_ranges(origin)
+    expected = SplitDepthCameras.planet_ranges(R, R + 800.0, CirrusSpec().mid, 0.0)
+    assert far > bare
+    assert far == pytest.approx(expected[1])
+
+
 def test_collision_for_the_chosen_bodies():
     planet, moon = _body(), _body("moon", MOON)
     world = _world(planet, moon)
@@ -407,9 +449,10 @@ def window(showbase):
 
 
 def test_a_whole_world(window, monkeypatch):
-    """A planet with air, clouds and ocean, and an airless moon, under a sky:
-    one pool, one air, the parts wired, the sea's frame on the nadir's tangent
-    plane, Panda3D's lights on, and all of it gone after destroy."""
+    """A planet with air, clouds (and cirrus) and ocean, and an airless moon,
+    under a sky: one pool, one air, the parts wired, the sea's frame on the
+    nadir's tangent plane, Panda3D's lights on, and all of it gone after
+    destroy."""
     window.camLens.set_near_far(1.0, 600e3)
     frame = TangentFrame.at(30.0, 40.0)
     world = World(
@@ -419,7 +462,7 @@ def test_a_whole_world(window, monkeypatch):
                 "planet",
                 EARTHLIKE,
                 atmosphere=AtmosphereParams(),
-                clouds=CloudLook(altitude=2200.0),
+                clouds=CloudLook(altitude=2200.0, cirrus=CirrusSpec()),
                 ocean=OceanLook(),
                 mass=5.97e24,
             ),
@@ -438,7 +481,7 @@ def test_a_whole_world(window, monkeypatch):
         planet, moon = world.body("planet"), world.body("moon")
         assert planet.terrain.executor is world.executor
         assert moon.terrain.executor is world.executor
-        assert planet.clouds.executor is world.executor
+        assert planet.clouds.volume.executor is world.executor
         assert planet.atmosphere == 0 and moon.atmosphere is None
         # Drawn by the far camera only
         assert world.sky.node.is_hidden(NEAR_CAMERA_MASK)
@@ -451,6 +494,14 @@ def test_a_whole_world(window, monkeypatch):
             window.graphicsEngine.render_frame()
 
         assert planet.ocean.near == 1.0
+        # The cirrus is set up around the planet's centre, as the deck is
+        sheet = planet.clouds.sheet
+        assert not sheet.root.is_stashed()
+        np.testing.assert_allclose(
+            sheet.root.get_pos(window.render),
+            planet.clouds.volume.deck.get_pos(window.render),
+            atol=1.0,
+        )
         # The sea's plane is the tangent plane at the camera's nadir (the
         # camera is wherever earlier tests left it, near render's origin)
         nadir = world.camera_world / np.linalg.norm(world.camera_world)
@@ -464,6 +515,7 @@ def test_a_whole_world(window, monkeypatch):
     assert shutdowns == [1]
     assert world.bodies == [] and world.sky is None
     assert not window.render.find("**/planet_sea_frame")
+    assert not window.render.find("**/planet_clouds")
 
 
 def test_open_space_builds_and_draws(window):

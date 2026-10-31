@@ -76,7 +76,7 @@ from world_builder.depth import (
 from world_builder.terrain.terrain import depth_only_shader
 
 #: The composites' cull bin: after the sky (21), where the clouds draw
-#: without this pass (22-29), before the transparent bin (30).
+#: without this pass (22-28), before the transparent bin (30).
 LAYER_BIN = "cloud_layer"
 LAYER_BIN_SORT = 22
 

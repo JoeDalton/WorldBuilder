@@ -31,7 +31,7 @@ times a few frames, then saves a screenshot::
                      clouds, ocean
     --no-clouds      no clouds at all
     --workers        generation processes (the terrain's setting)
-    --cloud-debug    SphericalClouds.set_debug bits (cloud.frag's
+    --cloud-debug    PlanetClouds.set_debug bits (cloud.frag's
                      uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
                      octaves at most, 8 flat colour; default 0)
     --frames         frames timed once settled (default 60)
@@ -47,20 +47,25 @@ pose prints whether it settled, the body's chunk count and finest level, the
 cloud billboards, the LOD pass and the median frame time.
 
 Poses: ground (the level's start), coast (2 km up over the reference point),
-high (20 km up), swell / sea_surface (13 and 17 km up, inside the sea's
-12-18 km fade from its near look to its flat far one), stratosphere (200 km
-up), orbit (3 radii up, looking down), corner (over a cube corner, where three
-faces meet), lod (the LOD debug view from 20 km), in_clouds (inside the cloud
-deck, 2.7 km up), sunset (600 m up, looking west at the sun 3 degrees up),
-moonrise (the moon over the northern horizon, from the start area),
-moon_orbit (3 moon radii up, looking down), moon_ground (2 km over the
-moon's sand), night_orbit (1.5 radii up, looking down at the terminator: the
-sun 60 degrees below the nadir's horizon), night_sea (3 m over the sea, the
-sun 8 degrees down: the sky's reflection must be as dark as the sky), beach
-(40 m up, 300 m off the coast nearest the reference point, looking at it: the
-sea's foam, colour by depth and swell), open_sea (150 m over open water,
-looking along it: the swell and how it flattens with distance). Every
-other pose has the sun at azimuth 210, elevation 35, as seen there.
+high (20 km up), swell / sea_surface (13 and 17 km up, inside the sea's 12-18 km
+fade from its near look to its flat far one), stratosphere (200 km up),
+orbit (3 radii up, looking down), corner (over a cube corner, where three faces
+meet), lod (the LOD debug view from 20 km), in_clouds (inside the cloud deck,
+2.7 km up), sunset (600 m up, looking west at the sun 3 degrees up), moonrise
+(the moon over the northern horizon, from the start area), moon_orbit (3 moon
+radii up, looking down), moon_ground (2 km over the moon's sand), cirrus_up
+(from the ground, looking 35 degrees up: the cumulus in front of the cirrus),
+cirrus_between (5 km up, between the cumulus and the cirrus, looking at the
+horizon), cirrus_above (15 km up, above both, looking down at the horizon: the
+cirrus in front of the cumulus), cirrus_dusk (the cirrus still lit after the
+cumulus has gone grey: the sun 2 degrees down), night_orbit (1.5 radii up,
+looking down at the terminator: the sun 60 degrees below the nadir's horizon),
+night_sea (3 m over the sea, the sun 8 degrees down: the sky's reflection must
+be as dark as the sky), beach (40 m up, 300 m off the coast nearest the
+reference point, looking at it: the sea's foam, colour by depth and swell),
+open_sea (150 m over open water, looking along it: the swell and how it
+flattens with distance). Every other pose has the sun at azimuth 210, elevation
+35, as seen there.
 """
 
 from __future__ import annotations
@@ -94,6 +99,7 @@ SUNS = {
     "sunset": (270.0, 3.0),
     "night_orbit": (90.0, -60.0),
     "night_sea": (90.0, -8.0),
+    "cirrus_dusk": (270.0, -2.0),
 }
 
 
@@ -137,6 +143,12 @@ def _poses(demo: TerrainDemo) -> dict:
         lat, lon = (float(v[0]) for v in latlon(facing[None, :]))
         poses["moon_orbit"] = (lat, lon, 3.0 * moon.radius, 0.0, -89.9, 0, 1)
         poses["moon_ground"] = (lat + 1.0, lon, 2000.0, 0.0, -15.0, 0, 1)
+    # The cirrus (8-9 km) against the cumulus (2.2-3.2 km): under both, between,
+    # above both, and at dusk (looking west, toward the set sun).
+    poses["cirrus_up"] = (lat0, lon0, start.get("alt", 800.0), 0.0, 35.0, 0, 0)
+    poses["cirrus_between"] = (ref_lat, ref_lon, 5000.0, 0.0, 3.0, 0, 0)
+    poses["cirrus_above"] = (ref_lat, ref_lon, 15000.0, 0.0, -8.0, 0, 0)
+    poses["cirrus_dusk"] = (ref_lat, ref_lon, 600.0, 90.0, 15.0, 0, 0)
     # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     # At sea level by night: the sky's reflection must be as dark as the sky.
@@ -225,7 +237,7 @@ def main() -> None:
     )
     add_world_arguments(parser)
     parser.add_argument(
-        "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"
+        "--cloud-debug", type=int, default=0, help="PlanetClouds.set_debug bits"
     )
     parser.add_argument(
         "--frames", type=int, default=60, help="frames timed once settled"

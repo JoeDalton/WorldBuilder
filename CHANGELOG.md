@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- High cirrus over a planet's clouds (`world_builder.clouds.cirrus`,
+  docs/source/atmosphere.md#cirrus).
+  - `CloudSheet`, built by `PlanetClouds(cirrus=CirrusSpec())`, or
+    `CloudLook(cirrus=...)` in a `World`: baked patches of cirrus uncinus
+    stamped on one sheet at 8-9 km. Each patch has cottony tufts along a
+    curved front, comet tails that curve, widen and merge, and strands of
+    uneven width and strength along every curve.
+  - `scripts/bake_cirrus_atlas.py` bakes the 24 patches into
+    `clouds/cirrus_atlas.png/.json`; `scripts/cirrus_preview.py` draws the
+    atlas, or the placed field beside a reference photo, for tuning.
+  - The stamps are a Poisson field, thinned by a cover map of the cirrus's
+    own (anvils over the wet tropics, streaks along the jets, a shield ahead
+    of each low), so that the share of sky under a stamp is the map's. Each
+    has its tufts downwind along the upper wind (the jet streams, bent
+    around the weather's cyclones). Neighbours stay parallel: their heading
+    wanders together, and stamps fade out where the wind turns along their
+    length.
+  - It draws behind every cumulus where sight lines leave its sphere and in
+    front of them where they enter it, so the order holds from the ground to
+    orbit and in the sea's mirror, with no sorting.
+  - `PlanetClouds` (and `World`, before building anything) refuses cirrus
+    that is not above the clouds or not inside the air.
+  - `weather.py` gains the upper wind (`WeatherSpec.jets`, `upper_wind`,
+    `stream_table`, `stream_vortices`) and the cirrus cover
+    (`cirrus_cover_map`).
+  - The terrain and world demos draw it (C toggles it); `terrain_shots.py`
+    gains the `cirrus_up`, `cirrus_between`, `cirrus_above` and
+    `cirrus_dusk` poses.
+  - Its cost is not measured yet: see docs/source/performance_backlog.md,
+    "Cirrus".
 - `world_builder.gravity.Gravity` and `World.gravity_field(g_constant)`: the
   bodies' raw gravity vector at many points at once, from point masses
   (`g = -G sum m (x - p) / |x - p|^3`, capped inside a body at its surface
@@ -106,6 +136,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A planet's clouds are one part, `world_builder.clouds.planet.PlanetClouds`,
+  with two layers named by how they are drawn:
+  `clouds.sphere.SphericalClouds` is now `CloudVolume` (the low clouds:
+  billboard shells and the far deck), and the cirrus is
+  `clouds.cirrus.CloudSheet`. `PlanetClouds` takes `SphericalClouds`'
+  arguments plus `cirrus`, drives both layers (sun, sky light, settings,
+  pixel angle, half resolution, update, removal) and checks the cirrus
+  against the low clouds and the air (`planet.check_layers`). In a `World`,
+  `Body.clouds` is a `PlanetClouds` (the volume: `body.clouds.volume`) and
+  the cirrus is `CloudLook.cirrus`.
 - More realistic planet relief (#9). The same seed now gives a different
   planet, and the demo level moved to keep a coast to its north and a range
   to its south:
@@ -302,6 +342,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CloudField` keeps its knee and its 1.15.
 
 ### Removed
+
+- The flat-world parts: the flat cloud field (`world_builder.clouds.field`:
+  `CloudField`, `CloudLayer`, `Clouds`, `lod_shells`; `shaders/cloud.vert`;
+  `scripts/demo_clouds.py`) and what only it used:
+  - `cloud.sample_field_particles`, `snap_to_noise_period`,
+    `volume_fraction` and `CloudSpec.volume_fraction`;
+  - `noise.density`, `column_peaks`, `resolve_field`, `measure_coverage` and
+    `streak_direction` (the planet's are `density_on_sphere`,
+    `sphere_column_peaks` and `with_threshold`);
+  - `CloudSettings.resort_frames` (saved settings that name it load with a
+    warning);
+  - the shaders' flat mode (`uSpherical`, `earthCurvature`, `horizonFade`,
+    `hazeColor`, the soft-knee tonemap) and `pack_layer_params`'
+    `wrap_radius` and `wrap_fade_band`;
+  - `world_builder.PLANET_RADIUS_M`, the flat parts' shared droop radius.
+
+  The planet clouds' shell bins are now the contiguous sorts 23-28.
+- The flat sea's leftovers: `OceanLook.haze_color` and `haze_distance`
+  (ignored since the sea is drawn on the terrain) and the historical
+  `ocean/OCEAN_SWELL_ARTIFACT_REPORT.md`.
 
 - `world_builder.ocean.Ocean`, its swell mesh, `ocean/seabed.py` and the
   `ocean.vert` / `ocean.frag` / `seabed.glsl` shaders; use `Sea`, which a

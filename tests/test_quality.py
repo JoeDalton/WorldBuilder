@@ -318,8 +318,9 @@ def test_apply_finds_each_objects_section_by_its_type():
 
 def test_every_world_builder_object_declares_its_settings():
     from world_builder.atmosphere import Atmospheres
-    from world_builder.clouds import CloudField, Clouds
-    from world_builder.clouds.sphere import SphericalClouds
+    from world_builder.clouds.cirrus import CloudSheet
+    from world_builder.clouds.planet import PlanetClouds
+    from world_builder.clouds.sphere import CloudVolume
     from world_builder.ocean import Sea
     from world_builder.sky import Sky
     from world_builder.terrain.terrain import Terrain
@@ -329,9 +330,9 @@ def test_every_world_builder_object_declares_its_settings():
         (Terrain, "terrain"),
         (Atmospheres, "atmosphere"),
         (Sky, "sky"),
-        (SphericalClouds, "clouds"),
-        (CloudField, "clouds"),
-        (Clouds, "clouds"),
+        (PlanetClouds, "clouds"),
+        (CloudVolume, "clouds"),
+        (CloudSheet, "clouds"),
         (Sea, "ocean"),
     ):
         assert world.settings_for(kind) == getattr(world, section)

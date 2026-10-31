@@ -111,7 +111,7 @@ The demo uses them each frame for:
   in daylight) by the light on the sea under the camera over the daylight's,
   so the sea is dark by night;
 - **an ambient scale** (F9 / F10) applied to the terrain's sky light, the
-  clouds' (`SphericalClouds.set_sky_light`), the sea's and Panda3D's.
+  clouds' (`PlanetClouds.set_sky_light`), the sea's and Panda3D's.
 
 ### Left out: true multiple scattering (the Bruneton option)
 
@@ -179,6 +179,20 @@ Its shader shows:
 
 ## Planet clouds
 
+A planet's clouds are one part, `clouds.planet.PlanetClouds` (`CloudLook` in
+a `World`), with two layers:
+
+- the **volume** (`clouds.sphere.CloudVolume`): the low clouds, cumulus by
+  default (any cloud type), as billboard shells near the camera and a deck
+  beyond. Everything below up to "Clouds at the horizon" is about it;
+- the **sheet** (`clouds.cirrus.CloudSheet`), optional: high cirrus above
+  them ([Cirrus](#cirrus)).
+
+The part drives both as one (sun, sky light, settings, pixel angle, half
+resolution, update, removal) and holds the rule that only the pair can
+check: the sheet's base must clear the volume's slab (its draw order depends
+on it) and its top stay inside the air (`planet.check_layers`).
+
 ### One density field
 
 The billboard field's density (`clouds.noise`) is moved onto the planet:
@@ -217,7 +231,7 @@ once per process (the main thread for the textures, each worker for
 placement, cached by spec).
 
 **Coverage to the field, exactly.** The clouds never use coverage directly.
-The sorted column peaks of the field (`noise.column_peaks`, the coverage
+The sorted column peaks of the field (`noise.sphere_column_peaks`, the coverage
 calibration) are the inverse of the coverage function: a column is cloud when
 its peak plus the shift clears the threshold, so
 `shift(c) = threshold_lo − quantile(peaks, 1 − c)`. `weather.shift_table`
@@ -232,15 +246,16 @@ under its weather, and the coverage alone, for tuning.
 ### Near: billboard shells
 
 Billboards are generated per **cube-sphere tile** in the shared worker pool
-(`generate_cloud_tile`), by rejection sampling of the density, as the flat
-field places its own. Shell *k* uses tiles of level `base + k` (8 km at the
-first) and billboards twice the size of shell *k − 1*; adjacent shells
-crossfade by distance on optical depth (the flat field's `lod_shells`
-layout). Each shell costs about half the previous.
+(`generate_cloud_tile`), by rejection sampling of the density
+([clouds](clouds.md#the-types-and-their-cost)). Shell *k* uses tiles of level
+`base + k` (8 km at the first) and billboards twice the size of shell
+*k − 1*; adjacent shells crossfade by distance on optical depth, over a
+shared band so their weights sum to 1. Each shell costs about half the
+previous.
 
 Per pixel, the cost depends on the settings (`CloudSettings`, its presets
 by `QualityLevel`: LOW, MID, HIGH, ULTRA; the demo's F4 cycles them; ULTRA, above HIGH, keeps all four octaves on every shell;
-`SphericalClouds.set_settings` re-plans the shells and regenerates the
+`CloudVolume.set_settings` re-plans the shells and regenerates the
 tiles on the same worker channel), which sets the billboard sizes, the sun
 march's steps, and:
 
@@ -253,7 +268,7 @@ march's steps, and:
   holds within 2 % (tested) and the crossfades still agree; the placement
   evaluates the same octaves and threshold.
 - **Overlap** (`CloudSettings.overlap_near`, `overlap_far`): billboard volume per unit of
-  cloud volume, 2.5 at HIGH (the flat field's), less at MID and LOW. The
+  cloud volume, 2.5 at HIGH, less at MID and LOW. The
   extinction is divided by it, so the mean opacity holds, but fewer, more
   opaque billboards look lumpier and hit the per-billboard optical-depth cap
   sooner (thinner dense cores).
@@ -390,12 +405,166 @@ clouds kept their contrast. Ruled out on the way: the sunlight's own tint
 in front turned off (`uCloudDebug` bit 2) the clouds came out white; and too
 few samples of that air per vertex (as orange with 8 as with 4).
 
+### Cirrus
+
+[`clouds/cirrus.py`](../../src/world_builder/clouds/cirrus.py) puts high
+cirrus over the cumulus (`CloudSheet`, `PlanetClouds(cirrus=CirrusSpec())`,
+or `CloudLook(cirrus=...)` in a `World`): thin
+ice cloud, 8-9 km up by default, fibrous and streaming along the upper wind.
+
+**A surface, not billboards.** Cirrus is a kilometre deep at most and tens of
+kilometres across, and optically thin. Billboards would give it no volume
+worth their cost, and their puffs fight its fibres. So it lies on one sphere at the slab's mid-height, and a
+sight line crosses `thickness / |cos|` of the slab where it meets it (at
+most 4 slab depths: past that every patch saturated toward the horizon into a
+flat plate). Its optical depth saturates softly toward
+`CirrusSpec.max_optical_depth` rather than being clamped, which flattened
+each tuft to one white with a hard rim. There is no sun march; a sheet this
+thin barely shadows itself.
+
+**Baked shapes.** What makes cirrus uncinus read as cirrus is its structure:
+
+- cottony, ragged tufts, often along a curved leading front;
+- comet tails streaming from them, curving, widening, merging;
+- fibres of uneven width and strength along every curve.
+
+That structure is expensive to compute, so it is baked offline
+([`scripts/bake_cirrus_atlas.py`](../../scripts/bake_cirrus_atlas.py)) into an
+atlas of two dozen patches, 24 × 12 km each (`clouds/cirrus_atlas.png` and its
+`.json`), from a procedural model:
+
+- a flow, bent by a stream function, so tails and fibres curve together;
+- tufts, sheared and hooked, most of them on a front at the patch's
+  downwind end;
+- tails: each point marches downwind along the flow and takes the soft
+  maximum of the tufts it meets, fading with distance and read from ever more
+  blurred tufts, so the tails widen as they fall. The tufts lead and their
+  tails lag upwind, as fall streaks do when the wind rises with height;
+- strands in the flow's own coordinates, so they follow every curve: three
+  widths, each sparse and of a strength that wanders (one width at one
+  contrast read as a brush stroke), cut into wisps;
+- a faint fibrous veil joining the tufts into one field, an irregular
+  outline, and a long fade at the upwind border (a tail cut by it showed a
+  straight line).
+
+[`scripts/cirrus_preview.py`](../../scripts/cirrus_preview.py) draws the
+atlas, or the placed field over any patch of the planet, top-down beside a
+reference photo, in seconds: the tuning loop.
+
+Two designs were dropped on the way:
+
+- **The first cirrus was computed per pixel**: noise across the contours of
+  the upper wind's stream function. The contours are evenly spaced along the
+  jets, so the streaks came out as regular parallel bands, with no head and
+  no tail.
+- **Stamping in the shader** (texture bombing) would have to search a 3D
+  lattice per pixel, since a 2D grid on the cube's faces leaves seams. For
+  stamps this long that is about 30 candidates, no cheaper than computing
+  the cloud.
+
+**Stamps as geometry.** The patches are quads lying on the sheet
+(`cirrus_stamps`, `stamp_vertices`): a 4 × 2 grid each, every vertex on the
+sphere, grouped by cube face and a 4 × 4 grid on it for culling. A pixel pays
+one atlas fetch per stamp over it (typically 1-3). The air in front and the
+sunlight's tint are worked out per vertex. The atlas is mipmapped with
+anisotropic filtering, so the far sheet and the horizon need nothing else
+(no pixel angle, no fade to a cover map).
+
+**Where, and which way.** The stamps are a Poisson field, placed once in the
+worker pool (~0.3 s, about 12k stamps on the 600 km demo planet):
+
+- **Cover.** The field is thinned by the cirrus cover map
+  (`weather.cirrus_cover_map`, 6 × 128²):
+  - `WeatherSpec.cirrus_zonal`: anvils over the wet tropics, streaks along
+    the jets;
+  - a shield poleward and east of each extratropical low (ahead of its warm
+    front) and over each tropical cyclone;
+  - mesoscale texture;
+  - humidity, which counts for less than for the cumulus.
+
+  At cover c its density is `-ln(1 - c) / A` for a stamp's mean footprint
+  A (from the atlas's JSON), so the share of the sheet under a stamp is c (a
+  test checks it within 5 %).
+- **Heading.** Each stamp's tufts point downwind along the upper wind
+  (`upper_wind_at`):
+  - its stream function, `psi = -R * integral(u dlat)` from
+    `WeatherSpec.jets` (`weather.stream_table`): weak tropical easterlies,
+    the subtropical and polar-front jets;
+  - one Gaussian per weather system (`weather.stream_vortices`), turning
+    the wind around each low and over each tropical cyclone's outflow;
+  - a slow noise added to psi, so the field meanders (3 km over 120 km);
+  - the gradient taken by central differences.
+- **Parallel neighbours.** Real streaks side by side never cross at an
+  angle. Three things kept overlapping stamps from crossing, measured as the
+  angle between stamps within 20 km of each other (pairs past 20° went from
+  54 % to 0.1 %):
+  - the stamps' heading wanders off the wind *together*, ±10° along a slow
+    noise (`turn`, `turn_wavelength`), plus 2° each. Turned each on its own,
+    as they first were, neighbours crossed;
+  - stamps fade out where the upper wind turns more than 20° along a
+    stamp's length (`max_turn`): near a low's centre, or where the wind
+    nears calm and its direction swings. A straight stamp there would cross
+    its neighbours. That is about 5 % of them;
+  - the patches' own flows bend their tails at most ~20° off the patch's
+    axis (the bake's `curl`), or two overlapping patches bent opposite ways
+    cross.
+- **Variety.** Each stamp is drawn at a random scale, width, mirror and
+  opacity, so the 24 patches do not read as repeats.
+
+**Draw order.** The cirrus lies above the cumulus slab (the `World` checks
+that its base clears the clouds' top, and that its top stays inside the air).
+A ray's height along it is convex: it falls, then rises.
+
+- Where a ray *enters* the cirrus's sphere, it is above every cumulus, so the
+  cirrus is in front of all of them.
+- Where it *exits*, it never comes down again, so the cirrus is behind all of
+  them.
+
+This holds for any camera: under both layers, between them, above them, in
+orbit, and in the sea's mirror. The stamps lie on the sphere, so the same
+geometry is drawn by two nodes, each keeping one kind of crossing, found per
+fragment from the pass's own camera (`p3d_ModelViewMatrixInverse`, which is
+right in the mirror too). A sight line enters the sphere exactly where the
+camera is above the tangent plane. Overlapping stamps on one sphere have
+near-identical colours, so their order within a draw does not show.
+
+| Node | Crossings | Bin |
+|---|---|---|
+| `behind` | where sight lines leave the sphere (all of them from below) | the sky's (21, fixed), draw order 2: after the dome and the stars, before the deck (22) and every shell |
+| `front` | where they enter it (only from above) | Panda's "transparent" (30, back to front by each group's centre): after every cloud bin, before a game's translucent effects nearer than the stamps |
+
+Neither needs a bin of its own. The `front` stamps belong among a game's
+translucent things: Panda's transparent bin sorts them all back to front.
+
+- **The depth split** needs nothing: the far range draws before the near
+  one, and everything near is in front of everything far.
+- **Half-resolution clouds** leave the cirrus at full resolution (its fibres
+  are its look, and it costs one atlas fetch a stamp). It is kept out of the
+  half-resolution pass, and the composite (22) lands between its two nodes.
+- **The far plane** (`World.depth_ranges`) reaches the cirrus's far limb
+  where it is higher than any ground.
+
+**Lit** as the cumulus are, through `cloud_field.glsl`:
+
+- the ice's phase function (the `CIRRUS` preset's optics);
+- the sunlight reddened by the air at the cirrus's own height
+  (`cloudSunTint`), so it stays lit after the cumulus below has gone into
+  the planet's shadow, then twilight (`cloudTwilight`);
+- the air in front of it per vertex (`atmosphereAlong`), and the sky's
+  display transform.
+
+From inside the slab it fades to nothing near the camera: a veil, not a
+volume to fly through.
+
 ### Not yet
 
 - **Wind:** the clouds are static.
-- **Shadows on the ground:** clouds do not shade the terrain.
-- **One cloud type per planet** (cumulus in the demo); the flat field mixes
-  types, the planet field could take one per slab (the weather map could
+- **Shadows on the ground:** clouds do not shade the terrain; the cirrus does
+  not shade the cumulus either.
+- **One cumulus-like type per planet** (cumulus in the demo), with the cirrus
+  above it; the planet field could take one per slab (the weather map could
   then say which).
+- **Flying through the cirrus:** from inside its slab it is a veil fading
+  near the camera, with no volume.
 - **Weather that moves:** the map is fixed; the cyclones could drift with the
   zonal wind and the map be rebuilt (a few seconds) or advected.

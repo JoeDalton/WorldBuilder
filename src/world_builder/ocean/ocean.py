@@ -412,8 +412,8 @@ def swell_rotations(
 ) -> tuple[np.ndarray, np.ndarray]:
     """The swell layers' rotations at a time (swell.glsl's uSwellRotA, B):
     each turns about an axis through the planet's centre, so its pattern
-    drifts across a reference point at the speed the flat swell drifted at,
-    the first layer along the wind there, the second across it.
+    drifts across a reference point at the swell's drift speed, the first
+    layer along the wind there, the second across it.
 
     :param up: the reference point's vertical (unit), planet frame
     :param east: its east

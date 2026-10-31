@@ -36,10 +36,10 @@ median frames and in the slowest 5 %:
 | Panda's `renderFrame` (cull 1.5, draw 3.0) | 4.0 ms | 6.9 ms |
 | `Terrain._select` | 0.7 ms | 1.6 ms |
 | The demo's altimeter (`TerrainDemo._fly`) | 0.8 ms | 1.4 ms |
-| `SphericalClouds._resort` | 0.7 ms | 1.1 ms |
+| `CloudVolume._resort` | 0.7 ms | 1.1 ms |
 | `Terrain._upload` | 0.7 ms | 1.0 ms |
 | `ChunkExecutor.collect` | 0.1 ms | 0.6 ms |
-| `SphericalClouds._upload` | 0.05 ms | 0.35 ms |
+| `CloudVolume._upload` | 0.05 ms | 0.35 ms |
 | `Sea.update` | 0.2 ms | 0.3 ms |
 | Panda's state GC (`transform-cache false`) | 0.02 ms | 0.02 ms |
 
@@ -207,3 +207,53 @@ breakdown above predates them: frames are 1–3 ms shorter now.
 The swell's finite-difference gradient, the seabed bakes' GIL time and the
 15 km handover's shader-compile hitch went with the separate ocean mesh: the
 terrain's chunks draw the sea (performance.md §16).
+
+## Cirrus (not measured yet)
+
+The planet's cirrus sheet (`clouds/cirrus.py`, `cirrus.vert/.frag`) was
+written on a machine that cannot time it (WSL with software GL, at 130-300 ms
+a frame for the whole demo). It was built to be cheap, but nothing below has
+been measured. Measure it as the other layers are measured (§ How it was
+measured), on the GTX 1070, and write the numbers here.
+
+What it costs, by construction:
+
+- **Vertices:** about 12k stamps on the 600 km demo planet, 15 vertices
+  each (~180k), drawn twice (the `behind` and `front` nodes). They are in 96
+  groups that Panda culls to the view.
+- **Per vertex:**
+  - the air in front (`atmosphereAlong` at `uAtmoVertexSteps`);
+  - `cloudSunTint` and `cloudTwilight` (4 `atmoSunlight`).
+- **Per fragment:**
+  - one mipmapped, anisotropic atlas fetch;
+  - the phase function and `displayColour`.
+
+  Every stamp over a pixel costs one such fragment: typically 1-3 stamps,
+  more where the cover is high. The wrong node's fragments go after a dot
+  product.
+- **Memory:** the atlas is 4096 × 3072 R8 (12 MB, 16 MB with mips).
+
+To measure, each as the median frame with the cirrus shown minus hidden
+(the demo's C key, or `PlanetClouds.sheet.root.hide()`), at 1600×900:
+
+| Scene | `terrain_shots.py` pose | What it stresses |
+|---|---|---|
+| From the ground, looking up | `cirrus_up` | overdraw where stamps overlap |
+| Between the layers | `cirrus_between` | grazing stamps, anisotropic filtering |
+| Above both | `cirrus_above` | the front node over the cumulus |
+| Orbit | `orbit` | the vertex stage with half the planet's stamps in view |
+| Dusk | `cirrus_dusk` | twilight terms (per vertex) |
+
+Also note the share of the frame in the vertex stage (orbit), and the
+overdraw (with `uCloudDebug` bit 8, flat colour).
+
+If it costs too much, cheapest change first:
+
+1. **Fewer, larger stamps far away:** a second, coarser stamp set beyond a
+   distance (or the far fade to a cover map the first version had).
+2. **A smaller atlas** (2048 wide, or BC4-compressed): the far sheet only
+   reads the mips anyway.
+3. **Tiles near the camera** (the cumulus's worker-pool tiles) instead of all
+   stamps at once. The stamp count grows with the planet's area: an
+   Earth-sized planet would carry about 1.3M stamps, too many to draw at
+   once.

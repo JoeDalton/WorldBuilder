@@ -18,10 +18,17 @@ cloud) built with numpy from:
 
 Lengths follow the planet's feature scale, like the terrain's.
 
+The cirrus above (:mod:`cirrus`) has a weather of its own, from the same
+systems: an **upper wind** (the jet streams, deflected around the cyclones),
+whose stream function sets the direction of its fibres
+(:func:`stream_table`, :func:`stream_vortices`), and a cube map of its
+**cover** (:func:`cirrus_cover_map`): along the jets, over the wet tropics
+(anvils), in a shield ahead of each cyclone.
+
 The clouds never see coverage directly: :func:`shift_table` turns it into the
 fbm shift that gives that coverage, exactly, from the field's sorted column
-peaks over the planet (:func:`noise.sphere_column_peaks`, like
-:func:`noise.column_peaks`, is the inverse of the coverage function).
+peaks over the planet (:func:`noise.sphere_column_peaks` is the inverse of
+the coverage function).
 The GPU texture holds both (r = coverage for the far deck, g = the shift for
 the density), so the near field and the far deck agree by construction.
 
@@ -54,9 +61,15 @@ WEATHER_SIZE = 256
 CLIMATE_SIZE = 64
 #: Coverages the shift table is tabulated at, evenly over [0, 1].
 SHIFT_TABLE_SIZE = 256
+#: Texels per face edge of the cirrus cover map (~7 km on a 600 km planet):
+#: the cover follows the weather systems; the fibres come from the noise.
+CIRRUS_SIZE = 128
+#: Latitudes the upper wind's stream function is tabulated at, pole to pole.
+STREAM_TABLE_SIZE = 1024
 
 _SEED_MESO = 401
 _SEED_PLACEMENT = 409
+_SEED_CIRRUS = 419
 
 
 @dataclass(frozen=True)
@@ -93,6 +106,16 @@ class WeatherSpec:
     :ivar orographic_slope: the slope along the wind that gives 76 % of it
     :ivar climate_wavelength: the shortest relief and climate features the
         weather follows, metres (the mountain ranges, not single peaks)
+    :ivar jets: (|latitude| degrees, eastward wind) control points of the
+        upper wind, the jet streams' 1 the fastest: weak tropical easterlies,
+        the subtropical jet, the polar-front jet. The cirrus fibres follow it
+    :ivar jet_vortex: the cyclones' upper wind at its fastest, relative to
+        the jets' (the fibres bend around them)
+    :ivar cirrus_zonal: (|latitude| degrees, cover) control points of the
+        cirrus: anvils over the wet tropics, streaks along the jets
+    :ivar cirrus_shield: cirrus cover added ahead of a cyclone (poleward and
+        east of its low), and over a tropical one
+    :ivar cirrus_meso: amplitude of the cirrus cover's mesoscale texture
     """
 
     planet: PlanetSpec
@@ -128,6 +151,32 @@ class WeatherSpec:
     orographic: float = 0.3
     orographic_slope: float = 0.03
     climate_wavelength: float = 60e3
+    jets: tuple = (
+        (0.0, -0.25),
+        (12.0, -0.2),
+        (22.0, 0.45),
+        (30.0, 1.0),
+        (38.0, 0.55),
+        (48.0, 0.7),
+        (55.0, 0.9),
+        (64.0, 0.4),
+        (75.0, -0.05),
+        (90.0, 0.0),
+    )
+    jet_vortex: float = 0.8
+    cirrus_zonal: tuple = (
+        (0.0, 0.55),
+        (10.0, 0.42),
+        (20.0, 0.2),
+        (30.0, 0.38),
+        (40.0, 0.28),
+        (52.0, 0.45),
+        (64.0, 0.32),
+        (78.0, 0.12),
+        (90.0, 0.08),
+    )
+    cirrus_shield: float = 0.45
+    cirrus_meso: float = 0.3
 
 
 @dataclass(frozen=True)
@@ -324,6 +373,25 @@ def _local(points: np.ndarray, vortex: Vortex):
     return x, y
 
 
+def _reach(v: Vortex) -> float:
+    """How far a vortex turns the texture, in its radii (a Gaussian's width)."""
+    return 0.8 if v.tropical else 1.6
+
+
+def _near(dirs: np.ndarray, v: Vortex) -> np.ndarray:
+    """:returns: the mask of the directions a vortex reaches"""
+    return dirs @ np.asarray(v.centre) > math.cos(min(6.0 * v.radius, 1.2))
+
+
+def _wind_up(dirs: np.ndarray, warped: np.ndarray, v: Vortex) -> np.ndarray:
+    """*warped* (the texture's coordinates at *dirs*) wound by the vortex's
+    swirl, most at its centre: a line of constant wound angle is a spiral."""
+    c = np.asarray(v.centre)
+    angle = np.arccos(np.clip(dirs @ c, -1.0, 1.0))
+    turn = v.swirl * np.exp(-((angle / (_reach(v) * v.radius)) ** 2))
+    return _rotate(warped, c, -turn)
+
+
 def _gauss(x, y, cx, cy, sx, sy):
     return np.exp(-(((x - cx) / sx) ** 2) - ((y - cy) / sy) ** 2)
 
@@ -490,14 +558,10 @@ def _compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate):
     warped = dirs.copy()
     eye = np.ones(len(dirs))
     for v in vortices(spec, planet):
-        c = np.asarray(v.centre)
-        near = dirs @ c > math.cos(min(6.0 * v.radius, 1.2))
+        near = _near(dirs, v)
         if not near.any():
             continue
-        angle = np.arccos(np.clip(dirs[near] @ c, -1.0, 1.0))
-        reach = 0.8 if v.tropical else 1.6
-        turn = v.swirl * np.exp(-((angle / (reach * v.radius)) ** 2))
-        warped[near] = _rotate(warped[near], c, -turn)
+        warped[near] = _wind_up(dirs[near], warped[near], v)
         add, clear = _vortex_cover(dirs[near], warped[near], v, spec)
         cover[near] += add
         eye[near] *= clear
@@ -534,3 +598,137 @@ def weather_cube(
     cover = coverage_map(spec, size)
     shift = coverage_to_shift(cover, np.asarray(table))
     return np.stack([cover, shift.astype(np.float32)], axis=-1)
+
+
+# ── The cirrus: the upper wind and the cover ─────────────────────────────────
+
+#: The steepest slope of exp(-x^2) (at x = 1/sqrt(2)): a Gaussian stream
+#: function of amplitude A and width s blows at most this * A / s.
+_GAUSS_SLOPE = math.sqrt(2.0) * math.exp(-0.5)
+
+
+def upper_wind(spec: WeatherSpec, lat: np.ndarray) -> np.ndarray:
+    """The upper wind toward the east by latitude, the jets' 1 the fastest
+    (:attr:`WeatherSpec.jets`, moved north by the season).
+
+    :param lat: latitudes, degrees
+    """
+    points = np.array(spec.jets, dtype=np.float64)
+    return np.interp(np.abs(np.asarray(lat) - spec.season), points[:, 0], points[:, 1])
+
+
+def stream_table(spec: WeatherSpec, size: int = STREAM_TABLE_SIZE) -> np.ndarray:
+    """The zonal upper wind's stream function at *size* latitudes evenly
+    from -90 to 90 degrees, metres: ``psi = -R * integral(u dlat)``, so
+    the wind blows along its contours and ``|grad psi|`` is its speed. The
+    cirrus fibres are those contours (:mod:`cirrus`), one every fibre
+    spacing where the jet blows its fastest.
+
+    :returns: (size,) float64
+    """
+    lat = np.linspace(-90.0, 90.0, size)
+    u = upper_wind(spec, lat)
+    step = math.radians(180.0 / (size - 1))
+    integral = np.concatenate([[0.0], np.cumsum(0.5 * (u[1:] + u[:-1]) * step)])
+    return -spec.planet.radius * (integral - integral[size // 2])
+
+
+def stream_vortices(spec: WeatherSpec, planet: Planet | None = None) -> np.ndarray:
+    """The weather systems' share of the upper wind's stream function: one
+    Gaussian each, ``a * exp(-|d - c|^2 * k)`` over unit directions d, so
+    the wind turns around each low (cyclonic) and over each tropical
+    cyclone's outflow (anticyclonic), at most :attr:`WeatherSpec.jet_vortex`
+    of the jets' speed.
+
+    :param planet: the evaluated planet (built from the spec if None)
+    :returns: (N, 5) float64: centre (3), k, a (metres)
+    """
+    radius = spec.planet.radius
+    rows = []
+    for v in vortices(spec, planet):
+        width = _reach(v) * v.radius
+        amplitude = spec.jet_vortex * width * radius / _GAUSS_SLOPE
+        # A low's stream function is a minimum where it turns counter-
+        # clockwise (swirl > 0); the outflow aloft a tropical cyclone turns
+        # the other way.
+        sign = -math.copysign(1.0, v.swirl) * (-1.0 if v.tropical else 1.0)
+        rows.append((*v.centre, 1.0 / width**2, sign * amplitude))
+    return np.array(rows, dtype=np.float64).reshape(-1, 5)
+
+
+def stream_function(
+    table: np.ndarray, vortex_rows: np.ndarray, dirs: np.ndarray
+) -> np.ndarray:
+    """The upper wind's stream function at *dirs* (without the cirrus's
+    meanders), as the cirrus shader evaluates it.
+
+    :param table: :func:`stream_table`
+    :param vortex_rows: :func:`stream_vortices`
+    :param dirs: (N, 3) unit directions
+    :returns: (N,) metres
+    """
+    lat, _ = latlon(dirs)
+    psi = np.interp(lat, np.linspace(-90.0, 90.0, len(table)), table)
+    for cx, cy, cz, k, a in vortex_rows:
+        offset = dirs - np.array([cx, cy, cz])
+        psi = psi + a * np.exp(-np.einsum("ij,ij->i", offset, offset) * k)
+    return psi
+
+
+def _cirrus_compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate):
+    radius = spec.planet.radius
+    scale = _feature_scale(spec)
+    lat, _ = latlon(dirs)
+    points = np.array(spec.cirrus_zonal, dtype=np.float64)
+    cover = np.interp(np.abs(lat - spec.season), points[:, 0], points[:, 1])
+    # Ice cloud high above the ground cares less for its humidity than the
+    # cumulus: jet cirrus streams over deserts too.
+    _, _, humidity, _ = climate(dirs)
+    cover = cover * (0.4 + 0.6 * _wetness(humidity))
+
+    warped = dirs.copy()
+    for v in vortices(spec, planet):
+        near = _near(dirs, v)
+        if not near.any():
+            continue
+        warped[near] = _wind_up(dirs[near], warped[near], v)
+        x, y = _local(dirs[near], v)
+        if v.tropical:
+            shield = _gauss(x, y, 0.0, 0.0, 1.6, 1.6)  # the outflow's canopy
+        else:
+            shield = _gauss(x, y, 0.9, 1.0, 1.3, 1.0)  # ahead of the warm front
+        cover[near] += spec.cirrus_shield * shield
+    meso = fbm(
+        warped * radius,
+        spec.meso_wavelength * scale,
+        3,
+        spec.seed * 1000 + _SEED_CIRRUS,
+    )
+    return np.clip(cover + spec.cirrus_meso * meso, 0.0, 1.0)
+
+
+def cirrus_cover_at(
+    spec: WeatherSpec, dirs: np.ndarray, planet: Planet | None = None
+) -> np.ndarray:
+    """The cirrus's cover at arbitrary directions (no cube map; the climate
+    sampled directly).
+
+    :param dirs: (N, 3) unit directions
+    :returns: (N,) in [0, 1]
+    """
+    planet = planet or Planet(spec.planet)
+    return _cirrus_compose(spec, dirs, planet, _climate_direct(spec, planet))
+
+
+@functools.cache
+def cirrus_cover_map(spec: WeatherSpec, size: int = CIRRUS_SIZE) -> np.ndarray:
+    """The cirrus's cover as a cube map (cached per process): the share of
+    the sheet that holds cirrus.
+
+    :returns: (6, size, size) float32 in [0, 1], the layout of
+        :func:`sky.starfield.cube_directions`
+    """
+    planet = Planet(spec.planet)
+    dirs = cube_directions(size).reshape(-1, 3)
+    cover = _cirrus_compose(spec, dirs, planet, _climate_gridded(spec, planet))
+    return cover.reshape(6, size, size).astype(np.float32)

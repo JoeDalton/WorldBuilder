@@ -15,16 +15,14 @@ facing the sun reflects about 2.6 plus the sky's light. Before a pixel is
 written, every one of them applies the same three steps:
 
 1. **Exposure**: the light is multiplied by a camera-like constant,
-   `uExposure` (0.9 for the terrain, sky, ocean and planet clouds; the flat
-   cloud field has its own, 1.15).
+   `uExposure` (0.9 for the terrain, sky, ocean and clouds).
 2. **Tone map**: the ACES curve (`aces_tonemap`) maps the unbounded range
    into 0–1 smoothly. Dark values pass almost unchanged, and bright ones roll
    off gently toward white, so 2.0, 2.5 and 3.0 still come out as slightly
-   different near-whites. (The sky and the planet clouds keep the hue of
-   what is brighter than white, `displayColour` in
+   different near-whites. (The sky and the clouds keep the hue of what is
+   brighter than white, `displayColour` in
    [display.glsl](../../src/world_builder/atmosphere/shaders/display.glsl);
-   the flat cloud field uses a soft knee on the brightest channel and no
-   display encoding; see [atmosphere](atmosphere.md).)
+   see [atmosphere](atmosphere.md).)
 3. **Display encoding**: the `pow(…, 1/2.2)` at the end of `aces_tonemap`
    turns linear light into what a monitor expects.
 

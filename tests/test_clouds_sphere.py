@@ -21,9 +21,9 @@ from world_builder.clouds.noise import (
     with_threshold,
 )
 from world_builder.clouds.sphere import (
+    CloudVolume,
     ShellSpec,
     SphereCloudSpec,
-    SphericalClouds,
     _noise,
     generate_cloud_tile,
     octave_offset,
@@ -460,7 +460,7 @@ def test_empty_sky_gives_an_empty_tile(field, spec):
 
 def test_clouds_draw_tiles_around_the_camera(showbase):
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    clouds = SphericalClouds(
+    clouds = CloudVolume(
         showbase.render,
         R,
         executor,
@@ -505,7 +505,7 @@ def test_lower_quality_places_fewer_billboards(showbase):
     counts = {}
     try:
         for quality in (QualityLevel.HIGH, QualityLevel.LOW):
-            clouds = SphericalClouds(
+            clouds = CloudVolume(
                 showbase.render,
                 R,
                 executor,
@@ -530,9 +530,9 @@ def test_lower_quality_places_fewer_billboards(showbase):
 
 
 def test_deck_mesh_is_a_sphere():
-    from world_builder.clouds.sphere import _deck_mesh
+    from world_builder.clouds.sphere import deck_mesh
 
-    node = _deck_mesh(R + 2700.0, quads=4)
+    node = deck_mesh(R + 2700.0, quads=4)
     vdata = node.get_geom(0).get_vertex_data()
     data = np.frombuffer(bytes(memoryview(vdata.get_array(0))), np.float32).reshape(
         -1, 3

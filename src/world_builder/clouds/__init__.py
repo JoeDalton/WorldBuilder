@@ -1,23 +1,25 @@
 """
-In-scene billboard clouds.
+A planet's clouds.
 
+    planet.py  — a whole planet's clouds (PlanetClouds): the low clouds'
+                 volume and the cirrus sheet above it, as one part; not
+                 re-exported here, nor are the two layers:
+    sphere.py  — the volume (CloudVolume: billboard shells generated per
+                 cube-sphere tile in the worker pool, a deck beyond);
+    cirrus.py  — the sheet (CloudSheet: high cirrus, baked patches stamped
+                 along the upper wind, drawn behind and in front of the
+                 volume).
     noise.py   — what a cloud type looks like: its density field (DensityField)
                  and the tileable 3D value-noise volume it is built from.
-    cloud.py   — where a type's billboards go (sample_field_particles), presets
-                 (PRESETS, CloudSpec) and what they cost (CloudSettings).
-    field.py   — the drawable flat field (CloudField: geometry, sorting, wind,
-                 live set_sun / set_optics / set_coverage) and the game wrapper
-                 (Clouds).
-    sphere.py  — a whole planet's clouds (SphericalClouds: billboard shells
-                 generated per cube-sphere tile in the worker pool, a deck
-                 beyond); not re-exported here.
+    cloud.py   — the cloud types (PRESETS, CloudSpec), what they cost
+                 (CloudSettings) and the billboards' sprite atlas.
     weather.py — the planet's weather: a cube map of target coverage
-                 (WeatherSpec) and the fbm shift that gives it.
+                 (WeatherSpec) and the fbm shift that gives it; the upper
+                 wind and the cirrus's cover.
 
 A billboard is a sample of a volume, not a sprite, and a cloud type is one density
 field over a slab of sky whose features are the clouds. Design notes:
-docs/source/clouds.md (planet clouds: docs/source/atmosphere.md); profiling and an
-open alternative: view_aligned_slicing.md.
+docs/source/clouds.md and docs/source/atmosphere.md.
 """
 
 from world_builder.clouds.cloud import (
@@ -29,19 +31,13 @@ from world_builder.clouds.cloud import (
     scale_march,
     with_settings,
 )
-from world_builder.clouds.field import CloudField, CloudLayer, Clouds
 from world_builder.clouds.noise import (
     CloudOptics,
     DensityField,
     build_noise_texture,
-    measure_coverage,
-    resolve_field,
 )
 
 __all__ = [
-    "Clouds",
-    "CloudField",
-    "CloudLayer",
     "CloudType",
     "CloudSpec",
     "CloudOptics",
@@ -52,6 +48,4 @@ __all__ = [
     "scale_march",
     "with_settings",
     "build_noise_texture",
-    "measure_coverage",
-    "resolve_field",
 ]

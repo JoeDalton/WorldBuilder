@@ -408,7 +408,7 @@ Settled views, offscreen at 1280×720 (MSAA 4×), the demo's start area:
 - **Billboards evaluate it per vertex.** Per fragment, under the deck's
   overdraw, it took a flight skimming the slab to 4 fps; per vertex the same
   flight is GPU-cheap. Their own shading (4-octave density plus a 4-step sun
-  march per fragment) is the flat field's, unchanged.
+  march per fragment) is unchanged.
 - **Cloud tiles** take ~20 ms each in the workers, alongside terrain chunks;
   the pool gives each free slot to the channel with the fewest in flight. The
   initial fill (88 cloud tiles and ~610 chunks) takes ~12–16 s with 3 workers,
@@ -580,7 +580,7 @@ demo's first frame came 1.4 s later and its ground 3.6 s later.
 - **Cloud noise in C.** `wb_volume_fbm` (`native/noise.c`) samples the 64³
   volume as `sample_volume` does (float32 corner differences, float64 blends,
   the GPU's half-texel offset), bit for bit, 7x faster. Tiles, the column
-  peaks, the deck light, the sun march and the flat field all use it.
+  peaks, the deck light and the sun march all use it.
 - **Tile batches sized to the tile.** A tile needs about its slab volume over
   a billboard's candidates whatever the accept rate, so it draws that many
   (at least 2,048) instead of 20,000. Tiles per shell: 20 / 17 / 18 / 15 ms
@@ -591,7 +591,7 @@ demo's first frame came 1.4 s later and its ground 3.6 s later.
   instead of rebuilt by each one (0.7 s each). Its absence had stalled the
   start of the fill: 27 chunks in the first 2.5 s, now ~110.
 - **The deck light in the pool too**; the clouds finish their set-up in
-  `update()` once both are in (`SphericalClouds._finish`).
+  `update()` once both are in (`CloudVolume._finish`).
 - **The glow in the pool** (`Starfield.prefetch_glow`) while the terrains are
   built; the placeholder textures' noise on half spectra with cached filters
   (817 → 596 ms, the same bytes); the atlas's mean alpha with numpy.
@@ -944,6 +944,4 @@ set only when they change.
 
 The sea's parts are measured in §16; its reflection pass re-renders the
 scene (terrain, sky and clouds; M takes the terrain out of it), measured as a
-whole in the [performance backlog](performance_backlog.md). The flat cloud field's
-profiling and an open alternative design are in
-`world_builder/clouds/view_aligned_slicing.md`.
+whole in the [performance backlog](performance_backlog.md).

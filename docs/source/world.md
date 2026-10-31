@@ -67,17 +67,17 @@ parts.
   - `ocean`: an `OceanLook`, or None. An ocean needs `spec.has_ocean`.
     Without one, the terrain still draws its sea, as flat water only.
   - `ambient` and `exposure`: the terrain's sky light and tonemap.
-- **`CloudLook`**: `SphericalClouds`' arguments: altitude, cloud type,
+- **`CloudLook`**: `PlanetClouds`' arguments: altitude, cloud type,
+  `cirrus` (a `CirrusSpec` for high cirrus above the low clouds, or None),
   weather, seeds, shading. Its `exposure` (0.9) feeds the sky's tonemap, as
   the sky's and the terrain's do; keep them equal, or hazed clouds stop
-  matching the sky behind them.
+  matching the sky behind them. The cirrus must clear the low clouds' slab
+  and stay inside the air, or the world refuses it.
 - **`OceanLook`**: `Sea`'s arguments: water colour, wind, swell, foam,
   `near_band` (the altitudes over which the near look fades into the far
   one) and `anchor_range` (how far the waves stay anchored before
-  re-anchoring). The other fields are the world's own:
-  - `tuned_elevation`: the sun elevation the water colour was tuned in;
-  - `haze_color` and `haze_distance`: ignored (the atmosphere hazes the
-    sea), kept so older looks still build.
+  re-anchoring). Its `tuned_elevation` is the world's own: the sun
+  elevation the water colour was tuned in.
 - **`FieldLook`**: an asteroid field or a planet's ring
   (`AsteroidField`'s arguments, see [Asteroid fields](asteroids.md)):
   `name` (what `World.field(name)` finds it by), `spec`, `position`,

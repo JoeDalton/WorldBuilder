@@ -430,7 +430,7 @@ The library ships in the Linux (x86_64, aarch64), Windows x64 and macOS (univers
 
 ## Paths to SpaceFlight
 
-- **Collision:** `terrain.enable_collision(into_mask)` with SpaceFlight's terrain into-mask. The existing `ship-into-terrain`, `laser-into-terrain` and sensor handlers then see the planet. `munition_into_terrain` picks its sparks with `owner.material_at(hit_point, root_node)`. The flat ocean `CollisionPlane` goes away where there is a terrain: the sea is solid where it is drawn. Gravity and a radial "up" for flight are a separate matter, not needed for collision.
+- **Collision:** `terrain.enable_collision(into_mask)` with SpaceFlight's terrain into-mask. The existing `ship-into-terrain`, `laser-into-terrain` and sensor handlers then see the planet. `munition_into_terrain` picks its sparks with `owner.material_at(hit_point, root_node)`. SpaceFlight's own sea `CollisionPlane` is no longer needed where there is a terrain: the sea is solid where it is drawn. Gravity and a radial "up" for flight are a separate matter, not needed for collision.
 - **Loading phase:** a level should wait for `not terrain.loading` (held for a moment) before ships fly near the ground, since ground that is not drawn yet is not solid.
 - **Camera:** SpaceFlight already keeps the player at the render origin
   (`recenter_render_origin`). The terrain's root must hang under `render`,
@@ -438,7 +438,6 @@ The library ships in the Linux (x86_64, aarch64), Windows x64 and macOS (univers
   float64 planet-frame position.
 - **Depth:** `SplitDepthCameras` is opt-in. With it, the HUD's
   `lens.project` and `laser.frag`'s `gl_FragDepth` should use the near camera's lens.
-- **Ocean and clouds** still use `PLANET_RADIUS_M` (6371 km) and the flat
-  world by default. A 600 km terrain needs them built with its radius, and
-  placed in a frame that follows the camera's nadir, as the demo does with
-  the ocean.
+- **Ocean and clouds** are the planet's own: `World` builds them with the
+  body's radius (`BodyLook.ocean`, `BodyLook.clouds`), or build `Sea` and
+  `PlanetClouds` with the terrain's.

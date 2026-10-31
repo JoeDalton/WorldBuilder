@@ -1,5 +1,7 @@
 """
-Clouds over a whole planet, from inside the deck to orbit, with one pattern.
+A planet's low clouds as a volume (:class:`CloudVolume`), from inside the deck
+to orbit, with one pattern. :class:`planet.PlanetClouds` puts it under the
+cirrus sheet (:mod:`cirrus`).
 
 The density field is the billboard field's (:mod:`noise`), moved onto the
 planet: the slab is a height above the sea-level sphere, the tileable noise is
@@ -9,10 +11,11 @@ planet's circulation, weather systems, climate and terrain) shifts the fbm by
 exactly what gives its coverage there. Every view of the clouds evaluates that
 same function, so the pattern seen from orbit is the one you fly into:
 
-* **near** (the inner LOD shells): volumetric billboards, as the flat field
-  draws them, generated per cube-sphere tile in the shared worker pool by
-  rejection sampling of the density. Each shell doubles the billboards' size
-  and the tiles' (``lod_shells``' trade: each shell costs half the previous)
+* **near** (the inner LOD shells): volumetric billboards, generated per
+  cube-sphere tile in the shared worker pool by rejection sampling of the
+  density. Each shell doubles the billboards' size and the tiles' (at a fixed
+  volume fraction, the count falls as the cube of the size: each shell costs
+  half the previous)
   and crossfades with the next by distance, on optical depth. Below ULTRA the
   far shells are cheaper per pixel: fewer octaves (``CloudSettings.shell_octaves``; the
   dropped ones count as their mean and the shell's threshold moves to make up
@@ -30,8 +33,8 @@ same function, so the pattern seen from orbit is the one you fly into:
   the coverage): no change of colour closing in, and a terminator in the
   reddened sunlight's colour.
 
-The clouds are geometry that depth-tests against the scene, like the flat
-field: terrain occludes them with no depth plumbing. Premultiplied "over"
+The clouds are geometry that depth-tests against the scene: terrain occludes
+them with no depth plumbing. Premultiplied "over"
 needs back to front: the deck draws first, then each shell in its own
 back-to-front bin, coarsest first (a coarse tile holding the camera has its
 centre near it, but its visible billboards are all farther than the finer
@@ -128,16 +131,16 @@ if TYPE_CHECKING:
 _SHADERS = Path(__file__).parent / "shaders"
 #: Cull bins, between opaque (20) and transparent (30), after the sky's (21,
 #: ``sky.SKY_BIN_SORT``): the deck's first, then one back-to-front bin per
-#: shell, the coarsest first.
+#: shell, the coarsest first. A cirrus sheet above (:mod:`cirrus`) draws in
+#: the sky's bin where it is behind them and in "transparent" where it is in
+#: front.
 CLOUD_BIN = "cloud_sphere"
 _CLOUD_BIN_SORT = 22
 #: The shells' bin sorts, shell 0 (the nearest, drawn last) first: at most
-#: :data:`cloud.MAX_SHELLS` shells. 25 is skipped: it is the flat field's bin
-#: (``field._CLOUD_BIN_SORT``), and a tie would leave the two kinds' order
-#: undefined in one scene.
-_SHELL_BIN_SORTS = (29, 28, 27, 26, 24, 23)
-#: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box),
-#: rounded to the nearest level of the planet's grid.
+#: :data:`cloud.MAX_SHELLS` shells.
+_SHELL_BIN_SORTS = (28, 27, 26, 25, 24, 23)
+#: Side of a first-shell tile, metres, rounded to the nearest level of the
+#: planet's grid.
 BASE_TILE_SIZE = 8000.0
 #: Fewest candidate points per rejection-sampling batch of a tile: enough to
 #: measure the accept rate its billboard count follows.
@@ -312,10 +315,13 @@ def generate_cloud_tile(
 ) -> CloudTile:
     """Place one tile's billboards where the density field is non-zero.
 
-    The worker-process entry point. Rejection sampling, as the flat field's
-    :func:`cloud.sample_field_particles`, with the shell's octaves and
-    threshold: the accept rate measures the cloud volume, which sets the
-    count for the shell's volume fraction. A sparse tile gives up after 40
+    The worker-process entry point. Rejection sampling of the very field the
+    shader draws, with the shell's octaves and threshold: points are kept on
+    ``density > 0`` (the shader modulates by density, so weighting placement
+    too would double-count and starve the edges), and the accept rate
+    measures the cloud volume, which sets the count for the shell's volume
+    fraction (``extinction = density / phi`` then makes the billboard sum
+    take the field's own optical depth per metre). A sparse tile gives up after 40
     batches with what it found.
 
     :param spec: the clouds
@@ -488,9 +494,12 @@ def _tile_node(tile: CloudTile) -> tuple[NodePath, GeomTriangles, float]:
     return NodePath(node), tris, reach
 
 
-def _deck_mesh(radius: float, quads: int = DECK_QUADS) -> GeomNode:
+def deck_mesh(
+    radius: float, quads: int = DECK_QUADS, name: str = "cloud_deck"
+) -> GeomNode:
     """A cube-sphere of radius *radius*, never culled (the caller makes it
-    two-sided: the camera may be above or below it)."""
+    two-sided: the camera may be above or below it). The deck's, and the
+    cirrus sheet's (:mod:`cirrus`)."""
     t = np.linspace(-1.0, 1.0, quads + 1)
     a, b = np.meshgrid(t, t)
     positions, indices = [], []
@@ -512,7 +521,7 @@ def _deck_mesh(radius: float, quads: int = DECK_QUADS) -> GeomNode:
     memoryview(tris.modify_vertices()).cast("B")[:] = index.tobytes()
     geom = Geom(vdata)
     geom.add_primitive(tris)
-    node = GeomNode("cloud_deck")
+    node = GeomNode(name)
     node.add_geom(geom)
     node.set_bounds(OmniBoundingVolume())
     node.set_final(True)
@@ -555,16 +564,19 @@ def _sort_billboards(tile: _Tile, offset: np.ndarray) -> None:
     memoryview(tile.tris.modify_vertices()).cast("B")[:] = index.tobytes()
 
 
-class SphericalClouds:
-    """One planet's clouds: billboard shells near the camera, the deck beyond.
+class CloudVolume:
+    """A planet's low clouds as a volume (any of the cloud types): billboard
+    shells near the camera, the deck beyond. The volume layer of
+    :class:`planet.PlanetClouds`, which a game builds instead; a
+    :class:`cirrus.CloudSheet` may lie above it.
 
     Usage::
 
-        clouds = SphericalClouds(render, planet_radius, executor,
-                                 atmospheres=atmospheres, atmosphere=0)
-        clouds.set_sun(sun_direction)
+        volume = CloudVolume(render, planet_radius, executor,
+                             atmospheres=atmospheres, atmosphere=0)
+        volume.set_sun(sun_direction)
         # every frame, camera in the world frame (float64):
-        clouds.update(camera_world)
+        volume.update(camera_world)
 
     :ivar root: the node everything hangs under (hide it to hide the clouds)
     :ivar deck: the far deck's node
@@ -624,7 +636,7 @@ class SphericalClouds:
         :param settings: what the clouds cost (:class:`cloud.CloudSettings`:
             the billboards, their shells and octaves, the sun march, the
             tile budgets; :meth:`set_settings` changes it); None = HIGH
-        :param sun_brightness: direct-term gain (as :class:`field.CloudField`'s)
+        :param sun_brightness: direct-term gain
         :param sky_strength: ambient sky weight (live: :meth:`set_sky_light`)
         :param sky_occlusion: fraction of sky light reaching the slab's
             underside
@@ -683,7 +695,7 @@ class SphericalClouds:
         self.tiles_root = self.root.attach_new_node("cloud_tiles")
         self.tiles_root.set_shader(tile_shader)
         self.deck = self.root.attach_new_node(
-            _deck_mesh(self.radius + field.slab[0] + 0.5 * field.slab[1])
+            deck_mesh(self.radius + field.slab[0] + 0.5 * field.slab[1])
         )
         self.deck.set_shader(deck_shader)
         self.deck.set_two_sided(True)
@@ -723,7 +735,6 @@ class SphericalClouds:
             noiseSize=float(NOISE_SIZE),
             noiseOffset=Vec3(0, 0, 0),
             deckLightCosMin=DECK_LIGHT_COS_MIN,
-            uSpherical=1,
             planetRadius=self.radius,
             uOwnAtmosphere=-1 if atmosphere is None else int(atmosphere),
             camPos=self._camera_planet,
@@ -733,14 +744,11 @@ class SphericalClouds:
             # White: the planet's air colours it (atmoSunlight in cloud.frag).
             sunColor=Vec3(1.0, 1.0, 1.0),
             skyColor=Vec3(0.45, 0.6, 0.85),
-            hazeColor=Vec3(0.45, 0.6, 0.85),
             sunBrightness=float(sun_brightness),
             skyStrength=float(sky_strength),
             skyOcclusion=float(sky_occlusion),
             exposure=float(exposure),
-            horizonFade=0.0,
             uPixelAngle=0.001,
-            earthCurvature=0.0,
             nearFadeRadii=float(near_fade_radii),
             uCloudDebug=0,
         )
@@ -772,8 +780,7 @@ class SphericalClouds:
         shells and regenerate every tile (on the same worker channel), so the
         near clouds refill over a few seconds; the deck stays.
 
-        :param settings: the new settings (``resort_frames`` is the flat
-            field's and does nothing here)
+        :param settings: the new settings
         """
         changes = self._settings.changes(settings)
         if not changes:
@@ -823,8 +830,8 @@ class SphericalClouds:
         tile0 = self.grid.chunk_size(base_level)
         table = self._table
 
-        # The shells and their crossfade bands (lod_shells' layout, for a
-        # tile four times smaller than the box), then the deck.
+        # The shells and their crossfade bands (each twice the last, for a
+        # tile four times smaller than the domain), then the deck.
         domain = 4.0 * tile0
         bands = [
             (0.62 * domain * 2**k * 0.5, 0.85 * domain * 2**k * 0.5)
@@ -859,8 +866,6 @@ class SphericalClouds:
             params[k] = pack_layer_params(
                 shell.field_of(field),
                 extinction=field.density / max(fraction * sprite, 1e-6),
-                wrap_radius=1e12,
-                wrap_fade_band=0.0,
                 octave_mean=octave_mean,
                 optics=spec.optics,
                 aspect=spec.aspect,
@@ -880,8 +885,6 @@ class SphericalClouds:
         params[shells] = pack_layer_params(
             deck.field_of(field),
             extinction=field.density,  # per metre of the slab's path
-            wrap_radius=1e12,
-            wrap_fade_band=0.0,
             octave_mean=octave_mean,
             optics=deck_optics,
             fade_in=bands[-1],

@@ -4,11 +4,11 @@ updated as one.
 
 A game describes its world (what bodies there are, where, and how they look)
 and :class:`World` builds and wires the parts: each body's terrain, its air,
-its planet clouds and its sea, the asteroid fields and rings, the sky, the
-sun, and Panda3D lights for everything else (the game's own models). Every
-frame, :meth:`World.update` does what scripts/demo_terrain.py does by hand:
-the terrain, the fields, the air, the sky, the clouds, the lights and the
-sea's frame.
+its planet clouds (and their cirrus) and its sea, the asteroid fields and
+rings, the sky, the sun, and Panda3D lights for everything else (the game's
+own models). Every frame, :meth:`World.update` does what
+scripts/demo_terrain.py does by hand: the terrain, the fields, the air, the
+sky, the clouds, the lights and the sea's frame.
 
 Usage::
 
@@ -75,9 +75,10 @@ from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 from world_builder.asteroids.field import AsteroidField
 from world_builder.asteroids.spec import FieldSpec, KeepOut
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
+from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.half_res import HalfResClouds
-from world_builder.clouds.sphere import SphericalClouds
+from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.gravity import Gravity
@@ -132,15 +133,18 @@ class SkyLook:
 
 @dataclass(frozen=True)
 class CloudLook:
-    """A body's planet clouds: :class:`SphericalClouds`' arguments of the
-    same names.
+    """A body's planet clouds: :class:`PlanetClouds`' arguments of the same
+    names.
 
-    :ivar altitude: the cloud base above sea level, metres; None = the cloud
-        type's
+    :ivar altitude: the low clouds' base above sea level, metres; None = the
+        cloud type's
+    :ivar cirrus: high cirrus above them (:class:`CirrusSpec`); None = none.
+        Its base must clear the low clouds' slab, its top stay in the air
     """
 
     altitude: float | None = None
     cloud_type: CloudType = CloudType.CUMULUS
+    cirrus: CirrusSpec | None = None
     weather: WeatherSpec | None = None
     seed: int = 7
     weather_seed: int = 11
@@ -158,9 +162,6 @@ class OceanLook:
 
     :ivar tuned_elevation: the sun's elevation (degrees) the water's colour
         was tuned in: the water is lit relative to that daylight
-    :ivar haze_color: ignored (the atmospheres haze the sea); kept so older
-        looks still build
-    :ivar haze_distance: ignored, likewise
     """
 
     water_color: tuple[float, float, float] = (0.02, 0.06, 0.14)
@@ -183,12 +184,9 @@ class OceanLook:
     near_band: tuple[float, float] = (12000.0, 18000.0)
     anchor_range: float = 50000.0
     tuned_elevation: float = 35.0
-    haze_color: tuple[float, float, float] = (0.2, 0.2, 0.4)
-    haze_distance: float = 150000.0
 
-    #: The fields that are not Sea's arguments: the world's own, and those
-    #: kept for older looks
-    WORLD_FIELDS = ("tuned_elevation", "haze_color", "haze_distance")
+    #: The fields that are not Sea's arguments: the world's own
+    WORLD_FIELDS = ("tuned_elevation",)
 
 
 @dataclass(frozen=True)
@@ -272,7 +270,7 @@ class Body:
     look: BodyLook
     terrain: Terrain
     atmosphere: int | None = None
-    clouds: SphericalClouds | None = None
+    clouds: PlanetClouds | None = None
     ocean: Sea | None = None
     ocean_reference: np.ndarray | None = None
 
@@ -360,7 +358,8 @@ class World:
             space), linear
         :param fields: the asteroid fields and rings
         :raises ValueError: two bodies (or fields) of one name, clouds
-            without air, or an ocean on a dry planet
+            without air, cirrus not above the clouds or not inside the air,
+            or an ocean on a dry planet
         """
         names = [look.name for look in bodies]
         if len(set(names)) != len(names):
@@ -371,6 +370,15 @@ class World:
         for look in bodies:
             if look.clouds is not None and look.atmosphere is None:
                 raise ValueError(f"{look.name}: clouds need an atmosphere")
+            if look.clouds is not None:
+                # Before anything is built (PlanetClouds checks it too)
+                cl = look.clouds
+                try:
+                    check_layers(
+                        cl.cloud_type, cl.altitude, cl.cirrus, look.atmosphere.height
+                    )
+                except ValueError as error:
+                    raise ValueError(f"{look.name}: {error}") from None
             if look.ocean is not None and not look.spec.has_ocean:
                 raise ValueError(f"{look.name}: an ocean needs spec.has_ocean")
 
@@ -496,9 +504,9 @@ class World:
             bodies[0].position if bodies else (0.0, 0.0, 0.0), dtype=np.float64
         )
 
-    def _make_clouds(self, look: BodyLook, atmosphere: int) -> SphericalClouds:
+    def _make_clouds(self, look: BodyLook, atmosphere: int) -> PlanetClouds:
         cl = look.clouds
-        clouds = SphericalClouds(
+        clouds = PlanetClouds(
             self.app.render,
             look.spec.radius,
             self.executor,
@@ -507,6 +515,7 @@ class World:
             atmosphere=atmosphere,
             cloud_type=cl.cloud_type,
             altitude=cl.altitude,
+            cirrus=cl.cirrus,
             planet=look.spec,
             weather=cl.weather,
             seed=cl.seed,
@@ -595,7 +604,13 @@ class World:
             (
                 body.radius,
                 float(np.linalg.norm(camera - body.position)),
-                body.terrain.planet.height_bounds[1],
+                # The cirrus's far limb is as far as ground that high
+                max(
+                    body.terrain.planet.height_bounds[1],
+                    0.0
+                    if body.clouds is None or body.clouds.sheet is None
+                    else body.clouds.sheet.spec.mid,
+                ),
                 0.0
                 if body.look.spec.has_ocean
                 else body.terrain.planet.height_bounds[0],
@@ -697,7 +712,7 @@ class World:
             if self.sky is not None:
                 self.half_res.exclude(self.sky.node)
             for cloud in clouds:
-                self.half_res.add(cloud.root)
+                cloud.use_half_res(self.half_res)
         elif not wanted and self.half_res is not None:
             self.half_res.destroy()
             self.half_res = None
@@ -751,14 +766,14 @@ class World:
                 far = self.depth_ranges(origin_world)[1]
             self.sky.update(tuple(camera_render), far)
         pixel_angle = self._pixel_angle()
+        scale = 1.0
         if self.half_res is not None:
             self.half_res.update()
-            if pixel_angle is not None:
-                pixel_angle *= self.half_res.pixel_scale
+            scale = self.half_res.pixel_scale
         for body in self.bodies:
             if body.clouds is not None:
                 if pixel_angle is not None:
-                    body.clouds.set_pixel_angle(pixel_angle)
+                    body.clouds.set_pixel_angle(pixel_angle, volume_scale=scale)
                 body.clouds.update(camera, camera_render)
         self._light(camera)
         for body in self.bodies:
