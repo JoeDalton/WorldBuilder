@@ -3,10 +3,10 @@ Standalone flythrough demo for the procedural planet terrain.
 
 Flies a free camera around a small planetary system: a Kerbin-sized planet
 (600 km) with hand-made stamps (world_builder/terrain/levels/demo.yaml), its
-atmosphere, its clouds (cumulus over the whole planet, following its
-weather) and its sea, an airless sand moon 10,000 km away,
-and a procedural star field, from orbit down to the ground of either. Run it
-from an environment where world_builder is importable::
+atmosphere, its clouds (cumulus over the whole planet, following its weather,
+and high cirrus streaming along its jets) and its sea, an airless sand moon
+10,000 km away, and a procedural star field, from orbit down to the ground of
+either. Run it from an environment where world_builder is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--planet PRESET]
         [--seed N] [--start LAT LON] [--radius METRES]
@@ -37,7 +37,7 @@ from an environment where world_builder is importable::
     --quality        every part's quality preset at start (default high;
                      world_builder.settings.WorldSettings)
     --<part>-quality one part's preset, over --quality
-    --no-clouds      no clouds at all
+    --no-clouds      no clouds at all (neither cumulus nor cirrus)
 
 The default backend generates terrain in spawned worker processes, which
 re-import this script: keep the ``if __name__ == "__main__"`` guard. All
@@ -76,6 +76,7 @@ Controls (AZERTY):
                     terrain, air, sky, clouds, ocean (each part's own
                     settings; a cloud or ocean change may refill a moment)
     F6              cycle every part's preset at once
+    C               show / hide the high cirrus
     F               print the camera pose and terrain stats
     ESC             quit
 
@@ -122,6 +123,7 @@ from panda3d.core import (
 )
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
+from world_builder.clouds.cirrus import CirrusSheet
 from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.sphere import SphericalClouds
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
@@ -422,6 +424,7 @@ class TerrainDemo(ShowBase):
         self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.clouds = None
+        self.cirrus = None
         self._cloud_debug = cloud_debug
         self._rebuild_clouds()
         # Built before the depth split changes the lens: the sea's reflection
@@ -464,6 +467,7 @@ class TerrainDemo(ShowBase):
             ("end", self._reset_camera, []),
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
+            ("c", self._toggle_cirrus, []),
             ("escape", self._quit, []),
             (QUALITY_ALL_KEY, self._cycle_all_quality, []),
         ]
@@ -589,6 +593,10 @@ class TerrainDemo(ShowBase):
             scale = self.half_res.pixel_scale if self.half_res is not None else 1.0
             self.clouds.set_pixel_angle(scale * fov / max(self.win.get_y_size(), 1))
             self.clouds.update(self.cam_world)
+        if self.cirrus is not None:
+            fov = math.radians(self.camLens.get_fov()[1])
+            self.cirrus.set_pixel_angle(fov / max(self.win.get_y_size(), 1))
+            self.cirrus.update(self.cam_world)
         self._update_sun()
         self.ocean.update(self.cam_world)
         self._test_ball.set_pos(*self.home.terrain.to_render(self._test_ball_point))
@@ -645,6 +653,8 @@ class TerrainDemo(ShowBase):
         if self.clouds is not None:
             self.clouds.set_sun(self._sun)
             self.clouds.set_sky_light(CLOUD_SKY_LIGHT)
+        if self.cirrus is not None:
+            self.cirrus.set_sun(self._sun)
         for body in self.bodies:
             ambient = SKY_AMBIENT if body.atmosphere else SPACE_AMBIENT
             body.terrain.set_sun(tuple(self._sun), SUN_COLOR, ambient)
@@ -736,6 +746,9 @@ class TerrainDemo(ShowBase):
             if cs is not None
             else "clouds off"
         )
+        if self.cirrus is not None:
+            shown = not self.cirrus.root.is_hidden()
+            clouds += f"   cirrus {'on' if shown else 'off'} (C)"
         quality = "   ".join(
             f"{SECTIONS[name].LABEL.lower()} {_level_name(self.world, name)}"
             for _, name in QUALITY_KEYS
@@ -787,6 +800,9 @@ class TerrainDemo(ShowBase):
         if self.clouds is not None:
             self.clouds.remove()
             self.clouds = None
+        if self.cirrus is not None:
+            self.cirrus.remove()
+            self.cirrus = None
         if not self._clouds_on:
             return
         self.clouds = SphericalClouds(
@@ -802,8 +818,30 @@ class TerrainDemo(ShowBase):
         )
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
+        self.cirrus = CirrusSheet(
+            self.render,
+            self.radius,
+            self.executor,
+            atmospheres=self.atmospheres,
+            atmosphere=0,
+            planet=self.terrain.spec,
+            settings=self.world.clouds,
+        )
+        self.cirrus.set_debug(self._cloud_debug)
+        self.cirrus.set_sun(self._sun)
         if getattr(self, "half_res", None) is not None:
             self.half_res.add(self.clouds.root)
+            self.half_res.exclude(self.cirrus.root)
+
+    def _toggle_cirrus(self) -> None:
+        """Show or hide the high cirrus (a look toggle)."""
+        if self.cirrus is None:
+            return
+        root = self.cirrus.root
+        if root.is_hidden():
+            root.show()
+        else:
+            root.hide()
 
     def _sync_half_res(self) -> None:
         """Build or remove the clouds' half-resolution pass as the settings
@@ -814,6 +852,8 @@ class TerrainDemo(ShowBase):
             self.half_res.exclude(self.sky.node)
             if self.clouds is not None:
                 self.half_res.add(self.clouds.root)
+            if self.cirrus is not None:
+                self.half_res.exclude(self.cirrus.root)
         elif not wanted and self.half_res is not None:
             self.half_res.destroy()
             self.half_res = None
@@ -837,6 +877,8 @@ class TerrainDemo(ShowBase):
         world.apply(*self._terrains(), self.atmospheres, self.sky, self.ocean)
         if self.clouds is not None:
             world.apply(self.clouds)
+        if self.cirrus is not None:
+            world.apply(self.cirrus)
         self._sync_half_res()
 
     def set_debug_view(self, view: int) -> None:
