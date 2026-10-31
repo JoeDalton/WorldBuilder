@@ -14,17 +14,20 @@ uniform vec3  sunDir;            // FROM the scene TOWARD the sun, normalised
 // LAYER_VEC4S per cloud type, mirroring noise.pack_layer_params. Size is
 // MAX_LAYERS * LAYER_VEC4S (a test checks it): too small reads out of bounds,
 // and a mismatch with cloud_sphere.vert fails to link.
-uniform vec4 layerParams[96];
+uniform vec4 layerParams[104];
 
 uniform float planetRadius;      // sea-level radius
 // The weather (clouds.weather), by direction from the planet centre:
-// r = the target coverage, g = the fbm shift that gives it.
+// r = the target coverage, g = the fbm shift that gives it, b = the
+// convective depth, a = the anvil shelf's spread (clouds.genera; 0 in a
+// two-channel map).
 uniform samplerCube weatherMap;
 // A/B switches for profiling (bits, 0 = normal): 1 no sun march, 2 no
-// atmosphere, 4 two octaves only, 8 flat colour after the density.
+// atmosphere, 4 two octaves only, 8 flat colour after the density, 16 (the
+// raymarch) its steps per pixel, red over the budget.
 uniform int   uCloudDebug;
 
-const int LAYER_VEC4S = 12;
+const int LAYER_VEC4S = 13;
 
 // The type's field and optics. The layer index is dynamically uniform over a draw,
 // so these are cached uniform reads.
@@ -58,6 +61,14 @@ struct Field {
     float phaseBackward;
     float phaseIsotropic;
     float forwardAnisotropy;
+    // A convective field's growth with depth (noise.DensityField), neutral
+    // by default: its top at depth 0 as a share of the slab, its anvil (and
+    // shelf), its cell octave's weight, the shelf's fbm shift
+    // (noise.with_shelf).
+    float minTop;
+    float anvil;
+    float cellWeight;
+    float shelfShift;
 };
 
 Field getField(int layer) {
@@ -105,6 +116,11 @@ Field getField(int layer) {
         f.octaves = min(f.octaves, 2);
     }
     f.shellFade       = layerParams[b + 11];
+    vec4 v12 = layerParams[b + 12];
+    f.minTop          = v12.x;
+    f.anvil           = v12.y;
+    f.cellWeight      = v12.z;
+    f.shelfShift      = layerParams[b + 10].y;
     return f;
 }
 
@@ -117,6 +133,9 @@ float sampleNoise(vec3 coord) {
 const vec3 OCTAVE_2_OFFSET = vec3( 0.31,  0.73,  0.19);
 const vec3 OCTAVE_3_OFFSET = vec3(-0.57,  0.11,  0.83);
 const vec3 OCTAVE_4_OFFSET = vec3( 0.67, -0.29,  0.41);
+// A convective field's cell octave: MUST match noise.CELL_SCALE / CELL_OFFSET.
+const float CELL_SCALE = 0.25;
+const vec3 CELL_OFFSET = vec3(0.13, 0.59, 0.37);
 
 float lowOctaves(Field f, vec3 coord) {
     return sampleNoise(coord * f.octaveScales.x)                   * f.octaveWeights.x
@@ -182,42 +201,137 @@ float weatherShift(vec3 p) {
     return texture(weatherMap, p).g;
 }
 
-// How far the threshold has risen at slab height h (noise.threshold_lift).
-float thresholdLift(Field f, float h) {
-    return f.topErosion * pow(clamp(h, 0.0, 1.0), f.topExponent);
+// The weather at a planet-frame position: (its fbm shift, the convective
+// depth, the anvil shelf's spread), one fetch.
+vec3 weatherAt(vec3 p) {
+    return texture(weatherMap, p).gba;
 }
 
-// Flat bases scale DENSITY; bulging tops RAISE THE THRESHOLD (noise.threshold_lift).
-// Shared by the view sample and the sun march so both agree where the cloud ends.
-float slabDensity(Field f, float h, float raw) {
-    float lift = thresholdLift(f, h);
-    return smoothstep(f.threshLo + lift, f.threshHi + lift, raw)
-         * (1.0 - exp2(-f.baseRamp * h));
+// The clouds' local top, as a share of the slab (noise.top_fraction).
+float topFraction(Field f, float depth) {
+    return f.minTop + (1.0 - f.minTop) * clamp(depth, 0.0, 1.0);
+}
+
+// Above a convective cloud's local top: no cloud (an "infinite" lift).
+const float NO_CLOUD_LIFT = 1.0e9;
+
+// How far the threshold has risen at slab height h (noise.threshold_lift),
+// following the local top at the convective depth, and falling again just
+// under it in a deep cloud: the anvil (noise.ANVIL_DEPTH, ANVIL_BAND).
+float thresholdLift(Field f, float h, float depth) {
+    float local = h / topFraction(f, depth);
+    if (f.minTop < 1.0 && local >= 1.0) return NO_CLOUD_LIFT;
+    float lift = f.topErosion * pow(clamp(local, 0.0, 1.0), f.topExponent);
+    if (f.anvil > 0.0) {
+        lift -= f.anvil * smoothstep(0.6, 1.0, depth) * smoothstep(0.7, 0.95, local);
+    }
+    return lift;
+}
+
+float thresholdLift(Field f, float h) {
+    return thresholdLift(f, h, 0.0);
+}
+
+// A cumulonimbus's anvil shelf (noise.SHELF_BAND and the rest): a smooth
+// lens under the slab's top, spread past the tower over the weather's
+// spread (the map's alpha, 0 to 1). At spread 1 it rises in over (x, y) of
+// the slab, its threshold falling by SHELF_CLEAR; its underside rises with
+// the spread falling, to SHELF_EDGE at 0 (gone): thick by the tower, thin
+// at its rim. None under its underside. Its DENSITY fades out over (z, w):
+// a flat top cut by the threshold would cut every billboard along one
+// line. Smooth, not cauliflower: the two coarse octaves only (the others
+// their mean).
+const vec4 SHELF_BAND = vec4(0.6, 0.72, 0.76, 1.0);
+const float SHELF_EDGE = 1.0;
+const float SHELF_CLEAR = 0.6;
+
+// The shelf's underside at a spread (noise.shelf_underside).
+float shelfUnderside(float spread) {
+    return mix(SHELF_EDGE, SHELF_BAND.x, clamp(spread, 0.0, 1.0));
+}
+
+float shelfWeight(float h, float spread) {
+    float under = shelfUnderside(spread);
+    return smoothstep(under, under + SHELF_BAND.y - SHELF_BAND.x, h);
+}
+
+// What the fbm is raised by against the threshold at slab height h
+// (noise._slab_density): x the column's (the weather's shift less the
+// threshold's lift), y its base's fill (flat bases scale DENSITY; bulging
+// tops RAISE THE THRESHOLD: noise.threshold_lift), z the anvil shelf's
+// (noise.shelf_lift). -NO_CLOUD_LIFT where there is none. Shared by the
+// view sample and the sun march so both agree where the cloud ends.
+vec3 fieldBias(Field f, float h, vec3 weather) {
+    float lift = thresholdLift(f, h, weather.y);
+    float column = lift >= NO_CLOUD_LIFT ? -NO_CLOUD_LIFT : weather.x - lift;
+    float fill = 1.0 - exp2(-f.baseRamp * h / topFraction(f, weather.y));
+    float shelf = -NO_CLOUD_LIFT;
+    if (f.anvil > 0.0 && h > shelfUnderside(weather.z)) {
+        shelf = f.shelfShift - thresholdLift(f, h, 1.0)
+              - SHELF_CLEAR * (1.0 - shelfWeight(h, weather.z));
+    }
+    return vec3(column, fill, shelf);
+}
+
+// The shelf's density at slab height h for its coarse fbm v (the two
+// coarse octaves, the others' mean, the cell octave's shift), its bias
+// given (noise._shelf_density).
+float shelfDensity(Field f, float h, float v, float bias) {
+    return smoothstep(f.threshLo, f.threshHi, v + bias)
+         * (1.0 - smoothstep(SHELF_BAND.z, SHELF_BAND.w, h));
+}
+
+// What a convective field's cell octave adds at depth (noise.cell_shift):
+// its noise about its mean, so the coverage barely moves.
+float cellShift(Field f, vec3 coord, float depth) {
+    if (f.cellWeight <= 0.0) return 0.0;
+    return f.cellWeight * clamp(depth, 0.0, 1.0)
+         * (sampleNoise(coord * CELL_SCALE + CELL_OFFSET) - f.octaveMean);
+}
+
+// The density at p, the weather there given (weatherAt: it varies over
+// kilometres, so a raymarch reads it once for many samples): the column's
+// or the anvil shelf's, whichever is denser.
+float cloudDensityAt(Field f, vec3 p, vec3 weather) {
+    float h = slabHeight(f, heightOf(p));
+    if (h <= 0.0 || h >= 1.0) return 0.0;
+    vec3 bias = fieldBias(f, h, weather);
+    if (max(bias.x, bias.z) <= -NO_CLOUD_LIFT) return 0.0;  // no cloud here
+    vec3 coord = p * f.noiseScale + f.noiseOrigin;
+    // Exact early-outs: the octaves still to come add at most their maxima
+    // (the shelf, their mean), and at or below the threshold the smoothstep
+    // is 0. Most of a billboard quad is clear air, which then costs one or
+    // two noise fetches, not four (plus the weather's, on a planet).
+    float rest = highOctavesMax(f);
+    float mean = f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w);
+    float reach = max(bias.x + rest, bias.z + mean);
+    float v = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x
+            + cellShift(f, coord, weather.y);
+    if (v + f.octaveWeights.y + reach <= f.threshLo) return 0.0;
+    v += sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET) * f.octaveWeights.y;
+    if (v + reach <= f.threshLo) return 0.0;
+    float shelf = shelfDensity(f, h, v + mean, bias.z);
+    if (v + bias.x + rest <= f.threshLo) return shelf;
+    float column = smoothstep(f.threshLo, f.threshHi, v + highOctaves(f, coord) + bias.x);
+    return max(column * bias.y, shelf);
+}
+
+// The density at p with only the weather's shift (no convective depth, no
+// shelf).
+float cloudDensityShifted(Field f, vec3 p, float shift) {
+    return cloudDensityAt(f, p, vec3(shift, 0.0, -NO_CLOUD_LIFT));
 }
 
 float cloudDensity(Field f, vec3 p) {
-    float h = slabHeight(f, heightOf(p));
-    if (h <= 0.0 || h >= 1.0) return 0.0;
-    vec3 coord = p * f.noiseScale + f.noiseOrigin;
-    // Exact early-outs: the octaves still to come add at most their maxima,
-    // and at or below the threshold the smoothstep is 0. Most of a billboard
-    // quad is clear air, which then costs one or two noise fetches, not four
-    // (plus the weather's, on a planet).
-    float floor_ = f.threshLo + thresholdLift(f, h);
-    float rest = highOctavesMax(f);
-    float raw = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x
-              + weatherShift(p);
-    if (raw + f.octaveWeights.y + rest <= floor_) return 0.0;
-    raw += sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET) * f.octaveWeights.y;
-    if (raw + rest <= floor_) return 0.0;
-    return slabDensity(f, h, raw + highOctaves(f, coord));
+    return cloudDensityAt(f, p, weatherAt(p));
 }
 
 // Optical depth toward the sun through the same field, which is what lets clouds
 // shadow themselves AND each other. A depth, not a transmittance, so everything
 // derived from it stays a function of world position only. Two octaves,
 // calibrated onto the full field's distribution (noise.shadow_calibration).
-float sunOpticalDepth(Field f, vec3 p) {
+// The weather at p given (weatherAt).
+float sunOpticalDepthAt(Field f, vec3 p, vec3 weather) {
     if (f.sunSteps <= 0) {
         return 0.0;
     }
@@ -225,25 +339,45 @@ float sunOpticalDepth(Field f, vec3 p) {
     vec3 position = p + increment * 0.5;
     float density = 0.0;
     // The weather varies over kilometres, the march spans a few hundred
-    // metres: one fetch for all its steps.
-    float shift = weatherShift(p) + f.shadowBias;
+    // metres: one fetch for all its steps; the cell octave (eight
+    // kilometres) too.
+    float cell = cellShift(f, p * f.noiseScale + f.noiseOrigin, weather.y);
+    // The column's two octaves are calibrated onto the full field; the
+    // shelf's are its own, the rest their mean.
+    float shift = f.shadowBias + cell;
+    float mean = f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w) + cell;
     for (int i = 0; i < f.sunSteps; i++, position += increment) {
         float h = slabHeight(f, heightOf(position));
         if (h <= 0.0 || h >= 1.0) {
             continue;
         }
+        vec3 bias = fieldBias(f, h, weather);
+        if (max(bias.x, bias.z) <= -NO_CLOUD_LIFT) {
+            continue;
+        }
         vec3 coord = position * f.noiseScale + f.noiseOrigin;
         float first = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x;
         // The same exact early-out as cloudDensity's (shadowGain > 0).
-        if ((first + f.octaveWeights.y) * f.shadowGain + shift
-                <= f.threshLo + thresholdLift(f, h)) {
+        float most = first + f.octaveWeights.y;
+        if (max(most * f.shadowGain + shift + bias.x, most + mean + bias.z)
+                <= f.threshLo) {
             continue;
         }
-        float second = sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET)
-                     * f.octaveWeights.y;
-        density += slabDensity(f, h, (first + second) * f.shadowGain + shift);
+        float pair = first + sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET)
+                           * f.octaveWeights.y;
+        float column = smoothstep(f.threshLo, f.threshHi, pair * f.shadowGain + shift + bias.x);
+        density += max(column * bias.y, shelfDensity(f, h, pair + mean, bias.z));
     }
     return density * f.sunStepLength * f.fieldExtinction * f.shadowStrength;
+}
+
+// With only the weather's shift (no convective depth, no shelf).
+float sunOpticalDepthShifted(Field f, vec3 p, float shift) {
+    return sunOpticalDepthAt(f, p, vec3(shift, 0.0, -NO_CLOUD_LIFT));
+}
+
+float sunOpticalDepth(Field f, vec3 p) {
+    return sunOpticalDepthAt(f, p, weatherAt(p));
 }
 
 // ── Sunlight on a planet's clouds (through its own air) ───────────────────────

@@ -24,7 +24,10 @@ by two techniques:
 - a **volume** ([`sphere.py`](../../src/world_builder/clouds/sphere.py),
   `CloudVolume`): the low clouds, cumulus by default (any `CloudType`),
   billboard LOD shells generated per cube-sphere tile in the terrain's worker
-  pool, and a deck sphere beyond the last shell, up to orbit;
+  pool, and a deck sphere beyond the last shell, up to orbit. Or, with
+  `CloudSettings.renderer = "march"`, the same field **raymarched**
+  ([`march.py`](../../src/world_builder/clouds/march.py), `CloudMarch`, see
+  [the raymarch](#the-raymarch)), an experimental second code path;
 - optionally, a **sheet** above it
   ([`cirrus.py`](../../src/world_builder/clouds/cirrus.py), `CloudSheet`): high
   cirrus, baked patches stamped along the upper wind.
@@ -103,9 +106,10 @@ like:
 [`cloud.py`](../../src/world_builder/clouds/cloud.py) holds the types and
 what they cost:
 
-- **`PRESETS`** maps `CloudType` (`CUMULUS`/`STRATUS`/`CIRRUS`/`CUMULONIMBUS`)
-  to a `CloudSpec`: a field, its optics, a billboard radius range and a
-  billboard aspect. Every shape parameter lives in the field.
+- **`PRESETS`** maps `CloudType` (`CUMULUS`/`STRATUS`/`CIRRUS`/`CUMULONIMBUS`,
+  and `CONVECTIVE`, [the genera](#genera)'s) to a `CloudSpec`: a field, its
+  optics, a billboard radius range and a billboard aspect. Every shape
+  parameter lives in the field.
 - **Placement** (`sphere.generate_cloud_tile`) rejection-samples the slab and
   keeps the points the field calls cloud, so the field alone bounds each
   cloud. The accept rate measures the cloud's volume directly, which makes the
@@ -180,11 +184,228 @@ when broken:
   ~16% light ring that sweeps with the camera. Weighting before the cap would
   let each shell reach it and sum to twice it.
 
+## Genera
+
+[`genera.py`](../../src/world_builder/clouds/genera.py) adds stratus, and the
+convective continuum from fair-weather cumulus through congestus to
+cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
+`--genera` in the demo, `terrain_shots.py` and `cloud_bench.py`). Its maps are
+a **placeholder** for the weather (issue #8): features laid out around one
+point. Billboards draw them; the raymarch has no depth.
+
+**Two families, one sort.** Billboards mix cloud types by superposition: each
+samples its own type's field, and the blender adds them. So the genera are two
+families, each a `CloudVolume` (one field), in bands of sky that do not
+overlap:
+
+- **stratiform** (`CloudType.STRATUS`): a sheet 500 m thick, its base at
+  `GeneraSpec.stratus_altitude`;
+- **convective** (`CloudType.CONVECTIVE`): the cumulus field, its clouds
+  growing with the convective **depth** (0 to 1, a map of its own).
+
+Their billboards share the shells' bins, which sort them back to front as
+one cloud's: the bands do not overlap (`check_layers` refuses a stratus
+reaching the convective base). Their two decks are spheres one inside the
+other, drawn in a fixed bin farthest first: the stratus's first from above,
+the convective one's from under both.
+
+**The depth** (`DensityField.min_top`, `anvil`, `cell_weight`, all neutral
+by default):
+
+- the clouds' **top** rises from the cumulus's (1 km above the base, a
+  share `min_top` of the slab) to the slab's (10.5 km). The lift, which bulges
+  the tops, and the base's fill follow the local top (`noise.top_fraction`).
+  Above it nothing is cloud;
+- a **cell octave**, four times coarser than the first (8 km features),
+  adds to the fbm in proportion to the depth, about its mean: it gathers the
+  deep clouds into towers;
+- under a deep cloud's top, the threshold falls (`noise.ANVIL_BAND`): its
+  **anvil**, which spreads past the tower as a **shelf** (below);
+- **billboards grow with the depth** (`CloudSpec.deep_radius`, 2.5 times at
+  depth 1) and are thinned as the cube of their size, so the overlap, and
+  the extinction, hold. A cumulonimbus takes as many billboards per
+  kilometre of its features as a cumulus, not per cubic metre.
+
+The weather cube carries the depth beside the coverage and the shift (its
+blue channel), and the anvil's spread (alpha; one fetch). The shader and
+`density_on_sphere` read it, and for every other field it changes nothing
+(the billboards' images are within one 8-bit step of before).
+
+**Coverage by depth.** A deep column may grow taller, so it holds cloud at
+any height more often: the same coverage needs less shift. The shift is
+tabulated by depth too (`genera.depth_shift_tables`: one `shift_table` per
+depth of `genera.DEPTHS`, the column peaks measured through each depth's
+local top, as many more levels as it is taller) and interpolated
+(`depth_shift`). Tested within 4 % at depths 0, ½ and 1.
+
+**A cumulonimbus is coverage, not noise.** At the core's 65 % coverage, a
+deep column held scattered blobs at every height (the cumulus noise
+decorrelates every 2 km): a quarter of the volume below 6 km was cloud. At
+100 % the core fills (87-97 %) and the noise only carves its edges. So the
+maps make a cumulonimbus a disc of coverage 1 and depth 1, the depth staying
+1 to 1.4 radii where the coverage falls (the anvil's band holds most of the
+cloud there), then a ring of congestus (depth ½) to 2.2 radii. Those change
+over 2-4 km: the genus maps are twice the weather's resolution
+(`GENUS_SIZE`, 1.85 km texels on a 600 km planet).
+
+**The anvil's shelf.** A cumulonimbus's anvil spreads under the
+tropopause well past its tower: a smooth lens, thick by the tower and thin
+at its rim, unlike the cauliflower column under it. The shelf is drawn
+wherever its own map says, over whatever columns lie below:
+
+- **its spread**, a fourth map (`genus_planes`, `genera.anvil_spread`): 1
+  to a radius of a cumulonimbus, 0 by 3 (36 km across for a 6 km tower) in
+  calm air;
+- **on the upper wind**: the cirrus's (`genera.upper_wind_at`: the jets,
+  swirled by the weather systems; it blows along the stream function's
+  contours), read at the tower. In the jet's fastest the reach is 3.5 times
+  longer downwind (63 km for a 6 km tower), half as long upwind (a short,
+  sharp overhang) and a quarter shorter across: a plume, thinning
+  downwind as its spread falls. `GeneraSpec.wind` sets one wind for all;
+- **a lens**: its underside (`noise.shelf_underside`) is at 60 % of the
+  slab (7.2 km) at spread 1 and rises to the slab's top as the spread falls.
+  Over it the threshold, a depth-1 column's (`noise.shelf_lift`), falls by
+  `SHELF_CLEAR` over 1 km; none under it;
+- **its top fades in density**, not in threshold (from 76 % of the slab to
+  its top): a flat, smooth top cut by the threshold cuts every billboard
+  across it along one line, and from above the sheet was a stack of pills;
+- **smooth**: the two coarse octaves only, the others their mean
+  (`noise.shelf_fbm`; no cauliflower), and its own fbm shift
+  (`DensityField.shelf_shift`, `noise.with_shelf`): 97 % of its middle is
+  cloud, so from below it is an opaque ceiling;
+- the field takes the column's density or the shelf's, whichever is
+  denser: over the tower nothing changes under the shelf, over a cumulus
+  the shelf floats above it.
+
+Tried on the way: a squash of the noise in the shelf's band (features
+three times wider than tall) sliced into pills by the billboards; a softer
+threshold window left every billboard half transparent, and their round
+sprites showed from below as bubbles; a shelf coverage counted on columns
+(any cloud through its band) left separate puffs.
+
+From below it is a grey ceiling; under it, the sky term is occluded from
+the shelf's own underside. The deck samples it at the top of its rise.
+
+**Placement** draws a tile's candidates up to its highest local top (the
+depth read over the tile; the whole slab under a shelf), not through the
+whole 8.3 km slab. A billboard over its column's top is in a shelf, and as
+large as a tower's.
+
+**Their cost** is overdraw (performance §22): near the big clouds, half
+resolution (`CloudSettings.half_resolution`, on at LOW and MID) makes
+frames 2.5-2.9 times faster on a weak GPU. At LOW and MID, billboards deep inside a cloud grow
+and thin as the cube (`CloudSettings.interior_growth`,
+`sphere.interior_levels`): the same overlap, so the same extinction, for
+14-16 % less near a cumulonimbus and softer detail inside it.
+
+**Not yet.** The plume is straight: the wind is read at the tower, not
+along the plume. Its underside is lit as the rest of the cloud: no darker base
+for deep clouds. Close up from below, its billboards' round sprites show
+faintly, as the stratus's do. The tower's stem, at coverage 1, has
+straight sides. From the ground, the air hazes out a cumulonimbus's lower half at
+40 km, and its top half reads as a large cumulus. The stratus shows its billboards' outlines close up
+from above: a uniformly dense sheet has no field edge to hide the sprites
+behind. And the cost near the big clouds (performance §21).
+
+## The raymarch
+
+[`march.py`](../../src/world_builder/clouds/march.py) (`CloudMarch`) draws
+the same field, weather and lighting as the billboards and the deck, without
+their overdraw. Billboards are a raymarch whose steps are quads: every one
+of them is drawn, shaded and blended, so their cost grows with the cloud's
+volume on screen (15 ms inside the slab on a laptop's GPU, 41 ms in a dense
+cloud). Here each pixel steps along its own ray:
+
+- **Through the slab**, between the spheres at its base and top, less the
+  planet: up to two segments (a ray skimming under the slab leaves it and
+  comes back), from the depth range's near plane to the **scene's depth**.
+  A game's model inside a cloud is hidden by just the cloud in front of it,
+  and the camera inside a cloud sees it all around (the billboards fade out
+  near the camera, which leaves a clear bubble).
+- **In steps** of `MIN_STEP_FEATURE` of the finest feature near the camera
+  (50 m for cumulus), `STEP_GROWTH` of the distance farther, all lengthened
+  alike when a ray needs more than `CloudSettings.march_steps`. Each sample
+  is jittered within its step, the jitter moving on by the golden ratio
+  each frame. The march stops once the cloud is opaque. The steps' geometry
+  has a NumPy mirror that the tests run (`slab_segments`, `march_steps`,
+  `march_transmittance`).
+- **No longer steps in clear air.** A step longer than the finest features
+  (85-125 m) samples thin cloud by chance, and the jitter changes that
+  chance every frame: thin cloud blinks, and edges come out ragged. Up to
+  four-times-longer steps in clear air did exactly that. Nor can clear air
+  be *proven* clear and skipped: the fbm sits within a narrow band, the
+  threshold inside it, and its two fine octaves can each reach their
+  maximum somewhere in any 500 m, so no bound on it falls under the
+  threshold (the exact bound, from the texels each octave's filter
+  touches, did in 0.004 % of the cells).
+- **The field** with the octaves the billboard shells would have there
+  (`shell_octaves` over their distance bands). The weather's shift is read
+  once per kilometre of ray (`cloudDensityShifted`), not at every sample.
+  Two departures, march-only, give back the billboards' look:
+  - the view ray takes **twice the field's extinction**
+    (`VIEW_EXTINCTION_SCALE`): a billboard carries its sample's density over
+    a whole chord, which keeps a cloud's edge crisp, and the field's own
+    soft edge, integrated, reads as a blur;
+  - **billows** carve the edges, as the billboards' lumpy sprites do: a
+    billowy noise 24 times finer than the first octave moves the threshold
+    by up to half its window about its mean (`DETAIL_EROSION`), so the core
+    stays and the coverage holds.
+- **Lit** per sample exactly as the billboards are (`cloud_shading.glsl`,
+  which both renderers include). The air is applied once per pixel, at the
+  cloud's transmittance-weighted distance, with the billboards' per-vertex
+  sample count.
+- **Far away**, where a pixel spans more than the features, it samples the
+  deck's expected coverage as a homogeneous slab whose vertical crossing
+  takes the deck's alpha, lit by the deck's averages. The march reaches
+  orbit with no deck, and nothing changes colour closing in.
+
+**The passes.** There is one set per depth range of `SplitDepthCameras`
+(`CloudMarch.attach`; `PlanetClouds.use_split_depth`, which a `World` calls
+from `use_split_depth`):
+
+1. a camera sharing the range's lens draws the **scene's depth** at the
+   view's resolution into a texture. Everything but the clouds and the sky
+   is drawn, the terrain through its depth-only stage, as for the
+   half-resolution pass;
+2. a fullscreen card **marches** one pixel of every 2 × 2 block
+   (`march_resolution` ½; 4 × 4 at ¼), a different one each frame in a
+   Bayer order. It writes the premultiplied cloud and its distance;
+3. a **resolve** gathers them into the view's resolution over the frames:
+   the other pixels come from the last frame's result, reprojected along the
+   view ray to the cloud's distance (float64 for the camera's move, float32
+   only near the camera) and held within the range of this frame's
+   neighbouring samples. A traced pixel blends into its history, which
+   averages the jitter away. Two results alternate, each frame's reading
+   the other's;
+4. a card lays the result over the range's own pass, premultiplied "over",
+   at the **cloud's own depth**. The scene's depth test hides it pixel by
+   pixel at the view's resolution, behind anything nearer, which also
+   drops any stale history a moving model would leave behind it.
+
+The near range's clouds are close, large and soft on screen. It traces the
+middle of each block every frame, averages only its jitter, at the march's
+resolution, and the composite upsamples it: a full-resolution pass less. It
+runs only when the slab reaches into the near range.
+
+The sea's reflection sees the deck alone (the far layer is packed for it).
+The textures may be padded to powers of two, so the shaders address them
+in pixels.
+
+**What it costs** (performance §20): 1.3-2 times the billboards' over open
+sky on a weak GPU, the same inside the slab, two-fifths in a dense cloud.
+
 ## Testing
 
 The headless tests cannot check the pixels, nor even whether the GLSL compiles
 (`Shader.load` succeeds with no graphics context). That needs
 [`scripts/terrain_shots.py`](../../scripts/terrain_shots.py) (its `cirrus_*`
-and `in_clouds` poses among others) or an offscreen GL context; the cirrus's
-shapes can be previewed without one
-([`scripts/cirrus_preview.py`](../../scripts/cirrus_preview.py)).
+and `in_clouds` poses among others, `--cloud-renderer` to pick the
+renderer) or an offscreen GL context; the cirrus's shapes can be previewed
+without one ([`scripts/cirrus_preview.py`](../../scripts/cirrus_preview.py)).
+
+[`scripts/cloud_bench.py`](../../scripts/cloud_bench.py) times and shoots
+the clouds alone (the air, the sky, no terrain) from fixed poses, with
+either renderer, still or moving (`--move`). Its `model_in_cloud` pose puts
+a black ball, standing in for a game's model, half into a cloud, and
+`--interactive` flies it in and out of the clouds, switching renderers with
+M. On WSL, run it with `GALLIUM_DRIVER=d3d12`, or Mesa draws on the CPU.

@@ -184,7 +184,10 @@ a `World`), with two layers:
 
 - the **volume** (`clouds.sphere.CloudVolume`): the low clouds, cumulus by
   default (any cloud type), as billboard shells near the camera and a deck
-  beyond. Everything below up to "Clouds at the horizon" is about it;
+  beyond. Everything below up to "Clouds at the horizon" is about it. The
+  same field can be raymarched instead (`CloudSettings.renderer`,
+  `clouds.march.CloudMarch`, [the raymarch](clouds.md#the-raymarch)): no
+  shells nor deck, but the same weather, lighting, far field and terminator;
 - the **sheet** (`clouds.cirrus.CloudSheet`), optional: high cirrus above
   them ([Cirrus](#cirrus)).
 
@@ -305,7 +308,7 @@ new tiles, then those the camera has moved past most relative to their
 distance. A stale order composites a cloud's far side over its near side,
 which reads as shadows sliding over it.
 
-**At half resolution** (`CloudSettings.half_resolution`, off by default;
+**At half resolution** (`CloudSettings.half_resolution`, on at LOW and MID;
 `clouds.half_res.HalfResClouds`). The clouds draw into two offscreen layers
 half the view's size, one per split-depth range, each by a camera sharing
 that range's lens. Everything else draws into them as depth only (the

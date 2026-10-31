@@ -124,9 +124,11 @@ from panda3d.core import (
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cirrus import CirrusSpec
+from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.planet import PlanetClouds
-from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.clouds.weather import WeatherSpec
+from world_builder.depth import HIDE_FROM_CLOUD_PASS, HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.ocean import Sea
 from world_builder.quality import QualityLevel
 from world_builder.settings import SECTIONS, WorldSettings
@@ -335,6 +337,7 @@ class TerrainDemo(ShowBase):
         settings: WorldSettings | None = None,
         clouds: bool = True,
         cloud_debug: int = 0,
+        genera: bool = False,
         ocean_debug: int = 0,
         preset: str | None = None,
         seed: int | None = None,
@@ -382,6 +385,7 @@ class TerrainDemo(ShowBase):
         world = settings or WorldSettings()
         self.world = world
         self._clouds_on = clouds
+        self._genera = genera
         print("starting terrain workers ...")
         self.executor = ChunkExecutor(
             backend=backend, workers=world.terrain.workers or None
@@ -441,6 +445,9 @@ class TerrainDemo(ShowBase):
         )
         self.ocean.set_debug_mode(ocean_debug)
         self.depth = SplitDepthCameras(self, near=1.0)
+        self.sky.node.hide(HIDE_FROM_CLOUD_PASS)  # hides no cloud
+        if self.clouds is not None:
+            self.clouds.use_split_depth(self, self.depth)
         self.half_res = None  # the clouds' half-resolution pass, if asked for
         self._sync_half_res()
         self._debug = 0
@@ -805,14 +812,32 @@ class TerrainDemo(ShowBase):
             atmosphere=0,
             altitude=CLOUD_BASE,
             cirrus=CirrusSpec(),
+            genera=self._genera_spec(),
             planet=self.terrain.spec,
             settings=self.world.clouds,
             channel="clouds",
         )
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
+        if getattr(self, "depth", None) is not None:
+            self.clouds.use_split_depth(self, self.depth)
         if getattr(self, "half_res", None) is not None:
             self.clouds.use_half_res(self.half_res)
+
+    def _genera_spec(self) -> GeneraSpec | None:
+        """The low clouds by genus (--genera), around the start pose: a
+        placeholder for the weather (clouds.genera)."""
+        if not self._genera:
+            return None
+        spec = self.terrain.spec
+        pose = self.start_pose or {}
+        return GeneraSpec(
+            WeatherSpec(spec),
+            focus=(
+                pose.get("lat", spec.reference_lat),
+                pose.get("lon", spec.reference_lon),
+            ),
+        )
 
     def _toggle_cirrus(self) -> None:
         """Show or hide the high cirrus (a look toggle)."""
@@ -827,13 +852,16 @@ class TerrainDemo(ShowBase):
     def _sync_half_res(self) -> None:
         """Build or remove the clouds' half-resolution pass as the settings
         ask (CloudSettings.half_resolution)."""
-        wanted = self.world.clouds.half_resolution
+        clouds = self.world.clouds
+        wanted = clouds.half_resolution and clouds.renderer == "billboards"
         if wanted and self.half_res is None:
             self.half_res = HalfResClouds(self, self.depth)
             self.half_res.exclude(self.sky.node)
             if self.clouds is not None:
                 self.clouds.use_half_res(self.half_res)
         elif not wanted and self.half_res is not None:
+            if self.clouds is not None:
+                self.clouds.use_half_res(None)
             self.half_res.destroy()
             self.half_res = None
 
@@ -846,7 +874,7 @@ class TerrainDemo(ShowBase):
     def _cycle_all_quality(self) -> None:
         """Every part to the next preset."""
         level = _next_level(self.world.level)
-        self._set_world(WorldSettings.preset(level))
+        self._set_world(self.world.with_level(level))
         print(f"quality: {level.value}")
 
     def _set_world(self, world: WorldSettings) -> None:
@@ -1004,6 +1032,7 @@ def main() -> None:
         moon,
         settings=settings_from_args(args),
         clouds=not args.no_clouds,
+        genera=args.genera,
         preset=args.planet,
         seed=args.seed,
         start=args.start,
@@ -1094,6 +1123,18 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="clouds at half resolution (CloudSettings.half_resolution)",
     )
+    parser.add_argument(
+        "--genera",
+        action="store_true",
+        help="the low clouds by genus: cumulonimbus, congestus and stratus "
+        "around the start (clouds.genera's placeholder maps)",
+    )
+    parser.add_argument(
+        "--cloud-renderer",
+        default=None,
+        choices=["billboards", "march"],
+        help="the low clouds' renderer (CloudSettings.renderer)",
+    )
 
 
 def settings_from_args(args: argparse.Namespace) -> WorldSettings:
@@ -1108,6 +1149,8 @@ def settings_from_args(args: argparse.Namespace) -> WorldSettings:
         settings = settings.with_value("terrain", "workers", args.workers)
     if args.half_res_clouds:
         settings = settings.with_value("clouds", "half_resolution", True)
+    if args.cloud_renderer is not None:
+        settings = settings.with_value("clouds", "renderer", args.cloud_renderer)
     return settings
 
 

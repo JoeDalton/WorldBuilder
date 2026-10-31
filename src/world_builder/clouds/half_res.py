@@ -103,6 +103,78 @@ void main() {
 """
 
 
+def pass_states() -> tuple[RenderState, RenderState]:
+    """The render states of a camera drawing the scene for a cloud pass:
+    everything writes depth only (initial), the terrain through its
+    depth-only fragment stage (its tag state, ``PASS_TAG`` "terrain").
+
+    :returns: (initial, terrain)
+    """
+    initial = RenderState.make(ColorWriteAttrib.make(ColorWriteAttrib.C_off))
+    terrain = RenderState.make(
+        ShaderAttrib.make(depth_only_shader()),
+        ColorWriteAttrib.make(ColorWriteAttrib.C_off),
+        1,  # over the sea's own shader below the terrain's root
+    )
+    return initial, terrain
+
+
+def pass_camera(
+    app: Any,
+    name: str,
+    lens: Lens,
+    bit: int,
+    initial: RenderState,
+    terrain: RenderState,
+) -> NodePath:
+    """A camera of a cloud pass: under the app's camera, sharing a split
+    camera's very lens (so it follows its range, fov and aspect every
+    frame), seeing what is shown to *bit* with :func:`pass_states`.
+
+    :returns: the camera's NodePath
+    """
+    node = Camera(name, lens)
+    node.set_camera_mask(BitMask32.bit(bit))
+    node.set_initial_state(initial)
+    node.set_tag_state_key(PASS_TAG)
+    node.set_tag_state("terrain", terrain)
+    return app.camera.attach_new_node(node)
+
+
+def composite_card(app: Any, name: str, texture: Texture, shown_to: int) -> NodePath:
+    """A fullscreen card laying *texture* (premultiplied) over one depth
+    range's pass, in the clouds' slot (:data:`LAYER_BIN`), upsampled
+    bilinearly. Its ``uScale`` input is the share of the texture in use.
+
+    :param shown_to: the bit of the only main camera that draws it
+    :returns: the card
+    """
+    _ensure_layer_bin()
+    maker = CardMaker(name)
+    maker.set_frame(-1.0, 1.0, -1.0, 1.0)
+    card = app.camera.attach_new_node(maker.generate())
+    card.node().set_bounds(OmniBoundingVolume())
+    card.node().set_final(True)
+    card.set_shader(_composite_shader())
+    card.set_shader_input("uClouds", texture)
+    card.set_shader_input("uScale", LVecBase2f(1.0, 1.0))
+    card.set_bin(LAYER_BIN, 0)
+    card.set_depth_test(False)
+    card.set_depth_write(False)
+    card.set_transparency(TransparencyAttrib.M_none)
+    card.set_attrib(
+        ColorBlendAttrib.make(
+            ColorBlendAttrib.M_add,
+            ColorBlendAttrib.O_one,
+            ColorBlendAttrib.O_one_minus_incoming_alpha,
+        )
+    )
+    card.set_two_sided(True)
+    # Only its own range's main camera lays it on.
+    card.hide(BitMask32.all_on() & ~BitMask32.bit(shown_to))
+    return card
+
+
 class _Layer:
     """One depth range's clouds: its buffer, camera and composite card."""
 
@@ -134,37 +206,10 @@ class _Layer:
         self.buffer.set_clear_color_active(True)
         self.buffer.set_clear_color((0.0, 0.0, 0.0, 0.0))
         self.buffer.set_clear_depth_active(True)
-        node = Camera(name, lens)
-        node.set_camera_mask(BitMask32.bit(bit))
-        node.set_initial_state(initial)
-        node.set_tag_state_key(PASS_TAG)
-        node.set_tag_state("terrain", terrain)
-        self.camera = app.camera.attach_new_node(node)
+        self.camera = pass_camera(app, name, lens, bit, initial, terrain)
         self.buffer.make_display_region().set_camera(self.camera)
-
-        maker = CardMaker(name)
-        maker.set_frame(-1.0, 1.0, -1.0, 1.0)
-        self.card = app.camera.attach_new_node(maker.generate())
-        self.card.node().set_bounds(OmniBoundingVolume())
-        self.card.node().set_final(True)
-        self.card.set_shader(_composite_shader())
-        self.card.set_shader_input("uClouds", self.texture)
+        self.card = composite_card(app, name, self.texture, shown_to)
         self.uv_scale = LVecBase2f(1.0, 1.0)
-        self.card.set_shader_input("uScale", self.uv_scale)
-        self.card.set_bin(LAYER_BIN, 0)
-        self.card.set_depth_test(False)
-        self.card.set_depth_write(False)
-        self.card.set_transparency(TransparencyAttrib.M_none)
-        self.card.set_attrib(
-            ColorBlendAttrib.make(
-                ColorBlendAttrib.M_add,
-                ColorBlendAttrib.O_one,
-                ColorBlendAttrib.O_one_minus_incoming_alpha,
-            )
-        )
-        self.card.set_two_sided(True)
-        # Only its own range's main camera lays it on.
-        self.card.hide(BitMask32.all_on() & ~BitMask32.bit(shown_to))
 
     def update(self, size: tuple[int, int], resized: bool) -> None:
         if resized:
@@ -213,13 +258,7 @@ class HalfResClouds:
         self._size = self._view_size()
         # Everything writes depth only, but the clouds (add) and the terrain,
         # which swaps in a depth-only fragment stage.
-        initial = RenderState.make(ColorWriteAttrib.make(ColorWriteAttrib.C_off))
-        terrain = RenderState.make(
-            ShaderAttrib.make(depth_only_shader()),
-            ColorWriteAttrib.make(ColorWriteAttrib.C_off),
-            1,  # over the sea's own shader below the terrain's root
-        )
-        _ensure_layer_bin()
+        initial, terrain = pass_states()
         self.far = _Layer(
             app,
             depth.output,

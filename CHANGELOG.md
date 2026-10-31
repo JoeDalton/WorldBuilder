@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Clouds by genus (`world_builder.clouds.genera`,
+  docs/source/clouds.md#genera; #45): stratus, and cumulus growing with the
+  convective depth through congestus to cumulonimbus, drawn by billboards.
+  `PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`, `--genera` in
+  the terrain demo, `terrain_shots.py` and `cloud_bench.py` (its genera
+  poses). The maps are a placeholder for the weather: features around one
+  point.
+  - `CloudType.CONVECTIVE` and `DensityField.min_top`, `anvil`,
+    `cell_weight`: a field's top rising with the depth, its anvil, a cell
+    octave gathering towers; `CloudSpec.deep_radius`: billboards growing
+    with the depth. Neutral by default: the other types are unchanged.
+  - The cumulonimbus's anvil spreads as a smooth lens to 3 radii of its
+    tower (`noise.SHELF_BAND`, `shelf_lift`, `shelf_fbm`, `with_shelf`,
+    `DensityField.shelf_shift`): a deep column's top over its own spread
+    map, two octaves only, its top fading in density. It streams downwind
+    on the cirrus's upper wind (`genera.anvil_spread`, `upper_wind_at`,
+    `GeneraSpec.wind`).
+  - The weather cube may carry the depth (a third channel) and the anvil's
+    spread (a fourth); the coverage's fbm shift is tabulated by depth.
+  - Expensive near the big clouds (docs/source/performance.md §21, §22):
+    half resolution makes those frames 2.5-2.9 times faster on a weak GPU.
+- `CloudSettings.interior_growth` (on at LOW and MID): billboards deep
+  inside a cloud grow and thin as the cube, the same extinction for less
+  overdraw.
+
+### Changed
+
+- `CirrusSpec.base` defaults to 11 km (was 8 km): over the cumulonimbus's
+  cap, 10.5 km.
+- The LOW and MID cloud presets draw the clouds at half resolution
+  (`CloudSettings.half_resolution`): 2.5-2.9 times faster frames near big
+  clouds on a weak GPU. HIGH and ULTRA keep full resolution.
+
+- Raymarched low clouds, an experimental second renderer
+  (`CloudSettings.renderer = "march"`, `world_builder.clouds.march`,
+  docs/source/clouds.md#the-raymarch; #45).
+  - `CloudMarch` draws the billboards' field, weather, lighting and far
+    field per pixel, from the camera to the scene's depth: a game's model
+    inside a cloud is hidden by just the cloud in front of it, and the
+    camera inside a cloud sees it all around. It reaches orbit with no deck.
+  - One pixel of every 2 × 2 block is traced each frame and gathered into
+    the full resolution by reprojection (`march_resolution`, `march_steps`,
+    stepped by the quality presets). The result is laid over the scene at
+    the cloud's own depth, so models cut it at full resolution.
+  - 1.3-2 times the billboards' cost over open sky on a weak GPU, the same
+    inside the slab, two-fifths in a dense cloud
+    (docs/source/performance.md §20).
+- `Knob.kept`: a settings knob that is a choice rather than a level of
+  quality. Moving to a preset (`WorldSettings.with_level`,
+  `with_section_level`, `QualitySettings.at_level`) keeps it, and it makes
+  nothing custom. The clouds' renderer is one: cycling the quality presets
+  no longer switches the raymarch back to billboards.
+  - `PlanetClouds.use_split_depth` hands it the split cameras (`World` does
+    it in `use_split_depth`); `PlanetClouds.set_visible` hides either
+    renderer; a change of renderer rebuilds the volume live.
+  - The billboards' lighting moved, unchanged, into
+    `clouds/shaders/cloud_shading.glsl`, which both renderers share.
+  - `scripts/cloud_bench.py` times and shoots the clouds alone (no terrain)
+    with either renderer, still or moving. Its `--interactive` mode flies a
+    probe ball in and out of the clouds. `terrain_shots.py` and the terrain
+    demo take `--cloud-renderer`.
+
 - High cirrus over a planet's clouds (`world_builder.clouds.cirrus`,
   docs/source/atmosphere.md#cirrus).
   - `CloudSheet`, built by `PlanetClouds(cirrus=CirrusSpec())`, or

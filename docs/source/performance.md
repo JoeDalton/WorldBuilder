@@ -940,6 +940,179 @@ set only when they change.
 | Update mean | 4.7 ms | 4.3 ms |
 | `Sea.update` (median frame) | 0.47 ms | 0.20 ms |
 
+## 20. Raymarched clouds (#45)
+
+`CloudSettings.renderer = "march"` ([the raymarch](clouds.md#the-raymarch))
+against the billboards. Everything here was measured on a weak GPU: an Intel
+UHD Graphics under WSL2, through Mesa's D3D12 driver
+(`GALLIUM_DRIVER=d3d12`, GL 4.1; without it Mesa draws on the CPU). Scenes
+are drawn offscreen at 1600×900, each frame waiting for the GPU, with the
+clouds alone (`scripts/cloud_bench.py`: the air, the sky, the cirrus, no
+terrain). The **cloud cost** is the frame with the clouds minus without.
+Timings on this machine drift by 1-2 ms from run to run (the clouds-off
+frame alone moves between 3 and 9 ms), so only same-session numbers are
+compared.
+
+**The billboards first** (the reference before any change, one session):
+
+| Pose | LOW | MID | HIGH | HIGH, half resolution |
+|---|---|---|---|---|
+| Below (300 m) | 2.6 ms | 3.6 ms | 6.8 ms | 3.3 ms |
+| Start (1.3 km) | 3.6 ms | 5.4 ms | 6.1 ms | 4.9 ms |
+| Inside the slab (2.7 km) | 5.5 ms | 12.0 ms | 15.0 ms | 7.4 ms |
+| Above (4.5 km) | 4.2 ms | 6.0 ms | 8.1 ms | 4.8 ms |
+| 20 km up | 2.7 ms | 3.7 ms | 3.9 ms | 2.5 ms |
+| Orbit (deck only) | 7.0 ms | 8.4 ms | 6.2 ms | 5.6 ms |
+| Sunset | 4.1 ms | 6.7 ms | 8.1 ms | 6.1 ms |
+
+**Both renderers, one session** (the march without longer steps in clear
+air, see below):
+
+| Pose | Billboards HIGH | March HIGH |
+|---|---|---|
+| Below | 6.6 ms | 9.3 ms |
+| Start | 6.2 ms | 13.2 ms |
+| Inside the slab | 17.0 ms | 16.7 ms |
+| Above | 9.0 ms | 11.4 ms |
+| 20 km up | 2.6 ms | 4.7 ms |
+| Orbit | 5.4 ms | 4.4 ms |
+| Sunset | 8.0 ms | 8.4 ms |
+| A model in a dense cloud | 43.4 ms | 17.3 ms |
+
+Over open sky the march costs 1.3-2 times the billboards; inside the slab
+the same; in a dense cloud two-fifths. The billboards' cost grows with the
+cloud's volume on screen (their overdraw); the march's with the air its rays
+cross, cloud or not, until the first opaque cloud. Its rays take 33-47
+steps on average (debug view 16), many reaching the 64-step budget.
+
+Where its time goes (one-step marches and passes switched off):
+
+- **Fixed, ~3-4 ms**: per range, a depth pass of the scene, the march's
+  per-pixel set-up (the ray, the slab's spheres, the air once per pixel),
+  the full-resolution resolve and the composite.
+- **The near range, ~1-2 ms** when the slab reaches into it; it resolves at
+  the march's resolution (its clouds are close and soft), which roughly
+  halved it.
+- **The steps**: the rest.
+
+**Flicker, and what it cost to remove.** A first version crossed clear air
+in up to four-times-longer steps, and read the weather once per kilometre:
+the start pose's frame went from 15.7 to 10.8 ms. But a step longer than the
+finest features samples thin cloud by chance, which the per-frame jitter
+changes: thin cloud blinked and edges came out ragged. Measured as each
+pixel's brightness spread over 16 still frames (`cloud_bench.py` poses,
+8-bit steps, over the clouds' pixels; the billboards: 0):
+
+| | Mean | Worst 1 % | Cloud on screen |
+|---|---|---|---|
+| Longer steps in clear air | 2.7 | 17.7 | 15.7 % |
+| Without them | 1.0 | 5.4 | 19.4 % |
+| Without them, the jitter frozen too | 0.4 | 4.3 | 19.4 % |
+
+So the longer steps were also missing a fifth of the clouds' area. Two
+exact ways to skip clear air were tried and gave nothing: each sample's own
+margin under the threshold over the field's steepest change
+(`noise_slope`), and a ceiling of the fbm per 500 m cell from the texels
+each octave's filter can touch (`fbm_ceiling`). The fbm is narrow (99 % of
+it between 0.25 and 0.70), the threshold sits at 0.55, and the two fine
+octaves can each peak anywhere in a cell: the ceiling stayed above the
+threshold in all but 0.004 % of the cells, and the march proved 0 % of its
+steps clear. What is left of the flicker is the budget lengthening the
+steps of long rays, and the jitter.
+
+What stayed within the noise: a 2 × 2 neighbourhood for the resolve's
+clamp instead of 3 × 3, a half-float distance instead of a 32-bit one, 4
+air samples per pixel instead of 8, no sun march, no air.
+
+## 21. Genera (#45)
+
+Stratus, congestus and cumulonimbus by billboards ([genera](clouds.md#genera)),
+`cloud_bench.py --genera`, on the same weak GPU and set-up as §20 (one
+session, the cloud cost):
+
+| Pose | Cloud cost | Billboards |
+|---|---|---|
+| Cumulus only, below / start / inside / above | 7.1 / 10.3 / 21.5 / 11.4 ms | 55-57 k |
+| Cumulonimbus 40 km away, from the ground | 9.3 ms | 66 k |
+| From 20 km up, 50 km away | 7.2 ms | 55 k |
+| Between the towers (3.5 km up, in the congestus) | 71.7 ms | 87 k |
+| Under the anvil | 57.7 ms | 81 k |
+| Inside the congestus | 35.3 ms | 78 k |
+| Above the stratus deck | 54.4 ms | 118 k |
+| Under it | 63.3 ms | 155 k |
+| Orbit | 9.1 ms | 0 |
+
+Far away the genera cost what the cumulus do. Near the big clouds they cost
+3-7 times as much: their volume on screen, which billboards pay for in
+overdraw. Without the billboards growing with the depth (2.5 times at
+depth 1) a cumulonimbus would take some 15 times more of them. All the genera
+load within 25 s (their tiles, the maps by depth ~1 s). In the full world
+(`terrain_shots.py --genera`): 52 ms at the ground pose, 57 ms at the coast.
+Making this affordable is the next phase.
+
+## 22. Cheaper genera (#45)
+
+Where the genera's time goes, near the big clouds (§21): even flat-coloured
+with two octaves (`--cloud-debug 12`) they cost 33-39 ms of their 60-70.
+It is **overdraw**: their billboards' screen area, summed, is 30-33 times the
+screen's between the towers and under the stratus (6 times for the
+cumulus), most of it in the nearest shells. A CPU march of the field over
+the view finds 53-64 % of those fragments behind cloud already opaque
+(optical depth 5): blended, they cannot be skipped.
+
+Whole frames, one session, the genera's poses (clouds-only bench, 1600 x 900;
+the half-resolution pass's depth passes count in the frame):
+
+| Pose | HIGH | HIGH, half resolution | MID | MID, half resolution |
+|---|---|---|---|---|
+| Between the towers | 78.8 ms | 29.3 ms | 41.1 ms | 17.5 ms |
+| Under the anvil | 63.1 ms | 24.2 ms | 34.7 ms | 15.7 ms |
+| Inside the congestus | 42.3 ms | 18.0 ms | 24.0 ms | 12.5 ms |
+| Above / under the stratus | 61.6 / 68.9 ms | 24.9 / 26.8 ms | 34.9 / 39.0 ms | 15.7 / 16.7 ms |
+| A cumulonimbus 40 km away | 13.9 ms | 8.5 ms | 9.6 ms | 6.9 ms |
+| Orbit | 12.5 ms | 8.8 ms | 11.9 ms | 8.9 ms |
+
+**Half resolution** (`CloudSettings.half_resolution`, §19) is the lever:
+a quarter of the fragments, 2.5-2.9 times faster frames near the big
+clouds. It is on at LOW and MID, where the GPU is the weak one: there it
+saves 40-50 ms near big clouds. It stays off at HIGH and ULTRA because on a
+GTX 1070, CPU-bound in low flight, its extra camera passes (~1.2 ms) cost
+more than it saved.
+
+**Larger billboards inside** (`CloudSettings.interior_growth`, on at LOW
+and MID): a billboard with cloud every way at twice its radius grows twice
+(an eighth as many), at four times, four times. 14-16 % near the
+cumulonimbus, nothing elsewhere (few billboards qualify), and softer
+detail inside the towers: a trade for the cheaper presets.
+
+Tried and dropped:
+
+- **Occluders**: depth-only discs, drawn before the clouds, behind
+  billboards whose surroundings hold optical depth 6 within two radii every
+  way. 6-13 %, and black discs at the towers' silhouettes: there the cloud
+  as drawn (each billboard capped, its sprite's profile, the shells'
+  crossfades) is not as opaque as the field, and the discs hid the sky
+  behind it.
+- **Larger, flatter stratus billboards** (twice the radius, aspect 2):
+  30 % on the stratus, but the larger quads stick out of its 500 m slab and
+  are cut flat: planes with straight edges.
+
+**The anvil's shelf** (clouds.md, "Genera") adds a lens some 36 km
+across under the cap, drawn by the deep clouds' billboards. Whole frames,
+before and after it (MID with half resolution, its preset's):
+
+| Pose | HIGH before | HIGH after | MID before | MID after |
+|---|---|---|---|---|
+| Between the towers | 78.4 ms | 111.7 ms | 17.7 ms | 20.4 ms |
+| Under the anvil | 63.5 ms | 150.9 ms | 15.3 ms | 24.0 ms |
+| 20 km up, 50 km off | 11.4 ms | 14.8 ms | 7.6 ms | 7.6 ms |
+| Over the anvil (13 km, 25 km off) | — | 44.9 ms | — | 11.8 ms |
+| A cumulonimbus 40 km away | — | — | 7.2 ms | 7.7 ms |
+| Inside the congestus | — | — | 13.1 ms | 12.7 ms |
+
+Under the anvil the sheet fills the view: 1.6 times the frame at MID, 2.4
+at HIGH. Elsewhere it is a few milliseconds at most.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

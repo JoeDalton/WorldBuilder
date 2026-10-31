@@ -7,6 +7,7 @@
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "cloud_field.glsl"
+#pragma include "cloud_shading.glsl"
 // Cloud colour pass. Each billboard is a SAMPLE OF A VOLUME, not a sprite: its
 // outline and colour are functions of world position alone, while the sprite only
 // supplies how much volume sits behind each pixel (a thickness profile). Types mix
@@ -18,21 +19,11 @@
 uniform sampler2D p3d_Texture0;  // puff atlas: alpha = per-quad THICKNESS profile
 uniform vec3  camPos;
 
-uniform vec3  sunColor;
-uniform vec3  skyColor;
-uniform float sunBrightness;
-uniform float skyStrength;
-uniform float skyOcclusion;     // share of sky light reaching a deck's underside
 uniform float exposure;
 
 uniform int   uDeck;            // 1: the deck surface, not a billboard
 uniform int   uOwnAtmosphere;   // the planet's atmosphere (reddens sunlight), -1 none
 uniform float uPixelAngle;      // radians per pixel (the far deck's footprint)
-// The far deck's lighting (noise.deck_light_table): x the sun's cosine at the
-// cloud, from deckLightCosMin to 1; y the weather's coverage. r: the sun
-// term's shadowing (with the powder), g: the shadowing alone.
-uniform sampler2D deckLight;
-uniform float deckLightCosMin;
 
 in  vec2  vUv;
 in  vec3  worldPos;
@@ -45,12 +36,6 @@ in vec3 vSunTint;
 in float vSkyTint;
 in vec3 vTwilight;
 out vec4 fragColor;
-
-// Darkens optically THIN cloud. Fed the LOCAL density over a fixed length: the
-// sunward depth would invert it, and the quad's chord would tie it to quad size.
-float powder(Field f, float density) {
-    return 1.0 - exp2(-f.fieldExtinction * density * f.powderLength * 2.0);
-}
 
 void main() {
     Field f = getField(vLayer);
@@ -87,24 +72,37 @@ void main() {
         // through the slab's depth.
         puff = 1.0;
         vec3 up = normalize(worldPos);
+        // The column's weather: coverage, shift, convective depth, anvil
+        // shelf. The clouds there reach the local top (a convective field's
+        // grows with the depth; every other's is the slab's).
+        vec4 weather = texture(weatherMap, up);
+        float thickness = f.slabThickness * topFraction(f, weather.b);
         float cosView = max(abs(dot(V, up)), 0.04);
-        chord = f.slabThickness / cosView;
+        chord = thickness / cosView;
         float r = planetRadius + f.slabBase;
-        samplePos = up * (r + 0.5 * f.slabThickness);
+        samplePos = up * (r + 0.5 * thickness);
         float feature = 4.0 / (f.noiseScale.x * f.octaveScales.x);  // NOISE_FEATURE
         float footprint = distance * uPixelAngle / feature;
         detail = 1.0 - smoothstep(0.15, 0.6, footprint);
         shading = 1.0 - smoothstep(0.04, 0.2, footprint);  // <= detail
         density = 0.0;
         if (detail > 0.0) {
-            vec3 low = up * (r + 0.3 * f.slabThickness);
-            vec3 high = up * (r + 0.7 * f.slabThickness);
-            density = 0.5 * (cloudDensity(f, low) + cloudDensity(f, high));
+            vec3 low = up * (r + 0.3 * thickness);
+            vec3 high = up * (r + 0.7 * thickness);
+            density = 0.5 * (cloudDensityAt(f, low, weather.gba)
+                           + cloudDensityAt(f, high, weather.gba));
+            if (f.anvil > 0.0) {
+                // An anvil's shelf, over its column's top: sampled in the
+                // middle of its band.
+                float core = 0.5 * (SHELF_BAND.y + SHELF_BAND.z);
+                vec3 shelf = up * (planetRadius + f.slabBase + core * f.slabThickness);
+                density = max(density, cloudDensityAt(f, shelf, weather.gba));
+            }
         }
         if (shading < 1.0) {
             // The weather map's coverage: what the field's columns give
             // with its shift there, by construction (clouds.weather).
-            farCoverage = texture(weatherMap, up).r;
+            farCoverage = weather.r;
         }
         if (density <= 0.0 && farCoverage * (1.0 - detail) < 0.003) discard;
     } else {
@@ -136,57 +134,16 @@ void main() {
         fragColor = vec4(vec3(0.8) * alpha, alpha);
         return;
     }
-    if ((uCloudDebug & 1) != 0) shading = 0.0;
-    float sunVisibility = shading > 0.0 ? exp2(-sunOpticalDepth(f, samplePos)) : 1.0;
-    // What the sun term sees: the shadowing and the powder.
-    float sunShadowing = sunVisibility * mix(1.0, powder(f, density), f.powderStrength);
-    if (shading < 1.0) {
-        // The far deck: the averages of both over the clouds' columns, which
-        // the aliasing per-pixel values would not give, for this sun and
-        // coverage. They are what the deck shows close up, blurred, so
-        // nothing changes colour closing in. A low sun marches along the
-        // slab, through the clouds around: the terminator darkens gradually,
-        // in the (reddened) sunlight's colour.
-        vec2 size = vec2(textureSize(deckLight, 0));
-        float cosSun = dot(normalize(samplePos), sunDir);
-        vec2 at = vec2((cosSun - deckLightCosMin) / (1.0 - deckLightCosMin), farCoverage);
-        vec2 averaged = texture(deckLight, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size).rg;
-        sunVisibility = mix(averaged.g, sunVisibility, shading);
-        sunShadowing = mix(averaged.r, sunShadowing, shading);
-    }
-    // Skylight comes from above: occlude the SKY term toward the underside only.
-    float skyReach = mix(skyOcclusion, 1.0, clamp(slabHeight(f, heightOf(samplePos)), 0.0, 1.0));
-    // Multiple-scattering fill: sky-coloured and NOT phase-weighted, or dusk
-    // shadows turn orange and sunward shadow outshines side-lit cloud.
-    float ambient = skyStrength * skyReach
-                  + f.multipleScattering * sunBrightness * (1.0 - sunVisibility);
-
-    float phase = phaseFunction(f, dot(sunDir, -V));
-    vec3 sunlight = sunColor;
-    vec3 skylight = skyColor;
-    vec3 twilight = vec3(0.0);
+    vec3 sunlight, skylight, twilight;
     if (uDeck == 0) {
-        sunlight *= vSunTint;  // per vertex (cloud_sphere.vert)
-        skylight *= vSkyTint;
+        sunlight = sunColor * vSunTint;  // per vertex (cloud_sphere.vert)
+        skylight = skyColor * vSkyTint;
         twilight = sunColor * vTwilight;
-    } else if (uOwnAtmosphere >= 0) {
-        // Through the planet's air: reddened low, fading out toward its
-        // shadow (cloud_field.glsl's cloudSunTint).
-        vec3 tint = cloudSunTint(uOwnAtmosphere, samplePos, sunDir);
-        sunlight *= tint;
-        twilight = sunColor * cloudTwilight(uOwnAtmosphere, samplePos, sunDir, tint);
-        // The sky's light fades through twilight as the air's own fill
-        // does (atmosphere.glsl), so clouds in the planet's shadow stay as
-        // bright as the air around them.
-        skylight *= smoothstep(-0.3, 0.1, dot(normalize(samplePos), sunDir));
+    } else {
+        planetCloudLight(uOwnAtmosphere, samplePos, sunlight, skylight, twilight);
     }
-    // The lit air above a cloud in the planet's shadow (cloudTwilight): light
-    // from the sky, so neither phase-weighted nor self-shadowed, and reaching
-    // the underside as the sky's does. This is what spreads the terminator
-    // over the clouds instead of a line from lit to dark.
-    vec3 colour = sunlight * (sunBrightness * sunShadowing * phase)
-                + skylight * ambient
-                + twilight * (sunBrightness * TWILIGHT_GLOW * skyReach);
+    vec3 colour = cloudRadiance(f, samplePos, density, V, shading, farCoverage,
+                                sunlight, skylight, twilight);
     // The air between the camera and the cloud, in linear light. Its
     // in-scattered light is in front of the cloud, so it is weighted by the
     // cloud's alpha like the cloud itself: the background behind carries the

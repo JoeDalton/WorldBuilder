@@ -336,3 +336,19 @@ def test_every_world_builder_object_declares_its_settings():
         (Sea, "ocean"),
     ):
         assert world.settings_for(kind) == getattr(world, section)
+
+
+def test_a_preset_keeps_the_choices_that_are_not_quality():
+    # The renderer is a choice, not a level of quality: cycling the clouds'
+    # presets (or the world's) must not switch the raymarch back to billboards.
+    march = WorldSettings.preset("high").with_value("clouds", "renderer", "march")
+    for level in QualityLevel:
+        assert march.with_section_level("clouds", level).clouds.renderer == "march"
+        assert march.with_level(level).clouds.renderer == "march"
+        assert march.with_level(level).section_level("clouds") is level
+    # And it does not make the section custom
+    assert march.section_level("clouds") is QualityLevel.HIGH
+    assert not march.is_custom()
+    # A config file still remembers it
+    data = march.to_dict()
+    assert WorldSettings.from_dict(data).clouds.renderer == "march"

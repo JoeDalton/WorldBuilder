@@ -22,7 +22,10 @@ Usage::
 
 A preset (:meth:`WorldSettings.preset`) sets every section to the same
 level; changing one knob afterwards makes it "custom" (:meth:`is_custom`),
-saved as the preset plus that override.
+saved as the preset plus that override. A few knobs are choices rather than
+quality (``Knob.kept``, e.g. the clouds' renderer): moving to a preset
+(:meth:`with_level`, :meth:`with_section_level`) keeps them, and they make
+nothing custom.
 """
 
 from __future__ import annotations
@@ -127,8 +130,9 @@ class WorldSettings:
             target.set_settings(settings)
 
     def is_custom(self) -> bool:
-        """:returns: whether a knob differs from :attr:`level`'s preset"""
-        return self != WorldSettings.preset(self.level)
+        """:returns: whether a knob differs from :attr:`level`'s preset (the
+        kept knobs aside)"""
+        return self != self.with_level(self.level)
 
     def knobs(self) -> Iterator[tuple[str, str, Knob, Any]]:
         """:returns: (section, field name, its knob, its value), section by
@@ -156,13 +160,20 @@ class WorldSettings:
     def with_section_level(
         self, section: str, level: QualityLevel | str
     ) -> WorldSettings:
-        """:returns: these settings with one section at a preset (a menu's
-        per-part preset selector)"""
-        return dataclasses.replace(self, **{section: SECTIONS[section].preset(level)})
+        """:returns: these settings with one section at a preset, its kept
+        knobs as they are (a menu's per-part preset selector)"""
+        return dataclasses.replace(
+            self, **{section: getattr(self, section).at_level(level)}
+        )
 
     def with_level(self, level: QualityLevel | str) -> WorldSettings:
-        """:returns: the preset *level* (a menu's preset selector)"""
-        return WorldSettings.preset(level)
+        """:returns: the preset *level*, the kept knobs as they are (a
+        menu's preset selector)"""
+        level = QualityLevel.parse(level)
+        return WorldSettings(
+            level=level,
+            **{name: getattr(self, name).at_level(level) for name in SECTIONS},
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """:returns: plain data for a config file: the preset's name and the

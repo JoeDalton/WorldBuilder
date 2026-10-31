@@ -95,6 +95,10 @@ class Knob:
         values (saved by label); None = free
     :ivar advanced: a menu may hide it behind an "advanced" switch
     :ivar help: a sentence on what it trades
+    :ivar kept: a choice rather than a level of quality (which renderer):
+        moving to a preset leaves it as it is
+        (:meth:`QualitySettings.at_level`), and it does not make the
+        settings custom (:meth:`QualitySettings.level_of`)
     """
 
     label: str
@@ -104,6 +108,7 @@ class Knob:
     choices: Mapping[str, Any] | None = None
     advanced: bool = False
     help: str = ""
+    kept: bool = False
 
     def __post_init__(self):
         if self.apply not in APPLY_MODES:
@@ -202,6 +207,7 @@ class QualitySettings:
                     "apply": k.apply,
                     "advanced": k.advanced,
                     "help": k.help,
+                    "kept": k.kept,
                     "default": _encode(k, getattr(default, name)),
                     "presets": {
                         level.value: _encode(k, getattr(p, name))
@@ -211,11 +217,18 @@ class QualitySettings:
             )
         return out
 
+    def at_level(self: S, level: QualityLevel | str) -> S:
+        """:returns: the preset *level* with these settings' kept knobs (the
+        choices that are not quality: :attr:`Knob.kept`)"""
+        kept = {name: getattr(self, name) for name, k in self.knobs() if k.kept}
+        return dataclasses.replace(type(self).preset(level), **kept)
+
     @classmethod
     def level_of(cls: type[S], settings: S) -> QualityLevel | None:
-        """:returns: the preset *settings* equals; None = custom"""
+        """:returns: the preset *settings* equals, whatever its kept knobs;
+        None = custom"""
         for level in QualityLevel:
-            if cls.preset(level) == settings:
+            if settings.at_level(level) == settings:
                 return level
         return None
 

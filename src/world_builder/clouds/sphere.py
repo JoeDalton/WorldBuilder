@@ -87,12 +87,14 @@ from world_builder.clouds.cloud import (
     MAX_SHELLS,
     PRESETS,
     CloudSettings,
+    CloudSpec,
     CloudType,
     atlas_mean_alpha,
     atlas_rects,
     load_cloud_atlas,
     with_settings,
 )
+from world_builder.clouds.genera import GeneraSpec, depth_shift_tables, genus_cube
 from world_builder.clouds.noise import (
     DECK_LIGHT_COS_MIN,
     LAYER_VEC4S,
@@ -108,12 +110,15 @@ from world_builder.clouds.noise import (
     pack_layer_params,
     quantise,
     sphere_column_peaks,
+    top_fraction,
     value_noise_volume,
+    with_shelf,
     with_threshold,
 )
 from world_builder.clouds.weather import (
     WeatherSpec,
     build_weather_texture,
+    sample_cube,
     shift_table,
     weather_cube,
 )
@@ -147,6 +152,15 @@ BASE_TILE_SIZE = 8000.0
 MIN_TILE_BATCH = 2048
 #: Quads per face edge of the deck sphere.
 DECK_QUADS = 48
+#: Billboards deep inside a cloud grow (:func:`interior_levels`): by this
+#: much a level, for each level whose grown radius still has cloud every
+#: way around, at most INTERIOR_LEVELS; fewer of them, as the cube.
+INTERIOR_GROWTH = 2.0
+INTERIOR_LEVELS = 2
+#: The six ways a billboard's surroundings are probed.
+_SIX_WAYS = np.array(
+    [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)], float
+)
 #: The deck's optical depth cap (the billboards' is ~1.5 per quad).
 DECK_MAX_OPTICAL_DEPTH = 6.0
 Key = tuple[int, int, int, int]
@@ -192,9 +206,17 @@ class SphereCloudSpec:
     :ivar weather: the planet's weather
     :ivar shift_table: the fbm shift per coverage (:func:`weather.shift_table`)
     :ivar shells: the billboard shells, innermost first
-    :ivar shift: the weather map's fbm shift plane, shared with the workers
-        (a :attr:`terrain.workers.SharedArray.handle`); None = each worker
-        builds the map from *weather* (~0.6 s)
+    :ivar shift: the weather map's fbm shift plane (or, for a genus, its
+        whole cube: the depth too), shared with the workers (a
+        :attr:`terrain.workers.SharedArray.handle`); None = each worker
+        builds the map from *weather* or *genera* (~0.6 s)
+    :ivar genera: a genus family's maps instead of the weather's: (the
+        :class:`genera.GeneraSpec`, the family, its shift tables:
+        :func:`genera.genus_cube`'s arguments); None = the weather's
+    :ivar deep_radius: the billboards' radius at convective depth 1 over
+        their radius at depth 0 (``CloudSpec.deep_radius``)
+    :ivar interior_growth: billboards deep inside a cloud grow
+        (:func:`interior_levels`; ``CloudSettings.interior_growth``)
     """
 
     radius: float
@@ -204,6 +226,9 @@ class SphereCloudSpec:
     shift_table: tuple
     shells: tuple
     shift: tuple | None = None
+    genera: tuple | None = None
+    deep_radius: float = 1.0
+    interior_growth: bool = False
 
     def shell_of(self, level: int) -> int:
         """:returns: the index of the shell whose tiles are at *level*"""
@@ -239,11 +264,50 @@ def _weather(weather: WeatherSpec, table: tuple) -> np.ndarray:
     return weather_cube(weather, np.asarray(table))
 
 
+@functools.cache
+def _genus_weather(genera: GeneraSpec, family: str, tables: tuple) -> np.ndarray:
+    return genus_cube(genera, family, tables)
+
+
 def _shift_plane(spec: SphereCloudSpec) -> np.ndarray:
-    """:returns: (6, n, n) the weather's fbm shift, shared or built here"""
+    """:returns: (6, n, n) the weather's fbm shift, or a genus's (6, n, n, 3)
+    cube (coverage, shift, depth; (6, n, n, 4) with the anvil shelf's
+    shift), shared or built here"""
     if spec.shift is not None:
         return shared_array(spec.shift)
+    if spec.genera is not None:
+        return _genus_weather(*spec.genera)
     return _weather(spec.weather, spec.shift_table)[..., 1]
+
+
+#: How far the convective depth is read around a tile to bound its clouds'
+#: top (a 5 x 5 grid over it, plus this margin: the map is smooth over a
+#: tile).
+_TILE_DEPTH_MARGIN = 0.1
+
+
+def _tile_top(
+    spec: SphereCloudSpec,
+    weather: np.ndarray,
+    face: int,
+    a0: float,
+    b0: float,
+    span: float,
+) -> float:
+    """:returns: the highest local top of a tile's clouds, as a share of the
+    slab (1 for a field without convective depth, or under an anvil's
+    shelf)"""
+    field = spec.field
+    if field.min_top >= 1.0 or weather.ndim < 4 or weather.shape[-1] < 3:
+        return 1.0
+    u = np.linspace(0.0, 1.0, 5)
+    a, b = np.meshgrid(a0 + span * u, b0 + span * u)
+    dirs = face_dirs(face, a.ravel(), b.ravel())
+    if field.anvil and weather.shape[-1] > 3:
+        if sample_cube(weather[..., 3], dirs).max() > 0.0:  # an anvil's shelf
+            return 1.0
+    depth = sample_cube(weather[..., 2], dirs)
+    return float(top_fraction(field, min(1.0, depth.max() + _TILE_DEPTH_MARGIN)))
 
 
 def _peaks(seed: int, field: DensityField, radius: float, octaves: int) -> np.ndarray:
@@ -254,6 +318,12 @@ def _peaks(seed: int, field: DensityField, radius: float, octaves: int) -> np.nd
 @functools.cache
 def _cached_peaks(seed, field, radius, octaves) -> np.ndarray:
     return sphere_column_peaks(_noise(seed), field, radius, octaves)
+
+
+@functools.cache
+def _depth_tables(seed: int, field: DensityField, radius: float) -> np.ndarray:
+    """A convective field's shift tables by depth (genera.depth_shift_tables)."""
+    return depth_shift_tables(_noise(seed), field, radius)
 
 
 @functools.cache
@@ -289,6 +359,64 @@ def octave_offset(full: np.ndarray, fewer: np.ndarray) -> float:
     """
     q = np.linspace(0.05, 0.95, 19)
     return float(np.mean(np.quantile(fewer, q) - np.quantile(full, q)))
+
+
+def planet_field(
+    cloud_type: CloudType, altitude: float | None, seed: int, radius: float
+) -> tuple[CloudSpec, DensityField, np.ndarray]:
+    """A cloud type's field on a planet, the threshold resolved from its
+    coverage: what every renderer of a planet's low clouds starts from.
+
+    :param cloud_type: the type (its preset)
+    :param altitude: the slab's base above sea level, metres; None keeps
+        the type's
+    :param seed: the noise seed
+    :param radius: the planet's sea-level radius, metres
+    :returns: the preset, the resolved field (its anvil's shelf too:
+        :func:`noise.with_shelf`) and the planet's sorted column peaks
+        (:func:`noise.sphere_column_peaks`, all four octaves)
+    """
+    preset = PRESETS[cloud_type]
+    field = preset.field
+    if altitude is not None:
+        field = replace(field, slab=(float(altitude), field.slab[1]))
+    sigma = fbm_sigma(_noise(seed), field)
+    peaks = _peaks(seed, field, radius, 4)
+    resolved = with_shelf(with_threshold(field, peaks, sigma), _noise(seed), radius)
+    return preset, resolved, peaks
+
+
+def planet_weather(
+    weather: WeatherSpec | None,
+    planet: PlanetSpec | None,
+    radius: float,
+    weather_seed: int,
+) -> WeatherSpec:
+    """:returns: *weather*, or the defaults for *planet* (an earthlike one
+    of *radius* if None) with *weather_seed*"""
+    if weather is not None:
+        return weather
+    planet = planet or PlanetSpec(name="clouds", radius=radius)
+    return WeatherSpec(planet, seed=weather_seed)
+
+
+def shell_bands(grid: CubeGrid, shells: int) -> tuple[int, list[tuple[float, float]]]:
+    """The billboard shells' tile level and distance bands.
+
+    :param grid: the planet's cube-sphere grid
+    :param shells: how many shells
+    :returns: the first shell's tile level (tiles of about
+        :data:`BASE_TILE_SIZE`) and each shell's crossfade band (lo, hi),
+        metres: shell *k* fades out over band *k* as shell *k + 1* (or the
+        deck) fades in. Each band is twice the last, for a tile four times
+        smaller than the shell's domain.
+    """
+    base_level = max(0, round(math.log2(BASE_TILE_SIZE / grid.chunk_size(0))))
+    domain = 4.0 * grid.chunk_size(base_level)
+    bands = [
+        (0.62 * domain * 2**k * 0.5, 0.85 * domain * 2**k * 0.5) for k in range(shells)
+    ]
+    return base_level, bands
 
 
 @functools.cache
@@ -340,6 +468,9 @@ def generate_cloud_tile(
     base, thickness = field.slab
     span = 2.0 * (QUADS << level) / grid.n0
     a0, b0 = -1.0 + i * span, -1.0 + j * span
+    # A convective field's clouds reach only their local top: candidates are
+    # drawn up to the tile's highest.
+    thickness *= _tile_top(spec, weather, face, a0, b0, span)
     mid = spec.radius + base + 0.5 * thickness
     slab_volume = _patch_area(face, a0, b0, span, mid) * thickness
 
@@ -375,11 +506,34 @@ def generate_cloud_tile(
             break
     points = np.concatenate(kept)[:target] if kept else np.zeros((0, 3))
 
+    scale = 1.0
+    if spec.deep_radius != 1.0 and weather.ndim == 4 and weather.shape[-1] > 2:
+        # Billboards grow with the convective depth; fewer of them, as the
+        # cube of their size, so the overlap (and the extinction) holds. Over
+        # its column's top, a billboard is in an anvil's shelf: as deep.
+        depth = sample_cube(weather[..., 2], points)
+        h = (np.linalg.norm(points, axis=-1) - spec.radius - base) / field.slab[1]
+        depth = np.where(h >= top_fraction(field, depth), 1.0, depth)
+        scale = 1.0 + (spec.deep_radius - 1.0) * np.clip(depth, 0.0, 1.0)
+        keep = rng.uniform(size=len(points)) < scale**-3
+        points, scale = points[keep], scale[keep]
+
+    if spec.interior_growth and len(points):
+        # Deep inside a cloud, larger and fewer: the same overlap, so the
+        # same extinction, for fewer fragments where nothing is seen.
+        scale = np.broadcast_to(scale, len(points)).astype(np.float64)
+        inner = interior_levels(
+            volume, weather, field, points, r_hi * scale, spec.radius, shell.octaves
+        )
+        growth = INTERIOR_GROWTH**inner
+        keep = rng.uniform(size=len(points)) < growth**-3
+        points, scale = points[keep], (scale * growth)[keep]
+
     centre = grid.centre_dir(key) * mid
     n = len(points)
     particles = np.empty((n, 9), dtype=np.float32)
     particles[:, 0:3] = points - centre
-    particles[:, 3] = rng.uniform(r_lo, r_hi, n)
+    particles[:, 3] = rng.uniform(r_lo, r_hi, n) * scale
     rects = _rects()
     particles[:, 4:8] = rects[rng.integers(len(rects), size=n)]
     particles[:, 8] = spec.shell_of(level)
@@ -392,6 +546,49 @@ def generate_cloud_tile(
     )
 
 
+def interior_levels(
+    volume: np.ndarray,
+    weather: np.ndarray,
+    field: DensityField,
+    points: np.ndarray,
+    radii: np.ndarray,
+    radius: float,
+    octaves: int = 4,
+) -> np.ndarray:
+    """How far inside the cloud each billboard is, in levels: level k when
+    the field holds cloud in each of six ways at :data:`INTERIOR_GROWTH`
+    to the k times its radius, up to :data:`INTERIOR_LEVELS`. A billboard
+    that large then still lies in cloud: its quad carries its sample's
+    density over its chord, which near an edge would overstate it.
+
+    Most of a big cloud's billboards are deep inside it, hidden behind its
+    surface, and still shaded and blended: grown by a level they are an
+    eighth as many, each four times the area, so half the fragments.
+
+    :param points: (n, 3) the billboards, planet frame
+    :param radii: (n,) their radii, metres
+    :returns: (n,) int levels
+    """
+    level = np.zeros(len(points), dtype=np.int64)
+    alive = np.ones(len(points), dtype=bool)
+    for k in range(1, INTERIOR_LEVELS + 1):
+        index = np.nonzero(alive)[0]
+        if not len(index):
+            break
+        reach = radii[index] * INTERIOR_GROWTH**k
+        probes = points[index, None, :] + _SIX_WAYS[None] * reach[:, None, None]
+        inside = (
+            density_on_sphere(
+                volume, weather, field, probes.reshape(-1, 3), radius, octaves
+            ).reshape(len(index), 6)
+            > 0.0
+        ).all(axis=1)
+        level[index[inside]] = k
+        alive[:] = False
+        alive[index[inside]] = True
+    return level
+
+
 # ── Drawing ────────────────────────────────────────────────────────────────────
 
 
@@ -402,7 +599,8 @@ def _shell_bin(shell: int) -> str:
 def _ensure_bin():
     manager = CullBinManager.get_global_ptr()
     if manager.find_bin(CLOUD_BIN) == -1:
-        manager.add_bin(CLOUD_BIN, CullBinManager.BT_back_to_front, _CLOUD_BIN_SORT)
+        # In a fixed order: two decks (a genus's) are ordered by their caller.
+        manager.add_bin(CLOUD_BIN, CullBinManager.BT_fixed, _CLOUD_BIN_SORT)
     for shell in range(MAX_SHELLS):
         if manager.find_bin(_shell_bin(shell)) == -1:
             manager.add_bin(
@@ -613,6 +811,8 @@ class CloudVolume:
         near_fade_radii: float = 2.5,
         channel: str | None = None,
         game: Any = None,
+        genera: GeneraSpec | None = None,
+        family: str | None = None,
     ):
         """
         :param parent: usually ``render``
@@ -647,6 +847,12 @@ class CloudVolume:
         :param channel: the executor channel for the tiles; None = one of its
             own. Reusing a removed instance's channel cancels its work
         :param game: the game object, for its asset manager (None: from disk)
+        :param genera: draw one family of these genera (:mod:`genera`):
+            their maps instead of *weather*'s coverage (its spec still the
+            planet's weather); None = the weather's
+        :param family: which: :data:`genera.CONVECTIVE` (a field with
+            convective depth, :attr:`cloud.CloudType.CONVECTIVE`) or
+            :data:`genera.STRATIFORM`
         """
         settings = settings or CloudSettings()
         _ensure_bin()
@@ -657,24 +863,32 @@ class CloudVolume:
         self.grid: CubeGrid = grid_for(self.radius)
         self.stats = {"tiles": 0, "billboards": 0, "pending": 0, "gen_ms": 0.0}
 
-        preset = PRESETS[cloud_type]
-        field = preset.field
-        if altitude is not None:
-            field = replace(field, slab=(float(altitude), field.slab[1]))
+        preset, field, peaks = planet_field(cloud_type, altitude, seed, self.radius)
         volume = _noise(seed)
-        sigma = fbm_sigma(volume, field)
-        peaks = _peaks(seed, field, self.radius, 4)
-        field = with_threshold(field, peaks, sigma)
         self.field = field
-        if weather is None:
-            planet = planet or PlanetSpec(name="clouds", radius=self.radius)
-            weather = WeatherSpec(planet, seed=weather_seed)
+        if genera is not None:
+            weather = genera.weather
+        weather = planet_weather(weather, planet, self.radius, weather_seed)
         table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
+        self._genera = None
+        if genera is not None:
+            # The family's maps; a convective field's shift by depth too.
+            tables = table
+            if field.min_top < 1.0:
+                tables = tuple(
+                    tuple(float(v) for v in row)
+                    for row in _depth_tables(seed, field, self.radius)
+                )
+            self._genera = (genera, family, tables)
         # The weather map and the deck's light (~1 s together) are made in the
         # pool while the caller goes on; update() finishes the set-up when
         # they are in (see _finish).
-        self._weather_job = executor.submit_once(_weather, weather, table)
-        #: (6, n, n, 2): coverage and fbm shift; None until the set-up is done
+        if self._genera is not None:
+            self._weather_job = executor.submit_once(_genus_weather, *self._genera)
+        else:
+            self._weather_job = executor.submit_once(_weather, weather, table)
+        #: (6, n, n, 2): coverage and fbm shift, (6, n, n, 3) with the
+        #: convective depth for a genus; None until the set-up is done
         self.weather: np.ndarray | None = None
         self._shared_shift: SharedArray | None = None
         self._preset = preset
@@ -683,8 +897,6 @@ class CloudVolume:
         self._weather_spec = weather
         self._table = table
         self._octave_mean = float(volume.mean())
-        base_level = max(0, round(math.log2(BASE_TILE_SIZE / self.grid.chunk_size(0))))
-        self._base_level = base_level
         self._settings = settings
         params, self._deck_job = self._configure(settings)
 
@@ -694,9 +906,13 @@ class CloudVolume:
         self.root.stash()  # out of every camera until the set-up is done
         self.tiles_root = self.root.attach_new_node("cloud_tiles")
         self.tiles_root.set_shader(tile_shader)
-        self.deck = self.root.attach_new_node(
-            deck_mesh(self.radius + field.slab[0] + 0.5 * field.slab[1])
+        # At mid-slab; a convective field's at its shallowest clouds' (the
+        # deck samples each column's own height).
+        #: The deck sphere's radius, metres
+        self.deck_radius = (
+            self.radius + field.slab[0] + 0.5 * field.slab[1] * field.min_top
         )
+        self.deck = self.root.attach_new_node(deck_mesh(self.deck_radius))
         self.deck.set_shader(deck_shader)
         self.deck.set_two_sided(True)
         self.deck.set_shader_inputs(uDeck=1, uDeckLayer=self._deck_layer)
@@ -826,17 +1042,10 @@ class CloudVolume:
         fractions = (settings.overlap_near, settings.overlap_far)
         schedule = settings.shell_octaves
         octave_mean = self._octave_mean
-        base_level = self._base_level
-        tile0 = self.grid.chunk_size(base_level)
         table = self._table
 
-        # The shells and their crossfade bands (each twice the last, for a
-        # tile four times smaller than the domain), then the deck.
-        domain = 4.0 * tile0
-        bands = [
-            (0.62 * domain * 2**k * 0.5, 0.85 * domain * 2**k * 0.5)
-            for k in range(shells)
-        ]
+        # The shells and their crossfade bands, then the deck.
+        base_level, bands = shell_bands(self.grid, shells)
         sprite = atlas_mean_alpha()
         shell_specs = []
         params = np.zeros((MAX_LAYERS, LAYER_VEC4S, 4), dtype=np.float32)
@@ -909,6 +1118,9 @@ class CloudVolume:
             shift_table=table,
             shells=tuple(shell_specs),
             shift=None if shared is None else shared.handle,
+            genera=self._genera,
+            deep_radius=preset.deep_radius,
+            interior_growth=settings.interior_growth,
         )
         return params, deck_job
 
@@ -1026,7 +1238,8 @@ class CloudVolume:
         deck_light = self._deck_job.result()
         self._weather_job = self._deck_job = None
         if self.executor.backend == "process":
-            self._shared_shift = SharedArray(self.weather[..., 1])
+            shared = self.weather if self._genera is not None else self.weather[..., 1]
+            self._shared_shift = SharedArray(np.ascontiguousarray(shared))
             self.spec = replace(self.spec, shift=self._shared_shift.handle)
         self._version = self.executor.set_spec(
             self.spec, self._channel, generator=generate_cloud_tile

@@ -50,6 +50,9 @@ class CloudType(Enum):
     STRATUS = "stratus"
     CIRRUS = "cirrus"
     CUMULONIMBUS = "cumulonimbus"
+    #: Cumulus that grow with the weather's convective depth through
+    #: congestus to cumulonimbus (:mod:`genera`)
+    CONVECTIVE = "convective"
 
 
 @dataclass(frozen=True)
@@ -63,12 +66,18 @@ class CloudSpec:
     aspect           billboard long:short ratio. Area-preserving (sqrt(a) by
                      1/sqrt(a)), so extinction and count are untouched; the long
                      axis lies level
+    deep_radius      a convective field's billboards' radius at depth 1, over
+                     their radius at depth 0 (it grows linearly between): a
+                     cumulonimbus is drawn by as many billboards per kilometre
+                     of its features, not per cubic metre (the overlap holds,
+                     so the extinction does)
     """
 
     field: DensityField
     optics: CloudOptics = CloudOptics()
     radius: tuple = (70.0, 140.0)
     aspect: float = 1.0
+    deep_radius: float = 1.0
 
 
 PRESETS = {
@@ -91,16 +100,43 @@ PRESETS = {
             forward_anisotropy=delta_eddington(MIE_ASYMMETRY_WATER),
         ),
     ),
-    CloudType.STRATUS: CloudSpec(
-        # Overcast: a flat-topped sheet with holes, soft-edged.
+    CloudType.CONVECTIVE: CloudSpec(
+        # The cumulus field, its clouds' top rising with the depth from 1 km
+        # to the cap, 8.3 km above the base: congestus at 4-6 km, the
+        # cumulonimbus's anvil spreading under the cap, a smooth lens reaching
+        # past the tower. A cell octave (8 km features) gathers the deep ones
+        # into towers.
         field=DensityField(
-            slab=(600.0, 300.0),
+            slab=(2200.0, 8300.0),
+            noise_scale=(0.002, 0.002, 0.002),
+            coverage=0.3,
+            edge_softness=1.3,
+            base_ramp=6.0,
+            offset=field_offset(0),
+            min_top=1000.0 / 8300.0,
+            anvil=0.2,
+            cell_weight=0.5,
+        ),
+        optics=CloudOptics(
+            shadow_strength=0.3,
+            forward_gain=8.0,
+            forward_anisotropy=delta_eddington(MIE_ASYMMETRY_WATER),
+        ),
+        deep_radius=2.5,
+    ),
+    CloudType.STRATUS: CloudSpec(
+        # Overcast: a sheet with holes, soft-edged, flat underneath. Its top
+        # undulates under the slab's (a strong erosion): cut flat there, each
+        # billboard shows the cut as a straight edge, and the deck seen from
+        # above turns to blocks.
+        field=DensityField(
+            slab=(600.0, 500.0),
             density=0.05,
             noise_scale=(0.0015, 0.0015, 0.006),
             coverage=0.25,
             edge_softness=2,
             base_ramp=8.0,
-            top_erosion=0.12,
+            top_erosion=0.35,
             top_exponent=2.0,
             offset=field_offset(1),
         ),
@@ -194,6 +230,17 @@ class CloudSettings(QualitySettings):
     """What the clouds cost (:mod:`world_builder.quality`), for a planet's
     (:class:`sphere.CloudVolume`, and :class:`cirrus.CloudSheet` above it).
 
+    :ivar renderer: how the low clouds are drawn: ``"billboards"``
+        (:class:`sphere.CloudVolume`) or ``"march"``, a raymarch at a
+        fraction of the view's resolution (:class:`march.CloudMarch`, which
+        needs the split cameras). The knobs of the other renderer are
+        ignored. Rebuild
+    :ivar march_steps: most steps of the raymarch per pixel (it stops
+        sooner once the cloud is opaque). Live
+    :ivar march_resolution: the raymarch's resolution over the view's, per
+        axis. Live
+    :ivar interior_growth: billboards deep inside a cloud grow, fewer of
+        them (:func:`sphere.interior_levels`). Rebuild
     :ivar count_scale: billboards relative to the types as authored: their
         sizes go as count^(-1/3), so coverage and opacity hold
         (:func:`scale_count`). Rebuild
@@ -215,6 +262,37 @@ class CloudSettings(QualitySettings):
     :ivar tile_cache: tiles kept beyond those wanted. Live
     """
 
+    renderer: str = knob(
+        "billboards",
+        "Renderer",
+        REBUILD,
+        choices={"Billboards": "billboards", "Raymarch": "march"},
+        help="Billboards, or a raymarch at a fraction of the resolution "
+        "(experimental).",
+        kept=True,
+    )
+    march_steps: int = knob(
+        64,
+        "Raymarch steps",
+        unit="steps",
+        range=(8, 256),
+        help="Most samples per pixel of the raymarch: its smoothness along "
+        "the view (raymarch only).",
+    )
+    march_resolution: float = knob(
+        0.5,
+        "Raymarch resolution",
+        choices={"Quarter": 0.25, "Half": 0.5, "Full": 1.0},
+        help="The raymarch's resolution, per axis, over the view's (raymarch only).",
+    )
+    interior_growth: bool = knob(
+        False,
+        "Larger billboards inside",
+        REBUILD,
+        advanced=True,
+        help="Draw the inside of big clouds with fewer, larger billboards: "
+        "some 15 % less work near them, softer detail.",
+    )
     count_scale: float = knob(
         1.0,
         "Billboards",
@@ -300,6 +378,10 @@ class CloudSettings(QualitySettings):
             "overlap_far": 1.0,
             "shell_octaves": (4, 3, 3, 2),
             "reflected": False,
+            "march_steps": 24,
+            "march_resolution": 0.25,
+            "interior_growth": True,
+            "half_resolution": True,
         },
         QualityLevel.MID: {
             "count_scale": 0.5,
@@ -307,11 +389,15 @@ class CloudSettings(QualitySettings):
             "overlap_near": 2.0,
             "overlap_far": 1.5,
             "shell_octaves": (4, 4, 3, 3),
+            "march_steps": 40,
+            "interior_growth": True,
+            "half_resolution": True,
         },
         QualityLevel.ULTRA: {
             "count_scale": 2.0,
             "march_scale": 1.5,
             "shell_octaves": (4,),
+            "march_steps": 96,
         },
     }
 
