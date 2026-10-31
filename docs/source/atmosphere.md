@@ -184,7 +184,10 @@ a `World`), with two layers:
 
 - the **volume** (`clouds.sphere.CloudVolume`): the low clouds, cumulus by
   default (any cloud type), as billboard shells near the camera and a deck
-  beyond. Everything below up to "Clouds at the horizon" is about it;
+  beyond. Everything below up to "Clouds at the horizon" is about it. The
+  same field can be raymarched instead (`CloudSettings.renderer`,
+  `clouds.march.CloudMarch`, [the raymarch](clouds.md#the-raymarch)): no
+  shells nor deck, but the same weather, lighting, far field and terminator;
 - the **sheet** (`clouds.cirrus.CloudSheet`), optional: high cirrus above
   them ([Cirrus](#cirrus)).
 

@@ -195,7 +195,9 @@ float slabDensity(Field f, float h, float raw) {
          * (1.0 - exp2(-f.baseRamp * h));
 }
 
-float cloudDensity(Field f, vec3 p) {
+// The density at p, the weather's fbm shift there given (weatherShift: it
+// varies over kilometres, so a raymarch reads it once for many samples).
+float cloudDensityShifted(Field f, vec3 p, float shift) {
     float h = slabHeight(f, heightOf(p));
     if (h <= 0.0 || h >= 1.0) return 0.0;
     vec3 coord = p * f.noiseScale + f.noiseOrigin;
@@ -205,19 +207,23 @@ float cloudDensity(Field f, vec3 p) {
     // (plus the weather's, on a planet).
     float floor_ = f.threshLo + thresholdLift(f, h);
     float rest = highOctavesMax(f);
-    float raw = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x
-              + weatherShift(p);
+    float raw = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x + shift;
     if (raw + f.octaveWeights.y + rest <= floor_) return 0.0;
     raw += sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET) * f.octaveWeights.y;
     if (raw + rest <= floor_) return 0.0;
     return slabDensity(f, h, raw + highOctaves(f, coord));
 }
 
+float cloudDensity(Field f, vec3 p) {
+    return cloudDensityShifted(f, p, weatherShift(p));
+}
+
 // Optical depth toward the sun through the same field, which is what lets clouds
 // shadow themselves AND each other. A depth, not a transmittance, so everything
 // derived from it stays a function of world position only. Two octaves,
 // calibrated onto the full field's distribution (noise.shadow_calibration).
-float sunOpticalDepth(Field f, vec3 p) {
+// The weather's shift at p given (weatherShift).
+float sunOpticalDepthShifted(Field f, vec3 p, float weather) {
     if (f.sunSteps <= 0) {
         return 0.0;
     }
@@ -226,7 +232,7 @@ float sunOpticalDepth(Field f, vec3 p) {
     float density = 0.0;
     // The weather varies over kilometres, the march spans a few hundred
     // metres: one fetch for all its steps.
-    float shift = weatherShift(p) + f.shadowBias;
+    float shift = weather + f.shadowBias;
     for (int i = 0; i < f.sunSteps; i++, position += increment) {
         float h = slabHeight(f, heightOf(position));
         if (h <= 0.0 || h >= 1.0) {
@@ -244,6 +250,10 @@ float sunOpticalDepth(Field f, vec3 p) {
         density += slabDensity(f, h, (first + second) * f.shadowGain + shift);
     }
     return density * f.sunStepLength * f.fieldExtinction * f.shadowStrength;
+}
+
+float sunOpticalDepth(Field f, vec3 p) {
+    return sunOpticalDepthShifted(f, p, weatherShift(p));
 }
 
 // ── Sunlight on a planet's clouds (through its own air) ───────────────────────

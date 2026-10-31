@@ -4,9 +4,11 @@ A planet's clouds as one part: the low clouds' volume, the cirrus sheet above.
 :class:`PlanetClouds` is what a game (or :class:`world_builder.world.World`)
 builds for a planet. It owns two layers, one per technique:
 
-* the **volume** (:class:`sphere.CloudVolume`): the low clouds, cumulus by
-  default (any :class:`cloud.CloudType`), as billboard shells near the
-  camera and a deck beyond;
+* the **volume**: the low clouds, cumulus by default (any
+  :class:`cloud.CloudType`), as billboard shells near the camera and a deck
+  beyond (:class:`sphere.CloudVolume`), or raymarched
+  (:class:`march.CloudMarch`, ``CloudSettings.renderer``; it needs the
+  split cameras, :meth:`PlanetClouds.use_split_depth`);
 * the **sheet** (:class:`cirrus.CloudSheet`, optional): high cirrus as one
   surface above them.
 
@@ -30,13 +32,19 @@ from panda3d.core import NodePath
 from world_builder.atmosphere import Atmospheres
 from world_builder.clouds.cirrus import CirrusSpec, CloudSheet
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
+from world_builder.clouds.march import CloudMarch
 from world_builder.clouds.sphere import CloudVolume
 from world_builder.clouds.weather import WeatherSpec
+from world_builder.depth import HIDE_FROM_CLOUD_PASS
 from world_builder.terrain.planet import PlanetSpec
 
 if TYPE_CHECKING:
     from world_builder.clouds.half_res import HalfResClouds
+    from world_builder.depth import SplitDepthCameras
     from world_builder.terrain.workers import ChunkExecutor
+
+#: The volume's class per ``CloudSettings.renderer``.
+RENDERERS = {"billboards": CloudVolume, "march": CloudMarch}
 
 
 def check_layers(
@@ -83,8 +91,10 @@ class PlanetClouds:
         # every frame, camera in the world frame (float64):
         clouds.update(camera_world)
 
-    :ivar root: the node both layers hang under (hide it to hide the clouds)
-    :ivar volume: the low clouds (:class:`sphere.CloudVolume`)
+    :ivar root: the node both layers hang under (:meth:`set_visible` hides
+        the clouds: a march draws in passes of its own)
+    :ivar volume: the low clouds (:class:`sphere.CloudVolume` or
+        :class:`march.CloudMarch`, by ``settings.renderer``)
     :ivar sheet: the cirrus (:class:`cirrus.CloudSheet`), or None
     :ivar weather: the weather both follow
     """
@@ -164,10 +174,10 @@ class PlanetClouds:
         self.weather = weather
         self._settings = settings
         self.root = parent.attach_new_node("planet_clouds")
-        self.volume = CloudVolume(
-            self.root,
-            radius,
-            executor,
+        # What the volume is built from, again on a change of renderer.
+        self._volume_args = dict(
+            radius=radius,
+            executor=executor,
             position=position,
             atmospheres=atmospheres,
             atmosphere=atmosphere,
@@ -175,7 +185,6 @@ class PlanetClouds:
             altitude=altitude,
             weather=weather,
             seed=seed,
-            settings=settings,
             sun_brightness=sun_brightness,
             sky_strength=sky_strength,
             sky_occlusion=sky_occlusion,
@@ -184,6 +193,14 @@ class PlanetClouds:
             channel=channel,
             game=game,
         )
+        self._split: tuple[Any, SplitDepthCameras] | None = None
+        # The live state a new volume is given (set_sun, set_sky_light,
+        # set_debug).
+        self._sun: tuple = ((0.0, 0.0, 1.0), None, None)
+        self._sky_light: float | None = None
+        self._debug = 0
+        self._half_res: HalfResClouds | None = None
+        self.volume = self._make_volume(settings)
         self.sheet: CloudSheet | None = None
         if cirrus is not None:
             self.sheet = CloudSheet(
@@ -205,6 +222,14 @@ class PlanetClouds:
     def _layers(self) -> list:
         return [self.volume] if self.sheet is None else [self.volume, self.sheet]
 
+    def _make_volume(self, settings: CloudSettings) -> CloudVolume | CloudMarch:
+        volume = RENDERERS[settings.renderer](
+            self.root, settings=settings, **self._volume_args
+        )
+        if isinstance(volume, CloudMarch) and self._split is not None:
+            volume.attach(*self._split)
+        return volume
+
     # ── settings ──────────────────────────────────────────────────────────────
 
     @property
@@ -219,7 +244,22 @@ class PlanetClouds:
 
         :param settings: the new settings
         """
+        renderer = settings.renderer != self._settings.renderer
         self._settings = settings
+        if renderer:
+            if self._half_res is not None and isinstance(self.volume, CloudVolume):
+                self._half_res.remove(self.volume.root)
+            self.volume.remove()
+            self.volume = self._make_volume(settings)
+            self.volume.set_sun(*self._sun)
+            if self._sky_light is not None:
+                self.volume.set_sky_light(self._sky_light)
+            self.volume.set_debug(self._debug)
+            if self._half_res is not None and isinstance(self.volume, CloudVolume):
+                self._half_res.add(self.volume.root)
+            if self.sheet is not None:
+                self.sheet.set_settings(settings)
+            return
         for layer in self._layers():
             layer.set_settings(settings)
 
@@ -247,11 +287,17 @@ class PlanetClouds:
         :param sun_color: RGB of direct sunlight, or None to keep
         :param sky_color: RGB of the ambient sky light, or None to keep
         """
+        self._sun = (
+            direction,
+            sun_color if sun_color is not None else self._sun[1],
+            sky_color if sky_color is not None else self._sun[2],
+        )
         for layer in self._layers():
             layer.set_sun(direction, sun_color=sun_color, sky_color=sky_color)
 
     def set_sky_light(self, strength: float) -> None:
         """The sky's (ambient) light on both layers, as ``sky_strength``."""
+        self._sky_light = strength
         for layer in self._layers():
             layer.set_sky_light(strength)
 
@@ -273,17 +319,50 @@ class PlanetClouds:
 
         :param flags: the bits, 0 = normal
         """
+        self._debug = flags
         for layer in self._layers():
             layer.set_debug(flags)
 
-    def use_half_res(self, half_res: HalfResClouds) -> None:
-        """Draw the volume in a half-resolution pass; the sheet stays at full
-        resolution (its fibres are its look, and it is one cheap surface).
-        Feed :meth:`set_pixel_angle` the pass's ``pixel_scale``.
+    def set_visible(self, visible: bool) -> None:
+        """Show or hide both layers (a march's passes included)."""
+        if visible:
+            self.root.show()
+        else:
+            self.root.hide()
+        if isinstance(self.volume, CloudMarch):
+            self.volume.set_visible(visible)
 
-        :param half_res: the pass
+    def use_split_depth(self, app: Any, depth: SplitDepthCameras) -> None:
+        """The game's split cameras, which a raymarched volume draws its
+        passes with (:meth:`march.CloudMarch.attach`); kept for a later
+        change of renderer. The cirrus stays out of those passes' depth.
+
+        :param app: the ShowBase
+        :param depth: the split cameras
         """
-        half_res.add(self.volume.root)
+        self._split = (app, depth)
+        if self.sheet is not None:
+            self.sheet.root.hide(HIDE_FROM_CLOUD_PASS)
+        if isinstance(self.volume, CloudMarch):
+            self.volume.attach(app, depth)
+
+    def use_half_res(self, half_res: HalfResClouds | None) -> None:
+        """Draw the billboards in a half-resolution pass; the sheet stays at
+        full resolution (its fibres are its look, and it is one cheap
+        surface), and a raymarch has passes of its own. Feed
+        :meth:`set_pixel_angle` the pass's ``pixel_scale``.
+
+        :param half_res: the pass (kept for a later change of renderer);
+            None = none any more (call it before destroying the pass)
+        """
+        if half_res is None:
+            if self._half_res is not None and isinstance(self.volume, CloudVolume):
+                self._half_res.remove(self.volume.root)
+            self._half_res = None
+            return
+        self._half_res = half_res
+        if isinstance(self.volume, CloudVolume):
+            half_res.add(self.volume.root)
         if self.sheet is not None:
             half_res.exclude(self.sheet.root)
 

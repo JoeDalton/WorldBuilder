@@ -87,6 +87,7 @@ from world_builder.clouds.cloud import (
     MAX_SHELLS,
     PRESETS,
     CloudSettings,
+    CloudSpec,
     CloudType,
     atlas_mean_alpha,
     atlas_rects,
@@ -289,6 +290,62 @@ def octave_offset(full: np.ndarray, fewer: np.ndarray) -> float:
     """
     q = np.linspace(0.05, 0.95, 19)
     return float(np.mean(np.quantile(fewer, q) - np.quantile(full, q)))
+
+
+def planet_field(
+    cloud_type: CloudType, altitude: float | None, seed: int, radius: float
+) -> tuple[CloudSpec, DensityField, np.ndarray]:
+    """A cloud type's field on a planet, the threshold resolved from its
+    coverage: what every renderer of a planet's low clouds starts from.
+
+    :param cloud_type: the type (its preset)
+    :param altitude: the slab's base above sea level, metres; None keeps
+        the type's
+    :param seed: the noise seed
+    :param radius: the planet's sea-level radius, metres
+    :returns: the preset, the resolved field and the planet's sorted column
+        peaks (:func:`noise.sphere_column_peaks`, all four octaves)
+    """
+    preset = PRESETS[cloud_type]
+    field = preset.field
+    if altitude is not None:
+        field = replace(field, slab=(float(altitude), field.slab[1]))
+    sigma = fbm_sigma(_noise(seed), field)
+    peaks = _peaks(seed, field, radius, 4)
+    return preset, with_threshold(field, peaks, sigma), peaks
+
+
+def planet_weather(
+    weather: WeatherSpec | None,
+    planet: PlanetSpec | None,
+    radius: float,
+    weather_seed: int,
+) -> WeatherSpec:
+    """:returns: *weather*, or the defaults for *planet* (an earthlike one
+    of *radius* if None) with *weather_seed*"""
+    if weather is not None:
+        return weather
+    planet = planet or PlanetSpec(name="clouds", radius=radius)
+    return WeatherSpec(planet, seed=weather_seed)
+
+
+def shell_bands(grid: CubeGrid, shells: int) -> tuple[int, list[tuple[float, float]]]:
+    """The billboard shells' tile level and distance bands.
+
+    :param grid: the planet's cube-sphere grid
+    :param shells: how many shells
+    :returns: the first shell's tile level (tiles of about
+        :data:`BASE_TILE_SIZE`) and each shell's crossfade band (lo, hi),
+        metres: shell *k* fades out over band *k* as shell *k + 1* (or the
+        deck) fades in. Each band is twice the last, for a tile four times
+        smaller than the shell's domain.
+    """
+    base_level = max(0, round(math.log2(BASE_TILE_SIZE / grid.chunk_size(0))))
+    domain = 4.0 * grid.chunk_size(base_level)
+    bands = [
+        (0.62 * domain * 2**k * 0.5, 0.85 * domain * 2**k * 0.5) for k in range(shells)
+    ]
+    return base_level, bands
 
 
 @functools.cache
@@ -657,18 +714,10 @@ class CloudVolume:
         self.grid: CubeGrid = grid_for(self.radius)
         self.stats = {"tiles": 0, "billboards": 0, "pending": 0, "gen_ms": 0.0}
 
-        preset = PRESETS[cloud_type]
-        field = preset.field
-        if altitude is not None:
-            field = replace(field, slab=(float(altitude), field.slab[1]))
+        preset, field, peaks = planet_field(cloud_type, altitude, seed, self.radius)
         volume = _noise(seed)
-        sigma = fbm_sigma(volume, field)
-        peaks = _peaks(seed, field, self.radius, 4)
-        field = with_threshold(field, peaks, sigma)
         self.field = field
-        if weather is None:
-            planet = planet or PlanetSpec(name="clouds", radius=self.radius)
-            weather = WeatherSpec(planet, seed=weather_seed)
+        weather = planet_weather(weather, planet, self.radius, weather_seed)
         table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
         # The weather map and the deck's light (~1 s together) are made in the
         # pool while the caller goes on; update() finishes the set-up when
@@ -683,8 +732,6 @@ class CloudVolume:
         self._weather_spec = weather
         self._table = table
         self._octave_mean = float(volume.mean())
-        base_level = max(0, round(math.log2(BASE_TILE_SIZE / self.grid.chunk_size(0))))
-        self._base_level = base_level
         self._settings = settings
         params, self._deck_job = self._configure(settings)
 
@@ -826,17 +873,10 @@ class CloudVolume:
         fractions = (settings.overlap_near, settings.overlap_far)
         schedule = settings.shell_octaves
         octave_mean = self._octave_mean
-        base_level = self._base_level
-        tile0 = self.grid.chunk_size(base_level)
         table = self._table
 
-        # The shells and their crossfade bands (each twice the last, for a
-        # tile four times smaller than the domain), then the deck.
-        domain = 4.0 * tile0
-        bands = [
-            (0.62 * domain * 2**k * 0.5, 0.85 * domain * 2**k * 0.5)
-            for k in range(shells)
-        ]
+        # The shells and their crossfade bands, then the deck.
+        base_level, bands = shell_bands(self.grid, shells)
         sprite = atlas_mean_alpha()
         shell_specs = []
         params = np.zeros((MAX_LAYERS, LAYER_VEC4S, 4), dtype=np.float32)

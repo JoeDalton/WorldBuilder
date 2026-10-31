@@ -692,10 +692,14 @@ class World:
 
     def use_split_depth(self, depth: SplitDepthCameras) -> None:
         """The split cameras the game built after the world: the clouds'
-        half-resolution layers (``CloudSettings.half_resolution``) mirror
-        them, so the world needs them for that setting. Call
-        ``depth.update`` before :meth:`update` every frame, as always."""
+        half-resolution layers (``CloudSettings.half_resolution``) and their
+        raymarch (``CloudSettings.renderer``) draw with them, so the world
+        needs them for those settings. Call ``depth.update`` before
+        :meth:`update` every frame, as always."""
         self.depth = depth
+        for body in self.bodies:
+            if body.clouds is not None:
+                body.clouds.use_split_depth(self.app, depth)
         self._sync_half_res()
 
     def _sync_half_res(self) -> None:
@@ -704,6 +708,7 @@ class World:
         clouds = [body.clouds for body in self.bodies if body.clouds is not None]
         wanted = (
             self.settings.clouds.half_resolution
+            and self.settings.clouds.renderer == "billboards"
             and self.depth is not None
             and bool(clouds)
         )
@@ -714,6 +719,8 @@ class World:
             for cloud in clouds:
                 cloud.use_half_res(self.half_res)
         elif not wanted and self.half_res is not None:
+            for cloud in clouds:
+                cloud.use_half_res(None)
             self.half_res.destroy()
             self.half_res = None
 

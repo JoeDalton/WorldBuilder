@@ -126,7 +126,7 @@ from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.planet import PlanetClouds
-from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.depth import HIDE_FROM_CLOUD_PASS, HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.ocean import Sea
 from world_builder.quality import QualityLevel
 from world_builder.settings import SECTIONS, WorldSettings
@@ -441,6 +441,9 @@ class TerrainDemo(ShowBase):
         )
         self.ocean.set_debug_mode(ocean_debug)
         self.depth = SplitDepthCameras(self, near=1.0)
+        self.sky.node.hide(HIDE_FROM_CLOUD_PASS)  # hides no cloud
+        if self.clouds is not None:
+            self.clouds.use_split_depth(self, self.depth)
         self.half_res = None  # the clouds' half-resolution pass, if asked for
         self._sync_half_res()
         self._debug = 0
@@ -811,6 +814,8 @@ class TerrainDemo(ShowBase):
         )
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
+        if getattr(self, "depth", None) is not None:
+            self.clouds.use_split_depth(self, self.depth)
         if getattr(self, "half_res", None) is not None:
             self.clouds.use_half_res(self.half_res)
 
@@ -827,13 +832,16 @@ class TerrainDemo(ShowBase):
     def _sync_half_res(self) -> None:
         """Build or remove the clouds' half-resolution pass as the settings
         ask (CloudSettings.half_resolution)."""
-        wanted = self.world.clouds.half_resolution
+        clouds = self.world.clouds
+        wanted = clouds.half_resolution and clouds.renderer == "billboards"
         if wanted and self.half_res is None:
             self.half_res = HalfResClouds(self, self.depth)
             self.half_res.exclude(self.sky.node)
             if self.clouds is not None:
                 self.clouds.use_half_res(self.half_res)
         elif not wanted and self.half_res is not None:
+            if self.clouds is not None:
+                self.clouds.use_half_res(None)
             self.half_res.destroy()
             self.half_res = None
 
@@ -1094,6 +1102,12 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="clouds at half resolution (CloudSettings.half_resolution)",
     )
+    parser.add_argument(
+        "--cloud-renderer",
+        default=None,
+        choices=["billboards", "march"],
+        help="the low clouds' renderer (CloudSettings.renderer)",
+    )
 
 
 def settings_from_args(args: argparse.Namespace) -> WorldSettings:
@@ -1108,6 +1122,8 @@ def settings_from_args(args: argparse.Namespace) -> WorldSettings:
         settings = settings.with_value("terrain", "workers", args.workers)
     if args.half_res_clouds:
         settings = settings.with_value("clouds", "half_resolution", True)
+    if args.cloud_renderer is not None:
+        settings = settings.with_value("clouds", "renderer", args.cloud_renderer)
     return settings
 
 

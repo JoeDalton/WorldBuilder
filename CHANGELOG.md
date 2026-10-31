@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Raymarched low clouds, an experimental second renderer
+  (`CloudSettings.renderer = "march"`, `world_builder.clouds.march`,
+  docs/source/clouds.md#the-raymarch; #45).
+  - `CloudMarch` draws the billboards' field, weather, lighting and far
+    field per pixel, from the camera to the scene's depth: a game's model
+    inside a cloud is hidden by just the cloud in front of it, and the
+    camera inside a cloud sees it all around. It reaches orbit with no deck.
+  - One pixel of every 2 × 2 block is traced each frame and gathered into
+    the full resolution by reprojection (`march_resolution`, `march_steps`,
+    stepped by the quality presets). The result is laid over the scene at
+    the cloud's own depth, so models cut it at full resolution.
+  - About the billboards' cost over the sky, a third of it inside the slab,
+    a quarter in a dense cloud (docs/source/performance.md §20).
+  - `PlanetClouds.use_split_depth` hands it the split cameras (`World` does
+    it in `use_split_depth`); `PlanetClouds.set_visible` hides either
+    renderer; a change of renderer rebuilds the volume live.
+  - The billboards' lighting moved, unchanged, into
+    `clouds/shaders/cloud_shading.glsl`, which both renderers share.
+  - `scripts/cloud_bench.py` times and shoots the clouds alone (no terrain)
+    with either renderer, still or moving. Its `--interactive` mode flies a
+    probe ball in and out of the clouds. `terrain_shots.py` and the terrain
+    demo take `--cloud-renderer`.
+
 - High cirrus over a planet's clouds (`world_builder.clouds.cirrus`,
   docs/source/atmosphere.md#cirrus).
   - `CloudSheet`, built by `PlanetClouds(cirrus=CirrusSpec())`, or

@@ -940,6 +940,76 @@ set only when they change.
 | Update mean | 4.7 ms | 4.3 ms |
 | `Sea.update` (median frame) | 0.47 ms | 0.20 ms |
 
+## 20. Raymarched clouds (#45)
+
+`CloudSettings.renderer = "march"` ([the raymarch](clouds.md#the-raymarch))
+against the billboards. Everything here was measured on a weak GPU: an Intel
+UHD Graphics under WSL2, through Mesa's D3D12 driver
+(`GALLIUM_DRIVER=d3d12`, GL 4.1; without it Mesa draws on the CPU). Scenes
+are drawn offscreen at 1600×900, each frame waiting for the GPU, with the
+clouds alone (`scripts/cloud_bench.py`: the air, the sky, the cirrus, no
+terrain). The **cloud cost** is the frame with the clouds minus without.
+Timings on this machine drift by 1-2 ms from run to run (the clouds-off
+frame alone moves between 3 and 9 ms), so only same-session numbers are
+compared.
+
+**The billboards first** (the reference before any change, one session):
+
+| Pose | LOW | MID | HIGH | HIGH, half resolution |
+|---|---|---|---|---|
+| Below (300 m) | 2.6 ms | 3.6 ms | 6.8 ms | 3.3 ms |
+| Start (1.3 km) | 3.6 ms | 5.4 ms | 6.1 ms | 4.9 ms |
+| Inside the slab (2.7 km) | 5.5 ms | 12.0 ms | 15.0 ms | 7.4 ms |
+| Above (4.5 km) | 4.2 ms | 6.0 ms | 8.1 ms | 4.8 ms |
+| 20 km up | 2.7 ms | 3.7 ms | 3.9 ms | 2.5 ms |
+| Orbit (deck only) | 7.0 ms | 8.4 ms | 6.2 ms | 5.6 ms |
+| Sunset | 4.1 ms | 6.7 ms | 8.1 ms | 6.1 ms |
+
+**Both renderers, one session:**
+
+| Pose | Billboards HIGH | March HIGH | March MID | March LOW |
+|---|---|---|---|---|
+| Below | 6.8 ms | 10.9 ms | 7.2 ms | 3.5 ms |
+| Start | 10.5 ms | 9.9 ms | 8.6 ms | 4.8 ms |
+| Inside the slab | 19.6 ms | 14.0 ms | 12.4 ms | 5.7 ms |
+| Above | 11.4 ms | 9.2 ms | 8.3 ms | 4.7 ms |
+| 20 km up | 5.2 ms | 7.4 ms | 8.0 ms | 4.2 ms |
+| Orbit | 8.1 ms | 6.5 ms | 6.7 ms | 5.6 ms |
+| Sunset | 11.4 ms | 8.6 ms | 8.4 ms | 5.0 ms |
+| A model in a dense cloud | 41.8 ms | 17.8 ms | 13.7 ms | 6.2 ms |
+
+Over open sky the march costs about what the billboards do: a little more
+looking at the horizon from low (its rays cross a hundred kilometres of
+slab) and from 20 km (every pixel holds cloud), less elsewhere. Inside the
+clouds it costs a third less, and in a dense cloud less than half. The
+billboards' cost grows with the cloud's volume on screen (their overdraw);
+the march's stops at the first opaque cloud. In the full world
+(`terrain_shots.py --cloud-renderer`, frames with the terrain, the sea and
+the moon) the two are within the noise, the march ahead inside the clouds
+(49.8 against 55.9 ms).
+
+Where its time goes (one-step marches and passes switched off, start and
+inside poses):
+
+- **Fixed, ~3-4 ms**: per range, a depth pass of the scene, the march's
+  per-pixel set-up (the ray, the slab's spheres, the air once per pixel),
+  the full-resolution resolve and the composite. Two-thirds of it is
+  full-resolution passes, which this GPU pays dearly.
+- **The near range, ~1-2 ms** when the slab reaches into it; it resolves at
+  the march's resolution (its clouds are close and soft), which roughly
+  halved it.
+- **The steps**: the rest. Crossing clear air in up to four-times-longer
+  steps and reading the weather once per kilometre of ray took the frame at
+  the start pose from 15.7 to 10.8 ms, and inside the slab from 20.0 to
+  15.3 ms.
+- What stayed within the noise: a 2 × 2 neighbourhood for the resolve's
+  clamp instead of 3 × 3, a half-float distance instead of a 32-bit one, 4
+  air samples per pixel instead of 8, no sun march, no air.
+
+The first temporal version doubled the cost (a full-resolution resolve per
+range, 32-bit distances). The phase-1 march (half resolution, no history)
+cost about as much as the final one but looked blurred.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

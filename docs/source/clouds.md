@@ -24,7 +24,10 @@ by two techniques:
 - a **volume** ([`sphere.py`](../../src/world_builder/clouds/sphere.py),
   `CloudVolume`): the low clouds, cumulus by default (any `CloudType`),
   billboard LOD shells generated per cube-sphere tile in the terrain's worker
-  pool, and a deck sphere beyond the last shell, up to orbit;
+  pool, and a deck sphere beyond the last shell, up to orbit. Or, with
+  `CloudSettings.renderer = "march"`, the same field **raymarched**
+  ([`march.py`](../../src/world_builder/clouds/march.py), `CloudMarch`, see
+  [the raymarch](#the-raymarch)), an experimental second code path;
 - optionally, a **sheet** above it
   ([`cirrus.py`](../../src/world_builder/clouds/cirrus.py), `CloudSheet`): high
   cirrus, baked patches stamped along the upper wind.
@@ -180,11 +183,99 @@ when broken:
   ~16% light ring that sweeps with the camera. Weighting before the cap would
   let each shell reach it and sum to twice it.
 
+## The raymarch
+
+[`march.py`](../../src/world_builder/clouds/march.py) (`CloudMarch`) draws
+the same field, weather and lighting as the billboards and the deck, without
+their overdraw. Billboards are a raymarch whose steps are quads: every one
+of them is drawn, shaded and blended, so their cost grows with the cloud's
+volume on screen (15 ms inside the slab on a laptop's GPU, 41 ms in a dense
+cloud). Here each pixel steps along its own ray:
+
+- **Through the slab**, between the spheres at its base and top, less the
+  planet: up to two segments (a ray skimming under the slab leaves it and
+  comes back), from the depth range's near plane to the **scene's depth**.
+  A game's model inside a cloud is hidden by just the cloud in front of it,
+  and the camera inside a cloud sees it all around (the billboards fade out
+  near the camera, which leaves a clear bubble).
+- **In steps** of `MIN_STEP_FEATURE` of the finest feature near the camera
+  (50 m for cumulus), `STEP_GROWTH` of the distance farther, all lengthened
+  alike when a ray needs more than `CloudSettings.march_steps`. Clear air
+  is crossed in up to four-times-longer steps, and a step that lands in
+  cloud is taken again from its start. Each sample is jittered within its
+  step, the jitter moving on by the golden ratio each frame. The march
+  stops once the cloud is opaque. The steps' geometry has a NumPy mirror
+  that the tests run (`slab_segments`, `march_steps`,
+  `march_transmittance`).
+- **The field** with the octaves the billboard shells would have there
+  (`shell_octaves` over their distance bands). The weather's shift is read
+  once per kilometre of ray (`cloudDensityShifted`), not at every sample.
+  Two departures, march-only, give back the billboards' look:
+  - the view ray takes **twice the field's extinction**
+    (`VIEW_EXTINCTION_SCALE`): a billboard carries its sample's density over
+    a whole chord, which keeps a cloud's edge crisp, and the field's own
+    soft edge, integrated, reads as a blur;
+  - **billows** carve the edges, as the billboards' lumpy sprites do: a
+    billowy noise 24 times finer than the first octave moves the threshold
+    by up to half its window about its mean (`DETAIL_EROSION`), so the core
+    stays and the coverage holds.
+- **Lit** per sample exactly as the billboards are (`cloud_shading.glsl`,
+  which both renderers include). The air is applied once per pixel, at the
+  cloud's transmittance-weighted distance, with the billboards' per-vertex
+  sample count.
+- **Far away**, where a pixel spans more than the features, it samples the
+  deck's expected coverage as a homogeneous slab whose vertical crossing
+  takes the deck's alpha, lit by the deck's averages. The march reaches
+  orbit with no deck, and nothing changes colour closing in.
+
+**The passes.** There is one set per depth range of `SplitDepthCameras`
+(`CloudMarch.attach`; `PlanetClouds.use_split_depth`, which a `World` calls
+from `use_split_depth`):
+
+1. a camera sharing the range's lens draws the **scene's depth** at the
+   view's resolution into a texture. Everything but the clouds and the sky
+   is drawn, the terrain through its depth-only stage, as for the
+   half-resolution pass;
+2. a fullscreen card **marches** one pixel of every 2 × 2 block
+   (`march_resolution` ½; 4 × 4 at ¼), a different one each frame in a
+   Bayer order. It writes the premultiplied cloud and its distance;
+3. a **resolve** gathers them into the view's resolution over the frames:
+   the other pixels come from the last frame's result, reprojected along the
+   view ray to the cloud's distance (float64 for the camera's move, float32
+   only near the camera) and held within the range of this frame's
+   neighbouring samples. A traced pixel blends into its history, which
+   averages the jitter away. Two results alternate, each frame's reading
+   the other's;
+4. a card lays the result over the range's own pass, premultiplied "over",
+   at the **cloud's own depth**. The scene's depth test hides it pixel by
+   pixel at the view's resolution, behind anything nearer, which also
+   drops any stale history a moving model would leave behind it.
+
+The near range's clouds are close, large and soft on screen. It traces the
+middle of each block every frame, averages only its jitter, at the march's
+resolution, and the composite upsamples it: a full-resolution pass less. It
+runs only when the slab reaches into the near range.
+
+The sea's reflection sees the deck alone (the far layer is packed for it).
+The textures may be padded to powers of two, so the shaders address them
+in pixels.
+
+**What it costs** (performance §20): about the billboards' cost over the
+sky, a third of it inside the slab, a quarter in a dense cloud. Two-thirds
+of the march's fixed cost is the full-resolution passes on a weak GPU.
+
 ## Testing
 
 The headless tests cannot check the pixels, nor even whether the GLSL compiles
 (`Shader.load` succeeds with no graphics context). That needs
 [`scripts/terrain_shots.py`](../../scripts/terrain_shots.py) (its `cirrus_*`
-and `in_clouds` poses among others) or an offscreen GL context; the cirrus's
-shapes can be previewed without one
-([`scripts/cirrus_preview.py`](../../scripts/cirrus_preview.py)).
+and `in_clouds` poses among others, `--cloud-renderer` to pick the
+renderer) or an offscreen GL context; the cirrus's shapes can be previewed
+without one ([`scripts/cirrus_preview.py`](../../scripts/cirrus_preview.py)).
+
+[`scripts/cloud_bench.py`](../../scripts/cloud_bench.py) times and shoots
+the clouds alone (the air, the sky, no terrain) from fixed poses, with
+either renderer, still or moving (`--move`). Its `model_in_cloud` pose puts
+a black ball, standing in for a game's model, half into a cloud, and
+`--interactive` flies it in and out of the clouds, switching renderers with
+M. On WSL, run it with `GALLIUM_DRIVER=d3d12`, or Mesa draws on the CPU.
