@@ -199,6 +199,7 @@ class PlanetClouds:
                 sun_brightness=sun_brightness,
                 sky_strength=sky_strength,
                 exposure=exposure,
+                game=game,
             )
 
     def _layers(self) -> list:
@@ -256,7 +257,8 @@ class PlanetClouds:
 
     def set_pixel_angle(self, radians: float, volume_scale: float = 1.0) -> None:
         """The angle one pixel of the view spans (vertical fov / its height):
-        how far each layer draws its own detail before averaging it.
+        how far the volume draws its own detail before averaging it. The
+        sheet needs none: its atlas is mipmapped.
 
         :param radians: the angle per pixel of the view
         :param volume_scale: the volume's pixels over the view's (the half-
@@ -264,8 +266,6 @@ class PlanetClouds:
             resolution, :meth:`use_half_res`)
         """
         self.volume.set_pixel_angle(radians * volume_scale)
-        if self.sheet is not None:
-            self.sheet.set_pixel_angle(radians)
 
     def set_debug(self, flags: int) -> None:
         """Profiling switches, both layers (cloud_field.glsl's

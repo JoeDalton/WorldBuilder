@@ -414,55 +414,89 @@ ice cloud, 8-9 km up by default, fibrous and streaming along the upper wind.
 **A surface, not billboards.** Cirrus is a kilometre deep at most and tens of
 kilometres across, and optically thin. Billboards would give it no volume
 worth their cost, and their puffs fight its fibres (the flat field's `CIRRUS`
-preset shows both). So it is one sphere at the slab's mid-height. Its
-fragments evaluate a density through the slab's depth (`thickness / |cos|`,
-so it thickens toward the horizon), where the sight line meets the true
-sphere: the mesh's facets sag under it. There is no sun march; a sheet this
+preset shows both). So it lies on one sphere at the slab's mid-height, and a
+sight line crosses `thickness / |cos|` of the slab where it meets it (at
+most 4 slab depths: past that every patch saturated toward the horizon into a
+flat plate). Its optical depth saturates softly toward
+`CirrusSpec.max_optical_depth` rather than being clamped, which flattened
+each tuft to one white with a hard rim. There is no sun march; a sheet this
 thin barely shadows itself.
 
-**Fibres along the wind.** The upper wind (`weather.upper_wind`, from
-`WeatherSpec.jets`: weak tropical easterlies, the subtropical and polar-front
-jets) has a stream function, `psi = -R * integral(u dlat)`
-(`weather.stream_table`). The weather systems add one Gaussian each, turning
-the wind around each low and over each tropical cyclone's outflow
-(`weather.stream_vortices`). The wind blows along psi's contours, so noise
-sampled at `(psi / spacing, 0, 0) + along(p) / length` varies fast across the
-wind and slowly along it: streaks exactly along the flow, wherever it turns,
-and no frame to rotate (a stretched noise turned to follow a direction field
-shears).
+**Baked shapes.** What makes cirrus uncinus read as cirrus is its structure:
 
-- Finer fibrils inside a streak are the same construction at a smaller
-  spacing; a slow noise added to psi makes the fibres meander off the
-  contours.
-- Where the wind is weak, psi varies slowly and the same noise turns
-  isotropic. That gives a veil instead of streaks, and it is calm air, where
-  the weather puts little cirrus anyway.
-- The slow along-wind terms go into the noise's y and z only (`along`).
-  Added to x as well, they tilted the fibres off the wind by
-  `(spacing / length) / speed`, about 15° where the wind blows at a third of
-  the jets' speed.
-- The noise is computed, not fetched: hashed value noise with quintic
-  interpolation, C2 (`value_noise`, `hashNoise`). A streak magnifies its
-  noise about 50 times, and through the density's threshold a 3D texture's
-  linear filter showed its creases as a lattice of facets. Smoothstepping the
-  texel fraction swapped them for flat bands along the texel edges.
+- cottony, ragged tufts, often along a curved leading front;
+- comet tails streaming from them, curving, widening, merging;
+- fibres of uneven width and strength along every curve.
 
-**How much.** The cirrus has its own cover map (`weather.cirrus_cover_map`,
-6 × 128²):
+That structure is expensive to compute, so it is baked offline
+([`scripts/bake_cirrus_atlas.py`](../../scripts/bake_cirrus_atlas.py)) into an
+atlas of two dozen patches, 24 × 12 km each (`clouds/cirrus_atlas.png` and its
+`.json`), from a procedural model:
 
-- `WeatherSpec.cirrus_zonal`: anvils over the wet tropics, streaks along the
-  jets;
-- a shield poleward and east of each extratropical low (ahead of its warm
-  front) and over each tropical cyclone;
-- mesoscale texture;
-- humidity, which counts for less than for the cumulus.
+- a flow, bent by a stream function, so tails and fibres curve together;
+- tufts, sheared and hooked, most of them on a front at the patch's
+  downwind end;
+- tails: each point marches downwind along the flow and takes the soft
+  maximum of the tufts it meets, fading with distance and read from ever more
+  blurred tufts, so the tails widen as they fall. The tufts lead and their
+  tails lag upwind, as fall streaks do when the wind rises with height;
+- strands in the flow's own coordinates, so they follow every curve: three
+  widths, each sparse and of a strength that wanders (one width at one
+  contrast read as a brush stroke), cut into wisps;
+- a faint fibrous veil joining the tufts into one field, an irregular
+  outline, and a long fade at the upwind border (a tail cut by it showed a
+  straight line).
 
-The noise is stationary, so the raw density's distribution is the same
-everywhere. A coverage `c` is `P(raw > threshold)`, its threshold the
-`(1 - c)` quantile of `raw` (`calibrate`, as for the cumulus), and the map
-stores that threshold. The share of the sheet with cirrus is the map's cover
-(a test checks it within 3 %). Far away, the fibrils fade to their mean first,
-then the streaks to the cover, so there is no speckle from orbit.
+[`scripts/cirrus_preview.py`](../../scripts/cirrus_preview.py) draws the
+atlas, or the placed field over any patch of the planet, top-down beside a
+reference photo, in seconds: the tuning loop.
+
+Two designs were dropped on the way:
+
+- **The first cirrus was computed per pixel**: noise across the contours of
+  the upper wind's stream function. The contours are evenly spaced along the
+  jets, so the streaks came out as regular parallel bands, with no head and
+  no tail.
+- **Stamping in the shader** (texture bombing) would have to search a 3D
+  lattice per pixel, since a 2D grid on the cube's faces leaves seams. For
+  stamps this long that is about 30 candidates, no cheaper than computing
+  the cloud.
+
+**Stamps as geometry.** The patches are quads lying on the sheet
+(`cirrus_stamps`, `stamp_vertices`): a 4 × 2 grid each, every vertex on the
+sphere, grouped by cube face and a 4 × 4 grid on it for culling. A pixel pays
+one atlas fetch per stamp over it (typically 1-3). The air in front and the
+sunlight's tint are worked out per vertex. The atlas is mipmapped with
+anisotropic filtering, so the far sheet and the horizon need nothing else
+(no pixel angle, no fade to a cover map).
+
+**Where, and which way.** The stamps are a Poisson field, placed once in the
+worker pool (~0.3 s, about 12k stamps on the 600 km demo planet):
+
+- **Cover.** The field is thinned by the cirrus cover map
+  (`weather.cirrus_cover_map`, 6 × 128²):
+  - `WeatherSpec.cirrus_zonal`: anvils over the wet tropics, streaks along
+    the jets;
+  - a shield poleward and east of each extratropical low (ahead of its warm
+    front) and over each tropical cyclone;
+  - mesoscale texture;
+  - humidity, which counts for less than for the cumulus.
+
+  At cover c its density is `-ln(1 - c) / A` for a stamp's mean footprint
+  A (from the atlas's JSON), so the share of the sheet under a stamp is c (a
+  test checks it within 5 %).
+- **Heading.** Each stamp's tufts point downwind along the upper wind
+  (`upper_wind_at`):
+  - its stream function, `psi = -R * integral(u dlat)` from
+    `WeatherSpec.jets` (`weather.stream_table`): weak tropical easterlies,
+    the subtropical and polar-front jets;
+  - one Gaussian per weather system (`weather.stream_vortices`), turning
+    the wind around each low and over each tropical cyclone's outflow;
+  - a slow noise added to psi, so the field meanders;
+  - the gradient taken by central differences.
+- **Variety.** Each stamp is turned a little at random, more in calm air,
+  and drawn at a random scale, width, mirror and opacity, so the 24 patches
+  do not read as repeats.
 
 **Draw order.** The cirrus lies above the cumulus slab (the `World` checks
 that its base clears the clouds' top, and that its top stays inside the air).
@@ -474,14 +508,17 @@ A ray's height along it is convex: it falls, then rises.
   them.
 
 This holds for any camera: under both layers, between them, above them, in
-orbit, and in the sea's mirror. The same mesh is drawn by two nodes, each
-keeping one kind of crossing, found per fragment from the pass's own camera
-(`p3d_ModelViewMatrixInverse`, which is right in the mirror too):
+orbit, and in the sea's mirror. The stamps lie on the sphere, so the same
+geometry is drawn by two nodes, each keeping one kind of crossing, found per
+fragment from the pass's own camera (`p3d_ModelViewMatrixInverse`, which is
+right in the mirror too). A sight line enters the sphere exactly where the
+camera is above the tangent plane. Overlapping stamps on one sphere have
+near-identical colours, so their order within a draw does not show.
 
 | Node | Crossings | Bin |
 |---|---|---|
 | `behind` | where sight lines leave the sphere (all of them from below) | the sky's (21, fixed), draw order 2: after the dome and the stars, before the deck (22) and every shell |
-| `front` | where they enter it (only from above) | Panda's "transparent" (30, back to front by the planet's centre): after every cloud bin, before a game's translucent effects nearer than the planet's centre |
+| `front` | where they enter it (only from above) | Panda's "transparent" (30, back to front by each group's centre): after every cloud bin, before a game's translucent effects nearer than the stamps |
 
 The cloud bins 21-29 are all taken, so no new sort fits between them; these
 two need neither a new sort nor a change to Panda's own.
@@ -489,7 +526,7 @@ two need neither a new sort nor a change to Panda's own.
 - **The depth split** needs nothing: the far range draws before the near
   one, and everything near is in front of everything far.
 - **Half-resolution clouds** leave the cirrus at full resolution (its fibres
-  are its look, and it is one cheap surface). It is kept out of the
+  are its look, and it costs one atlas fetch a stamp). It is kept out of the
   half-resolution pass, and the composite (22) lands between its two nodes.
 - **The far plane** (`World.depth_ranges`) reaches the cirrus's far limb
   where it is higher than any ground.
@@ -500,7 +537,7 @@ two need neither a new sort nor a change to Panda's own.
 - the sunlight reddened by the air at the cirrus's own height
   (`cloudSunTint`), so it stays lit after the cumulus below has gone into
   the planet's shadow, then twilight (`cloudTwilight`);
-- the air in front of it per pixel (`atmosphereAlong`), and the sky's
+- the air in front of it per vertex (`atmosphereAlong`), and the sky's
   display transform.
 
 From inside the slab it fades to nothing near the camera: a veil, not a

@@ -12,11 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - High cirrus over a planet's clouds (`world_builder.clouds.cirrus`,
   docs/source/atmosphere.md#cirrus).
   - `CloudSheet`, built by `PlanetClouds(cirrus=CirrusSpec())`, or
-    `CloudLook(cirrus=...)` in a `World`: one sheet at 8-9 km. Its fibres follow the upper wind's stream function (the
-    jet streams, bent around the weather's cyclones), and its cover comes
-    from a map of its own (anvils over the wet tropics, streaks along the
-    jets, a shield ahead of each low), calibrated so that the share of sky
-    with cirrus is the map's.
+    `CloudLook(cirrus=...)` in a `World`: baked patches of cirrus uncinus
+    stamped on one sheet at 8-9 km. Each patch has cottony tufts along a
+    curved front, comet tails that curve, widen and merge, and strands of
+    uneven width and strength along every curve.
+  - `scripts/bake_cirrus_atlas.py` bakes the 24 patches into
+    `clouds/cirrus_atlas.png/.json`; `scripts/cirrus_preview.py` draws the
+    atlas, or the placed field beside a reference photo, for tuning.
+  - The stamps are a Poisson field, thinned by a cover map of the cirrus's
+    own (anvils over the wet tropics, streaks along the jets, a shield ahead
+    of each low), so that the share of sky under a stamp is the map's. Each
+    has its tufts downwind along the upper wind (the jet streams, bent
+    around the weather's cyclones).
   - It draws behind every cumulus where sight lines leave its sphere and in
     front of them where they enter it, so the order holds from the ground to
     orbit and in the sea's mirror, with no sorting.

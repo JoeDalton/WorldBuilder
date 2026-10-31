@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
-from world_builder.clouds.cirrus import CirrusSpec, CloudSheet
+from world_builder.clouds.cirrus import CirrusSpec, CloudSheet, cirrus_stamps
 from world_builder.clouds.cloud import CloudSettings, CloudType
 from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.clouds.sphere import CloudVolume
@@ -101,10 +101,10 @@ def test_both_layers_are_driven_as_one(showbase, executor):
         clouds.set_sky_light(0.7)
         assert volume._sky_light == sheet._sky_light == 0.7
 
-        # The volume may be at half resolution, the sheet never is
+        # The volume may be at half resolution, the sheet never is (its
+        # atlas is mipmapped: it takes no pixel angle)
         clouds.set_pixel_angle(0.001, volume_scale=2.0)
         assert volume._pixel_angle == pytest.approx(0.002)
-        assert sheet._pixel_angle == pytest.approx(0.001)
         half_res = MagicMock()
         clouds.use_half_res(half_res)
         half_res.add.assert_called_once_with(volume.root)
@@ -141,8 +141,7 @@ def test_the_layers_share_one_weather(showbase, executor):
         assert clouds.weather.planet == PLANETS["forest"]
         camera = TangentFrame.at(20.0, 40.0).up * (R + 1000.0)
         clouds.update(camera)
-        # The sheet's fibres bend around the same systems the volume's
-        # weather winds
-        assert len(clouds.sheet.data.vortices) > 0
+        # The sheet's stamps follow the same weather the volume's do
+        assert clouds.sheet.stamps is cirrus_stamps(CirrusSpec(), clouds.weather, R)
     finally:
         clouds.remove()
