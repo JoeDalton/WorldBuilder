@@ -20,8 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `cell_weight`: a field's top rising with the depth, its anvil, a cell
     octave gathering towers; `CloudSpec.deep_radius`: billboards growing
     with the depth. Neutral by default: the other types are unchanged.
-  - The weather cube may carry the depth (a third channel); the coverage's
-    fbm shift is tabulated by depth (`depth_shift_tables`).
+  - The cumulonimbus's anvil spreads as a smooth lens to 3 radii of its
+    tower (`noise.SHELF_BAND`, `shelf_lift`, `shelf_fbm`, `with_shelf`,
+    `DensityField.shelf_shift`): a deep column's top over its own spread
+    map, two octaves only, its top fading in density.
+  - The weather cube may carry the depth (a third channel) and the anvil's
+    spread (a fourth); the coverage's fbm shift is tabulated by depth.
   - Expensive near the big clouds (docs/source/performance.md §21, §22):
     half resolution makes those frames 2.5-2.9 times faster on a weak GPU.
 - `CloudSettings.interior_growth` (on at LOW and MID): billboards deep

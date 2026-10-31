@@ -72,9 +72,9 @@ void main() {
         // through the slab's depth.
         puff = 1.0;
         vec3 up = normalize(worldPos);
-        // The column's weather: coverage, shift, convective depth. The
-        // clouds there reach the local top (a convective field's grows with
-        // the depth; every other's is the slab's).
+        // The column's weather: coverage, shift, convective depth, anvil
+        // shelf. The clouds there reach the local top (a convective field's
+        // grows with the depth; every other's is the slab's).
         vec4 weather = texture(weatherMap, up);
         float thickness = f.slabThickness * topFraction(f, weather.b);
         float cosView = max(abs(dot(V, up)), 0.04);
@@ -89,8 +89,15 @@ void main() {
         if (detail > 0.0) {
             vec3 low = up * (r + 0.3 * thickness);
             vec3 high = up * (r + 0.7 * thickness);
-            density = 0.5 * (cloudDensityAt(f, low, weather.gb)
-                           + cloudDensityAt(f, high, weather.gb));
+            density = 0.5 * (cloudDensityAt(f, low, weather.gba)
+                           + cloudDensityAt(f, high, weather.gba));
+            if (f.anvil > 0.0) {
+                // An anvil's shelf, over its column's top: sampled in the
+                // middle of its band.
+                float core = 0.5 * (SHELF_BAND.y + SHELF_BAND.z);
+                vec3 shelf = up * (planetRadius + f.slabBase + core * f.slabThickness);
+                density = max(density, cloudDensityAt(f, shelf, weather.gba));
+            }
         }
         if (shading < 1.0) {
             // The weather map's coverage: what the field's columns give

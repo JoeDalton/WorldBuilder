@@ -112,6 +112,7 @@ from world_builder.clouds.noise import (
     sphere_column_peaks,
     top_fraction,
     value_noise_volume,
+    with_shelf,
     with_threshold,
 )
 from world_builder.clouds.weather import (
@@ -270,7 +271,8 @@ def _genus_weather(genera: GeneraSpec, family: str, tables: tuple) -> np.ndarray
 
 def _shift_plane(spec: SphereCloudSpec) -> np.ndarray:
     """:returns: (6, n, n) the weather's fbm shift, or a genus's (6, n, n, 3)
-    cube (coverage, shift, depth), shared or built here"""
+    cube (coverage, shift, depth; (6, n, n, 4) with the anvil shelf's
+    shift), shared or built here"""
     if spec.shift is not None:
         return shared_array(spec.shift)
     if spec.genera is not None:
@@ -293,13 +295,18 @@ def _tile_top(
     span: float,
 ) -> float:
     """:returns: the highest local top of a tile's clouds, as a share of the
-    slab (1 for a field without convective depth)"""
+    slab (1 for a field without convective depth, or under an anvil's
+    shelf)"""
     field = spec.field
     if field.min_top >= 1.0 or weather.ndim < 4 or weather.shape[-1] < 3:
         return 1.0
     u = np.linspace(0.0, 1.0, 5)
     a, b = np.meshgrid(a0 + span * u, b0 + span * u)
-    depth = sample_cube(weather[..., 2], face_dirs(face, a.ravel(), b.ravel()))
+    dirs = face_dirs(face, a.ravel(), b.ravel())
+    if field.anvil and weather.shape[-1] > 3:
+        if sample_cube(weather[..., 3], dirs).max() > 0.0:  # an anvil's shelf
+            return 1.0
+    depth = sample_cube(weather[..., 2], dirs)
     return float(top_fraction(field, min(1.0, depth.max() + _TILE_DEPTH_MARGIN)))
 
 
@@ -365,8 +372,9 @@ def planet_field(
         the type's
     :param seed: the noise seed
     :param radius: the planet's sea-level radius, metres
-    :returns: the preset, the resolved field and the planet's sorted column
-        peaks (:func:`noise.sphere_column_peaks`, all four octaves)
+    :returns: the preset, the resolved field (its anvil's shelf too:
+        :func:`noise.with_shelf`) and the planet's sorted column peaks
+        (:func:`noise.sphere_column_peaks`, all four octaves)
     """
     preset = PRESETS[cloud_type]
     field = preset.field
@@ -374,7 +382,8 @@ def planet_field(
         field = replace(field, slab=(float(altitude), field.slab[1]))
     sigma = fbm_sigma(_noise(seed), field)
     peaks = _peaks(seed, field, radius, 4)
-    return preset, with_threshold(field, peaks, sigma), peaks
+    resolved = with_shelf(with_threshold(field, peaks, sigma), _noise(seed), radius)
+    return preset, resolved, peaks
 
 
 def planet_weather(
@@ -500,8 +509,11 @@ def generate_cloud_tile(
     scale = 1.0
     if spec.deep_radius != 1.0 and weather.ndim == 4 and weather.shape[-1] > 2:
         # Billboards grow with the convective depth; fewer of them, as the
-        # cube of their size, so the overlap (and the extinction) holds.
+        # cube of their size, so the overlap (and the extinction) holds. Over
+        # its column's top, a billboard is in an anvil's shelf: as deep.
         depth = sample_cube(weather[..., 2], points)
+        h = (np.linalg.norm(points, axis=-1) - spec.radius - base) / field.slab[1]
+        depth = np.where(h >= top_fraction(field, depth), 1.0, depth)
         scale = 1.0 + (spec.deep_radius - 1.0) * np.clip(depth, 0.0, 1.0)
         keep = rng.uniform(size=len(points)) < scale**-3
         points, scale = points[keep], scale[keep]

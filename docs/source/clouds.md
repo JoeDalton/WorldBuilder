@@ -220,16 +220,16 @@ by default):
   adds to the fbm in proportion to the depth, about its mean: it gathers the
   deep clouds into towers;
 - under a deep cloud's top, the threshold falls (`noise.ANVIL_BAND`): its
-  **anvil**;
+  **anvil**, which spreads past the tower as a **shelf** (below);
 - **billboards grow with the depth** (`CloudSpec.deep_radius`, 2.5 times at
   depth 1) and are thinned as the cube of their size, so the overlap, and
   the extinction, hold. A cumulonimbus takes as many billboards per
   kilometre of its features as a cumulus, not per cubic metre.
 
 The weather cube carries the depth beside the coverage and the shift (its
-blue channel; one fetch). The shader and `density_on_sphere` read it, and
-for every other field it changes nothing (the billboards' images are within
-one 8-bit step of before).
+blue channel), and the anvil's spread (alpha; one fetch). The shader and
+`density_on_sphere` read it, and for every other field it changes nothing
+(the billboards' images are within one 8-bit step of before).
 
 **Coverage by depth.** A deep column may grow taller, so it holds cloud at
 any height more often: the same coverage needs less shift. The shift is
@@ -248,8 +248,41 @@ cloud there), then a ring of congestus (depth ½) to 2.2 radii. Those change
 over 2-4 km: the genus maps are twice the weather's resolution
 (`GENUS_SIZE`, 1.85 km texels on a 600 km planet).
 
+**The anvil's shelf.** A cumulonimbus's anvil spreads under the
+tropopause well past its tower: a smooth lens, thick by the tower and thin
+at its rim, unlike the cauliflower column under it. The shelf is drawn
+wherever its own map says, over whatever columns lie below:
+
+- **its spread**, a fourth map (`genus_planes`): 1 to a radius of a
+  cumulonimbus, 0 by 3 (36 km across for a 6 km tower);
+- **a lens**: its underside (`noise.shelf_underside`) is at 60 % of the
+  slab (7.2 km) at spread 1 and rises to the slab's top as the spread falls.
+  Over it the threshold, a depth-1 column's (`noise.shelf_lift`), falls by
+  `SHELF_CLEAR` over 1 km; none under it;
+- **its top fades in density**, not in threshold (from 76 % of the slab to
+  its top): a flat, smooth top cut by the threshold cuts every billboard
+  across it along one line, and from above the sheet was a stack of pills;
+- **smooth**: the two coarse octaves only, the others their mean
+  (`noise.shelf_fbm`; no cauliflower), and its own fbm shift
+  (`DensityField.shelf_shift`, `noise.with_shelf`): 97 % of its middle is
+  cloud, so from below it is an opaque ceiling;
+- the field takes the column's density or the shelf's, whichever is
+  denser: over the tower nothing changes under the shelf, over a cumulus
+  the shelf floats above it.
+
+Tried on the way: a squash of the noise in the shelf's band (features
+three times wider than tall) sliced into pills by the billboards; a softer
+threshold window left every billboard half transparent, and their round
+sprites showed from below as bubbles; a shelf coverage counted on columns
+(any cloud through its band) left separate puffs.
+
+From below it is a grey ceiling; under it, the sky term is occluded from
+the shelf's own underside. The deck samples it at the top of its rise.
+
 **Placement** draws a tile's candidates up to its highest local top (the
-depth read over the tile), not through the whole 8.3 km slab.
+depth read over the tile; the whole slab under a shelf), not through the
+whole 8.3 km slab. A billboard over its column's top is in a shelf, and as
+large as a tower's.
 
 **Their cost** is overdraw (performance §22): near the big clouds, half
 resolution (`CloudSettings.half_resolution`, on at LOW and MID) makes
@@ -258,10 +291,12 @@ and thin as the cube (`CloudSettings.interior_growth`,
 `sphere.interior_levels`): the same overlap, so the same extinction, for
 14-16 % less near a cumulonimbus and softer detail inside it.
 
-**Not yet.** The anvil thickens the tops but makes no flat overhang (the
-noise would need stretching across the anvil's band). From the ground, the
-air hazes out a cumulonimbus's lower half at 40 km, and its top half reads
-as a large cumulus. The stratus shows its billboards' outlines close up
+**Not yet.** The shelf is round, around its tower (a real anvil streams
+downwind). Its underside is lit as the rest of the cloud: no darker base
+for deep clouds. Close up from below, its billboards' round sprites show
+faintly, as the stratus's do. The tower's stem, at coverage 1, has
+straight sides. From the ground, the air hazes out a cumulonimbus's lower half at
+40 km, and its top half reads as a large cumulus. The stratus shows its billboards' outlines close up
 from above: a uniformly dense sheet has no field edge to hide the sprites
 behind. And the cost near the big clouds (performance §21).
 

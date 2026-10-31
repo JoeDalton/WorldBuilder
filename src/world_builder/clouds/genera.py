@@ -15,7 +15,8 @@ shells' bins as one cloud would:
   (:attr:`noise.DensityField.min_top`), a coarse cell octave gathers them
   into towers kilometres wide (``cell_weight``), the threshold falls under
   the cap of the deepest into an anvil (``anvil``), and their billboards grow
-  with it (``CloudSpec.deep_radius``).
+  with it (``CloudSpec.deep_radius``). The anvil spreads past its tower as
+  a smooth lens, over a fourth map (its spread: :func:`noise.shelf_lift`).
 
 The maps (:func:`genus_planes`, cube maps as the weather's) are the
 weather's own coverage for the fair-weather cumulus everywhere, plus, around
@@ -26,7 +27,8 @@ how tall they may grow, so the convective field's fbm shift is tabulated by
 depth as well as coverage (:func:`depth_shift_tables`, one
 :func:`weather.shift_table` per depth of :data:`DEPTHS`), and the weather
 cube carries the depth beside the coverage and the shift
-(:func:`genus_cube`).
+(:func:`genus_cube`), and the anvil's spread (its shift is the field's:
+:func:`noise.with_shelf`).
 
 Design notes: docs/source/clouds.md, "Genera".
 """
@@ -64,6 +66,9 @@ DEPTHS = (0.0, 0.25, 0.5, 0.75, 1.0)
 #: The coverage around a cumulonimbus's core: its anvil's overhang, then
 #: the congestus ring.
 _CB_RING_COVERAGE = 0.45
+#: A cumulonimbus's anvil shelf, in radii of it: its spread 1 out to the
+#: first, 0 by the second (its underside rising, a lens).
+_ANVIL_REACH = (1.0, 3.0)
 #: The families.
 CONVECTIVE = "convective"
 STRATIFORM = "stratiform"
@@ -77,7 +82,8 @@ class Feature:
     :ivar north: north of it, metres
     :ivar radius: its radius, metres; it fades out over its outer third
     :ivar genus: ``"cumulonimbus"`` (depth 1 to 1.4 radii: its core, then
-        its anvil's overhang; a ring of congestus to 2.2 radii),
+        its anvil's overhang; a ring of congestus to 2.2 radii; its anvil's
+        shelf to 3 radii),
         ``"congestus"`` (depth ~0.5) or ``"stratus"`` (the stratiform
         family)
     :ivar coverage: the share of its columns holding cloud at its core (a
@@ -140,15 +146,16 @@ def _feature_dirs(spec: GeneraSpec) -> list[tuple[Feature, np.ndarray, float]]:
 def genus_planes(spec: GeneraSpec, size: int = GENUS_SIZE) -> np.ndarray:
     """The genera's maps as cube maps (cached per process).
 
-    :returns: (6, size, size, 3) float32: the convective coverage (the
-        weather's, smooth, upsampled from its own map), the convective depth
-        and the stratiform coverage, the layout of
+    :returns: (6, size, size, 4) float32: the convective coverage (the
+        weather's, smooth, upsampled from its own map), the convective depth,
+        the stratiform coverage and the anvil shelf's spread, the layout of
         :func:`sky.starfield.cube_directions`
     """
     dirs = cube_directions(size).reshape(-1, 3)
     convective = sample_cube(coverage_map(spec.weather), dirs).astype(np.float64)
     depth = np.zeros(len(dirs))
     stratiform = np.zeros(len(dirs))
+    shelf = np.zeros(len(dirs))
     for f, centre, angle in _feature_dirs(spec):
         distance = np.arccos(np.clip(dirs @ centre, -1.0, 1.0)) / angle
         core = 1.0 - _smoothstep(2.0 / 3.0, 1.0, distance)
@@ -163,12 +170,13 @@ def genus_planes(spec: GeneraSpec, size: int = GENUS_SIZE) -> np.ndarray:
             ring = 1.0 - _smoothstep(1.6, 2.2, distance)
             depth = np.maximum(depth, np.maximum(deep, 0.5 * ring))
             cover = np.maximum(f.coverage * core, _CB_RING_COVERAGE * ring)
+            shelf = np.maximum(shelf, 1.0 - _smoothstep(*_ANVIL_REACH, distance))
         else:
             depth = np.maximum(depth, 0.5 * core)
             cover = f.coverage * core
         convective = np.maximum(convective, cover)
-    planes = np.stack([convective, depth, stratiform], axis=-1)
-    return planes.reshape(6, size, size, 3).astype(np.float32)
+    planes = np.stack([convective, depth, stratiform, shelf], axis=-1)
+    return planes.reshape(6, size, size, 4).astype(np.float32)
 
 
 def depth_shift_tables(
@@ -222,19 +230,21 @@ def genus_cube(
     :param tables: the family's shift tables: one per depth of
         :data:`DEPTHS` (:func:`depth_shift_tables`) for the convective one,
         one (:func:`weather.shift_table`) for the stratiform one
-    :returns: (6, size, size, 3) float32: coverage, the fbm shift giving
-        it, the convective depth (0 for the stratiform family)
+    :returns: (6, size, size, 4) float32 for the convective family:
+        coverage, the fbm shift giving it, the convective depth, the anvil
+        shelf's spread; (6, size, size, 3) for the stratiform one, its
+        depth 0
     """
     planes = genus_planes(spec, size)
     tables = np.asarray(tables)
     if family == CONVECTIVE:
         cover, depth = planes[..., 0], planes[..., 1]
         shift = depth_shift(cover, depth, tables)
+        channels = [cover, shift, depth, planes[..., 3]]
     elif family == STRATIFORM:
         cover, depth = planes[..., 2], np.zeros(planes.shape[:-1], np.float32)
         shift = coverage_to_shift(cover, tables.reshape(-1))
+        channels = [cover, shift, depth]
     else:
         raise ValueError(f"unknown family {family!r}")
-    return np.stack([cover, shift.astype(np.float32), depth], axis=-1).astype(
-        np.float32
-    )
+    return np.stack([c.astype(np.float32) for c in channels], axis=-1)

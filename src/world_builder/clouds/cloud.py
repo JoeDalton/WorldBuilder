@@ -103,8 +103,9 @@ PRESETS = {
     CloudType.CONVECTIVE: CloudSpec(
         # The cumulus field, its clouds' top rising with the depth from 1 km
         # to the cap, 8.3 km above the base: congestus at 4-6 km, the
-        # cumulonimbus's anvil spreading under the cap. A cell octave (8 km
-        # features) gathers the deep ones into towers.
+        # cumulonimbus's anvil spreading under the cap, a smooth lens reaching
+        # past the tower. A cell octave (8 km features) gathers the deep ones
+        # into towers.
         field=DensityField(
             slab=(2200.0, 8300.0),
             noise_scale=(0.002, 0.002, 0.002),

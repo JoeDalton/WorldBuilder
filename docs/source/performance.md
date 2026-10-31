@@ -1097,6 +1097,22 @@ Tried and dropped:
   30 % on the stratus, but the larger quads stick out of its 500 m slab and
   are cut flat: planes with straight edges.
 
+**The anvil's shelf** (clouds.md, "Genera") adds a lens some 36 km
+across under the cap, drawn by the deep clouds' billboards. Whole frames,
+before and after it (MID with half resolution, its preset's):
+
+| Pose | HIGH before | HIGH after | MID before | MID after |
+|---|---|---|---|---|
+| Between the towers | 78.4 ms | 111.7 ms | 17.7 ms | 20.4 ms |
+| Under the anvil | 63.5 ms | 150.9 ms | 15.3 ms | 24.0 ms |
+| 20 km up, 50 km off | 11.4 ms | 14.8 ms | 7.6 ms | 7.6 ms |
+| Over the anvil (13 km, 25 km off) | — | 44.9 ms | — | 11.8 ms |
+| A cumulonimbus 40 km away | — | — | 7.2 ms | 7.7 ms |
+| Inside the congestus | — | — | 13.1 ms | 12.7 ms |
+
+Under the anvil the sheet fills the view: 1.6 times the frame at MID, 2.4
+at HIGH. Elsewhere it is a few milliseconds at most.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

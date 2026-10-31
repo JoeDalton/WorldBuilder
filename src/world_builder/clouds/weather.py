@@ -234,8 +234,9 @@ def sample_cube(cube: np.ndarray, dirs: np.ndarray) -> np.ndarray:
 
 def build_weather_texture(cube: np.ndarray) -> Texture:
     """The (6, n, n, 2) weather (coverage, shift) as an RG32F cube map, or a
-    (6, n, n, 3) one with the convective depth too (:mod:`genera`) as an
-    RGBA32F one, linearly filtered (:func:`sample_cube` is its CPU copy)."""
+    (6, n, n, 3) one with the convective depth too, or (6, n, n, 4) with the
+    anvil shelf's shift too (:mod:`genera`) as an RGBA32F one, linearly
+    filtered (:func:`sample_cube` is its CPU copy)."""
     size = cube.shape[1]
     tex = Texture("cloud_weather")
     if cube.shape[-1] == 2:

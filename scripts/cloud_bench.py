@@ -55,7 +55,8 @@ cloud ahead at 2.7 km, seen from 250 m).
 With --genera (the features: a cumulonimbus 40 km north of the reference
 point, another 70 km north-east, congestus 30 km west, a stratus deck 30 km
 south): cb_far (300 m up at the reference, looking north at the towers),
-cb_high (20 km up, 50 km south of the cumulonimbus), between_towers (3.5 km
+cb_high (20 km up, 50 km south of the cumulonimbus), anvil_top (13 km up,
+25 km south of it, looking down at its anvil), between_towers (3.5 km
 up, 25 km north, in the congestus around the cumulonimbus), under_anvil
 (2 km up under the cumulonimbus's edge, looking up at its anvil),
 in_congestus (4 km up, inside the congestus to the west), stratus_above
@@ -133,6 +134,7 @@ POSES = {
 GENERA_POSES = {
     "cb_far": (300.0, 0.0, 6.0, 0.0, 0.0),
     "cb_high": (20000.0, 0.0, -12.0, 0.0, -10e3),
+    "anvil_top": (13000.0, 0.0, -10.0, 0.0, 15e3),
     "between_towers": (3500.0, 0.0, 2.0, 0.0, 25e3),
     "under_anvil": (2000.0, 0.0, 35.0, 0.0, 27e3),
     "in_congestus": (4000.0, 90.0, 0.0, -30e3, 30e3),

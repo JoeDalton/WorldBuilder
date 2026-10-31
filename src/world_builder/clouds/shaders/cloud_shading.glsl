@@ -50,11 +50,11 @@ void planetCloudLight(int atmo, vec3 p, out vec3 sunlight, out vec3 skylight,
 //   sunlight     the sun's colour as it reaches p (planetCloudLight)
 //   skylight     the sky's
 //   twilight     the lit air's above p once p is in the planet's shadow
-//   weather      the weather at p: its fbm shift, the convective depth
-//                (weatherAt)
+//   weather      the weather at p: its fbm shift, the convective depth, the
+//                anvil shelf's shift (weatherAt)
 vec3 cloudRadianceAt(Field f, vec3 p, float density, vec3 V, float shading,
                      float farCoverage, vec3 sunlight, vec3 skylight,
-                     vec3 twilight, vec2 weather) {
+                     vec3 twilight, vec3 weather) {
     if ((uCloudDebug & 1) != 0) shading = 0.0;
     float sunVisibility = shading > 0.0 ? exp2(-sunOpticalDepthAt(f, p, weather)) : 1.0;
     // What the sun term sees: the shadowing and the powder.
@@ -74,8 +74,13 @@ vec3 cloudRadianceAt(Field f, vec3 p, float density, vec3 V, float shading,
         sunShadowing = mix(averaged.r, sunShadowing, shading);
     }
     // Skylight comes from above: occlude the SKY term toward the underside
-    // only (of the cloud's own height, at its convective depth).
-    float local = slabHeight(f, heightOf(p)) / topFraction(f, weather.y);
+    // only (of the cloud's own height, at its convective depth; over its
+    // column's top, of the anvil shelf's).
+    float h = slabHeight(f, heightOf(p));
+    float local = h / topFraction(f, weather.y);
+    if (local > 1.0 && f.anvil > 0.0) {
+        local = (h - SHELF_BAND.x) / (SHELF_BAND.w - SHELF_BAND.x);
+    }
     float skyReach = mix(skyOcclusion, 1.0, clamp(local, 0.0, 1.0));
     // Multiple-scattering fill: sky-coloured and NOT phase-weighted, or dusk
     // shadows turn orange and sunward shadow outshines side-lit cloud.
@@ -92,12 +97,12 @@ vec3 cloudRadianceAt(Field f, vec3 p, float density, vec3 V, float shading,
          + twilight * (sunBrightness * TWILIGHT_GLOW * skyReach);
 }
 
-// With only the weather's shift (no convective depth).
+// With only the weather's shift (no convective depth, no shelf).
 vec3 cloudRadianceShifted(Field f, vec3 p, float density, vec3 V, float shading,
                           float farCoverage, vec3 sunlight, vec3 skylight,
                           vec3 twilight, float shift) {
     return cloudRadianceAt(f, p, density, V, shading, farCoverage, sunlight,
-                           skylight, twilight, vec2(shift, 0.0));
+                           skylight, twilight, vec3(shift, 0.0, -NO_CLOUD_LIFT));
 }
 
 vec3 cloudRadiance(Field f, vec3 p, float density, vec3 V, float shading,
