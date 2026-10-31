@@ -206,7 +206,7 @@ _OCTAVE_SCHEDULES = ((4, 3, 3, 2), (4, 4, 3, 3), (4, 4, 4, 3), (4,))
 @dataclass(frozen=True)
 class CloudSettings(QualitySettings):
     """What the clouds cost (:mod:`world_builder.quality`), for a planet's
-    (:class:`sphere.SphericalClouds`) and the flat field
+    (:class:`sphere.CloudVolume`) and the flat field
     (:class:`field.CloudField`); the fields marked "planet clouds" do nothing
     on the flat field.
 

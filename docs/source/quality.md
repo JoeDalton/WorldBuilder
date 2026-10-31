@@ -111,8 +111,8 @@ terrain's GPU chunk cap is never above its RAM one.
 - **The saved format has a version** (`FORMAT_VERSION`, now 1). Data
   without one reads as version 1.
 - **Objects find their own section** (`SETTINGS_TYPE` on each class:
-  `Terrain`, `Atmospheres`, `Sky`, `SphericalClouds`, `CloudField` /
-  `Clouds`, `Ocean`), so `apply()` and `settings_for()` work for any mix of
+  `Terrain`, `Atmospheres`, `Sky`, `PlanetClouds` (and its layers,
+  `CloudVolume` and `CloudSheet`), `CloudField` / `Clouds`, `Ocean`), so `apply()` and `settings_for()` work for any mix of
   them.
 
 What the schema does not say:

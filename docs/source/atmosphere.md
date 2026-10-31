@@ -111,7 +111,7 @@ The demo uses them each frame for:
   in daylight) by the light on the sea under the camera over the daylight's,
   so the sea is dark by night;
 - **an ambient scale** (F9 / F10) applied to the terrain's sky light, the
-  clouds' (`SphericalClouds.set_sky_light`), the sea's and Panda3D's.
+  clouds' (`PlanetClouds.set_sky_light`), the sea's and Panda3D's.
 
 ### Left out: true multiple scattering (the Bruneton option)
 
@@ -179,6 +179,20 @@ Its shader shows:
 
 ## Planet clouds
 
+A planet's clouds are one part, `clouds.planet.PlanetClouds` (`CloudLook` in
+a `World`), with two layers:
+
+- the **volume** (`clouds.sphere.CloudVolume`): the low clouds, cumulus by
+  default (any cloud type), as billboard shells near the camera and a deck
+  beyond. Everything below up to "Clouds at the horizon" is about it;
+- the **sheet** (`clouds.cirrus.CloudSheet`), optional: high cirrus above
+  them ([Cirrus](#cirrus)).
+
+The part drives both as one (sun, sky light, settings, pixel angle, half
+resolution, update, removal) and holds the rule that only the pair can
+check: the sheet's base must clear the volume's slab (its draw order depends
+on it) and its top stay inside the air (`planet.check_layers`).
+
 ### One density field
 
 The billboard field's density (`clouds.noise`) is moved onto the planet:
@@ -240,7 +254,7 @@ layout). Each shell costs about half the previous.
 
 Per pixel, the cost depends on the settings (`CloudSettings`, its presets
 by `QualityLevel`: LOW, MID, HIGH, ULTRA; the demo's F4 cycles them; ULTRA, above HIGH, keeps all four octaves on every shell;
-`SphericalClouds.set_settings` re-plans the shells and regenerates the
+`CloudVolume.set_settings` re-plans the shells and regenerates the
 tiles on the same worker channel), which sets the billboard sizes, the sun
 march's steps, and:
 
@@ -393,7 +407,8 @@ few samples of that air per vertex (as orange with 8 as with 4).
 ### Cirrus
 
 [`clouds/cirrus.py`](../../src/world_builder/clouds/cirrus.py) puts high
-cirrus over the cumulus (`CirrusSheet`, `BodyLook.cirrus` in a `World`): thin
+cirrus over the cumulus (`CloudSheet`, `PlanetClouds(cirrus=CirrusSpec())`,
+or `CloudLook(cirrus=...)` in a `World`): thin
 ice cloud, 8-9 km up by default, fibrous and streaming along the upper wind.
 
 **A surface, not billboards.** Cirrus is a kilometre deep at most and tens of

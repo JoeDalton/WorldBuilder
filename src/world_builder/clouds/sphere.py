@@ -1,5 +1,7 @@
 """
-Clouds over a whole planet, from inside the deck to orbit, with one pattern.
+A planet's low clouds as a volume (:class:`CloudVolume`), from inside the deck
+to orbit, with one pattern. :class:`planet.PlanetClouds` puts it under the
+cirrus sheet (:mod:`cirrus`).
 
 The density field is the billboard field's (:mod:`noise`), moved onto the
 planet: the slab is a height above the sea-level sphere, the tileable noise is
@@ -560,16 +562,19 @@ def _sort_billboards(tile: _Tile, offset: np.ndarray) -> None:
     memoryview(tile.tris.modify_vertices()).cast("B")[:] = index.tobytes()
 
 
-class SphericalClouds:
-    """One planet's clouds: billboard shells near the camera, the deck beyond.
+class CloudVolume:
+    """A planet's low clouds as a volume (any of the cloud types): billboard
+    shells near the camera, the deck beyond. The volume layer of
+    :class:`planet.PlanetClouds`, which a game builds instead; a
+    :class:`cirrus.CloudSheet` may lie above it.
 
     Usage::
 
-        clouds = SphericalClouds(render, planet_radius, executor,
-                                 atmospheres=atmospheres, atmosphere=0)
-        clouds.set_sun(sun_direction)
+        volume = CloudVolume(render, planet_radius, executor,
+                             atmospheres=atmospheres, atmosphere=0)
+        volume.set_sun(sun_direction)
         # every frame, camera in the world frame (float64):
-        clouds.update(camera_world)
+        volume.update(camera_world)
 
     :ivar root: the node everything hangs under (hide it to hide the clouds)
     :ivar deck: the far deck's node

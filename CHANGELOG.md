@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - High cirrus over a planet's clouds (`world_builder.clouds.cirrus`,
   docs/source/atmosphere.md#cirrus).
-  - `CirrusSheet`, or `BodyLook.cirrus` (`CirrusLook`) in a `World`: one
-    sheet at 8-9 km. Its fibres follow the upper wind's stream function (the
+  - `CloudSheet`, built by `PlanetClouds(cirrus=CirrusSpec())`, or
+    `CloudLook(cirrus=...)` in a `World`: one sheet at 8-9 km. Its fibres follow the upper wind's stream function (the
     jet streams, bent around the weather's cyclones), and its cover comes
     from a map of its own (anvils over the wet tropics, streaks along the
     jets, a shield ahead of each low), calibrated so that the share of sky
@@ -20,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - It draws behind every cumulus where sight lines leave its sphere and in
     front of them where they enter it, so the order holds from the ground to
     orbit and in the sea's mirror, with no sorting.
-  - `World` refuses cirrus that is not above the clouds or not inside the
-    air.
+  - `PlanetClouds` (and `World`, before building anything) refuses cirrus
+    that is not above the clouds or not inside the air.
   - `weather.py` gains the upper wind (`WeatherSpec.jets`, `upper_wind`,
     `stream_table`, `stream_vortices`) and the cirrus cover
     (`cirrus_cover_map`).
@@ -127,6 +127,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A planet's clouds are one part, `world_builder.clouds.planet.PlanetClouds`,
+  with two layers named by how they are drawn:
+  `clouds.sphere.SphericalClouds` is now `CloudVolume` (the low clouds:
+  billboard shells and the far deck), and the cirrus is
+  `clouds.cirrus.CloudSheet`. `PlanetClouds` takes `SphericalClouds`'
+  arguments plus `cirrus`, drives both layers (sun, sky light, settings,
+  pixel angle, half resolution, update, removal) and checks the cirrus
+  against the low clouds and the air (`planet.check_layers`). In a `World`,
+  `Body.clouds` is a `PlanetClouds` (the volume: `body.clouds.volume`) and
+  the cirrus is `CloudLook.cirrus`.
 - More realistic planet relief (#9). The same seed now gives a different
   planet, and the demo level moved to keep a coast to its north and a range
   to its south:

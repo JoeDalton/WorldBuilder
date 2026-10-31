@@ -36,10 +36,10 @@ median frames and in the slowest 5 %:
 | Panda's `renderFrame` (cull 1.5, draw 3.0) | 4.0 ms | 6.9 ms |
 | `Terrain._select` | 0.7 ms | 1.6 ms |
 | The demo's altimeter (`TerrainDemo._fly`) | 0.8 ms | 1.4 ms |
-| `SphericalClouds._resort` | 0.7 ms | 1.1 ms |
+| `CloudVolume._resort` | 0.7 ms | 1.1 ms |
 | `Terrain._upload` | 0.7 ms | 1.0 ms |
 | `ChunkExecutor.collect` | 0.1 ms | 0.6 ms |
-| `SphericalClouds._upload` | 0.05 ms | 0.35 ms |
+| `CloudVolume._upload` | 0.05 ms | 0.35 ms |
 | `Sea.update` | 0.2 ms | 0.3 ms |
 | Panda's state GC (`transform-cache false`) | 0.02 ms | 0.02 ms |
 
@@ -233,7 +233,7 @@ What it costs, by construction:
   Fragments under the threshold still pay for the noise.
 
 To measure, each as the median frame with the cirrus shown minus hidden
-(the demo's C key, or `CirrusSheet.root.hide()`), at 1600×900:
+(the demo's C key, or `PlanetClouds.sheet.root.hide()`), at 1600×900:
 
 | Scene | `terrain_shots.py` pose | What it stresses |
 |---|---|---|

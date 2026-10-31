@@ -31,7 +31,7 @@ times a few frames, then saves a screenshot::
                      clouds, ocean
     --no-clouds      no clouds at all
     --workers        generation processes (the terrain's setting)
-    --cloud-debug    SphericalClouds.set_debug bits (cloud.frag's
+    --cloud-debug    PlanetClouds.set_debug bits (cloud.frag's
                      uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
                      octaves at most, 8 flat colour; default 0)
     --frames         frames timed once settled (default 60)
@@ -237,7 +237,7 @@ def main() -> None:
     )
     add_world_arguments(parser)
     parser.add_argument(
-        "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"
+        "--cloud-debug", type=int, default=0, help="PlanetClouds.set_debug bits"
     )
     parser.add_argument(
         "--frames", type=int, default=60, help="frames timed once settled"

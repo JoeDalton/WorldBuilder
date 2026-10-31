@@ -591,7 +591,7 @@ demo's first frame came 1.4 s later and its ground 3.6 s later.
   instead of rebuilt by each one (0.7 s each). Its absence had stalled the
   start of the fill: 27 chunks in the first 2.5 s, now ~110.
 - **The deck light in the pool too**; the clouds finish their set-up in
-  `update()` once both are in (`SphericalClouds._finish`).
+  `update()` once both are in (`CloudVolume._finish`).
 - **The glow in the pool** (`Starfield.prefetch_glow`) while the terrains are
   built; the placeholder textures' noise on half spectra with cached filters
   (817 → 596 ms, the same bytes); the atlas's mean alpha with numpy.

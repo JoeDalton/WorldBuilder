@@ -31,7 +31,7 @@ reporting frame times and where the main thread spends them::
     --<part>-quality one part's preset over it: terrain, atmosphere, sky,
                      clouds, ocean
     --no-clouds      no clouds at all
-    --cloud-debug    SphericalClouds.set_debug bits (default 0)
+    --cloud-debug    PlanetClouds.set_debug bits (default 0)
 
 Flights (boosted, along the coast of the demo level from its reference
 point, heading west):
@@ -87,10 +87,10 @@ TRACED = (
     ("world_builder.terrain.terrain", "Terrain", "_evict_store"),
     ("world_builder.terrain.terrain", "Terrain", "_evict_nodes"),
     ("world_builder.terrain.workers", "ChunkExecutor", "collect"),
-    ("world_builder.clouds.sphere", "SphericalClouds", "_select"),
-    ("world_builder.clouds.sphere", "SphericalClouds", "_upload"),
-    ("world_builder.clouds.sphere", "SphericalClouds", "_resort"),
-    ("world_builder.clouds.sphere", "SphericalClouds", "_rebase"),
+    ("world_builder.clouds.sphere", "CloudVolume", "_select"),
+    ("world_builder.clouds.sphere", "CloudVolume", "_upload"),
+    ("world_builder.clouds.sphere", "CloudVolume", "_resort"),
+    ("world_builder.clouds.sphere", "CloudVolume", "_rebase"),
     ("world_builder.ocean.sea", "Sea", "update"),
     ("demo_terrain", "TerrainDemo", "_fly"),
     ("direct.showbase.ShowBase", "ShowBase", "_ShowBase__garbageCollectStates"),
@@ -336,7 +336,7 @@ def main() -> None:
     )
     add_world_arguments(parser)
     parser.add_argument(
-        "--cloud-debug", type=int, default=0, help="SphericalClouds.set_debug bits"
+        "--cloud-debug", type=int, default=0, help="PlanetClouds.set_debug bits"
     )
     args = parser.parse_args()
     window_config("Flight benchmark", args.size, args.offscreen, vsync=False)

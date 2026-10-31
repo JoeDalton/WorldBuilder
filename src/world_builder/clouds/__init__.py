@@ -8,15 +8,16 @@ In-scene billboard clouds.
     field.py   — the drawable flat field (CloudField: geometry, sorting, wind,
                  live set_sun / set_optics / set_coverage) and the game wrapper
                  (Clouds).
-    sphere.py  — a whole planet's clouds (SphericalClouds: billboard shells
-                 generated per cube-sphere tile in the worker pool, a deck
-                 beyond); not re-exported here.
+    planet.py  — a whole planet's clouds (PlanetClouds): the low clouds'
+                 volume and the cirrus sheet above it, as one part; not
+                 re-exported here, nor are the two layers:
+    sphere.py  — the volume (CloudVolume: billboard shells generated per
+                 cube-sphere tile in the worker pool, a deck beyond);
+    cirrus.py  — the sheet (CloudSheet: high cirrus, fibres along the upper
+                 wind, drawn behind and in front of the volume).
     weather.py — the planet's weather: a cube map of target coverage
                  (WeatherSpec) and the fbm shift that gives it; the upper
                  wind and the cirrus's cover.
-    cirrus.py  — a planet's high cirrus (CirrusSheet: one sheet, fibres along
-                 the upper wind, drawn behind and in front of the other
-                 clouds); not re-exported here.
 
 A billboard is a sample of a volume, not a sprite, and a cloud type is one density
 field over a slab of sky whose features are the clouds. Design notes:

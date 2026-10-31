@@ -16,8 +16,8 @@ from panda3d.core import DepthWriteAttrib
 from world_builder.clouds.cirrus import (
     BEHIND_DRAW_ORDER,
     FRONT_BIN,
-    CirrusSheet,
     CirrusSpec,
+    CloudSheet,
     along,
     calibrate,
     cirrus_density,
@@ -220,7 +220,7 @@ def test_the_cirrus_cover_follows_the_jets_and_the_cyclones(weather):
 
 def test_the_sheet_draws_behind_and_in_front_of_the_clouds(showbase, weather):
     executor = ChunkExecutor(backend="inline")
-    cirrus = CirrusSheet(showbase.render, R, executor, planet=PLANETS["earthlike"])
+    cirrus = CloudSheet(showbase.render, R, executor, planet=PLANETS["earthlike"])
     try:
         behind, front = cirrus.behind, cirrus.front
         assert behind.get_bin_name() == SKY_BIN

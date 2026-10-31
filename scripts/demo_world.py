@@ -5,8 +5,8 @@ Flies the same small planetary system as scripts/demo_terrain.py (the demo
 level's 600 km planet with its air, clouds and sea, an airless moon
 10,000 km away, the star field), with the same controls, keys, HUD and
 options. The difference is the assembly: here the world's look is a handful
-of looks (:class:`BodyLook`, :class:`CloudLook`, :class:`CirrusLook`,
-:class:`OceanLook`, :class:`SunLook`, :class:`SkyLook`), and each frame is::
+of looks (:class:`BodyLook`, :class:`CloudLook`, :class:`OceanLook`,
+:class:`SunLook`, :class:`SkyLook`), and each frame is::
 
     self.depth.update(*world.depth_ranges(cam_world))
     world.update(cam_world, far=self.depth.far)
@@ -68,13 +68,13 @@ from demo_terrain import (  # noqa: E402
 )
 
 from world_builder.atmosphere import AtmosphereParams  # noqa: E402
+from world_builder.clouds.cirrus import CirrusSpec  # noqa: E402
 from world_builder.depth import SplitDepthCameras  # noqa: E402
 from world_builder.settings import WorldSettings  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL, load_level  # noqa: E402
 from world_builder.terrain.planet import PRESETS  # noqa: E402
 from world_builder.world import (  # noqa: E402
     BodyLook,
-    CirrusLook,
     CloudLook,
     OceanLook,
     SkyLook,
@@ -93,11 +93,12 @@ def planet_look(spec, clouds: bool) -> BodyLook:
         spec,
         atmosphere=AtmosphereParams(),
         clouds=(
-            CloudLook(altitude=CLOUD_BASE, sky_strength=CLOUD_SKY_LIGHT)
+            CloudLook(
+                altitude=CLOUD_BASE, cirrus=CirrusSpec(), sky_strength=CLOUD_SKY_LIGHT
+            )
             if clouds
             else None
         ),
-        cirrus=CirrusLook() if clouds else None,
         ocean=OceanLook(
             # The game's 20 m swell, in deep water: it dies out over the
             # shallows, so it does not drown the beaches.
@@ -189,7 +190,6 @@ class WorldDemo(TerrainDemo):
         self.sky = self.scene.sky
         self.terrain = planet.terrain
         self.clouds = planet.clouds
-        self.cirrus = planet.cirrus
         self.ocean = planet.ocean
         self.bodies = [
             Body(b.name, b.terrain, atmosphere=b.atmosphere is not None)
@@ -200,8 +200,6 @@ class WorldDemo(TerrainDemo):
         self.max_range = MAX_RANGE_FACTOR * (moon_distance or 10.0 * spec.radius)
         if self.clouds is not None:
             self.clouds.set_debug(cloud_debug)
-        if self.cirrus is not None:
-            self.cirrus.set_debug(cloud_debug)
         self.ocean.set_debug_mode(ocean_debug)
         # After the world, whose sea copied the lens.
         self.depth = SplitDepthCameras(self, near=1.0)

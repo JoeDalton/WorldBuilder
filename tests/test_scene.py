@@ -16,7 +16,7 @@ from panda3d.core import LVecBase3f, NodePath, Texture
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
 from world_builder.clouds import sphere
 from world_builder.clouds.cloud import CloudSettings
-from world_builder.clouds.sphere import SphericalClouds
+from world_builder.clouds.sphere import CloudVolume
 from world_builder.depth import (
     FAR_CAMERA_MASK,
     NEAR_CAMERA_MASK,
@@ -624,7 +624,7 @@ def test_terrain_frames(terrain):
 @pytest.fixture
 def clouds(showbase):
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    made = SphericalClouds(
+    made = CloudVolume(
         showbase.render,
         R,
         executor,

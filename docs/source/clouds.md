@@ -209,8 +209,16 @@ shadow each other, and why their silhouettes are exactly as crisp as the field.
 
 ## Planet clouds
 
+A planet's clouds are one part,
+[`PlanetClouds`](../../src/world_builder/clouds/planet.py), drawn as two
+layers by two techniques: a **volume** (`CloudVolume`, the low clouds) and,
+optionally, a **sheet** above it (`CloudSheet`, high cirrus). They share the
+weather, the sun, the settings and the camera, and the part checks the one
+rule the pair must keep: the sheet lies above the volume's slab and inside
+the air.
+
 [`sphere.py`](../../src/world_builder/clouds/sphere.py) carries the same field
-over a whole planet (`SphericalClouds`): the slab becomes a height above the
+over a whole planet (`CloudVolume`): the slab becomes a height above the
 sea-level sphere, billboard LOD shells are generated per cube-sphere tile in
 the terrain's worker pool, and a deck sphere takes over beyond the last shell,
 up to orbit. [`weather.py`](../../src/world_builder/clouds/weather.py) builds
@@ -219,9 +227,8 @@ into the fbm shift that gives it exactly (`shift_table`). The same shaders draw
 it, with `uSpherical` set (`field.flat_mode_inputs` switches that mode off for
 the flat field); in that mode their colour goes through the sky's tonemap
 instead of the flat field's knee (Lighting, above). The design is described in
-[Atmosphere, sky and planet clouds](atmosphere.md#planet-clouds). High cirrus
-above them is a sheet of its own
-([`cirrus.py`](../../src/world_builder/clouds/cirrus.py), `CirrusSheet`): see
+[Atmosphere, sky and planet clouds](atmosphere.md#planet-clouds). The cirrus
+sheet ([`cirrus.py`](../../src/world_builder/clouds/cirrus.py)): see
 [Cirrus](atmosphere.md#cirrus).
 
 ## Testing and the demo

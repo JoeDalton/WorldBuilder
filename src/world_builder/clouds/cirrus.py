@@ -430,17 +430,19 @@ def _stream_texture(table: np.ndarray) -> Texture:
     return tex
 
 
-class CirrusSheet:
-    """One planet's cirrus: a sheet drawn behind and in front of its other
-    clouds (see the module).
+class CloudSheet:
+    """A planet's high cirrus as a surface: drawn behind and in front of the
+    clouds below it (see the module). The sheet layer of
+    :class:`planet.PlanetClouds`, which a game builds instead, above a
+    :class:`sphere.CloudVolume`.
 
     Usage::
 
-        cirrus = CirrusSheet(render, planet_radius, executor,
-                             atmospheres=atmospheres, atmosphere=0)
-        cirrus.set_sun(sun_direction)
+        sheet = CloudSheet(render, planet_radius, executor,
+                           atmospheres=atmospheres, atmosphere=0)
+        sheet.set_sun(sun_direction)
         # every frame, camera in the world frame (float64):
-        cirrus.update(camera_world)
+        sheet.update(camera_world)
 
     :ivar root: the node both of its nodes hang under (hide it to hide it)
     :ivar behind: the node drawing where sight lines leave the sheet
@@ -705,4 +707,4 @@ class CirrusSheet:
         self.root.unstash()
 
     def __repr__(self) -> str:
-        return f"CirrusSheet(radius={self.radius:g}, base={self.spec.base:g})"
+        return f"CloudSheet(radius={self.radius:g}, base={self.spec.base:g})"
