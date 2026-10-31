@@ -253,8 +253,15 @@ tropopause well past its tower: a smooth lens, thick by the tower and thin
 at its rim, unlike the cauliflower column under it. The shelf is drawn
 wherever its own map says, over whatever columns lie below:
 
-- **its spread**, a fourth map (`genus_planes`): 1 to a radius of a
-  cumulonimbus, 0 by 3 (36 km across for a 6 km tower);
+- **its spread**, a fourth map (`genus_planes`, `genera.anvil_spread`): 1
+  to a radius of a cumulonimbus, 0 by 3 (36 km across for a 6 km tower) in
+  calm air;
+- **on the upper wind**: the cirrus's (`genera.upper_wind_at`: the jets,
+  swirled by the weather systems; it blows along the stream function's
+  contours), read at the tower. In the jet's fastest the reach is 3.5 times
+  longer downwind (63 km for a 6 km tower), half as long upwind (a short,
+  sharp overhang) and a quarter shorter across: a plume, thinning
+  downwind as its spread falls. `GeneraSpec.wind` sets one wind for all;
 - **a lens**: its underside (`noise.shelf_underside`) is at 60 % of the
   slab (7.2 km) at spread 1 and rises to the slab's top as the spread falls.
   Over it the threshold, a depth-1 column's (`noise.shelf_lift`), falls by
@@ -291,8 +298,8 @@ and thin as the cube (`CloudSettings.interior_growth`,
 `sphere.interior_levels`): the same overlap, so the same extinction, for
 14-16 % less near a cumulonimbus and softer detail inside it.
 
-**Not yet.** The shelf is round, around its tower (a real anvil streams
-downwind). Its underside is lit as the rest of the cloud: no darker base
+**Not yet.** The plume is straight: the wind is read at the tower, not
+along the plume. Its underside is lit as the rest of the cloud: no darker base
 for deep clouds. Close up from below, its billboards' round sprites show
 faintly, as the stratus's do. The tower's stem, at coverage 1, has
 straight sides. From the ground, the air hazes out a cumulonimbus's lower half at

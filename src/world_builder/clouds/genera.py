@@ -16,7 +16,8 @@ shells' bins as one cloud would:
   into towers kilometres wide (``cell_weight``), the threshold falls under
   the cap of the deepest into an anvil (``anvil``), and their billboards grow
   with it (``CloudSpec.deep_radius``). The anvil spreads past its tower as
-  a smooth lens, over a fourth map (its spread: :func:`noise.shelf_lift`).
+  a smooth lens, over a fourth map (its spread: :func:`noise.shelf_lift`),
+  streaming downwind on the upper wind (:func:`anvil_spread`).
 
 The maps (:func:`genus_planes`, cube maps as the weather's) are the
 weather's own coverage for the fair-weather cumulus everywhere, plus, around
@@ -53,9 +54,12 @@ from world_builder.clouds.weather import (
     coverage_to_shift,
     sample_cube,
     shift_table,
+    stream_function,
+    stream_table,
+    stream_vortices,
 )
 from world_builder.sky.starfield import cube_directions
-from world_builder.terrain.chart import TangentFrame
+from world_builder.terrain.chart import TangentFrame, latlon
 
 #: The genus maps' cube size: twice the weather's (1.85 km texels on a
 #: 600 km planet), for features a few kilometres across.
@@ -67,8 +71,14 @@ DEPTHS = (0.0, 0.25, 0.5, 0.75, 1.0)
 #: the congestus ring.
 _CB_RING_COVERAGE = 0.45
 #: A cumulonimbus's anvil shelf, in radii of it: its spread 1 out to the
-#: first, 0 by the second (its underside rising, a lens).
+#: first, 0 by the second (its underside rising, a lens), with no wind.
 _ANVIL_REACH = (1.0, 3.0)
+#: The anvil on the upper wind (:func:`anvil_spread`), at the jets' fastest
+#: (1): its reach downwind this many times longer, upwind and across this
+#: many times shorter (it streams downwind, its upwind edge sharp).
+ANVIL_DOWNWIND = 2.5
+ANVIL_UPWIND = 0.5
+ANVIL_ACROSS = 0.25
 #: The families.
 CONVECTIVE = "convective"
 STRATIFORM = "stratiform"
@@ -119,12 +129,16 @@ class GeneraSpec:
     :ivar features: the features
     :ivar stratus_altitude: the stratiform slab's base, metres (its top must
         stay under the convective clouds' base)
+    :ivar wind: the upper wind blowing the anvils, (east, north), the jets'
+        fastest 1, the same for all; None = the weather's at each
+        cumulonimbus (:func:`upper_wind_at`)
     """
 
     weather: WeatherSpec
     focus: tuple[float, float] = (0.0, 0.0)
     features: tuple[Feature, ...] = field(default=DEFAULT_FEATURES)
     stratus_altitude: float = 900.0
+    wind: tuple[float, float] | None = None
 
 
 def _feature_dirs(spec: GeneraSpec) -> list[tuple[Feature, np.ndarray, float]]:
@@ -140,6 +154,76 @@ def _feature_dirs(spec: GeneraSpec) -> list[tuple[Feature, np.ndarray, float]]:
         centre = math.cos(offset) * frame.up + math.sin(offset) * heading
         out.append((f, centre, f.radius / radius))
     return out
+
+
+#: The step the upper wind's stream function is differenced over, metres.
+_WIND_STEP = 1000.0
+
+
+def _frame(centre: np.ndarray) -> TangentFrame:
+    lat, lon = latlon(np.asarray(centre)[None])
+    return TangentFrame.at(float(lat[0]), float(lon[0]))
+
+
+def upper_wind_at(spec: WeatherSpec, centre: np.ndarray) -> np.ndarray:
+    """The upper wind at a direction: the cirrus's (the jets, swirled by
+    the weather systems: :func:`weather.stream_function`), which blows
+    along its stream function's contours, ``up x grad psi``.
+
+    :param centre: (3,) unit direction
+    :returns: (east, north), the jets' fastest 1
+    """
+    frame = _frame(centre)
+    step = _WIND_STEP / spec.planet.radius
+    probes = np.array(
+        [
+            centre + step * frame.east,
+            centre - step * frame.east,
+            centre + step * frame.north,
+            centre - step * frame.north,
+        ]
+    )
+    probes /= np.linalg.norm(probes, axis=1, keepdims=True)
+    psi = stream_function(stream_table(spec), stream_vortices(spec), probes)
+    grad_east = (psi[0] - psi[1]) / (2.0 * _WIND_STEP)
+    grad_north = (psi[2] - psi[3]) / (2.0 * _WIND_STEP)
+    return np.array([-grad_north, grad_east])
+
+
+def anvil_spread(
+    dirs: np.ndarray, centre: np.ndarray, angle: float, wind: np.ndarray
+) -> np.ndarray:
+    """A cumulonimbus's anvil spread at *dirs*: 1 to :data:`_ANVIL_REACH`'s
+    first radius, 0 by its second, the reach stretched downwind and
+    shortened upwind and across on the upper wind (:data:`ANVIL_DOWNWIND`,
+    ``ANVIL_UPWIND``, ``ANVIL_ACROSS`` at the jets' fastest): the anvil
+    streams downwind, as a plume.
+
+    :param dirs: (N, 3) unit directions
+    :param centre: (3,) the tower's centre
+    :param angle: its radius, radians
+    :param wind: (east, north) at it, the jets' fastest 1
+    """
+    frame = _frame(centre)
+    speed = float(np.hypot(*wind))
+    along = frame.east
+    if speed > 1e-9:
+        along = (wind[0] * frame.east + wind[1] * frame.north) / speed
+    across = np.cross(centre, along)
+    # Polar coordinates around the tower: its distance (radians, in its
+    # radii), along the great circle's heading.
+    cosine = np.clip(dirs @ centre, -1.0, 1.0)
+    tangent = dirs - cosine[:, None] * centre
+    norm = np.maximum(np.linalg.norm(tangent, axis=1), 1e-12)
+    distance = np.arccos(cosine) / angle
+    x = distance * (tangent @ along) / norm
+    y = distance * (tangent @ across) / norm
+    speed = min(speed, 1.0)
+    x = np.where(
+        x > 0.0, x / (1.0 + ANVIL_DOWNWIND * speed), x / (1.0 - ANVIL_UPWIND * speed)
+    )
+    y = y / (1.0 - ANVIL_ACROSS * speed)
+    return 1.0 - _smoothstep(*_ANVIL_REACH, np.hypot(x, y))
 
 
 @functools.cache
@@ -170,7 +254,12 @@ def genus_planes(spec: GeneraSpec, size: int = GENUS_SIZE) -> np.ndarray:
             ring = 1.0 - _smoothstep(1.6, 2.2, distance)
             depth = np.maximum(depth, np.maximum(deep, 0.5 * ring))
             cover = np.maximum(f.coverage * core, _CB_RING_COVERAGE * ring)
-            shelf = np.maximum(shelf, 1.0 - _smoothstep(*_ANVIL_REACH, distance))
+            wind = (
+                np.asarray(spec.wind, dtype=np.float64)
+                if spec.wind is not None
+                else upper_wind_at(spec.weather, centre)
+            )
+            shelf = np.maximum(shelf, anvil_spread(dirs, centre, angle, wind))
         else:
             depth = np.maximum(depth, 0.5 * core)
             cover = f.coverage * core

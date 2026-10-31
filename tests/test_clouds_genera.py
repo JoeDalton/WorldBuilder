@@ -335,12 +335,8 @@ def test_the_features_are_where_they_are_placed(genera):
         if feature.genus == "cumulonimbus":
             assert depth == pytest.approx(1.0, abs=0.05)
             assert convective >= feature.coverage - 0.05
-            # Its anvil's shelf, spread past the tower, gone by 3 radii
+            # Its anvil's shelf, spread past the tower
             assert shelf == pytest.approx(1.0)
-            middle = _sample(genera, _at(genera, feature, east=2.0 * feature.radius))
-            assert middle[3] == pytest.approx(0.5, abs=0.05)
-            beyond = _at(genera, feature, north=-3.3 * feature.radius)
-            assert _sample(genera, beyond)[3] == 0.0
             # Its anvil's overhang, deep, then the congestus around it
             # (past the core's edge the depth stays high, the coverage
             # falls: the map's texels are 3.7 km, a radius or less)
@@ -353,6 +349,48 @@ def test_the_features_are_where_they_are_placed(genera):
             assert depth == pytest.approx(0.5, abs=0.05)
         else:
             assert stratiform == pytest.approx(feature.coverage, abs=0.05)
+
+
+def test_in_calm_air_the_anvil_is_round(genera):
+    calm = replace(genera, wind=(0.0, 0.0))
+    for feature in calm.features:
+        if feature.genus != "cumulonimbus":
+            continue
+        for east, north in ((2.0, 0.0), (0.0, -2.0), (-2.0, 0.0)):
+            at = _at(calm, feature, east * feature.radius, north * feature.radius)
+            assert _sample(calm, at)[3] == pytest.approx(0.5, abs=0.05)
+        beyond = _at(calm, feature, north=-3.3 * feature.radius)
+        assert _sample(calm, beyond)[3] == 0.0
+
+
+def test_the_anvil_streams_downwind(genera):
+    from world_builder.clouds.genera import ANVIL_DOWNWIND
+
+    windy = replace(genera, wind=(0.0, 1.0))  # the fastest jet, northward
+    cb = next(f for f in windy.features if f.genus == "cumulonimbus")
+    reach = 3.0 * (1.0 + ANVIL_DOWNWIND)
+
+    def spread(east, north):
+        return _sample(windy, _at(windy, cb, east * cb.radius, north * cb.radius))[3]
+
+    # Far downwind, not upwind nor across at the calm reach's half
+    assert spread(0.0, 0.8 * reach) > 0.0
+    assert spread(0.0, 0.5 * reach) > 0.5
+    assert spread(0.0, -2.0) < 0.05
+    assert spread(2.0, 0.0) < spread(0.0, 2.0)
+    assert spread(0.0, 1.05 * reach) == 0.0
+
+
+def test_the_upper_wind_is_the_jets():
+    from world_builder.clouds.genera import upper_wind_at
+    from world_builder.clouds.weather import upper_wind
+
+    weather = replace(WeatherSpec(PLANETS["earthlike"]), jet_vortex=0.0)
+    for lat in (0.0, 20.0, 30.0):
+        wind = upper_wind_at(weather, TangentFrame.at(lat, 10.0).up)
+        expected = upper_wind(weather, np.array([lat]))[0]
+        assert wind[0] == pytest.approx(expected, abs=0.01)  # eastward
+        assert wind[1] == pytest.approx(0.0, abs=0.01)
 
 
 def test_away_from_the_features_it_is_the_weather(genera):

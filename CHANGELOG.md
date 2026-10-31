@@ -23,7 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The cumulonimbus's anvil spreads as a smooth lens to 3 radii of its
     tower (`noise.SHELF_BAND`, `shelf_lift`, `shelf_fbm`, `with_shelf`,
     `DensityField.shelf_shift`): a deep column's top over its own spread
-    map, two octaves only, its top fading in density.
+    map, two octaves only, its top fading in density. It streams downwind
+    on the cirrus's upper wind (`genera.anvil_spread`, `upper_wind_at`,
+    `GeneraSpec.wind`).
   - The weather cube may carry the depth (a third channel) and the anvil's
     spread (a fourth); the coverage's fbm shift is tabulated by depth.
   - Expensive near the big clouds (docs/source/performance.md §21, §22):
