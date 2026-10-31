@@ -965,50 +965,64 @@ compared.
 | Orbit (deck only) | 7.0 ms | 8.4 ms | 6.2 ms | 5.6 ms |
 | Sunset | 4.1 ms | 6.7 ms | 8.1 ms | 6.1 ms |
 
-**Both renderers, one session:**
+**Both renderers, one session** (the march without longer steps in clear
+air, see below):
 
-| Pose | Billboards HIGH | March HIGH | March MID | March LOW |
-|---|---|---|---|---|
-| Below | 6.8 ms | 10.9 ms | 7.2 ms | 3.5 ms |
-| Start | 10.5 ms | 9.9 ms | 8.6 ms | 4.8 ms |
-| Inside the slab | 19.6 ms | 14.0 ms | 12.4 ms | 5.7 ms |
-| Above | 11.4 ms | 9.2 ms | 8.3 ms | 4.7 ms |
-| 20 km up | 5.2 ms | 7.4 ms | 8.0 ms | 4.2 ms |
-| Orbit | 8.1 ms | 6.5 ms | 6.7 ms | 5.6 ms |
-| Sunset | 11.4 ms | 8.6 ms | 8.4 ms | 5.0 ms |
-| A model in a dense cloud | 41.8 ms | 17.8 ms | 13.7 ms | 6.2 ms |
+| Pose | Billboards HIGH | March HIGH |
+|---|---|---|
+| Below | 6.6 ms | 9.3 ms |
+| Start | 6.2 ms | 13.2 ms |
+| Inside the slab | 17.0 ms | 16.7 ms |
+| Above | 9.0 ms | 11.4 ms |
+| 20 km up | 2.6 ms | 4.7 ms |
+| Orbit | 5.4 ms | 4.4 ms |
+| Sunset | 8.0 ms | 8.4 ms |
+| A model in a dense cloud | 43.4 ms | 17.3 ms |
 
-Over open sky the march costs about what the billboards do: a little more
-looking at the horizon from low (its rays cross a hundred kilometres of
-slab) and from 20 km (every pixel holds cloud), less elsewhere. Inside the
-clouds it costs a third less, and in a dense cloud less than half. The
-billboards' cost grows with the cloud's volume on screen (their overdraw);
-the march's stops at the first opaque cloud. In the full world
-(`terrain_shots.py --cloud-renderer`, frames with the terrain, the sea and
-the moon) the two are within the noise, the march ahead inside the clouds
-(49.8 against 55.9 ms).
+Over open sky the march costs 1.3-2 times the billboards; inside the slab
+the same; in a dense cloud two-fifths. The billboards' cost grows with the
+cloud's volume on screen (their overdraw); the march's with the air its rays
+cross, cloud or not, until the first opaque cloud. Its rays take 33-47
+steps on average (debug view 16), many reaching the 64-step budget.
 
-Where its time goes (one-step marches and passes switched off, start and
-inside poses):
+Where its time goes (one-step marches and passes switched off):
 
 - **Fixed, ~3-4 ms**: per range, a depth pass of the scene, the march's
   per-pixel set-up (the ray, the slab's spheres, the air once per pixel),
-  the full-resolution resolve and the composite. Two-thirds of it is
-  full-resolution passes, which this GPU pays dearly.
+  the full-resolution resolve and the composite.
 - **The near range, ~1-2 ms** when the slab reaches into it; it resolves at
   the march's resolution (its clouds are close and soft), which roughly
   halved it.
-- **The steps**: the rest. Crossing clear air in up to four-times-longer
-  steps and reading the weather once per kilometre of ray took the frame at
-  the start pose from 15.7 to 10.8 ms, and inside the slab from 20.0 to
-  15.3 ms.
-- What stayed within the noise: a 2 × 2 neighbourhood for the resolve's
-  clamp instead of 3 × 3, a half-float distance instead of a 32-bit one, 4
-  air samples per pixel instead of 8, no sun march, no air.
+- **The steps**: the rest.
 
-The first temporal version doubled the cost (a full-resolution resolve per
-range, 32-bit distances). The phase-1 march (half resolution, no history)
-cost about as much as the final one but looked blurred.
+**Flicker, and what it cost to remove.** A first version crossed clear air
+in up to four-times-longer steps, and read the weather once per kilometre:
+the start pose's frame went from 15.7 to 10.8 ms. But a step longer than the
+finest features samples thin cloud by chance, which the per-frame jitter
+changes: thin cloud blinked and edges came out ragged. Measured as each
+pixel's brightness spread over 16 still frames (`cloud_bench.py` poses,
+8-bit steps, over the clouds' pixels; the billboards: 0):
+
+| | Mean | Worst 1 % | Cloud on screen |
+|---|---|---|---|
+| Longer steps in clear air | 2.7 | 17.7 | 15.7 % |
+| Without them | 1.0 | 5.4 | 19.4 % |
+| Without them, the jitter frozen too | 0.4 | 4.3 | 19.4 % |
+
+So the longer steps were also missing a fifth of the clouds' area. Two
+exact ways to skip clear air were tried and gave nothing: each sample's own
+margin under the threshold over the field's steepest change
+(`noise_slope`), and a ceiling of the fbm per 500 m cell from the texels
+each octave's filter can touch (`fbm_ceiling`). The fbm is narrow (99 % of
+it between 0.25 and 0.70), the threshold sits at 0.55, and the two fine
+octaves can each peak anywhere in a cell: the ceiling stayed above the
+threshold in all but 0.004 % of the cells, and the march proved 0 % of its
+steps clear. What is left of the flicker is the budget lengthening the
+steps of long rays, and the jitter.
+
+What stayed within the noise: a 2 × 2 neighbourhood for the resolve's
+clamp instead of 3 × 3, a half-float distance instead of a 32-bit one, 4
+air samples per pixel instead of 8, no sun march, no air.
 
 ## Not covered
 

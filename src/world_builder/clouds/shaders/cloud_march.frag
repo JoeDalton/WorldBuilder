@@ -49,11 +49,11 @@ uniform vec2  uViewSize;         // the view, pixels
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragDistance;
 
-// cloudDensityShifted's, its edges carved by billows (march.DETAIL_SCALE):
-// the threshold moves by the billowy noise about its mean, in units of its
+// The density, its edges carved by billows (march.DETAIL_SCALE): the
+// threshold moves by the billowy noise about its mean, in units of its
 // window, so a cloud's edge breaks into rounded lumps, its core stays, and
-// the coverage holds on average. Cloud only costs the noise twice over: clear
-// air is found first with the most the billows could add.
+// the coverage holds on average. Clear air is found first with the most the
+// billows could add: cloud alone costs the noise twice over.
 float marchDensity(Field f, vec3 p, float shift) {
     float window = (f.threshHi - f.threshLo) * uDetailErosion;
     float most = cloudDensityShifted(f, p, shift + window * uBillowMean);
@@ -69,8 +69,6 @@ float marchDensity(Field f, vec3 p, float shift) {
 const float OPAQUE = 0.01;
 // A cloudy column's alpha seen from afar: the deck's.
 const float FAR_ALPHA = 0.92;
-// Clear air's steps are up to this many times the planned ones.
-const float COARSE = 4.0;
 // The weather's shift is read once this far along the ray, metres.
 const float WEATHER_STRETCH = 1000.0;
 
@@ -190,12 +188,8 @@ void main() {
         vec2 seg = s == 0 ? seg0 : seg1;
         float a = seg.x;
         float least = 0.5 * (seg.y - seg.x);  // two samples a segment at least
-        // Clear air is crossed in longer steps (up to COARSE times), the
-        // cloud in the planned ones: a step that lands in cloud after a long
-        // one is taken again from its start.
-        float coarse = 1.0;
         while (a < seg.y && steps < uMarchSteps + 8 && transmittance > OPAQUE) {
-            float dt = min(min(max(dtMin, a * growth), least) * coarse, seg.y - a);
+            float dt = min(min(max(dtMin, a * growth), least), seg.y - a);
             float t = a + dt * jitter;
             steps++;
             int layer = layerAt(t);
@@ -223,16 +217,10 @@ void main() {
                            / (lf.extinction * lf.slabThickness);
                 density = mix(mean, density, detail);
             }
-            if (density <= 0.0) {
-                a += dt;
-                coarse = min(coarse * 2.0, COARSE);
-                continue;
-            }
-            if (coarse > 1.0) {
-                coarse = 1.0;  // back to the start of this step, finely
-                continue;
-            }
             a += dt;
+            if (density <= 0.0) {
+                continue;
+            }
             float alpha = 1.0 - exp2(-lf.extinction * density * dt);
             if (!lit) {
                 // The air's colouring of the light, once a pixel.
@@ -247,6 +235,12 @@ void main() {
             weightedDistance += weight * t;
             transmittance *= 1.0 - alpha;
         }
+    }
+    if ((uCloudDebug & 16) != 0) {
+        // The march's work: red its steps over the budget.
+        fragColor = vec4(float(steps) / float(uMarchSteps), 0.0, 0.0, 1.0);
+        fragDistance = vec4(0.001, 0.0, 0.0, 1.0);
+        return;
     }
     float alpha = transmittance <= OPAQUE ? 1.0 : 1.0 - transmittance;
     if (alpha < 1.0 / 512.0) {

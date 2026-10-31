@@ -21,7 +21,8 @@ uniform float planetRadius;      // sea-level radius
 // r = the target coverage, g = the fbm shift that gives it.
 uniform samplerCube weatherMap;
 // A/B switches for profiling (bits, 0 = normal): 1 no sun march, 2 no
-// atmosphere, 4 two octaves only, 8 flat colour after the density.
+// atmosphere, 4 two octaves only, 8 flat colour after the density, 16 (the
+// raymarch) its steps per pixel, red over the budget.
 uniform int   uCloudDebug;
 
 const int LAYER_VEC4S = 12;

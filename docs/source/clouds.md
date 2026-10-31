@@ -200,13 +200,20 @@ cloud). Here each pixel steps along its own ray:
   near the camera, which leaves a clear bubble).
 - **In steps** of `MIN_STEP_FEATURE` of the finest feature near the camera
   (50 m for cumulus), `STEP_GROWTH` of the distance farther, all lengthened
-  alike when a ray needs more than `CloudSettings.march_steps`. Clear air
-  is crossed in up to four-times-longer steps, and a step that lands in
-  cloud is taken again from its start. Each sample is jittered within its
-  step, the jitter moving on by the golden ratio each frame. The march
-  stops once the cloud is opaque. The steps' geometry has a NumPy mirror
-  that the tests run (`slab_segments`, `march_steps`,
+  alike when a ray needs more than `CloudSettings.march_steps`. Each sample
+  is jittered within its step, the jitter moving on by the golden ratio
+  each frame. The march stops once the cloud is opaque. The steps' geometry
+  has a NumPy mirror that the tests run (`slab_segments`, `march_steps`,
   `march_transmittance`).
+- **No longer steps in clear air.** A step longer than the finest features
+  (85-125 m) samples thin cloud by chance, and the jitter changes that
+  chance every frame: thin cloud blinks, and edges come out ragged. Up to
+  four-times-longer steps in clear air did exactly that. Nor can clear air
+  be *proven* clear and skipped: the fbm sits within a narrow band, the
+  threshold inside it, and its two fine octaves can each reach their
+  maximum somewhere in any 500 m, so no bound on it falls under the
+  threshold (the exact bound, from the texels each octave's filter
+  touches, did in 0.004 % of the cells).
 - **The field** with the octaves the billboard shells would have there
   (`shell_octaves` over their distance bands). The weather's shift is read
   once per kilometre of ray (`cloudDensityShifted`), not at every sample.
@@ -260,9 +267,8 @@ The sea's reflection sees the deck alone (the far layer is packed for it).
 The textures may be padded to powers of two, so the shaders address them
 in pixels.
 
-**What it costs** (performance §20): about the billboards' cost over the
-sky, a third of it inside the slab, a quarter in a dense cloud. Two-thirds
-of the march's fixed cost is the full-resolution passes on a weak GPU.
+**What it costs** (performance §20): 1.3-2 times the billboards' over open
+sky on a weak GPU, the same inside the slab, two-fifths in a dense cloud.
 
 ## Testing
 

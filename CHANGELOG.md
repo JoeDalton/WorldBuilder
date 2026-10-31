@@ -20,8 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the full resolution by reprojection (`march_resolution`, `march_steps`,
     stepped by the quality presets). The result is laid over the scene at
     the cloud's own depth, so models cut it at full resolution.
-  - About the billboards' cost over the sky, a third of it inside the slab,
-    a quarter in a dense cloud (docs/source/performance.md §20).
+  - 1.3-2 times the billboards' cost over open sky on a weak GPU, the same
+    inside the slab, two-fifths in a dense cloud
+    (docs/source/performance.md §20).
+- `Knob.kept`: a settings knob that is a choice rather than a level of
+  quality. Moving to a preset (`WorldSettings.with_level`,
+  `with_section_level`, `QualitySettings.at_level`) keeps it, and it makes
+  nothing custom. The clouds' renderer is one: cycling the quality presets
+  no longer switches the raymarch back to billboards.
   - `PlanetClouds.use_split_depth` hands it the split cameras (`World` does
     it in `use_split_depth`); `PlanetClouds.set_visible` hides either
     renderer; a change of renderer rebuilds the volume live.

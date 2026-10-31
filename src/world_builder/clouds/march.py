@@ -15,7 +15,11 @@ own ray instead (``shaders/cloud_march.frag``):
 * in **steps** :data:`MIN_STEP_FEATURE` of the finest feature long near the
   camera, a share of the distance (:data:`STEP_GROWTH`) farther, all
   lengthened alike when a ray would need more than the budget
-  (``CloudSettings.march_steps``), each jittered within its length;
+  (``CloudSettings.march_steps``), each jittered within its length. No
+  step is longer in clear air: one longer than the finest features samples
+  thin cloud by chance, a chance the jitter changes every frame, which reads
+  as flicker and ragged edges (and the field's fine octaves leave no bound
+  that would prove clear air clear);
 * sampling the **field** with the octaves the billboard shells would have
   there (``CloudSettings.shell_octaves`` over the shells' distance bands),
   and stopping once the cloud is opaque;

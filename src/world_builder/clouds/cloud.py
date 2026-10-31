@@ -231,6 +231,7 @@ class CloudSettings(QualitySettings):
         choices={"Billboards": "billboards", "Raymarch": "march"},
         help="Billboards, or a raymarch at a fraction of the resolution "
         "(experimental).",
+        kept=True,
     )
     march_steps: int = knob(
         64,

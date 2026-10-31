@@ -854,7 +854,7 @@ class TerrainDemo(ShowBase):
     def _cycle_all_quality(self) -> None:
         """Every part to the next preset."""
         level = _next_level(self.world.level)
-        self._set_world(WorldSettings.preset(level))
+        self._set_world(self.world.with_level(level))
         print(f"quality: {level.value}")
 
     def _set_world(self, world: WorldSettings) -> None:
