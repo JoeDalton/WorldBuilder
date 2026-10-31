@@ -50,6 +50,9 @@ class CloudType(Enum):
     STRATUS = "stratus"
     CIRRUS = "cirrus"
     CUMULONIMBUS = "cumulonimbus"
+    #: Cumulus that grow with the weather's convective depth through
+    #: congestus to cumulonimbus (:mod:`genera`)
+    CONVECTIVE = "convective"
 
 
 @dataclass(frozen=True)
@@ -63,12 +66,18 @@ class CloudSpec:
     aspect           billboard long:short ratio. Area-preserving (sqrt(a) by
                      1/sqrt(a)), so extinction and count are untouched; the long
                      axis lies level
+    deep_radius      a convective field's billboards' radius at depth 1, over
+                     their radius at depth 0 (it grows linearly between): a
+                     cumulonimbus is drawn by as many billboards per kilometre
+                     of its features, not per cubic metre (the overlap holds,
+                     so the extinction does)
     """
 
     field: DensityField
     optics: CloudOptics = CloudOptics()
     radius: tuple = (70.0, 140.0)
     aspect: float = 1.0
+    deep_radius: float = 1.0
 
 
 PRESETS = {
@@ -91,16 +100,42 @@ PRESETS = {
             forward_anisotropy=delta_eddington(MIE_ASYMMETRY_WATER),
         ),
     ),
-    CloudType.STRATUS: CloudSpec(
-        # Overcast: a flat-topped sheet with holes, soft-edged.
+    CloudType.CONVECTIVE: CloudSpec(
+        # The cumulus field, its clouds' top rising with the depth from 1 km
+        # to the cap, 8.3 km above the base: congestus at 4-6 km, the
+        # cumulonimbus's anvil spreading under the cap. A cell octave (8 km
+        # features) gathers the deep ones into towers.
         field=DensityField(
-            slab=(600.0, 300.0),
+            slab=(2200.0, 8300.0),
+            noise_scale=(0.002, 0.002, 0.002),
+            coverage=0.3,
+            edge_softness=1.3,
+            base_ramp=6.0,
+            offset=field_offset(0),
+            min_top=1000.0 / 8300.0,
+            anvil=0.2,
+            cell_weight=0.5,
+        ),
+        optics=CloudOptics(
+            shadow_strength=0.3,
+            forward_gain=8.0,
+            forward_anisotropy=delta_eddington(MIE_ASYMMETRY_WATER),
+        ),
+        deep_radius=2.5,
+    ),
+    CloudType.STRATUS: CloudSpec(
+        # Overcast: a sheet with holes, soft-edged, flat underneath. Its top
+        # undulates under the slab's (a strong erosion): cut flat there, each
+        # billboard shows the cut as a straight edge, and the deck seen from
+        # above turns to blocks.
+        field=DensityField(
+            slab=(600.0, 500.0),
             density=0.05,
             noise_scale=(0.0015, 0.0015, 0.006),
             coverage=0.25,
             edge_softness=2,
             base_ramp=8.0,
-            top_erosion=0.12,
+            top_erosion=0.35,
             top_exponent=2.0,
             offset=field_offset(1),
         ),

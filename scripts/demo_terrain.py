@@ -124,8 +124,10 @@ from panda3d.core import (
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cirrus import CirrusSpec
+from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.planet import PlanetClouds
+from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS, HIDE_FROM_NEAR, SplitDepthCameras
 from world_builder.ocean import Sea
 from world_builder.quality import QualityLevel
@@ -335,6 +337,7 @@ class TerrainDemo(ShowBase):
         settings: WorldSettings | None = None,
         clouds: bool = True,
         cloud_debug: int = 0,
+        genera: bool = False,
         ocean_debug: int = 0,
         preset: str | None = None,
         seed: int | None = None,
@@ -382,6 +385,7 @@ class TerrainDemo(ShowBase):
         world = settings or WorldSettings()
         self.world = world
         self._clouds_on = clouds
+        self._genera = genera
         print("starting terrain workers ...")
         self.executor = ChunkExecutor(
             backend=backend, workers=world.terrain.workers or None
@@ -808,6 +812,7 @@ class TerrainDemo(ShowBase):
             atmosphere=0,
             altitude=CLOUD_BASE,
             cirrus=CirrusSpec(),
+            genera=self._genera_spec(),
             planet=self.terrain.spec,
             settings=self.world.clouds,
             channel="clouds",
@@ -818,6 +823,21 @@ class TerrainDemo(ShowBase):
             self.clouds.use_split_depth(self, self.depth)
         if getattr(self, "half_res", None) is not None:
             self.clouds.use_half_res(self.half_res)
+
+    def _genera_spec(self) -> GeneraSpec | None:
+        """The low clouds by genus (--genera), around the start pose: a
+        placeholder for the weather (clouds.genera)."""
+        if not self._genera:
+            return None
+        spec = self.terrain.spec
+        pose = self.start_pose or {}
+        return GeneraSpec(
+            WeatherSpec(spec),
+            focus=(
+                pose.get("lat", spec.reference_lat),
+                pose.get("lon", spec.reference_lon),
+            ),
+        )
 
     def _toggle_cirrus(self) -> None:
         """Show or hide the high cirrus (a look toggle)."""
@@ -1012,6 +1032,7 @@ def main() -> None:
         moon,
         settings=settings_from_args(args),
         clouds=not args.no_clouds,
+        genera=args.genera,
         preset=args.planet,
         seed=args.seed,
         start=args.start,
@@ -1101,6 +1122,12 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         "--half-res-clouds",
         action="store_true",
         help="clouds at half resolution (CloudSettings.half_resolution)",
+    )
+    parser.add_argument(
+        "--genera",
+        action="store_true",
+        help="the low clouds by genus: cumulonimbus, congestus and stratus "
+        "around the start (clouds.genera's placeholder maps)",
     )
     parser.add_argument(
         "--cloud-renderer",

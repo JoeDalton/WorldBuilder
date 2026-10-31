@@ -72,24 +72,30 @@ void main() {
         // through the slab's depth.
         puff = 1.0;
         vec3 up = normalize(worldPos);
+        // The column's weather: coverage, shift, convective depth. The
+        // clouds there reach the local top (a convective field's grows with
+        // the depth; every other's is the slab's).
+        vec4 weather = texture(weatherMap, up);
+        float thickness = f.slabThickness * topFraction(f, weather.b);
         float cosView = max(abs(dot(V, up)), 0.04);
-        chord = f.slabThickness / cosView;
+        chord = thickness / cosView;
         float r = planetRadius + f.slabBase;
-        samplePos = up * (r + 0.5 * f.slabThickness);
+        samplePos = up * (r + 0.5 * thickness);
         float feature = 4.0 / (f.noiseScale.x * f.octaveScales.x);  // NOISE_FEATURE
         float footprint = distance * uPixelAngle / feature;
         detail = 1.0 - smoothstep(0.15, 0.6, footprint);
         shading = 1.0 - smoothstep(0.04, 0.2, footprint);  // <= detail
         density = 0.0;
         if (detail > 0.0) {
-            vec3 low = up * (r + 0.3 * f.slabThickness);
-            vec3 high = up * (r + 0.7 * f.slabThickness);
-            density = 0.5 * (cloudDensity(f, low) + cloudDensity(f, high));
+            vec3 low = up * (r + 0.3 * thickness);
+            vec3 high = up * (r + 0.7 * thickness);
+            density = 0.5 * (cloudDensityAt(f, low, weather.gb)
+                           + cloudDensityAt(f, high, weather.gb));
         }
         if (shading < 1.0) {
             // The weather map's coverage: what the field's columns give
             // with its shift there, by construction (clouds.weather).
-            farCoverage = texture(weatherMap, up).r;
+            farCoverage = weather.r;
         }
         if (density <= 0.0 && farCoverage * (1.0 - detail) < 0.003) discard;
     } else {

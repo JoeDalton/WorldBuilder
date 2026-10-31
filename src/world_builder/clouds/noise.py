@@ -18,6 +18,7 @@ docs/source/clouds.md.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -58,8 +59,14 @@ COVERAGE_LEVELS = 32
 #: vec4s per cloud type in the layerParams uniform array, and the most layers one
 #: field may mix (LOD shells, and a planet's deck, count as layers). Must match
 #: cloud_field.glsl / cloud_sphere.vert.
-LAYER_VEC4S = 12
+LAYER_VEC4S = 13
 MAX_LAYERS = 8
+
+#: A convective field's cell octave (:attr:`DensityField.cell_weight`): its
+#: scale over the first octave's (four times its features: 8 km for cumulus),
+#: and its offset. MUST match CELL_SCALE / CELL_OFFSET in cloud_field.glsl.
+CELL_SCALE = 0.25
+CELL_OFFSET = (0.13, 0.59, 0.37)
 
 
 @dataclass(frozen=True)
@@ -84,6 +91,18 @@ class DensityField:
     top_exponent    the curve of that rise
     offset          noise-space translation decorrelating types that share one
                     volume (see :func:`field_offset`)
+
+    A convective field's clouds grow with the weather's convective DEPTH (0
+    to 1, a cube map: :mod:`genera`), from fair-weather cumulus to
+    cumulonimbus; the three are neutral by default (no depth):
+
+    min_top         the clouds' top at depth 0, as a share of the slab; the
+                    top rises with depth to the slab's (the profile above,
+                    lift and base, follows the local top: :func:`top_fraction`)
+    anvil           at depth 1, how far the threshold falls just under the
+                    top, in fbm units: the cloud spreads there, an anvil
+    cell_weight     at depth 1, the weight of a cell octave :data:`CELL_SCALE`
+                    of the first: towers kilometres wide
     """
 
     slab: tuple = (1000.0, 600.0)
@@ -98,6 +117,9 @@ class DensityField:
     top_erosion: float = 0.40
     top_exponent: float = 3.0
     offset: tuple = (0.0, 0.0, 0.0)
+    min_top: float = 1.0
+    anvil: float = 0.0
+    cell_weight: float = 0.0
 
     @property
     def feature_size(self) -> tuple:
@@ -391,15 +413,70 @@ def fbm(
     return total
 
 
-def threshold_lift(spec: DensityField, h: np.ndarray) -> np.ndarray:
+def top_fraction(spec: DensityField, depth: ArrayLike = 0.0) -> np.ndarray | float:
+    """The clouds' local top, as a share of the slab, at convective *depth*
+    (:attr:`DensityField.min_top`: 1 for a field with no depth)."""
+    return spec.min_top + (1.0 - spec.min_top) * np.clip(depth, 0.0, 1.0)
+
+
+def _smoothstep(lo: float, hi: float, x: ArrayLike) -> np.ndarray:
+    t = np.clip((np.asarray(x) - lo) / (hi - lo), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+#: The anvil (:attr:`DensityField.anvil`): the convective depth it grows
+#: over, and the band under the local top it spreads in. MUST match
+#: cloud_field.glsl's thresholdLift.
+ANVIL_DEPTH = (0.6, 1.0)
+ANVIL_BAND = (0.7, 0.95)
+
+
+def threshold_lift(
+    spec: DensityField, h: np.ndarray, depth: ArrayLike = 0.0
+) -> np.ndarray:
     """How far the threshold has risen at normalised slab height *h*.
 
     Raising the THRESHOLD, not fading density, is what makes tops bulge: strong
     columns keep clearing the rising bar and tower, weak ones stop short. Fading
     density could only slice every cloud off at one altitude. Once the lift passes
     the fbm's maximum nothing is cloud, which bounds the slab with no hard clamp.
+
+    The profile follows the local top at convective *depth*
+    (:func:`top_fraction`); above it nothing is cloud (an infinite lift). A
+    deep cloud's threshold falls again just under its top: the anvil.
     """
-    return spec.top_erosion * np.clip(h, 0.0, 1.0) ** spec.top_exponent
+    local = np.asarray(h) / top_fraction(spec, depth)
+    lift = spec.top_erosion * np.clip(local, 0.0, 1.0) ** spec.top_exponent
+    if spec.anvil:
+        lift = lift - spec.anvil * _smoothstep(*ANVIL_DEPTH, depth) * _smoothstep(
+            *ANVIL_BAND, local
+        )
+    if spec.min_top < 1.0:
+        lift = np.where(local < 1.0, lift, np.inf)
+    return lift
+
+
+def cell_shift(
+    volume: np.ndarray,
+    spec: DensityField,
+    coords: np.ndarray,
+    depth: ArrayLike,
+    octave_mean: float | None = None,
+) -> np.ndarray | float:
+    """What the cell octave adds to the fbm at convective *depth*
+    (:attr:`DensityField.cell_weight`): its noise about its mean, so the
+    coverage barely moves. 0 for a field without one.
+
+    :param coords: (..., 3) noise coords (world * noise_scale + offset)
+    """
+    if not spec.cell_weight:
+        return 0.0
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
+    cell = sample_volume(
+        volume, np.asarray(coords) * CELL_SCALE + np.asarray(CELL_OFFSET)
+    )
+    return spec.cell_weight * np.clip(depth, 0.0, 1.0) * (cell - octave_mean)
 
 
 def fbm_sigma(volume: np.ndarray, spec: DensityField) -> float:
@@ -419,6 +496,7 @@ def sphere_column_peaks(
     octaves: int = 4,
     columns: int = COVERAGE_GRID * COVERAGE_GRID,
     levels: int = COVERAGE_LEVELS,
+    depth: float = 0.0,
 ) -> np.ndarray:
     """The per-column peak of ``fbm - threshold_lift``, SORTED ascending:
     radial columns through the slab above a sphere, spread evenly over it (a
@@ -434,15 +512,20 @@ def sphere_column_peaks(
 
     :param radius: sea-level radius, metres
     :param octaves: octaves evaluated (see :func:`fbm`)
+    :param depth: a convective field's depth, the same everywhere: the levels
+        span its local top, as many more as it is taller than at depth 0 (so
+        they still resolve the finest octave)
     :returns: (columns,) sorted peaks, in raw fbm units
     """
     dirs = _fibonacci_dirs(columns)
     base, thickness = spec.slab
-    h = (np.arange(levels) + 0.5) / levels
+    top = top_fraction(spec, depth)
+    levels = int(math.ceil(levels * top / top_fraction(spec, 0.0)))
+    h = (np.arange(levels) + 0.5) / levels * top
     points = dirs[:, None, :] * (radius + base + h * thickness)[None, :, None]
     coords = points * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    raw = fbm(volume, coords, spec, octaves)
-    peaks = (raw - threshold_lift(spec, h)[None, :]).max(axis=1)
+    raw = fbm(volume, coords, spec, octaves) + cell_shift(volume, spec, coords, depth)
+    peaks = (raw - threshold_lift(spec, h, depth)[None, :]).max(axis=1)
     peaks.sort()
     return peaks
 
@@ -570,6 +653,7 @@ def pack_layer_params(
             (isotropic, clamped_anisotropy(o), octaves, octave_mean),
             (aspect, 0.0, 0.0, 0.0),
             (*fade_in, *fade_out),
+            (spec.min_top, spec.anvil, spec.cell_weight, 0.0),
         ],
         dtype=np.float32,
     )
@@ -594,7 +678,9 @@ def density_on_sphere(
 
     :param volume: the noise octave (quantised, to match the GPU)
     :param weather: (6, n, n, 2) cube map of coverage and shift
-        (:func:`weather.weather_cube`), or its (6, n, n) shift plane alone
+        (:func:`weather.weather_cube`), (6, n, n, 3) with the convective
+        depth too (:mod:`genera`), or its (6, n, n) shift plane alone (depth
+        0)
     :param spec: a resolved field (a shell's: :meth:`sphere.ShellSpec.field_of`)
     :param points: (..., 3) planet-frame positions, metres
     :param radius: sea-level radius, metres
@@ -614,10 +700,14 @@ def density_on_sphere(
     coords = points * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
     plane = weather[..., 1] if weather.ndim == 4 else weather
     shift = sample_cube(plane, points)
+    depth = 0.0
+    if weather.ndim == 4 and weather.shape[-1] > 2:
+        depth = sample_cube(weather[..., 2], points)
+    shift = shift + cell_shift(volume, spec, coords, depth)
     raw = fbm(volume, coords, spec, octaves) + shift
     if early_out:
         # cloud_field.glsl's cloudDensity: what is still to come at most.
-        lo = spec.threshold[0] + threshold_lift(spec, h)
+        lo = spec.threshold[0] + threshold_lift(spec, h, depth)
         mean = float(volume.mean())
         w = spec.octave_weights
         rest = sum((1.0 if k < octaves else mean) * w[k] for k in (2, 3))
@@ -630,21 +720,28 @@ def density_on_sphere(
         )
         alive = (first + w[1] + rest > lo) & (first + second + rest > lo)
         raw = np.where(alive, raw, -np.inf)
-    return _slab_density(spec, h, raw)
+    return _slab_density(spec, h, raw, depth)
 
 
-def _slab_density(spec: DensityField, h: np.ndarray, raw: np.ndarray) -> np.ndarray:
+def _slab_density(
+    spec: DensityField, h: np.ndarray, raw: np.ndarray, depth: ArrayLike = 0.0
+) -> np.ndarray:
     """cloud_field.glsl's ``slabDensity``, zero outside the slab: the threshold
-    window raised by :func:`threshold_lift`, times the base's fill.
+    window raised by :func:`threshold_lift`, times the base's fill, both
+    following the local top at convective *depth*.
 
     :param h: normalised slab height
     :param raw: the fbm, shift included
     """
-    lift = threshold_lift(spec, h)
+    lift = threshold_lift(spec, h, depth)
+    above = np.isinf(lift)  # over the local top: no cloud
+    lift = np.where(above, 0.0, lift)
     lo, hi = spec.threshold[0] + lift, spec.threshold[1] + lift
     t = np.clip((raw - lo) / np.maximum(hi - lo, 1e-9), 0.0, 1.0)
+    t = np.where(above, 0.0, t)
     coverage = t * t * (3.0 - 2.0 * t)
-    base_fill = 1.0 - np.exp2(-spec.base_ramp * np.clip(h, 0.0, 1.0))
+    local = np.clip(h / top_fraction(spec, depth), 0.0, 1.0)
+    base_fill = 1.0 - np.exp2(-spec.base_ramp * local)
     inside = (h > 0.0) & (h < 1.0)
     return np.where(inside, coverage * base_fill, 0.0)
 
@@ -676,11 +773,13 @@ def _sun_depth(
     pair: np.ndarray,
     shift: ArrayLike,
     octave_mean: float,
+    depth: ArrayLike = 0.0,
 ) -> np.ndarray:
     """:func:`sun_optical_depth_on_sphere` from :func:`_sun_march_samples`."""
     gain, bias = shadow_calibration(spec, octave_mean)
     shift = np.asarray(shift, dtype=np.float64)[..., None]
-    density = _slab_density(spec, h, pair * gain + shift + bias).sum(axis=-1)
+    depth = np.asarray(depth, dtype=np.float64)[..., None]
+    density = _slab_density(spec, h, pair * gain + shift + bias, depth).sum(axis=-1)
     return density * optics.sun_step_length * spec.density * optics.shadow_strength
 
 
@@ -693,6 +792,7 @@ def sun_optical_depth_on_sphere(
     radius: float,
     shift: ArrayLike = 0.0,
     octave_mean: float | None = None,
+    depth: ArrayLike = 0.0,
 ) -> np.ndarray:
     """The shader's ``sunOpticalDepth`` in planet mode: *sun_steps* steps of
     *sun_step_length* toward the sun, from half a step out, through the two
@@ -705,8 +805,11 @@ def sun_optical_depth_on_sphere(
     :param points: (..., 3) planet-frame positions the march starts from
     :param sun_dirs: (..., 3) unit directions toward the sun
     :param radius: sea-level radius, metres
-    :param shift: the weather's fbm shift at *points* (broadcast)
+    :param shift: the weather's fbm shift at *points* (broadcast), the cell
+        octave's there included (:func:`cell_shift`)
     :param octave_mean: the noise's mean; None = *volume*'s
+    :param depth: the convective depth at *points* (broadcast): the march
+        keeps it, as it keeps the shift
     :returns: (...) optical depth toward the sun
     """
     _require_resolved(spec)
@@ -717,7 +820,7 @@ def sun_optical_depth_on_sphere(
         octave_mean = float(volume.mean())
     sun_dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
     h, pair = _sun_march_samples(volume, spec, optics, points, sun_dirs, radius)
-    return _sun_depth(spec, optics, h, pair, shift, octave_mean)
+    return _sun_depth(spec, optics, h, pair, shift, octave_mean, depth)
 
 
 #: The lowest sun cosine (at the cloud) of :func:`deck_light_table`: below

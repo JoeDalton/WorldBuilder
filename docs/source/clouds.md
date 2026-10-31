@@ -106,9 +106,10 @@ like:
 [`cloud.py`](../../src/world_builder/clouds/cloud.py) holds the types and
 what they cost:
 
-- **`PRESETS`** maps `CloudType` (`CUMULUS`/`STRATUS`/`CIRRUS`/`CUMULONIMBUS`)
-  to a `CloudSpec`: a field, its optics, a billboard radius range and a
-  billboard aspect. Every shape parameter lives in the field.
+- **`PRESETS`** maps `CloudType` (`CUMULUS`/`STRATUS`/`CIRRUS`/`CUMULONIMBUS`,
+  and `CONVECTIVE`, [the genera](#genera)'s) to a `CloudSpec`: a field, its
+  optics, a billboard radius range and a billboard aspect. Every shape
+  parameter lives in the field.
 - **Placement** (`sphere.generate_cloud_tile`) rejection-samples the slab and
   keeps the points the field calls cloud, so the field alone bounds each
   cloud. The accept rate measures the cloud's volume directly, which makes the
@@ -182,6 +183,80 @@ when broken:
   half-weight billboards at depth 1.5 composite to 0.544 instead of 0.65, a
   ~16% light ring that sweeps with the camera. Weighting before the cap would
   let each shell reach it and sum to twice it.
+
+## Genera
+
+[`genera.py`](../../src/world_builder/clouds/genera.py) adds stratus, and the
+convective continuum from fair-weather cumulus through congestus to
+cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
+`--genera` in the demo, `terrain_shots.py` and `cloud_bench.py`). Its maps are
+a **placeholder** for the weather (issue #8): features laid out around one
+point. Billboards draw them; the raymarch has no depth.
+
+**Two families, one sort.** Billboards mix cloud types by superposition: each
+samples its own type's field, and the blender adds them. So the genera are two
+families, each a `CloudVolume` (one field), in bands of sky that do not
+overlap:
+
+- **stratiform** (`CloudType.STRATUS`): a sheet 500 m thick, its base at
+  `GeneraSpec.stratus_altitude`;
+- **convective** (`CloudType.CONVECTIVE`): the cumulus field, its clouds
+  growing with the convective **depth** (0 to 1, a map of its own).
+
+Their billboards share the shells' bins, which sort them back to front as
+one cloud's: the bands do not overlap (`check_layers` refuses a stratus
+reaching the convective base). Their two decks are spheres one inside the
+other, drawn in a fixed bin farthest first: the stratus's first from above,
+the convective one's from under both.
+
+**The depth** (`DensityField.min_top`, `anvil`, `cell_weight`, all neutral
+by default):
+
+- the clouds' **top** rises from the cumulus's (1 km above the base, a
+  share `min_top` of the slab) to the slab's (10.5 km). The lift, which bulges
+  the tops, and the base's fill follow the local top (`noise.top_fraction`).
+  Above it nothing is cloud;
+- a **cell octave**, four times coarser than the first (8 km features),
+  adds to the fbm in proportion to the depth, about its mean: it gathers the
+  deep clouds into towers;
+- under a deep cloud's top, the threshold falls (`noise.ANVIL_BAND`): its
+  **anvil**;
+- **billboards grow with the depth** (`CloudSpec.deep_radius`, 2.5 times at
+  depth 1) and are thinned as the cube of their size, so the overlap, and
+  the extinction, hold. A cumulonimbus takes as many billboards per
+  kilometre of its features as a cumulus, not per cubic metre.
+
+The weather cube carries the depth beside the coverage and the shift (its
+blue channel; one fetch). The shader and `density_on_sphere` read it, and
+for every other field it changes nothing (the billboards' images are within
+one 8-bit step of before).
+
+**Coverage by depth.** A deep column may grow taller, so it holds cloud at
+any height more often: the same coverage needs less shift. The shift is
+tabulated by depth too (`genera.depth_shift_tables`: one `shift_table` per
+depth of `genera.DEPTHS`, the column peaks measured through each depth's
+local top, as many more levels as it is taller) and interpolated
+(`depth_shift`). Tested within 4 % at depths 0, ½ and 1.
+
+**A cumulonimbus is coverage, not noise.** At the core's 65 % coverage, a
+deep column held scattered blobs at every height (the cumulus noise
+decorrelates every 2 km): a quarter of the volume below 6 km was cloud. At
+100 % the core fills (87-97 %) and the noise only carves its edges. So the
+maps make a cumulonimbus a disc of coverage 1 and depth 1, the depth staying
+1 to 1.4 radii where the coverage falls (the anvil's band holds most of the
+cloud there), then a ring of congestus (depth ½) to 2.2 radii. Those change
+over 2-4 km: the genus maps are twice the weather's resolution
+(`GENUS_SIZE`, 1.85 km texels on a 600 km planet).
+
+**Placement** draws a tile's candidates up to its highest local top (the
+depth read over the tile), not through the whole 8.3 km slab.
+
+**Not yet.** The anvil thickens the tops but makes no flat overhang (the
+noise would need stretching across the anvil's band). From the ground, the
+air hazes out a cumulonimbus's lower half at 40 km, and its top half reads
+as a large cumulus. The stratus shows its billboards' outlines close up
+from above: a uniformly dense sheet has no field edge to hide the sprites
+behind. And the cost near the big clouds (performance §21).
 
 ## The raymarch
 

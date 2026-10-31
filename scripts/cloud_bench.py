@@ -7,7 +7,7 @@ sky and the clouds, so the clouds are most of the frame.
         [--quality low|mid|high|ultra] [--renderer billboards|march]
         [--half-res | --no-half-res]
         [--uniform-coverage C] [--no-cirrus] [--cloud-debug BITS]
-        [--move M] [--interactive]
+        [--move M] [--genera] [--interactive]
 
     --out              where the PNGs go (default ./cloud_bench)
     --pose             the poses to time (default: all, in the order below)
@@ -24,6 +24,9 @@ sky and the clouds, so the clouds are most of the frame.
                        on where the pose is
     --no-cirrus        no cirrus sheet
     --cloud-debug      PlanetClouds.set_debug bits (cloud.frag's uCloudDebug)
+    --genera           the low clouds by genus (clouds.genera's placeholder
+                       maps around the reference point: cumulonimbus,
+                       congestus, stratus) and their poses (below)
     --move             fly the camera (and the probe) along the view at M
                        metres a frame while timing: reprojection under motion
     --interactive      fly the probe in and out of the clouds in a window
@@ -45,6 +48,16 @@ looking down at the deck), high (20 km), orbit (3 radii up, looking down),
 sunset (600 m, looking west at the sun 3 degrees up), model_in_cloud (the
 probe, a black ball standing in for a game's model, half into the nearest
 cloud ahead at 2.7 km, seen from 250 m).
+
+With --genera (the features: a cumulonimbus 40 km north of the reference
+point, another 70 km north-east, congestus 30 km west, a stratus deck 30 km
+south): cb_far (300 m up at the reference, looking north at the towers),
+cb_high (20 km up, 50 km south of the cumulonimbus), between_towers (3.5 km
+up, 25 km north, in the congestus around the cumulonimbus), under_anvil
+(2 km up under the cumulonimbus's edge, looking up at its anvil),
+in_congestus (4 km up, inside the congestus to the west), stratus_above
+(2 km up over the stratus deck, looking down), stratus_below (300 m up under
+it), genera_orbit (3 radii up).
 
 Interactive (``--interactive``): the probe flies, the camera follows it.
 
@@ -87,6 +100,7 @@ from demo_terrain import (  # noqa: E402
 from world_builder.atmosphere import AtmosphereParams, Atmospheres  # noqa: E402
 from world_builder.clouds.cirrus import CirrusSpec  # noqa: E402
 from world_builder.clouds.cloud import CloudSettings  # noqa: E402
+from world_builder.clouds.genera import GeneraSpec  # noqa: E402
 from world_builder.clouds.half_res import HalfResClouds  # noqa: E402
 from world_builder.clouds.noise import density_on_sphere  # noqa: E402
 from world_builder.clouds.planet import PlanetClouds  # noqa: E402
@@ -110,6 +124,18 @@ POSES = {
     "orbit": (None, 0.0, -89.9),  # 3 radii up
     "sunset": (600.0, 90.0, 2.0),
     "model_in_cloud": (2700.0, 0.0, 0.0),  # the probe placed by probe_at_cloud
+}
+#: name -> (altitude, heading, pitch, east, north): over a point *east* and
+#: *north* metres from the reference (--genera)
+GENERA_POSES = {
+    "cb_far": (300.0, 0.0, 6.0, 0.0, 0.0),
+    "cb_high": (20000.0, 0.0, -12.0, 0.0, -10e3),
+    "between_towers": (3500.0, 0.0, 2.0, 0.0, 25e3),
+    "under_anvil": (2000.0, 0.0, 35.0, 0.0, 27e3),
+    "in_congestus": (4000.0, 90.0, 0.0, -30e3, 30e3),
+    "stratus_above": (2000.0, 180.0, -20.0, 0.0, -15e3),
+    "stratus_below": (300.0, 180.0, 10.0, 0.0, -25e3),
+    "genera_orbit": (None, 0.0, -89.9, 0.0, 0.0),
 }
 #: Sun (azimuth, elevation) per pose, as seen there; default (210, 35).
 SUNS = {"sunset": (270.0, 3.0)}
@@ -163,6 +189,7 @@ class CloudBench(ShowBase):
         cirrus: bool = True,
         coverage: float | None = None,
         cloud_debug: int = 0,
+        genera: bool = False,
     ) -> None:
         super().__init__()
         self.disable_mouse()
@@ -188,6 +215,12 @@ class CloudBench(ShowBase):
         weather = None
         if coverage is not None:
             weather = uniform_weather(self.spec, coverage)
+        spec = None
+        if genera:
+            spec = GeneraSpec(
+                weather or WeatherSpec(self.spec),
+                focus=(self.spec.reference_lat, self.spec.reference_lon),
+            )
         self.clouds = PlanetClouds(
             self.render,
             self.radius,
@@ -200,6 +233,7 @@ class CloudBench(ShowBase):
             weather=weather,
             settings=settings,
             channel="clouds",
+            genera=spec,
         )
         self.clouds.set_debug(cloud_debug)
         self.depth = SplitDepthCameras(self, near=1.0)
@@ -229,17 +263,39 @@ class CloudBench(ShowBase):
         heading: float,
         pitch: float,
         sun: tuple[float, float] = (210.0, 35.0),
+        east: float = 0.0,
+        north: float = 0.0,
     ) -> None:
-        """Over the level's reference point: *altitude* metres up, heading
-        and pitch in the local frame (degrees), the sun at (azimuth,
-        elevation) as seen there."""
+        """Over the level's reference point (moved *east* and *north*
+        metres along the ground): *altitude* metres up, heading and pitch in
+        the local frame (degrees), the sun at (azimuth, elevation) as seen
+        there."""
         frame = TangentFrame.at(self.spec.reference_lat, self.spec.reference_lon)
-        self.cam_world = frame.up * (self.radius + altitude)
+        up = frame.up
+        distance = math.hypot(east, north)
+        if distance > 0.0:
+            along = (east * frame.east + north * frame.north) / distance
+            angle = distance / self.radius
+            up = math.cos(angle) * frame.up + math.sin(angle) * along
+            lat, lon = latlon(up[None, :])
+            frame = TangentFrame.at(float(lat[0]), float(lon[0]))
+        self.cam_world = up * (self.radius + altitude)
         local = LQuaternionf()
         local.set_hpr((heading, pitch, 0.0))
         self._orientation = local * _quat_from_axes(frame.east, frame.north, frame.up)
         d, _, _ = sun_lighting(*sun)
         self.sun = d[0] * frame.east + d[1] * frame.north + d[2] * frame.up
+
+    def place_pose(self, name: str) -> tuple[float, float]:
+        """A pose of :data:`POSES` or :data:`GENERA_POSES` by name.
+
+        :returns: its heading and pitch
+        """
+        altitude, heading, pitch, *offset = {**POSES, **GENERA_POSES}[name]
+        if altitude is None:
+            altitude = 2.0 * self.radius
+        self.place(altitude, heading, pitch, SUNS.get(name, (210.0, 35.0)), *offset)
+        return heading, pitch
 
     def look(self, position: np.ndarray, heading: float, pitch: float) -> None:
         """The camera at *position* (planet frame), heading and pitch in the
@@ -252,7 +308,7 @@ class CloudBench(ShowBase):
         shaders draw, without the raymarch's billows), once set up."""
         volume = self.clouds.volume
         return density_on_sphere(
-            _noise(7), volume.weather[..., 1], volume.field, points, self.radius
+            _noise(7), volume.weather, volume.field, points, self.radius
         )
 
     def probe_at_cloud(self) -> bool:
@@ -404,11 +460,7 @@ class Flight:
         bench = self.bench
         self.pose = (self.pose + 1) % len(self.poses)
         name = self.poses[self.pose]
-        altitude, heading, pitch = POSES[name]
-        if altitude is None:
-            altitude = 2.0 * bench.radius
-        bench.place(altitude, heading, pitch, SUNS.get(name, (210.0, 35.0)))
-        self.heading, self.pitch = heading, pitch
+        self.heading, self.pitch = bench.place_pose(name)
         # The probe waits ahead of the camera; at model_in_cloud it goes to
         # a cloud's edge once the weather is in (fly).
         forward = np.array(bench._orientation.get_forward())
@@ -496,7 +548,11 @@ def main() -> None:
         "--out", type=Path, default=Path("cloud_bench"), help="PNG directory"
     )
     parser.add_argument(
-        "--pose", nargs="*", default=None, choices=list(POSES), help="default: all"
+        "--pose",
+        nargs="*",
+        default=None,
+        choices=[*POSES, *GENERA_POSES],
+        help="default: all (the genera's with --genera)",
     )
     parser.add_argument("--size", default="1600 900", help='"width height"')
     parser.add_argument(
@@ -538,6 +594,9 @@ def main() -> None:
         "--move", type=float, default=0.0, help="metres a frame along the view"
     )
     parser.add_argument(
+        "--genera", action="store_true", help="the low clouds by genus, their poses"
+    )
+    parser.add_argument(
         "--interactive", action="store_true", help="fly the probe, no timing"
     )
     args = parser.parse_args()
@@ -552,6 +611,7 @@ def main() -> None:
         cirrus=not args.no_cirrus,
         coverage=args.uniform_coverage,
         cloud_debug=args.cloud_debug,
+        genera=args.genera,
     )
     gsg = bench.win.get_gsg()
     renderer = gsg.get_driver_renderer()
@@ -565,10 +625,11 @@ def main() -> None:
     if "llvmpipe" in renderer:
         print("warning: CPU rasteriser; on WSL set GALLIUM_DRIVER=d3d12 for the GPU")
     if args.interactive:
-        poses = args.pose or [
-            "model_in_cloud",
-            *[p for p in POSES if p != "model_in_cloud"],
-        ]
+        poses = args.pose or (
+            list(GENERA_POSES)
+            if args.genera
+            else ["model_in_cloud", *[p for p in POSES if p != "model_in_cloud"]]
+        )
         flight = Flight(bench, poses)
         flight.next_pose()
         print(__doc__.split("Interactive")[1])
@@ -579,11 +640,8 @@ def main() -> None:
     print(
         f"{'pose':<14} {'frame':>9} {'no clouds':>10} {'clouds':>9} {'billboards':>11}"
     )
-    for name in args.pose or list(POSES):
-        altitude, heading, pitch = POSES[name]
-        if altitude is None:
-            altitude = 2.0 * bench.radius
-        bench.place(altitude, heading, pitch, SUNS.get(name, (210.0, 35.0)))
+    for name in args.pose or list(GENERA_POSES if args.genera else POSES):
+        bench.place_pose(name)
         bench.probe_world = None
         settled = bench.settle(args.timeout)
         if name == "model_in_cloud" and not bench.probe_at_cloud():

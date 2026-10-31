@@ -1024,6 +1024,32 @@ What stayed within the noise: a 2 × 2 neighbourhood for the resolve's
 clamp instead of 3 × 3, a half-float distance instead of a 32-bit one, 4
 air samples per pixel instead of 8, no sun march, no air.
 
+## 21. Genera (#45)
+
+Stratus, congestus and cumulonimbus by billboards ([genera](clouds.md#genera)),
+`cloud_bench.py --genera`, on the same weak GPU and set-up as §20 (one
+session, the cloud cost):
+
+| Pose | Cloud cost | Billboards |
+|---|---|---|
+| Cumulus only, below / start / inside / above | 7.1 / 10.3 / 21.5 / 11.4 ms | 55-57 k |
+| Cumulonimbus 40 km away, from the ground | 9.3 ms | 66 k |
+| From 20 km up, 50 km away | 7.2 ms | 55 k |
+| Between the towers (3.5 km up, in the congestus) | 71.7 ms | 87 k |
+| Under the anvil | 57.7 ms | 81 k |
+| Inside the congestus | 35.3 ms | 78 k |
+| Above the stratus deck | 54.4 ms | 118 k |
+| Under it | 63.3 ms | 155 k |
+| Orbit | 9.1 ms | 0 |
+
+Far away the genera cost what the cumulus do. Near the big clouds they cost
+3-7 times as much: their volume on screen, which billboards pay for in
+overdraw. Without the billboards growing with the depth (2.5 times at
+depth 1) a cumulonimbus would take some 15 times more of them. All the genera
+load within 25 s (their tiles, the maps by depth ~1 s). In the full world
+(`terrain_shots.py --genera`): 52 ms at the ground pose, 57 ms at the coast.
+Making this affordable is the next phase.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

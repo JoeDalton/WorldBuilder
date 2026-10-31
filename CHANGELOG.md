@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Clouds by genus (`world_builder.clouds.genera`,
+  docs/source/clouds.md#genera; #45): stratus, and cumulus growing with the
+  convective depth through congestus to cumulonimbus, drawn by billboards.
+  `PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`, `--genera` in
+  the terrain demo, `terrain_shots.py` and `cloud_bench.py` (its genera
+  poses). The maps are a placeholder for the weather: features around one
+  point.
+  - `CloudType.CONVECTIVE` and `DensityField.min_top`, `anvil`,
+    `cell_weight`: a field's top rising with the depth, its anvil, a cell
+    octave gathering towers; `CloudSpec.deep_radius`: billboards growing
+    with the depth. Neutral by default: the other types are unchanged.
+  - The weather cube may carry the depth (a third channel); the coverage's
+    fbm shift is tabulated by depth (`depth_shift_tables`).
+  - Expensive near the big clouds (docs/source/performance.md §21).
+
+### Changed
+
+- `CirrusSpec.base` defaults to 11 km (was 8 km): over the cumulonimbus's
+  cap, 10.5 km.
+
 - Raymarched low clouds, an experimental second renderer
   (`CloudSettings.renderer = "march"`, `world_builder.clouds.march`,
   docs/source/clouds.md#the-raymarch; #45).

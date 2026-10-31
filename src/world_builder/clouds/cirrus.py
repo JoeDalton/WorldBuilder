@@ -179,7 +179,7 @@ class CirrusSpec:
         wind nears calm): a straight stamp there would cross its neighbours
     """
 
-    base: float = 8000.0
+    base: float = 11000.0
     thickness: float = 1000.0
     amount: float = 1.0
     meander: float = 3000.0

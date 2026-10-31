@@ -255,6 +255,7 @@ def main() -> None:
         args.radius,
         settings=settings,
         clouds=not args.no_clouds,
+        genera=args.genera,
         cloud_debug=args.cloud_debug,
         ocean_debug=args.ocean_debug,
         preset=args.planet,

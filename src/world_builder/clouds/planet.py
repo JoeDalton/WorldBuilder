@@ -26,14 +26,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar
 
+import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import NodePath
 
 from world_builder.atmosphere import Atmospheres
 from world_builder.clouds.cirrus import CirrusSpec, CloudSheet
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
+from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
 from world_builder.clouds.march import CloudMarch
-from world_builder.clouds.sphere import CloudVolume
+from world_builder.clouds.sphere import CLOUD_BIN, CloudVolume
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS
 from world_builder.terrain.planet import PlanetSpec
@@ -52,16 +54,30 @@ def check_layers(
     altitude: float | None,
     cirrus: CirrusSpec | None,
     air_top: float | None = None,
+    genera: GeneraSpec | None = None,
 ) -> None:
-    """Refuse a sheet the draw order or the air cannot hold: its base must
-    clear the volume's slab, its top stay under the air's.
+    """Refuse layers the draw order or the air cannot hold: the sheet's base
+    must clear the volume's slab, its top stay under the air's; with genera,
+    the stratus's top must stay under the convective clouds' base (their
+    billboards then sort together as one cloud's).
 
-    :param cloud_type: the volume's type
+    :param cloud_type: the volume's type (the convective one with genera)
     :param altitude: the volume's base, metres; None = the type's
-    :param cirrus: the sheet; None = none (nothing to check)
+    :param cirrus: the sheet; None = none
     :param air_top: the air's top above sea level, metres; None = unchecked
-    :raises ValueError: for a sheet that does not fit
+    :param genera: the genera (:mod:`genera`); None = one type
+    :raises ValueError: for layers that do not fit
     """
+    if genera is not None:
+        cloud_type = CloudType.CONVECTIVE
+        stratus = PRESETS[CloudType.STRATUS].field.slab
+        stratus_top = genera.stratus_altitude + stratus[1]
+        base = PRESETS[cloud_type].field.slab[0] if altitude is None else altitude
+        if stratus_top >= base:
+            raise ValueError(
+                f"the stratus's top ({stratus_top:g} m) must be under the "
+                f"convective clouds' base ({base:g} m)"
+            )
     if cirrus is None:
         return
     slab = PRESETS[cloud_type].field.slab
@@ -125,6 +141,7 @@ class PlanetClouds:
         near_fade_radii: float = 2.5,
         channel: str | None = None,
         game: Any = None,
+        genera: GeneraSpec | None = None,
     ):
         """
         :param parent: usually ``render``
@@ -160,14 +177,23 @@ class PlanetClouds:
         :param channel: the executor channel for the volume's tiles; None =
             one of its own
         :param game: the game object, for its asset manager (None: from disk)
+        :param genera: the low clouds by genus (:mod:`genera`, billboards
+            only): the convective volume (*cloud_type* is
+            :attr:`cloud.CloudType.CONVECTIVE`, *weather* the genera's) and a
+            stratus volume under it (:attr:`stratus`); None = one type
         :raises ValueError: a sheet not above the volume or not inside the
-            air (:func:`check_layers`)
+            air, a stratus not under the convective clouds
+            (:func:`check_layers`)
         """
         air_top = None
         if atmospheres is not None and atmosphere is not None:
             air_top = atmospheres.params(atmosphere).height
-        check_layers(cloud_type, altitude, cirrus, air_top)
+        check_layers(cloud_type, altitude, cirrus, air_top, genera)
         settings = settings or CloudSettings()
+        self.genera = genera
+        if genera is not None:
+            cloud_type = CloudType.CONVECTIVE
+            weather = genera.weather
         if weather is None:
             planet = planet or PlanetSpec(name="clouds", radius=float(radius))
             weather = WeatherSpec(planet, seed=weather_seed)
@@ -193,6 +219,8 @@ class PlanetClouds:
             channel=channel,
             game=game,
         )
+        if genera is not None:
+            self._volume_args.update(genera=genera, family=CONVECTIVE)
         self._split: tuple[Any, SplitDepthCameras] | None = None
         # The live state a new volume is given (set_sun, set_sky_light,
         # set_debug).
@@ -201,6 +229,21 @@ class PlanetClouds:
         self._debug = 0
         self._half_res: HalfResClouds | None = None
         self.volume = self._make_volume(settings)
+        #: The genera's stratus, under the convective volume; None = none
+        self.stratus: CloudVolume | None = None
+        if genera is not None:
+            self.stratus = CloudVolume(
+                self.root,
+                settings=settings,
+                **{
+                    **self._volume_args,
+                    "cloud_type": CloudType.STRATUS,
+                    "altitude": genera.stratus_altitude,
+                    "family": STRATIFORM,
+                    "channel": None if channel is None else f"{channel}:stratus",
+                },
+            )
+        self._deck_order: tuple | None = None
         self.sheet: CloudSheet | None = None
         if cirrus is not None:
             self.sheet = CloudSheet(
@@ -220,12 +263,20 @@ class PlanetClouds:
             )
 
     def _layers(self) -> list:
-        return [self.volume] if self.sheet is None else [self.volume, self.sheet]
+        return [
+            layer
+            for layer in (self.volume, self.stratus, self.sheet)
+            if layer is not None
+        ]
+
+    def _volumes(self) -> list:
+        """:returns: the low clouds' volumes (the stratus's with genera)"""
+        return [v for v in (self.volume, self.stratus) if v is not None]
 
     def _make_volume(self, settings: CloudSettings) -> CloudVolume | CloudMarch:
-        volume = RENDERERS[settings.renderer](
-            self.root, settings=settings, **self._volume_args
-        )
+        # The genera are drawn by billboards (the raymarch has no depth).
+        kind = CloudVolume if self.genera is not None else RENDERERS[settings.renderer]
+        volume = kind(self.root, settings=settings, **self._volume_args)
         if isinstance(volume, CloudMarch) and self._split is not None:
             volume.attach(*self._split)
         return volume
@@ -244,7 +295,7 @@ class PlanetClouds:
 
         :param settings: the new settings
         """
-        renderer = settings.renderer != self._settings.renderer
+        renderer = settings.renderer != self._settings.renderer and self.genera is None
         self._settings = settings
         if renderer:
             if self._half_res is not None and isinstance(self.volume, CloudVolume):
@@ -267,9 +318,12 @@ class PlanetClouds:
 
     @property
     def stats(self) -> dict:
-        """The volume's (tiles, billboards, pending, gen_ms), with the
-        sheet's set-up counted in ``pending``."""
+        """The volume's (tiles, billboards, pending, gen_ms), the stratus's
+        added in (with genera), the sheet's set-up counted in ``pending``."""
         stats = dict(self.volume.stats)
+        if self.stratus is not None:
+            for key in ("tiles", "billboards", "pending"):
+                stats[key] += self.stratus.stats[key]
         if self.sheet is not None:
             stats["pending"] += self.sheet.stats["pending"]
         return stats
@@ -356,13 +410,16 @@ class PlanetClouds:
             None = none any more (call it before destroying the pass)
         """
         if half_res is None:
-            if self._half_res is not None and isinstance(self.volume, CloudVolume):
-                self._half_res.remove(self.volume.root)
+            if self._half_res is not None:
+                for volume in self._volumes():
+                    if isinstance(volume, CloudVolume):
+                        self._half_res.remove(volume.root)
             self._half_res = None
             return
         self._half_res = half_res
-        if isinstance(self.volume, CloudVolume):
-            half_res.add(self.volume.root)
+        for volume in self._volumes():
+            if isinstance(volume, CloudVolume):
+                half_res.add(volume.root)
         if self.sheet is not None:
             half_res.exclude(self.sheet.root)
 
@@ -377,6 +434,22 @@ class PlanetClouds:
         """
         for layer in self._layers():
             layer.update(camera_world, camera_render)
+        if self.stratus is not None:
+            self._order_decks(camera_world)
+
+    def _order_decks(self, camera_world: ArrayLike) -> None:
+        """The two decks are spheres, one inside the other: the farther draws
+        first. Seen from outside both (above the convective deck, from orbit)
+        that is the stratus's; from under both, the convective one's; in
+        between they meet only at the horizon."""
+        position = np.asarray(self.volume.position, dtype=np.float64)
+        r = float(np.linalg.norm(np.asarray(camera_world, dtype=np.float64) - position))
+        under = r < self.stratus.deck_radius
+        order = (self.volume, self.stratus) if under else (self.stratus, self.volume)
+        if order != self._deck_order:
+            self._deck_order = order
+            for sort, volume in enumerate(order):
+                volume.deck.set_bin(CLOUD_BIN, sort)
 
     def remove(self) -> None:
         """Take the clouds off the scene and drop the volume's queued tiles."""

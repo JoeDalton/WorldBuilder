@@ -94,6 +94,7 @@ from world_builder.clouds.cloud import (
     load_cloud_atlas,
     with_settings,
 )
+from world_builder.clouds.genera import GeneraSpec, depth_shift_tables, genus_cube
 from world_builder.clouds.noise import (
     DECK_LIGHT_COS_MIN,
     LAYER_VEC4S,
@@ -109,12 +110,14 @@ from world_builder.clouds.noise import (
     pack_layer_params,
     quantise,
     sphere_column_peaks,
+    top_fraction,
     value_noise_volume,
     with_threshold,
 )
 from world_builder.clouds.weather import (
     WeatherSpec,
     build_weather_texture,
+    sample_cube,
     shift_table,
     weather_cube,
 )
@@ -193,9 +196,15 @@ class SphereCloudSpec:
     :ivar weather: the planet's weather
     :ivar shift_table: the fbm shift per coverage (:func:`weather.shift_table`)
     :ivar shells: the billboard shells, innermost first
-    :ivar shift: the weather map's fbm shift plane, shared with the workers
-        (a :attr:`terrain.workers.SharedArray.handle`); None = each worker
-        builds the map from *weather* (~0.6 s)
+    :ivar shift: the weather map's fbm shift plane (or, for a genus, its
+        whole cube: the depth too), shared with the workers (a
+        :attr:`terrain.workers.SharedArray.handle`); None = each worker
+        builds the map from *weather* or *genera* (~0.6 s)
+    :ivar genera: a genus family's maps instead of the weather's: (the
+        :class:`genera.GeneraSpec`, the family, its shift tables:
+        :func:`genera.genus_cube`'s arguments); None = the weather's
+    :ivar deep_radius: the billboards' radius at convective depth 1 over
+        their radius at depth 0 (``CloudSpec.deep_radius``)
     """
 
     radius: float
@@ -205,6 +214,8 @@ class SphereCloudSpec:
     shift_table: tuple
     shells: tuple
     shift: tuple | None = None
+    genera: tuple | None = None
+    deep_radius: float = 1.0
 
     def shell_of(self, level: int) -> int:
         """:returns: the index of the shell whose tiles are at *level*"""
@@ -240,11 +251,44 @@ def _weather(weather: WeatherSpec, table: tuple) -> np.ndarray:
     return weather_cube(weather, np.asarray(table))
 
 
+@functools.cache
+def _genus_weather(genera: GeneraSpec, family: str, tables: tuple) -> np.ndarray:
+    return genus_cube(genera, family, tables)
+
+
 def _shift_plane(spec: SphereCloudSpec) -> np.ndarray:
-    """:returns: (6, n, n) the weather's fbm shift, shared or built here"""
+    """:returns: (6, n, n) the weather's fbm shift, or a genus's (6, n, n, 3)
+    cube (coverage, shift, depth), shared or built here"""
     if spec.shift is not None:
         return shared_array(spec.shift)
+    if spec.genera is not None:
+        return _genus_weather(*spec.genera)
     return _weather(spec.weather, spec.shift_table)[..., 1]
+
+
+#: How far the convective depth is read around a tile to bound its clouds'
+#: top (a 5 x 5 grid over it, plus this margin: the map is smooth over a
+#: tile).
+_TILE_DEPTH_MARGIN = 0.1
+
+
+def _tile_top(
+    spec: SphereCloudSpec,
+    weather: np.ndarray,
+    face: int,
+    a0: float,
+    b0: float,
+    span: float,
+) -> float:
+    """:returns: the highest local top of a tile's clouds, as a share of the
+    slab (1 for a field without convective depth)"""
+    field = spec.field
+    if field.min_top >= 1.0 or weather.ndim < 4 or weather.shape[-1] < 3:
+        return 1.0
+    u = np.linspace(0.0, 1.0, 5)
+    a, b = np.meshgrid(a0 + span * u, b0 + span * u)
+    depth = sample_cube(weather[..., 2], face_dirs(face, a.ravel(), b.ravel()))
+    return float(top_fraction(field, min(1.0, depth.max() + _TILE_DEPTH_MARGIN)))
 
 
 def _peaks(seed: int, field: DensityField, radius: float, octaves: int) -> np.ndarray:
@@ -255,6 +299,12 @@ def _peaks(seed: int, field: DensityField, radius: float, octaves: int) -> np.nd
 @functools.cache
 def _cached_peaks(seed, field, radius, octaves) -> np.ndarray:
     return sphere_column_peaks(_noise(seed), field, radius, octaves)
+
+
+@functools.cache
+def _depth_tables(seed: int, field: DensityField, radius: float) -> np.ndarray:
+    """A convective field's shift tables by depth (genera.depth_shift_tables)."""
+    return depth_shift_tables(_noise(seed), field, radius)
 
 
 @functools.cache
@@ -397,6 +447,9 @@ def generate_cloud_tile(
     base, thickness = field.slab
     span = 2.0 * (QUADS << level) / grid.n0
     a0, b0 = -1.0 + i * span, -1.0 + j * span
+    # A convective field's clouds reach only their local top: candidates are
+    # drawn up to the tile's highest.
+    thickness *= _tile_top(spec, weather, face, a0, b0, span)
     mid = spec.radius + base + 0.5 * thickness
     slab_volume = _patch_area(face, a0, b0, span, mid) * thickness
 
@@ -432,11 +485,20 @@ def generate_cloud_tile(
             break
     points = np.concatenate(kept)[:target] if kept else np.zeros((0, 3))
 
+    scale = 1.0
+    if spec.deep_radius != 1.0 and weather.ndim == 4 and weather.shape[-1] > 2:
+        # Billboards grow with the convective depth; fewer of them, as the
+        # cube of their size, so the overlap (and the extinction) holds.
+        depth = sample_cube(weather[..., 2], points)
+        scale = 1.0 + (spec.deep_radius - 1.0) * np.clip(depth, 0.0, 1.0)
+        keep = rng.uniform(size=len(points)) < scale**-3
+        points, scale = points[keep], scale[keep]
+
     centre = grid.centre_dir(key) * mid
     n = len(points)
     particles = np.empty((n, 9), dtype=np.float32)
     particles[:, 0:3] = points - centre
-    particles[:, 3] = rng.uniform(r_lo, r_hi, n)
+    particles[:, 3] = rng.uniform(r_lo, r_hi, n) * scale
     rects = _rects()
     particles[:, 4:8] = rects[rng.integers(len(rects), size=n)]
     particles[:, 8] = spec.shell_of(level)
@@ -459,7 +521,8 @@ def _shell_bin(shell: int) -> str:
 def _ensure_bin():
     manager = CullBinManager.get_global_ptr()
     if manager.find_bin(CLOUD_BIN) == -1:
-        manager.add_bin(CLOUD_BIN, CullBinManager.BT_back_to_front, _CLOUD_BIN_SORT)
+        # In a fixed order: two decks (a genus's) are ordered by their caller.
+        manager.add_bin(CLOUD_BIN, CullBinManager.BT_fixed, _CLOUD_BIN_SORT)
     for shell in range(MAX_SHELLS):
         if manager.find_bin(_shell_bin(shell)) == -1:
             manager.add_bin(
@@ -670,6 +733,8 @@ class CloudVolume:
         near_fade_radii: float = 2.5,
         channel: str | None = None,
         game: Any = None,
+        genera: GeneraSpec | None = None,
+        family: str | None = None,
     ):
         """
         :param parent: usually ``render``
@@ -704,6 +769,12 @@ class CloudVolume:
         :param channel: the executor channel for the tiles; None = one of its
             own. Reusing a removed instance's channel cancels its work
         :param game: the game object, for its asset manager (None: from disk)
+        :param genera: draw one family of these genera (:mod:`genera`):
+            their maps instead of *weather*'s coverage (its spec still the
+            planet's weather); None = the weather's
+        :param family: which: :data:`genera.CONVECTIVE` (a field with
+            convective depth, :attr:`cloud.CloudType.CONVECTIVE`) or
+            :data:`genera.STRATIFORM`
         """
         settings = settings or CloudSettings()
         _ensure_bin()
@@ -717,13 +788,29 @@ class CloudVolume:
         preset, field, peaks = planet_field(cloud_type, altitude, seed, self.radius)
         volume = _noise(seed)
         self.field = field
+        if genera is not None:
+            weather = genera.weather
         weather = planet_weather(weather, planet, self.radius, weather_seed)
         table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
+        self._genera = None
+        if genera is not None:
+            # The family's maps; a convective field's shift by depth too.
+            tables = table
+            if field.min_top < 1.0:
+                tables = tuple(
+                    tuple(float(v) for v in row)
+                    for row in _depth_tables(seed, field, self.radius)
+                )
+            self._genera = (genera, family, tables)
         # The weather map and the deck's light (~1 s together) are made in the
         # pool while the caller goes on; update() finishes the set-up when
         # they are in (see _finish).
-        self._weather_job = executor.submit_once(_weather, weather, table)
-        #: (6, n, n, 2): coverage and fbm shift; None until the set-up is done
+        if self._genera is not None:
+            self._weather_job = executor.submit_once(_genus_weather, *self._genera)
+        else:
+            self._weather_job = executor.submit_once(_weather, weather, table)
+        #: (6, n, n, 2): coverage and fbm shift, (6, n, n, 3) with the
+        #: convective depth for a genus; None until the set-up is done
         self.weather: np.ndarray | None = None
         self._shared_shift: SharedArray | None = None
         self._preset = preset
@@ -741,9 +828,13 @@ class CloudVolume:
         self.root.stash()  # out of every camera until the set-up is done
         self.tiles_root = self.root.attach_new_node("cloud_tiles")
         self.tiles_root.set_shader(tile_shader)
-        self.deck = self.root.attach_new_node(
-            deck_mesh(self.radius + field.slab[0] + 0.5 * field.slab[1])
+        # At mid-slab; a convective field's at its shallowest clouds' (the
+        # deck samples each column's own height).
+        #: The deck sphere's radius, metres
+        self.deck_radius = (
+            self.radius + field.slab[0] + 0.5 * field.slab[1] * field.min_top
         )
+        self.deck = self.root.attach_new_node(deck_mesh(self.deck_radius))
         self.deck.set_shader(deck_shader)
         self.deck.set_two_sided(True)
         self.deck.set_shader_inputs(uDeck=1, uDeckLayer=self._deck_layer)
@@ -949,6 +1040,8 @@ class CloudVolume:
             shift_table=table,
             shells=tuple(shell_specs),
             shift=None if shared is None else shared.handle,
+            genera=self._genera,
+            deep_radius=preset.deep_radius,
         )
         return params, deck_job
 
@@ -1066,7 +1159,8 @@ class CloudVolume:
         deck_light = self._deck_job.result()
         self._weather_job = self._deck_job = None
         if self.executor.backend == "process":
-            self._shared_shift = SharedArray(self.weather[..., 1])
+            shared = self.weather if self._genera is not None else self.weather[..., 1]
+            self._shared_shift = SharedArray(np.ascontiguousarray(shared))
             self.spec = replace(self.spec, shift=self._shared_shift.handle)
         self._version = self.executor.set_spec(
             self.spec, self._channel, generator=generate_cloud_tile

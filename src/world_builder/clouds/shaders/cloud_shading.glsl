@@ -50,12 +50,13 @@ void planetCloudLight(int atmo, vec3 p, out vec3 sunlight, out vec3 skylight,
 //   sunlight     the sun's colour as it reaches p (planetCloudLight)
 //   skylight     the sky's
 //   twilight     the lit air's above p once p is in the planet's shadow
-//   shift        the weather's fbm shift at p (weatherShift)
-vec3 cloudRadianceShifted(Field f, vec3 p, float density, vec3 V, float shading,
-                          float farCoverage, vec3 sunlight, vec3 skylight,
-                          vec3 twilight, float shift) {
+//   weather      the weather at p: its fbm shift, the convective depth
+//                (weatherAt)
+vec3 cloudRadianceAt(Field f, vec3 p, float density, vec3 V, float shading,
+                     float farCoverage, vec3 sunlight, vec3 skylight,
+                     vec3 twilight, vec2 weather) {
     if ((uCloudDebug & 1) != 0) shading = 0.0;
-    float sunVisibility = shading > 0.0 ? exp2(-sunOpticalDepthShifted(f, p, shift)) : 1.0;
+    float sunVisibility = shading > 0.0 ? exp2(-sunOpticalDepthAt(f, p, weather)) : 1.0;
     // What the sun term sees: the shadowing and the powder.
     float sunShadowing = sunVisibility * mix(1.0, powder(f, density), f.powderStrength);
     if (shading < 1.0) {
@@ -72,8 +73,10 @@ vec3 cloudRadianceShifted(Field f, vec3 p, float density, vec3 V, float shading,
         sunVisibility = mix(averaged.g, sunVisibility, shading);
         sunShadowing = mix(averaged.r, sunShadowing, shading);
     }
-    // Skylight comes from above: occlude the SKY term toward the underside only.
-    float skyReach = mix(skyOcclusion, 1.0, clamp(slabHeight(f, heightOf(p)), 0.0, 1.0));
+    // Skylight comes from above: occlude the SKY term toward the underside
+    // only (of the cloud's own height, at its convective depth).
+    float local = slabHeight(f, heightOf(p)) / topFraction(f, weather.y);
+    float skyReach = mix(skyOcclusion, 1.0, clamp(local, 0.0, 1.0));
     // Multiple-scattering fill: sky-coloured and NOT phase-weighted, or dusk
     // shadows turn orange and sunward shadow outshines side-lit cloud.
     float ambient = skyStrength * skyReach
@@ -89,8 +92,16 @@ vec3 cloudRadianceShifted(Field f, vec3 p, float density, vec3 V, float shading,
          + twilight * (sunBrightness * TWILIGHT_GLOW * skyReach);
 }
 
+// With only the weather's shift (no convective depth).
+vec3 cloudRadianceShifted(Field f, vec3 p, float density, vec3 V, float shading,
+                          float farCoverage, vec3 sunlight, vec3 skylight,
+                          vec3 twilight, float shift) {
+    return cloudRadianceAt(f, p, density, V, shading, farCoverage, sunlight,
+                           skylight, twilight, vec2(shift, 0.0));
+}
+
 vec3 cloudRadiance(Field f, vec3 p, float density, vec3 V, float shading,
                    float farCoverage, vec3 sunlight, vec3 skylight, vec3 twilight) {
-    return cloudRadianceShifted(f, p, density, V, shading, farCoverage, sunlight,
-                                skylight, twilight, weatherShift(p));
+    return cloudRadianceAt(f, p, density, V, shading, farCoverage, sunlight,
+                           skylight, twilight, weatherAt(p));
 }
