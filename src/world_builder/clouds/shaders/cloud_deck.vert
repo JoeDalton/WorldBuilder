@@ -1,5 +1,5 @@
 #version 330
-// Planet-mode far-field deck (clouds.sphere): a sphere at mid-slab height,
+// A planet's far-field deck (clouds.sphere): a sphere at mid-slab height,
 // shaded by cloud.frag with uDeck = 1. worldPos is in the planet frame.
 uniform mat4 p3d_ModelViewProjectionMatrix;
 uniform int uDeckLayer;

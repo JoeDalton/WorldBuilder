@@ -1,11 +1,10 @@
 #version 330
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "cloud_field.glsl"
-// Planet-mode billboards (clouds.sphere): one tile's particles, positioned
+// A planet's billboards (clouds.sphere): one tile's particles, positioned
 // relative to the tile node, which sits on the planet. The quad faces the
-// camera, upright against the local vertical. Outputs as cloud.vert, with
-// worldPos in the PLANET frame (centre at the origin), which is where
-// cloud.frag samples the density field.
+// camera, upright against the local vertical. worldPos is in the PLANET frame
+// (centre at the origin), which is where cloud.frag samples the density field.
 uniform mat4 p3d_ModelMatrix;          // tile -> render
 uniform mat4 p3d_ViewProjectionMatrix;
 uniform vec3 uCamRender;               // camera, render frame

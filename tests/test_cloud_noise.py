@@ -19,9 +19,10 @@ import pytest
 from panda3d.core import SamplerState, Texture
 
 from world_builder.clouds.cloud import PRESETS
-from world_builder.clouds.field import _SHADERS
 from world_builder.clouds.noise import (
     BACKWARD_ANISOTROPY,
+    COVERAGE_GRID,
+    COVERAGE_LEVELS,
     FORWARD_ANISOTROPY_MAX,
     LAYER_VEC4S,
     MAX_LAYERS,
@@ -32,24 +33,59 @@ from world_builder.clouds.noise import (
     CloudOptics,
     DensityField,
     build_noise_texture,
-    column_peaks,
-    density,
+    density_on_sphere,
     fbm,
     fbm_sigma,
     field_offset,
     henyey_greenstein,
-    measure_coverage,
     pack_layer_params,
     phase,
     phase_weights,
     quantise,
-    resolve_field,
     sample_volume,
     shadow_calibration,
+    sphere_column_peaks,
     threshold_from_peaks,
     threshold_lift,
     value_noise_volume,
+    with_threshold,
 )
+from world_builder.clouds.sphere import _SHADERS
+
+#: The planet the field is measured over, metres.
+R = 600e3
+#: No weather: the fbm unshifted everywhere (a cube map of zero shift).
+CALM = np.zeros((6, 2, 2))
+
+
+def _peaks(volume, spec, columns=COVERAGE_GRID * COVERAGE_GRID, levels=COVERAGE_LEVELS):
+    """The field's sorted column peaks over the planet."""
+    return sphere_column_peaks(volume, spec, R, columns=columns, levels=levels)
+
+
+def _resolve(volume, spec):
+    """*spec* with its threshold derived for its coverage over the planet."""
+    return with_threshold(spec, _peaks(volume, spec), fbm_sigma(volume, spec))
+
+
+def _coverage(volume, spec):
+    """The share of the planet's columns a resolved field puts under cloud."""
+    return float((_peaks(volume, spec) > spec.threshold[0]).mean())
+
+
+def _on_sphere(points):
+    """Planet-frame positions of (x, y) metres around the north pole, z above
+    sea level."""
+    p = np.asarray(points, dtype=np.float64)
+    up = np.stack([p[..., 0], p[..., 1], np.full(p.shape[:-1], R)], axis=-1)
+    up /= np.linalg.norm(up, axis=-1, keepdims=True)
+    return up * (R + p[..., 2])[..., None]
+
+
+def _density(volume, spec, points):
+    """The density at :func:`_on_sphere`'s positions, as the shader evaluates
+    it with no weather."""
+    return density_on_sphere(volume, CALM, spec, _on_sphere(points), R)
 
 
 @pytest.fixture(scope="module")
@@ -156,11 +192,11 @@ def test_a_requested_coverage_is_the_coverage_you_get(volume):
     for cloud_type, cspec in PRESETS.items():
         # Measured once per type, not once per coverage: the peaks do not depend on
         # the requested coverage, only the index into them does.
-        solving = column_peaks(volume, cspec.field)
+        solving = _peaks(volume, cspec.field)
         sigma = fbm_sigma(volume, cspec.field)
         # A different, deliberately non-power-of-two resolution, so agreement
         # cannot come from sharing a grid.
-        checking = column_peaks(volume, cspec.field, grid=101, levels=37)
+        checking = _peaks(volume, cspec.field, columns=101 * 101, levels=37)
         for want in (0.1, 0.3, 0.6, 0.85):
             lo, _ = threshold_from_peaks(
                 solving, want, cspec.field.edge_softness, sigma
@@ -177,7 +213,7 @@ def test_coverage_is_monotone_and_exact_at_the_endpoints(volume):
     quantile lands ON an observed peak there, and the field's test is strict — so
     "everything" would leave the single strongest column out."""
     spec = DensityField(noise_scale=(0.002,) * 3)
-    peaks = column_peaks(volume, spec)
+    peaks = _peaks(volume, spec)
     sigma = fbm_sigma(volume, spec)
 
     def solve(want):
@@ -205,10 +241,10 @@ def test_coverage_survives_a_change_of_octave_weights(volume):
     """
     spec = DensityField(noise_scale=(0.002,) * 3)
     quieter = replace(spec, octave_weights=(0.5, 0.25, 0.0625, 0.03125))
-    base = resolve_field(volume, spec)
-    changed = resolve_field(volume, quieter)
-    assert measure_coverage(volume, base) == pytest.approx(spec.coverage, abs=0.005)
-    assert measure_coverage(volume, changed) == pytest.approx(spec.coverage, abs=0.005)
+    base = _resolve(volume, spec)
+    changed = _resolve(volume, quieter)
+    assert _coverage(volume, base) == pytest.approx(spec.coverage, abs=0.005)
+    assert _coverage(volume, changed) == pytest.approx(spec.coverage, abs=0.005)
     # It held coverage fixed by MOVING the threshold, which is the whole mechanism.
     assert abs(changed.threshold[0] - base.threshold[0]) > 0.02
 
@@ -218,16 +254,14 @@ def test_edge_softness_is_measured_in_sigma(volume):
     A raw width could not: it would be a hard edge on one field and a mushy one
     on another with a different octave spectrum."""
     spec = DensityField(noise_scale=(0.002,) * 3)
-    field = resolve_field(volume, replace(spec, edge_softness=0.5))
+    field = _resolve(volume, replace(spec, edge_softness=0.5))
     lo, hi = field.threshold
     assert hi - lo == pytest.approx(0.5 * fbm_sigma(volume, field), rel=1e-6)
     # And softness must not disturb the amount of cloud: the window's LOW edge is
     # what coverage is defined against, so widening it must not move coverage.
-    wide = resolve_field(volume, replace(spec, edge_softness=2.0))
+    wide = _resolve(volume, replace(spec, edge_softness=2.0))
     assert wide.threshold[0] == pytest.approx(lo, abs=1e-9)
-    assert measure_coverage(volume, wide) == pytest.approx(
-        measure_coverage(volume, field)
-    )
+    assert _coverage(volume, wide) == pytest.approx(_coverage(volume, field))
 
 
 def test_the_peak_statistic_ignores_the_base_ramp_but_not_the_top_erosion(volume):
@@ -240,10 +274,10 @@ def test_the_peak_statistic_ignores_the_base_ramp_but_not_the_top_erosion(volume
     quantile trick would collapse.
     """
     spec = DensityField(noise_scale=(0.002,) * 3)
-    base = column_peaks(volume, spec, grid=48, levels=24)
-    ramped = column_peaks(volume, replace(spec, base_ramp=1.0), grid=48, levels=24)
+    base = _peaks(volume, spec, columns=48 * 48, levels=24)
+    ramped = _peaks(volume, replace(spec, base_ramp=1.0), columns=48 * 48, levels=24)
     np.testing.assert_allclose(base, ramped)
-    eroded = column_peaks(volume, replace(spec, top_erosion=0.8), grid=48, levels=24)
+    eroded = _peaks(volume, replace(spec, top_erosion=0.8), columns=48 * 48, levels=24)
     assert not np.allclose(base, eroded)
     # More erosion can only ever lower a column's peak.
     assert (eroded <= base + 1e-12).all()
@@ -258,11 +292,9 @@ def test_an_unresolved_field_is_refused_rather_than_guessed(volume):
     assert spec.threshold is None
     points = np.zeros((4, 3))
     with pytest.raises(ValueError, match="unresolved"):
-        density(volume, spec, points)
+        _density(volume, spec, points)
     with pytest.raises(ValueError, match="unresolved"):
-        pack_layer_params(spec, extinction=0.05, wrap_radius=1.0, wrap_fade_band=0.0)
-    with pytest.raises(ValueError, match="unresolved"):
-        measure_coverage(volume, spec)
+        pack_layer_params(spec, extinction=0.05)
 
 
 def test_threshold_from_peaks_needs_no_field_evaluation(volume):
@@ -270,11 +302,11 @@ def test_threshold_from_peaks_needs_no_field_evaluation(volume):
     of the coverage function, so a new threshold is an index into them rather than
     a fresh measurement of the field."""
     spec = DensityField(noise_scale=(0.002,) * 3)
-    peaks = column_peaks(volume, spec)
+    peaks = _peaks(volume, spec)
     sigma = fbm_sigma(volume, spec)
     for want in (0.2, 0.5, 0.8):
         cheap = threshold_from_peaks(peaks, want, spec.edge_softness, sigma)
-        full = resolve_field(volume, replace(spec, coverage=want)).threshold
+        full = _resolve(volume, replace(spec, coverage=want)).threshold
         assert cheap == pytest.approx(full)
 
 
@@ -282,9 +314,11 @@ def test_the_peaks_are_sorted_and_deterministic(volume):
     """Sorted because the quantile reads straight off them; deterministic because
     the grid carries no RNG, so a build is repeatable."""
     spec = DensityField(noise_scale=(0.002,) * 3)
-    peaks = column_peaks(volume, spec, grid=32, levels=16)
+    peaks = _peaks(volume, spec, columns=32 * 32, levels=16)
     assert (np.diff(peaks) >= 0).all()
-    np.testing.assert_array_equal(peaks, column_peaks(volume, spec, grid=32, levels=16))
+    np.testing.assert_array_equal(
+        peaks, _peaks(volume, spec, columns=32 * 32, levels=16)
+    )
 
 
 # ── The fbm ────────────────────────────────────────────────────────────────────
@@ -297,19 +331,10 @@ def test_fbm_octaves_are_offset_so_they_never_align(volume):
     assert len(set(OCTAVE_OFFSETS)) == 4
 
 
-def test_fbm_octave_scales_are_whole_numbers():
-    """A cell recycling across the domain shifts by one noise period, and an
-    octave at scale k then shifts by k periods — seamless only if k is an
-    integer. A non-integer scale puts a discontinuity at every recycle."""
-    for spec in (DensityField(),):
-        for scale in spec.octave_scales:
-            assert scale == int(scale), f"octave scale {scale} is not whole"
-
-
 def test_fbm_spans_the_threshold_window(volume):
     """The threshold window must sit inside the fbm's actual range, or the field
     is either everywhere or nowhere."""
-    spec = resolve_field(volume, DensityField(noise_scale=(0.002,) * 3))
+    spec = _resolve(volume, DensityField(noise_scale=(0.002,) * 3))
     rng = np.random.default_rng(0)
     points = rng.uniform([-20000, -20000, 1000], [20000, 20000, 1600], (50_000, 3))
     values = fbm(volume, points * np.asarray(spec.noise_scale), spec)
@@ -328,7 +353,7 @@ def test_the_shadow_march_agrees_with_the_field_it_approximates(volume):
     leaves both the mean and the spread too high: the march finds about 1.65x the
     cloud and sunlit tops come out grey in full sun. The affine calibration fixes
     the distribution, not just the scale."""
-    spec = resolve_field(volume, DensityField(noise_scale=(0.002,) * 3))
+    spec = _resolve(volume, DensityField(noise_scale=(0.002,) * 3))
     rng = np.random.default_rng(0)
     points = rng.uniform([-16000, -16000, 1000], [16000, 16000, 2000], (60_000, 3))
     coords = points * np.asarray(spec.noise_scale)
@@ -372,7 +397,7 @@ def test_base_density_ramps_up_from_the_base(volume):
     h = np.linspace(0.025, 0.975, 20)
     points = np.zeros((len(h), 3))
     points[:, 2] = 1000.0 + h * 600.0
-    ramp = density(volume, spec, points)
+    ramp = _density(volume, spec, points)
     np.testing.assert_allclose(ramp, 1.0 - np.exp2(-6.0 * h))
     assert (np.diff(ramp) > 0).all()  # monotonic
     assert ramp[-1] > 0.98  # fully filled in well before the ceiling
@@ -380,7 +405,7 @@ def test_base_density_ramps_up_from_the_base(volume):
     assert ramp[np.searchsorted(h, 0.25)] > 0.6
     # Outside the slab there is no cloud at all.
     outside = np.array([[0.0, 0.0, 999.0], [0.0, 0.0, 1601.0]])
-    assert (density(volume, spec, outside) == 0.0).all()
+    assert (_density(volume, spec, outside) == 0.0).all()
 
 
 def test_threshold_lift_rises_to_clear_the_fbm_at_the_ceiling():
@@ -407,7 +432,7 @@ def test_the_cloud_top_follows_the_field(volume):
     is asserted: top height tracks field strength, tightly, and no column is
     pinned against the ceiling."""
     base, thickness = 1000.0, 1000.0
-    spec = resolve_field(
+    spec = _resolve(
         volume,
         DensityField(
             slab=(base, thickness),
@@ -422,22 +447,24 @@ def test_the_cloud_top_follows_the_field(volume):
     top = np.full(gx.shape, np.nan)
     for z in np.linspace(base, base + thickness, 60):
         points = np.stack([gx, gy, np.full(gx.shape, z)], axis=-1)
-        top = np.where(density(volume, spec, points) > 0.0, z, top)
+        top = np.where(_density(volume, spec, points) > 0.0, z, top)
     cloudy = ~np.isnan(top)
     height = (top[cloudy] - base) / thickness
 
     # Field strength per column, taken low in the slab where nothing is eroded.
     low = np.stack([gx, gy, np.full(gx.shape, base + 0.15 * thickness)], axis=-1)
-    strength = fbm(volume, low * np.asarray(spec.noise_scale), spec)[cloudy]
+    coords = _on_sphere(low) * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    strength = fbm(volume, coords, spec)[cloudy]
 
     # A strong column towers, a weak one stops short. The correlation measures
-    # about 0.57 rather than near 1, and that is expected rather than weak: the
-    # field varies vertically as well, so how strong a column is DOWN HERE only
-    # partly predicts how strong it is where its top ends up. What matters is that
-    # this is the dominant effect, which over several thousand columns it plainly
-    # is — a threshold that does not vary with height would give zero.
+    # about 0.45 over the planet rather than near 1, and that is expected rather
+    # than weak: the field varies vertically as well, so how strong a column is
+    # DOWN HERE only partly predicts how strong it is where its top ends up. What
+    # matters is that this is the dominant effect, which over several thousand
+    # columns it plainly is: a threshold that does not vary with height would
+    # give zero.
     correlation = np.corrcoef(strength, height)[0, 1]
-    assert correlation > 0.45, (
+    assert correlation > 0.35, (
         f"top height barely follows the field ({correlation:.2f})"
     )
     # Nothing is pinned at the ceiling: the lift carries the threshold past the
@@ -450,18 +477,18 @@ def test_the_cloud_top_follows_the_field(volume):
 def test_the_base_stays_flat_when_the_top_bulges(volume):
     """The base must NOT be eroded along with the top — a cumulus really does
     have a flat underside."""
-    spec = resolve_field(
+    spec = _resolve(
         volume, DensityField(slab=(1000.0, 1000.0), noise_scale=(0.002,) * 3)
     )
     columns = np.linspace(-6000.0, 6000.0, 90)
     gx, gy = np.meshgrid(columns, columns, indexing="ij")
     # Density just above the base is non-zero wherever the column is cloud at
     # all, so the underside sits at one altitude across the whole deck.
-    low = density(volume, spec, np.stack([gx, gy, np.full(gx.shape, 1030.0)], -1))
-    mid = density(volume, spec, np.stack([gx, gy, np.full(gx.shape, 1300.0)], -1))
+    low = _density(volume, spec, np.stack([gx, gy, np.full(gx.shape, 1030.0)], -1))
+    mid = _density(volume, spec, np.stack([gx, gy, np.full(gx.shape, 1300.0)], -1))
     assert (low > 0.0).sum() >= (mid > 0.0).sum()
     # And nothing at all below it.
-    below = density(volume, spec, np.stack([gx, gy, np.full(gx.shape, 999.0)], -1))
+    below = _density(volume, spec, np.stack([gx, gy, np.full(gx.shape, 999.0)], -1))
     assert (below == 0.0).all()
 
 
@@ -473,41 +500,27 @@ def test_density_is_a_function_of_world_position_alone(volume):
     pixel must agree where the cloud's boundary is, which holds only while the
     field depends on position and nothing else (a per-cloud slab, say, lets one
     cloud's ceiling slice a flat plane through its neighbour)."""
-    spec = resolve_field(volume, DensityField(noise_scale=(0.002,) * 3))
+    spec = _resolve(volume, DensityField(noise_scale=(0.002,) * 3))
     points = np.random.default_rng(1).uniform(
         [-8000, -8000, 1000], [8000, 8000, 1600], (2000, 3)
     )
-    first = density(volume, spec, points)
+    first = _density(volume, spec, points)
     # Same points, asked in a different order and shape: identical answers.
     shuffled = np.random.default_rng(2).permutation(len(points))
     np.testing.assert_array_equal(
-        density(volume, spec, points[shuffled]), first[shuffled]
+        _density(volume, spec, points[shuffled]), first[shuffled]
     )
     np.testing.assert_array_equal(
-        density(volume, spec, points.reshape(20, 100, 3)).reshape(-1), first
-    )
-
-
-def test_density_is_periodic_at_the_noise_period(volume):
-    """What makes toroidal recycling seamless: a cell teleported by one period
-    lands where the field is identical."""
-    spec = resolve_field(volume, DensityField(noise_scale=(0.002,) * 3))
-    period = NOISE_SIZE / spec.noise_scale[0]
-    points = np.random.default_rng(3).uniform(
-        [-4000, -4000, 1000], [4000, 4000, 1600], (500, 3)
-    )
-    shifted = points + np.array([period, 0.0, 0.0])
-    np.testing.assert_allclose(
-        density(volume, spec, points), density(volume, spec, shifted), atol=1e-6
+        _density(volume, spec, points.reshape(20, 100, 3)).reshape(-1), first
     )
 
 
 def test_density_is_bounded_and_carves(volume):
-    spec = resolve_field(volume, DensityField(noise_scale=(0.002,) * 3))
+    spec = _resolve(volume, DensityField(noise_scale=(0.002,) * 3))
     points = np.random.default_rng(4).uniform(
         [-20000, -20000, 1000], [20000, 20000, 1600], (50_000, 3)
     )
-    values = density(volume, spec, points)
+    values = _density(volume, spec, points)
     assert values.min() == 0.0  # clear sky exists
     assert 0.0 < values.max() <= 1.0
     inside = values > 0.0
@@ -528,8 +541,8 @@ def test_anisotropic_scale_stretches_the_field(volume):
     y = np.stack(
         [np.zeros(120), np.arange(0, 6000, 50.0), np.full(120, 1250.0)], axis=1
     )
-    along = np.abs(np.diff(density(volume, stretched, x))).mean()
-    across = np.abs(np.diff(density(volume, stretched, y))).mean()
+    along = np.abs(np.diff(_density(volume, stretched, x))).mean()
+    across = np.abs(np.diff(_density(volume, stretched, y))).mean()
     assert across > 2.0 * along
 
 
@@ -566,9 +579,7 @@ def test_pack_layer_params_round_trips_the_field():
         top_exponent=2.5,
         offset=(11.0, 22.0, 33.0),
     )
-    rows = pack_layer_params(
-        spec, extinction=0.09, wrap_radius=8000.0, wrap_fade_band=0.0
-    )
+    rows = pack_layer_params(spec, extinction=0.09)
     assert rows.shape == (LAYER_VEC4S, 4)
     np.testing.assert_allclose(rows[0], (0.001, 0.002, 0.003, 0.51))
     np.testing.assert_allclose(rows[1], spec.octave_scales)
@@ -582,15 +593,13 @@ def test_pack_layer_params_round_trips_the_field():
     # The two extinctions are DIFFERENT numbers on purpose: the per-billboard one
     # is scaled by 1/(volume fraction) for a sum over chords, while the sun march
     # is a continuous path integral and must use the field's own density.
-    np.testing.assert_allclose(rows[5], (0.09, 0.037, 8000.0, 0.0))
+    np.testing.assert_allclose(rows[5], (0.09, 0.037, 0.0, 0.0))
     # Octaves evaluated and their mean (cloud_field.glsl's highOctaves): all
     # four by default.
     np.testing.assert_allclose(rows[9][2:], (4.0, 0.5))
     far = pack_layer_params(
         spec,
         extinction=0.09,
-        wrap_radius=8000.0,
-        wrap_fade_band=0.0,
         octave_mean=0.47,
         octaves=2,
     )
@@ -617,8 +626,6 @@ def test_pack_layer_params_carries_the_types_optics():
         # Any resolved window will do: this test is about the optics rows.
         DensityField(threshold=(0.55, 0.60)),
         extinction=0.05,
-        wrap_radius=1000.0,
-        wrap_fade_band=0.0,
         optics=optics,
     )
     assert rows[6][3] == pytest.approx(2.0)  # max_optical_depth
@@ -777,11 +784,12 @@ def test_both_shaders_size_layerparams_for_every_layer():
       * different between the two stages, and the shared uniform fails to LINK
         ("has different type across different shaders") and nothing draws at all.
 
-    Both stages must declare exactly MAX_LAYERS * LAYER_VEC4S (cloud.frag and
-    cloud_sphere.vert through their shared include, cloud_field.glsl).
+    Both stages (cloud.frag and cloud_sphere.vert) declare it through their
+    shared include, cloud_field.glsl, which must hold exactly
+    MAX_LAYERS * LAYER_VEC4S.
     """
     expected = MAX_LAYERS * LAYER_VEC4S
-    for name in ("cloud_field.glsl", "cloud.vert"):
+    for name in ("cloud_field.glsl",):
         source = Path(_SHADERS / name).read_text()
         match = re.search(r"uniform\s+vec4\s+layerParams\[(\d+)\]", source)
         assert match, f"layerParams declaration not found in {name}"

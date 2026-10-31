@@ -1,10 +1,9 @@
 #version 330
 
-// Planet mode (uSpherical == 1, see clouds.sphere): the slab is a height above
-// the sea-level sphere, the noise is sampled at planet-frame positions, a
-// weather field shifts the fbm by direction, and the atmospheres replace the
-// flat distance haze. uDeck == 1 draws the far-field deck surface instead of a
-// billboard. The flat field leaves all of it off.
+// A planet's clouds (clouds.sphere): the slab is a height above the sea-level
+// sphere, the noise is sampled at planet-frame positions, a weather field
+// shifts the fbm by direction, and the atmospheres haze them. uDeck == 1 draws
+// the far-field deck surface instead of a billboard.
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "cloud_field.glsl"
@@ -21,13 +20,10 @@ uniform vec3  camPos;
 
 uniform vec3  sunColor;
 uniform vec3  skyColor;
-uniform vec3  hazeColor;        // what distant cloud tends to
 uniform float sunBrightness;
 uniform float skyStrength;
 uniform float skyOcclusion;     // share of sky light reaching a deck's underside
 uniform float exposure;
-uniform float horizonFade;      // 1 / metres over which cloud tends fully to haze
-uniform float earthCurvature;   // 1 / (2R); undone here, the field is flat
 
 uniform int   uDeck;            // 1: the deck surface, not a billboard
 uniform int   uOwnAtmosphere;   // the planet's atmosphere (reddens sunlight), -1 none
@@ -116,21 +112,11 @@ void main() {
         if (puff < 0.01) discard;                // the sprite's own soft edge
         chord = 2.0 * vRadius * puff;
         // Sampled ON the quad plane (not mid-chord, which would make overlapping
-        // quads disagree); on the flat field with the vertex stage's droop added
-        // back.
-        samplePos = uSpherical == 1 ? worldPos : vec3(
-            worldPos.xy,
-            worldPos.z + dot(toCamera.xy, toCamera.xy) * earthCurvature
-        );
+        // quads disagree).
+        samplePos = worldPos;
         density = cloudDensity(f, samplePos);
         if (density <= 0.0) discard;             // THE crisp silhouette
     }
-
-    // Aerial perspective tends to the haze COLOUR, never to transparent (a fading
-    // deck would show the ground behind it). Fully hazed cloud is sky: skip it.
-    // (On a planet the atmospheres do it, in linear light, below.)
-    float haze = uSpherical == 1 ? 0.0 : clamp(distance * horizonFade, 0.0, 1.0);
-    if (haze >= 0.999) discard;
 
     // Capped so every billboard stays a thin veil, never a hard-edged opaque quad.
     float opticalDepth = min(f.extinction * density * chord, f.maxOpticalDepth);
@@ -179,11 +165,11 @@ void main() {
     vec3 sunlight = sunColor;
     vec3 skylight = skyColor;
     vec3 twilight = vec3(0.0);
-    if (uSpherical == 1 && uDeck == 0) {
+    if (uDeck == 0) {
         sunlight *= vSunTint;  // per vertex (cloud_sphere.vert)
         skylight *= vSkyTint;
         twilight = sunColor * vTwilight;
-    } else if (uSpherical == 1 && uOwnAtmosphere >= 0) {
+    } else if (uOwnAtmosphere >= 0) {
         // Through the planet's air: reddened low, fading out toward its
         // shadow (cloud_field.glsl's cloudSunTint).
         vec3 tint = cloudSunTint(uOwnAtmosphere, samplePos, sunDir);
@@ -201,40 +187,23 @@ void main() {
     vec3 colour = sunlight * (sunBrightness * sunShadowing * phase)
                 + skylight * ambient
                 + twilight * (sunBrightness * TWILIGHT_GLOW * skyReach);
-    if (uSpherical == 1) {
-        // The air between the camera and the cloud, in linear light. Its
-        // in-scattered light is in front of the cloud, so it is weighted by
-        // the cloud's alpha like the cloud itself: the background behind
-        // carries the same air's light for the uncovered part.
-        vec3 transmittance = vAtmoT;
-        vec3 inscatter = vAtmoS;
-        if (uDeck == 1 && (uCloudDebug & 2) == 0) {  // one layer: per fragment is affordable
-            atmosphereAlong(-V, distance, sunDir, transmittance, inscatter);
-        }
-        colour = colour * transmittance + inscatter;
+    // The air between the camera and the cloud, in linear light. Its
+    // in-scattered light is in front of the cloud, so it is weighted by the
+    // cloud's alpha like the cloud itself: the background behind carries the
+    // same air's light for the uncovered part.
+    vec3 transmittance = vAtmoT;
+    vec3 inscatter = vAtmoS;
+    if (uDeck == 1 && (uCloudDebug & 2) == 0) {  // one layer: per fragment is affordable
+        atmosphereAlong(-V, distance, sunDir, transmittance, inscatter);
     }
+    colour = colour * transmittance + inscatter;
 
-    colour *= exposure;
-    if (uSpherical == 1) {
-        // The sky's display transform, so cloud hazed by the air meets the
-        // sky behind it. Per channel below white, which softens the warm
-        // cast a long low path of air leaves on lit tops (kept, it turned
-        // the horizon's clouds orange at noon); hue kept above white, or a
-        // dusk sun's orange light maps to white. See docs: atmosphere.md,
-        // clouds at the horizon.
-        colour = displayColour(colour);
-    } else {
-        // The flat field has no air and draws over the caller's own colours
-        // (hazeColor, the background), set for this soft knee: on the PEAK
-        // channel, scaling the colour, which preserves hue (a per-channel
-        // knee maps a bright orange sun to white). Colours are never
-        // negative, so peak / sqrt(peak² + 1) / peak needs no zero guard.
-        float peak = max(max(colour.r, colour.g), colour.b);
-        colour *= inversesqrt(peak * peak + 1.0);
-    }
-
-    // Haze acts on the displayed colour: it sits between the eye and the cloud.
-    colour = mix(colour, hazeColor, haze);
+    // The sky's display transform, so cloud hazed by the air meets the sky
+    // behind it. Per channel below white, which softens the warm cast a long
+    // low path of air leaves on lit tops (kept, it turned the horizon's clouds
+    // orange at noon); hue kept above white, or a dusk sun's orange light maps
+    // to white. See docs: atmosphere.md, clouds at the horizon.
+    colour = displayColour(colour * exposure);
 
     fragColor = vec4(colour * alpha, alpha);   // premultiplied "over"
 }

@@ -112,14 +112,14 @@ terrain's GPU chunk cap is never above its RAM one.
   without one reads as version 1.
 - **Objects find their own section** (`SETTINGS_TYPE` on each class:
   `Terrain`, `Atmospheres`, `Sky`, `PlanetClouds` (and its layers,
-  `CloudVolume` and `CloudSheet`), `CloudField` / `Clouds`, `Ocean`), so `apply()` and `settings_for()` work for any mix of
-  them.
+  `CloudVolume` and `CloudSheet`), `Sea`), so `apply()` and
+  `settings_for()` work for any mix of them.
 
 What the schema does not say:
 
 - **Dependencies between knobs.** Foam detail means nothing with foam off,
-  and the planet-cloud knobs (overlap, octaves, shells, tile budgets) mean
-  nothing to the flat cloud field. A menu shows them all.
+  and the cirrus takes only `reflected` from the clouds' knobs. A menu shows
+  them all.
 - **Which knobs matter to a given scene.** A game without an ocean simply
   never builds the ocean, but its section is still in the schema.
 
@@ -176,7 +176,6 @@ labels and ranges below are what the schema gives.
 | `uploads_per_frame` (advanced) | Tile uploads per frame | live | 1 to 32 | 3 | 3 | 3 | 3 |
 | `resorts_per_frame` (advanced) | Tile re-sorts per frame | live | 1 to 32 | 4 | 4 | 4 | 4 |
 | `tile_cache` (advanced) | Tiles kept | live | 0 to 2000 tiles | 160 | 160 | 160 | 160 |
-| `resort_frames` (advanced) | Re-sort period (flat clouds) | live | 1 to 60 frames | 8 | 8 | 8 | 8 |
 
 ### `ocean`: Sea (`OceanSettings`)
 
@@ -222,9 +221,6 @@ labels and ranges below are what the schema gives.
   made HIGH *faster*: the loop is no longer unrolled, and the frames
   measured 13.3–13.7 ms instead of 15.8 ms at the sea-level night pose. The
   images are unchanged.
-- **The flat cloud field** takes the same `CloudSettings`, but only its
-  billboard count, sun march, reflection and re-sort period. The other
-  fields belong to the planet's clouds.
 - **The sea's reflection** is sized from the main camera's display region
   (`app.cam`). A game that renders its scene at a lower resolution than the
   window gets a reflection sized to that resolution, with nothing to set.

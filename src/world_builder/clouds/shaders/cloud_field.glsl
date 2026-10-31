@@ -1,7 +1,8 @@
 // The cloud density field and the sun march through it, shared by the
 // fragment stage (cloud.frag) and the planet billboards' vertex stage
-// (cloud_sphere.vert: the layer parameters, sunDir, uCloudDebug). Include with
-// #pragma include. noise.py mirrors the density on the CPU (fbm, density,
+// (cloud_sphere.vert: the layer parameters, sunDir, uCloudDebug); the cirrus
+// (cirrus.vert/.frag) takes its sunlight and phase helpers. Include with
+// #pragma include. noise.py mirrors the density on the CPU (fbm,
 // density_on_sphere), which is what billboard placement runs on, and the sun
 // march (sun_optical_depth_on_sphere), which the far deck's lighting table is
 // averaged from (deck_light_table).
@@ -12,11 +13,10 @@ uniform vec3  sunDir;            // FROM the scene TOWARD the sun, normalised
 
 // LAYER_VEC4S per cloud type, mirroring noise.pack_layer_params. Size is
 // MAX_LAYERS * LAYER_VEC4S (a test checks it): too small reads out of bounds,
-// and a mismatch with cloud.vert fails to link.
+// and a mismatch with cloud_sphere.vert fails to link.
 uniform vec4 layerParams[96];
 
-uniform int   uSpherical;        // 1: planet mode (see cloud.frag)
-uniform float planetRadius;      // sea-level radius (planet mode)
+uniform float planetRadius;      // sea-level radius
 // The weather (clouds.weather), by direction from the planet centre:
 // r = the target coverage, g = the fbm shift that gives it.
 uniform samplerCube weatherMap;
@@ -172,17 +172,13 @@ float slabHeight(Field f, float z) {
     return (z - f.slabBase) / max(f.slabThickness, 1e-3);
 }
 
-// Height of a field position: z on the flat field, above the sea-level
-// sphere on a planet.
+// Height of a field position (planet frame) above the sea-level sphere.
 float heightOf(vec3 p) {
-    return uSpherical == 1 ? length(p) - planetRadius : p.z;
+    return length(p) - planetRadius;
 }
 
-// The weather's fbm shift at a planet-frame position (none on the flat field).
+// The weather's fbm shift at a planet-frame position.
 float weatherShift(vec3 p) {
-    if (uSpherical == 0) {
-        return 0.0;
-    }
     return texture(weatherMap, p).g;
 }
 
@@ -250,7 +246,7 @@ float sunOpticalDepth(Field f, vec3 p) {
     return density * f.sunStepLength * f.fieldExtinction * f.shadowStrength;
 }
 
-// ── Sunlight on a planet's clouds (planet mode, through its own air) ──────────
+// ── Sunlight on a planet's clouds (through its own air) ───────────────────────
 // For the shaders that also include atmosphere.glsl (atmoSunlight).
 
 // The lit air's light on a cloud in the planet's shadow, as a share of the

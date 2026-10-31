@@ -27,8 +27,8 @@ whose stream function sets the direction of its fibres
 
 The clouds never see coverage directly: :func:`shift_table` turns it into the
 fbm shift that gives that coverage, exactly, from the field's sorted column
-peaks over the planet (:func:`noise.sphere_column_peaks`, like
-:func:`noise.column_peaks`, is the inverse of the coverage function).
+peaks over the planet (:func:`noise.sphere_column_peaks` is the inverse of
+the coverage function).
 The GPU texture holds both (r = coverage for the far deck, g = the shift for
 the density), so the near field and the far deck agree by construction.
 

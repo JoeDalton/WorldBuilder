@@ -162,9 +162,6 @@ class OceanLook:
 
     :ivar tuned_elevation: the sun's elevation (degrees) the water's colour
         was tuned in: the water is lit relative to that daylight
-    :ivar haze_color: ignored (the atmospheres haze the sea); kept so older
-        looks still build
-    :ivar haze_distance: ignored, likewise
     """
 
     water_color: tuple[float, float, float] = (0.02, 0.06, 0.14)
@@ -187,12 +184,9 @@ class OceanLook:
     near_band: tuple[float, float] = (12000.0, 18000.0)
     anchor_range: float = 50000.0
     tuned_elevation: float = 35.0
-    haze_color: tuple[float, float, float] = (0.2, 0.2, 0.4)
-    haze_distance: float = 150000.0
 
-    #: The fields that are not Sea's arguments: the world's own, and those
-    #: kept for older looks
-    WORLD_FIELDS = ("tuned_elevation", "haze_color", "haze_distance")
+    #: The fields that are not Sea's arguments: the world's own
+    WORLD_FIELDS = ("tuned_elevation",)
 
 
 @dataclass(frozen=True)

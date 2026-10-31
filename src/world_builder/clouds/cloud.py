@@ -1,19 +1,16 @@
 """
-cloud.py — Where a cloud type's billboards go (CPU only).
+cloud.py — The cloud types and what they cost (CPU only).
 
 There is no "cloud" object: a cloud type is one density field over a slab of sky
 (noise.py), clouds are its features, and a billboard is a marker saying "there is
-cloud here, come and sample it". :func:`sample_field_particles` places them by
-rejection-sampling the very field the shader draws, so the field alone bounds each
-cloud and its crisp edge is the field's edge.
+cloud here, come and sample it". A planet's billboards are placed per
+cube-sphere tile by rejection-sampling the very field the shader draws
+(sphere.py), so the field alone bounds each cloud and its crisp edge is the
+field's edge.
 
-Particles are grouped into spatial CELLS, the units of draw-order sorting and
-toroidal recycling (field.py), stored ragged with an offsets table. (A planet's
-billboards are placed the same way, per cube-sphere tile: sphere.py.)
-
-Also here: the per-type presets (:data:`PRESETS`), what the clouds cost
-(:class:`CloudSettings` and its presets; :func:`with_settings`) and
-the sprite atlas.
+Here: the per-type presets (:data:`PRESETS`), what the clouds cost
+(:class:`CloudSettings` and its presets; :func:`with_settings`) and the
+billboards' sprite atlas.
 """
 
 from __future__ import annotations
@@ -32,18 +29,16 @@ from world_builder.clouds.noise import (
     MAX_LAYERS,
     MIE_ASYMMETRY_ICE,
     MIE_ASYMMETRY_WATER,
-    NOISE_SIZE,
     CloudOptics,
     DensityField,
     delta_eddington,
-    density,
     field_offset,
 )
 from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 
 #: Most billboard shells a planet's clouds take: one cull bin each between
 #: the opaque and transparent bins (``sphere._SHELL_BIN_SORTS``), which the
-#: sky, the deck and the flat field share. Their layers fit ``MAX_LAYERS``.
+#: sky and the deck share. Their layers fit ``MAX_LAYERS``.
 MAX_SHELLS = 6
 assert MAX_SHELLS < MAX_LAYERS
 
@@ -65,23 +60,17 @@ class CloudSpec:
                      change needs a rebuild
     optics           its :class:`CloudOptics` — shading only, changeable live
     radius           (min, max) billboard radius, metres; match the finest octave
-    volume_fraction  target sphere volume per unit of cloud volume: sets how
-                     UNIFORMLY billboards cover the volume, not how opaque it is
-                     (extinction is derived from it — see :func:`volume_fraction`)
     aspect           billboard long:short ratio. Area-preserving (sqrt(a) by
                      1/sqrt(a)), so extinction and count are untouched; the long
-                     axis follows noise.streak_direction
+                     axis lies level
     """
 
     field: DensityField
     optics: CloudOptics = CloudOptics()
     radius: tuple = (70.0, 140.0)
-    volume_fraction: float = 2.5
     aspect: float = 1.0
 
 
-# Octave scales stay the integer defaults (1/2/7/16): a recycle shifts an octave of
-# scale k by k noise periods, which is seamless only for whole k.
 PRESETS = {
     CloudType.CUMULUS: CloudSpec(
         # 2 km isotropic features over a 1 km slab; scattered fair-weather puffs,
@@ -96,8 +85,8 @@ PRESETS = {
         ),
         optics=CloudOptics(
             shadow_strength=0.3,
-            # 8x stays clear of the tonemap's knee; the reference's 24x washes a
-            # dusk deck into one flat colour.
+            # 8x stays clear of the tonemap's shoulder; the reference's 24x
+            # washes a dusk deck into one flat colour.
             forward_gain=8.0,
             forward_anisotropy=delta_eddington(MIE_ASYMMETRY_WATER),
         ),
@@ -127,11 +116,9 @@ PRESETS = {
             forward_anisotropy=delta_eddington(MIE_ASYMMETRY_WATER),
         ),
         radius=(90.0, 180.0),
-        volume_fraction=2.0,
     ),
     CloudType.CIRRUS: CloudSpec(
         # Anisotropy IS the fibrous look: 10 km along X, 1.6 km along Y, 130 m in Z.
-        # Unequal horizontal periods mean no seamless recycle (a fade band instead).
         field=DensityField(
             slab=(8000.0, 400.0),
             density=0.008,
@@ -159,7 +146,6 @@ PRESETS = {
             forward_anisotropy=delta_eddington(MIE_ASYMMETRY_ICE, applicability=0.15),
         ),
         radius=(90.0, 200.0),
-        volume_fraction=1.5,
         # Gentler than the field's 6.25:1, or the anisotropy is double-counted.
         aspect=3.5,
     ),
@@ -206,31 +192,27 @@ _OCTAVE_SCHEDULES = ((4, 3, 3, 2), (4, 4, 3, 3), (4, 4, 4, 3), (4,))
 @dataclass(frozen=True)
 class CloudSettings(QualitySettings):
     """What the clouds cost (:mod:`world_builder.quality`), for a planet's
-    (:class:`sphere.CloudVolume`) and the flat field
-    (:class:`field.CloudField`); the fields marked "planet clouds" do nothing
-    on the flat field.
+    (:class:`sphere.CloudVolume`, and :class:`cirrus.CloudSheet` above it).
 
     :ivar count_scale: billboards relative to the types as authored: their
         sizes go as count^(-1/3), so coverage and opacity hold
         (:func:`scale_count`). Rebuild
     :ivar march_scale: sun-march steps relative to the types', over the same
         reach (:func:`scale_march`). Live
-    :ivar overlap_near: planet clouds: billboard overlap in the nearest shell
+    :ivar overlap_near: billboard overlap in the nearest shell
         (volume per unit of cloud volume; the cost, not the opacity). Rebuild
     :ivar overlap_far: in the shells past it. Rebuild
-    :ivar shell_octaves: planet clouds: noise octaves per shell, the last
+    :ivar shell_octaves: noise octaves per shell, the last
         repeating (and going to the deck). Rebuild
-    :ivar shells: planet clouds: billboard shells before the deck takes
+    :ivar shells: billboard shells before the deck takes
         over, each twice as far as the last. Rebuild
     :ivar reflected: drawn in the ocean's reflection. Live
     :ivar half_resolution: drawn at half the view's resolution and laid over
         it (``clouds.half_res``; World, given the split cameras, and the
         demo draw that pass). Live
-    :ivar uploads_per_frame: planet clouds: tiles uploaded per frame. Live
-    :ivar resorts_per_frame: planet clouds: tiles re-sorted per frame. Live
-    :ivar tile_cache: planet clouds: tiles kept beyond those wanted. Live
-    :ivar resort_frames: the flat field: frames over which its cells are
-        re-sorted. Live
+    :ivar uploads_per_frame: tiles uploaded per frame. Live
+    :ivar resorts_per_frame: tiles re-sorted per frame. Live
+    :ivar tile_cache: tiles kept beyond those wanted. Live
     """
 
     count_scale: float = knob(
@@ -280,7 +262,7 @@ class CloudSettings(QualitySettings):
         unit="shells",
         range=(1, MAX_SHELLS),
         advanced=True,
-        help="Billboard shells, each twice as far as the last, before the flat "
+        help="Billboard shells, each twice as far as the last, before the "
         "deck takes over.",
     )
     reflected: bool = knob(
@@ -302,9 +284,6 @@ class CloudSettings(QualitySettings):
     )
     tile_cache: int = knob(
         160, "Tiles kept", unit="tiles", range=(0, 2000), advanced=True
-    )
-    resort_frames: int = knob(
-        8, "Re-sort period (flat clouds)", unit="frames", range=(1, 60), advanced=True
     )
 
     LABEL: ClassVar = "Clouds"
@@ -340,9 +319,9 @@ class CloudSettings(QualitySettings):
 def scale_count(spec: CloudSpec, count: float) -> CloudSpec:
     """A cloud type with *count* times its billboards, as large in all: their
     radii go as count^(-1/3), not the volume fraction (at a fixed fraction
-    the count falls as radius⁻³, the lod_shells trade; cutting the fraction
-    instead strips billboards from the fringes and loses silhouette:
-    measured -18% vs -8.8% at LOW).
+    the count falls as radius⁻³, the trade each LOD shell makes; cutting the
+    fraction instead strips billboards from the fringes and loses
+    silhouette: measured -18% vs -8.8% at LOW).
 
     :returns: a scaled copy (*spec* itself at 1)
     """
@@ -374,153 +353,6 @@ def with_settings(spec: CloudSpec, settings: CloudSettings) -> CloudSpec:
     """A cloud type at the settings' cost (:func:`scale_count`,
     :func:`scale_march`)."""
     return scale_march(scale_count(spec, settings.count_scale), settings.march_scale)
-
-
-# ── Optical calibration ───────────────────────────────────────────────────────
-
-
-def volume_fraction(radii: np.ndarray, cloud_volume: float) -> float:
-    """Sphere volume per unit of cloud volume, phi = (4/3)·π·Σr³ / V.
-
-    A ray crosses n·πr² billboards per metre, each with mean chord 4r/3, so
-    ``extinction = field.density / phi`` makes the billboard sum accumulate the
-    field's own optical depth per metre, whatever the count and radii. Exact, since
-    V comes from the rejection-sampling accept rate. Values above 1 are normal.
-
-    :param radii: (n,) billboard radii, metres
-    :param cloud_volume: the cloud's volume, cubic metres
-    :returns: phi (0 for no billboards or no volume)
-    """
-    radii = np.asarray(radii, dtype=np.float64)
-    if len(radii) == 0 or cloud_volume <= 0.0:
-        return 0.0
-    return float((4.0 / 3.0 * np.pi) * (radii**3).sum() / cloud_volume)
-
-
-def snap_to_noise_period(spec: DensityField, requested: float) -> tuple[float, bool]:
-    """The largest recycle-box width up to *requested* that recycles seamlessly.
-
-    A box a whole number of noise periods wide teleports cells to bit-identical
-    field, so no fade is needed. Impossible for an anisotropic field (two periods),
-    and not attempted below one period (the fade band covers it).
-
-    :param spec: the layer's field
-    :param requested: the box width asked for, metres
-    :returns: (width, seamless)
-    """
-    scale_x, scale_y = spec.noise_scale[0], spec.noise_scale[1]
-    if abs(scale_x - scale_y) > 1e-12 or scale_x <= 0.0:
-        return float(requested), False
-    period = NOISE_SIZE / scale_x
-    multiple = int(requested // period)
-    if multiple < 1:
-        return float(requested), False
-    return float(multiple * period), True
-
-
-# ── Placement ──────────────────────────────────────────────────────────────────
-
-
-def sample_field_particles(
-    spec: CloudSpec,
-    volume: np.ndarray,
-    domain: float,
-    cell_size: float,
-    atlas_rects: list[tuple[float, float, float, float]],
-    seed: int = 0,
-    batch: int = 50_000,
-) -> dict:
-    """Place this type's billboards wherever its density field is non-zero.
-
-    Keeps points on ``density > 0`` rather than in proportion to density: the
-    shader already modulates each fragment by density, so weighting placement too
-    would double-count and starve the edges. The accept rate measures the cloud
-    volume, which is what makes the extinction exact (:func:`volume_fraction`).
-
-    :param spec: the type, its field's threshold resolved
-    :param volume: the noise octave, already quantised to the GPU's 8 bits
-    :param domain: square domain width, metres (see :func:`snap_to_noise_period`)
-    :param cell_size: side of one spatial cell, metres
-    :param atlas_rects: sprite rects (u, v, du, dv) to draw thickness profiles from
-    :param seed: RNG seed for the positions, radii and sprites
-    :param batch: rejection-sampling batch size
-    :returns: dict with ``local`` (n,3) offsets from each particle's cell centre,
-        ``radii`` (n,), ``uv`` (n,4), ``cell_centres`` (k,3), ``cell_start``
-        (k+1,) ragged offsets, ``phi`` and ``cloud_volume``
-    :raises ValueError: if the field is empty over its slab
-    """
-    rng = np.random.default_rng(seed)
-    field = spec.field
-    half = domain * 0.5
-    base_z, thickness = field.slab
-    slab_volume = domain * domain * thickness
-
-    # E[r³] for r uniform on [a,b] is (b⁴-a⁴)/(4(b-a)); the mean CUBE, not the
-    # cube of the mean.
-    r_lo, r_hi = spec.radius
-    mean_r3 = (r_hi**4 - r_lo**4) / (4.0 * (r_hi - r_lo)) if r_hi > r_lo else r_lo**3
-    sphere = (4.0 / 3.0) * np.pi * mean_r3
-
-    kept, tried, accepted = [], 0, 0
-    target = None
-    while target is None or accepted < target:
-        points = np.empty((batch, 3))
-        points[:, 0] = rng.uniform(-half, half, batch)
-        points[:, 1] = rng.uniform(-half, half, batch)
-        points[:, 2] = rng.uniform(base_z, base_z + thickness, batch)
-        inside = points[density(volume, field, points) > 0.0]
-        tried += batch
-        accepted += len(inside)
-        kept.append(inside)
-        if target is None:
-            rate = accepted / tried
-            if rate <= 0.0:
-                raise ValueError(
-                    f"{spec.field} is empty over its slab: nothing to place. "
-                    "The threshold window is probably above the fbm's range."
-                )
-            target = int(slab_volume * rate * spec.volume_fraction / sphere)
-        if tried > 500 * batch:  # a runaway guard, not an expected path
-            break
-    points = np.concatenate(kept)[:target]
-
-    cloud_volume = slab_volume * (accepted / tried)
-    radii = rng.uniform(r_lo, r_hi, len(points)).astype(np.float32)
-    uv = np.asarray(atlas_rects, dtype=np.float32)[
-        rng.integers(len(atlas_rects), size=len(points))
-    ]
-
-    # Sorting by flat cell index makes each cell's particles a contiguous slice,
-    # which keeps the per-frame ragged re-sort loop-free.
-    n_side = max(1, int(round(domain / cell_size)))
-    step = domain / n_side
-    ix = np.clip(((points[:, 0] + half) / step).astype(np.int64), 0, n_side - 1)
-    iy = np.clip(((points[:, 1] + half) / step).astype(np.int64), 0, n_side - 1)
-    flat = ix * n_side + iy
-    order = np.argsort(flat, kind="stable")
-    points, radii, uv, flat = points[order], radii[order], uv[order], flat[order]
-
-    population = np.bincount(flat, minlength=n_side * n_side)
-    # Empty cells (over a fifth at cumulus coverage) would still cost a sort rank.
-    occupied = np.flatnonzero(population)
-    cell_start = np.concatenate([[0], np.cumsum(population[occupied])]).astype(np.int64)
-    centres = np.empty((len(occupied), 3), np.float32)
-    centres[:, 0] = -half + (occupied // n_side + 0.5) * step
-    centres[:, 1] = -half + (occupied % n_side + 0.5) * step
-    centres[:, 2] = base_z + 0.5 * thickness
-
-    local = (points - np.repeat(centres, population[occupied], axis=0)).astype(
-        np.float32
-    )
-    return {
-        "local": local,
-        "radii": radii,
-        "uv": uv,
-        "cell_centres": centres,
-        "cell_start": cell_start,
-        "phi": volume_fraction(radii, cloud_volume),
-        "cloud_volume": cloud_volume,
-    }
 
 
 # ── Sprite atlas ──────────────────────────────────────────────────────────────

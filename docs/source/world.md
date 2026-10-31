@@ -76,10 +76,8 @@ parts.
 - **`OceanLook`**: `Sea`'s arguments: water colour, wind, swell, foam,
   `near_band` (the altitudes over which the near look fades into the far
   one) and `anchor_range` (how far the waves stay anchored before
-  re-anchoring). The other fields are the world's own:
-  - `tuned_elevation`: the sun elevation the water colour was tuned in;
-  - `haze_color` and `haze_distance`: ignored (the atmosphere hazes the
-    sea), kept so older looks still build.
+  re-anchoring). Its `tuned_elevation` is the world's own: the sun
+  elevation the water colour was tuned in.
 - **`FieldLook`**: an asteroid field or a planet's ring
   (`AsteroidField`'s arguments, see [Asteroid fields](asteroids.md)):
   `name` (what `World.field(name)` finds it by), `spec`, `position`,

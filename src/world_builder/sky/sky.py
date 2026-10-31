@@ -43,7 +43,7 @@ from world_builder.sky.starfield import NebulaStyle, StarCatalogue, Starfield
 SHADER_PATH = Path(__file__).parent / "shaders"
 #: The sky's cull bin: after the opaque bin (20), so its per-pixel atmosphere
 #: is computed only where no terrain was drawn (its vertices sit on the far
-#: plane, depth-tested), and before the clouds (``clouds.sphere``, 22-29).
+#: plane, depth-tested), and before the clouds (``clouds.sphere``, 22-28).
 #: Fixed: the dome (draw order 0), the stars (1), then the cirrus where it
 #: is behind every other cloud (2, ``clouds.cirrus``).
 SKY_BIN = "sky"

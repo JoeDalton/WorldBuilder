@@ -87,7 +87,7 @@ DEFAULT_COVER = 0.55
 #: Segments of a ring's hull: its outer wall is at most R * pi^2 / (2 N^2)
 #: beyond the ring (500 m at 110,000 km).
 RING_SEGMENTS = 1024
-#: The cull bin: after the sky (21) and the clouds (22-29), blended over them.
+#: The cull bin: after the sky (21) and the clouds (22-28), blended over them.
 HAZE_BIN = "fixed"
 HAZE_BIN_SORT = 30
 

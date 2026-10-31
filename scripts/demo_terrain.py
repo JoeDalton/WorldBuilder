@@ -1040,8 +1040,8 @@ def start_pose(spec, pose: dict | None, start: tuple[float, float] | None):
 
 
 def start_sun(spec, pose: dict | None) -> np.ndarray:
-    """:returns: the sun where the original flat demo had it (azimuth 210,
-    elevation 35), as seen at the start *pose* (the reference without one)"""
+    """:returns: the demo's sun (azimuth 210, elevation 35), as seen at the
+    start *pose* (the reference without one)"""
     pose = pose or {}
     frame = TangentFrame.at(
         pose.get("lat", spec.reference_lat), pose.get("lon", spec.reference_lon)

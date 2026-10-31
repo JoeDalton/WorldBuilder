@@ -3,8 +3,8 @@
 WorldBuilder procedurally builds worlds in Panda3D: cube-sphere planetary
 terrain seen from orbit to the ground, single-scattering atmospheres, a
 procedural sky (stars, nebulae, the sun), a reflective sea drawn on the terrain, and
-volumetric billboard clouds (a flat field, or over a whole planet, following
-its weather). It started inside
+a planet's clouds (volumetric billboards following its weather, and high
+cirrus above them). It started inside
 [SpaceFlight](https://github.com/JoeDalton/SpaceFlight), which uses it for its
 ocean and clouds.
 

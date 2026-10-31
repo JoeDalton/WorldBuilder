@@ -166,8 +166,6 @@ and no look gets the far look only.
   `Atmospheres.light_at`. The far look is lit per pixel.
 - **Atmosphere.** Both looks are seen through the atmospheres like the
   terrain is, in linear light before the tonemap.
-  `OceanLook.haze_color` / `haze_distance` are ignored, kept so older looks
-  still build.
 - **Collision follows the drawn water.** `Terrain.set_swell` hands the swell
   (`world_builder.ocean.swell.Swell`, which `Sea` makes every frame) to the
   query and to the native collision solid.

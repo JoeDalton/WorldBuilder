@@ -11,10 +11,11 @@ planet's circulation, weather systems, climate and terrain) shifts the fbm by
 exactly what gives its coverage there. Every view of the clouds evaluates that
 same function, so the pattern seen from orbit is the one you fly into:
 
-* **near** (the inner LOD shells): volumetric billboards, as the flat field
-  draws them, generated per cube-sphere tile in the shared worker pool by
-  rejection sampling of the density. Each shell doubles the billboards' size
-  and the tiles' (``lod_shells``' trade: each shell costs half the previous)
+* **near** (the inner LOD shells): volumetric billboards, generated per
+  cube-sphere tile in the shared worker pool by rejection sampling of the
+  density. Each shell doubles the billboards' size and the tiles' (at a fixed
+  volume fraction, the count falls as the cube of the size: each shell costs
+  half the previous)
   and crossfades with the next by distance, on optical depth. Below ULTRA the
   far shells are cheaper per pixel: fewer octaves (``CloudSettings.shell_octaves``; the
   dropped ones count as their mean and the shell's threshold moves to make up
@@ -32,8 +33,8 @@ same function, so the pattern seen from orbit is the one you fly into:
   the coverage): no change of colour closing in, and a terminator in the
   reddened sunlight's colour.
 
-The clouds are geometry that depth-tests against the scene, like the flat
-field: terrain occludes them with no depth plumbing. Premultiplied "over"
+The clouds are geometry that depth-tests against the scene: terrain occludes
+them with no depth plumbing. Premultiplied "over"
 needs back to front: the deck draws first, then each shell in its own
 back-to-front bin, coarsest first (a coarse tile holding the camera has its
 centre near it, but its visible billboards are all farther than the finer
@@ -136,12 +137,10 @@ _SHADERS = Path(__file__).parent / "shaders"
 CLOUD_BIN = "cloud_sphere"
 _CLOUD_BIN_SORT = 22
 #: The shells' bin sorts, shell 0 (the nearest, drawn last) first: at most
-#: :data:`cloud.MAX_SHELLS` shells. 25 is skipped: it is the flat field's bin
-#: (``field._CLOUD_BIN_SORT``), and a tie would leave the two kinds' order
-#: undefined in one scene.
-_SHELL_BIN_SORTS = (29, 28, 27, 26, 24, 23)
-#: Side of a first-shell tile, metres (a quarter of the flat field's 32 km box),
-#: rounded to the nearest level of the planet's grid.
+#: :data:`cloud.MAX_SHELLS` shells.
+_SHELL_BIN_SORTS = (28, 27, 26, 25, 24, 23)
+#: Side of a first-shell tile, metres, rounded to the nearest level of the
+#: planet's grid.
 BASE_TILE_SIZE = 8000.0
 #: Fewest candidate points per rejection-sampling batch of a tile: enough to
 #: measure the accept rate its billboard count follows.
@@ -316,10 +315,13 @@ def generate_cloud_tile(
 ) -> CloudTile:
     """Place one tile's billboards where the density field is non-zero.
 
-    The worker-process entry point. Rejection sampling, as the flat field's
-    :func:`cloud.sample_field_particles`, with the shell's octaves and
-    threshold: the accept rate measures the cloud volume, which sets the
-    count for the shell's volume fraction. A sparse tile gives up after 40
+    The worker-process entry point. Rejection sampling of the very field the
+    shader draws, with the shell's octaves and threshold: points are kept on
+    ``density > 0`` (the shader modulates by density, so weighting placement
+    too would double-count and starve the edges), and the accept rate
+    measures the cloud volume, which sets the count for the shell's volume
+    fraction (``extinction = density / phi`` then makes the billboard sum
+    take the field's own optical depth per metre). A sparse tile gives up after 40
     batches with what it found.
 
     :param spec: the clouds
@@ -634,7 +636,7 @@ class CloudVolume:
         :param settings: what the clouds cost (:class:`cloud.CloudSettings`:
             the billboards, their shells and octaves, the sun march, the
             tile budgets; :meth:`set_settings` changes it); None = HIGH
-        :param sun_brightness: direct-term gain (as :class:`field.CloudField`'s)
+        :param sun_brightness: direct-term gain
         :param sky_strength: ambient sky weight (live: :meth:`set_sky_light`)
         :param sky_occlusion: fraction of sky light reaching the slab's
             underside
@@ -733,7 +735,6 @@ class CloudVolume:
             noiseSize=float(NOISE_SIZE),
             noiseOffset=Vec3(0, 0, 0),
             deckLightCosMin=DECK_LIGHT_COS_MIN,
-            uSpherical=1,
             planetRadius=self.radius,
             uOwnAtmosphere=-1 if atmosphere is None else int(atmosphere),
             camPos=self._camera_planet,
@@ -743,14 +744,11 @@ class CloudVolume:
             # White: the planet's air colours it (atmoSunlight in cloud.frag).
             sunColor=Vec3(1.0, 1.0, 1.0),
             skyColor=Vec3(0.45, 0.6, 0.85),
-            hazeColor=Vec3(0.45, 0.6, 0.85),
             sunBrightness=float(sun_brightness),
             skyStrength=float(sky_strength),
             skyOcclusion=float(sky_occlusion),
             exposure=float(exposure),
-            horizonFade=0.0,
             uPixelAngle=0.001,
-            earthCurvature=0.0,
             nearFadeRadii=float(near_fade_radii),
             uCloudDebug=0,
         )
@@ -782,8 +780,7 @@ class CloudVolume:
         shells and regenerate every tile (on the same worker channel), so the
         near clouds refill over a few seconds; the deck stays.
 
-        :param settings: the new settings (``resort_frames`` is the flat
-            field's and does nothing here)
+        :param settings: the new settings
         """
         changes = self._settings.changes(settings)
         if not changes:
@@ -833,8 +830,8 @@ class CloudVolume:
         tile0 = self.grid.chunk_size(base_level)
         table = self._table
 
-        # The shells and their crossfade bands (lod_shells' layout, for a
-        # tile four times smaller than the box), then the deck.
+        # The shells and their crossfade bands (each twice the last, for a
+        # tile four times smaller than the domain), then the deck.
         domain = 4.0 * tile0
         bands = [
             (0.62 * domain * 2**k * 0.5, 0.85 * domain * 2**k * 0.5)
@@ -869,8 +866,6 @@ class CloudVolume:
             params[k] = pack_layer_params(
                 shell.field_of(field),
                 extinction=field.density / max(fraction * sprite, 1e-6),
-                wrap_radius=1e12,
-                wrap_fade_band=0.0,
                 octave_mean=octave_mean,
                 optics=spec.optics,
                 aspect=spec.aspect,
@@ -890,8 +885,6 @@ class CloudVolume:
         params[shells] = pack_layer_params(
             deck.field_of(field),
             extinction=field.density,  # per metre of the slab's path
-            wrap_radius=1e12,
-            wrap_fade_band=0.0,
             octave_mean=octave_mean,
             optics=deck_optics,
             fade_in=bands[-1],

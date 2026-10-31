@@ -343,6 +343,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The flat-world parts: the flat cloud field (`world_builder.clouds.field`:
+  `CloudField`, `CloudLayer`, `Clouds`, `lod_shells`; `shaders/cloud.vert`;
+  `scripts/demo_clouds.py`) and what only it used:
+  - `cloud.sample_field_particles`, `snap_to_noise_period`,
+    `volume_fraction` and `CloudSpec.volume_fraction`;
+  - `noise.density`, `column_peaks`, `resolve_field`, `measure_coverage` and
+    `streak_direction` (the planet's are `density_on_sphere`,
+    `sphere_column_peaks` and `with_threshold`);
+  - `CloudSettings.resort_frames` (saved settings that name it load with a
+    warning);
+  - the shaders' flat mode (`uSpherical`, `earthCurvature`, `horizonFade`,
+    `hazeColor`, the soft-knee tonemap) and `pack_layer_params`'
+    `wrap_radius` and `wrap_fade_band`;
+  - `world_builder.PLANET_RADIUS_M`, the flat parts' shared droop radius.
+
+  The planet clouds' shell bins are now the contiguous sorts 23-28.
+- The flat sea's leftovers: `OceanLook.haze_color` and `haze_distance`
+  (ignored since the sea is drawn on the terrain) and the historical
+  `ocean/OCEAN_SWELL_ARTIFACT_REPORT.md`.
+
 - `world_builder.ocean.Ocean`, its swell mesh, `ocean/seabed.py` and the
   `ocean.vert` / `ocean.frag` / `seabed.glsl` shaders; use `Sea`, which a
   `World` builds from an `OceanLook`. (#20)

@@ -231,7 +231,7 @@ once per process (the main thread for the textures, each worker for
 placement, cached by spec).
 
 **Coverage to the field, exactly.** The clouds never use coverage directly.
-The sorted column peaks of the field (`noise.column_peaks`, the coverage
+The sorted column peaks of the field (`noise.sphere_column_peaks`, the coverage
 calibration) are the inverse of the coverage function: a column is cloud when
 its peak plus the shift clears the threshold, so
 `shift(c) = threshold_lo − quantile(peaks, 1 − c)`. `weather.shift_table`
@@ -246,11 +246,12 @@ under its weather, and the coverage alone, for tuning.
 ### Near: billboard shells
 
 Billboards are generated per **cube-sphere tile** in the shared worker pool
-(`generate_cloud_tile`), by rejection sampling of the density, as the flat
-field places its own. Shell *k* uses tiles of level `base + k` (8 km at the
-first) and billboards twice the size of shell *k − 1*; adjacent shells
-crossfade by distance on optical depth (the flat field's `lod_shells`
-layout). Each shell costs about half the previous.
+(`generate_cloud_tile`), by rejection sampling of the density
+([clouds](clouds.md#the-types-and-their-cost)). Shell *k* uses tiles of level
+`base + k` (8 km at the first) and billboards twice the size of shell
+*k − 1*; adjacent shells crossfade by distance on optical depth, over a
+shared band so their weights sum to 1. Each shell costs about half the
+previous.
 
 Per pixel, the cost depends on the settings (`CloudSettings`, its presets
 by `QualityLevel`: LOW, MID, HIGH, ULTRA; the demo's F4 cycles them; ULTRA, above HIGH, keeps all four octaves on every shell;
@@ -267,7 +268,7 @@ march's steps, and:
   holds within 2 % (tested) and the crossfades still agree; the placement
   evaluates the same octaves and threshold.
 - **Overlap** (`CloudSettings.overlap_near`, `overlap_far`): billboard volume per unit of
-  cloud volume, 2.5 at HIGH (the flat field's), less at MID and LOW. The
+  cloud volume, 2.5 at HIGH, less at MID and LOW. The
   extinction is divided by it, so the mean opacity holds, but fewer, more
   opaque billboards look lumpier and hit the per-billboard optical-depth cap
   sooner (thinner dense cores).
@@ -413,8 +414,7 @@ ice cloud, 8-9 km up by default, fibrous and streaming along the upper wind.
 
 **A surface, not billboards.** Cirrus is a kilometre deep at most and tens of
 kilometres across, and optically thin. Billboards would give it no volume
-worth their cost, and their puffs fight its fibres (the flat field's `CIRRUS`
-preset shows both). So it lies on one sphere at the slab's mid-height, and a
+worth their cost, and their puffs fight its fibres. So it lies on one sphere at the slab's mid-height, and a
 sight line crosses `thickness / |cos|` of the slab where it meets it (at
 most 4 slab depths: past that every patch saturated toward the horizon into a
 flat plate). Its optical depth saturates softly toward
@@ -533,8 +533,8 @@ near-identical colours, so their order within a draw does not show.
 | `behind` | where sight lines leave the sphere (all of them from below) | the sky's (21, fixed), draw order 2: after the dome and the stars, before the deck (22) and every shell |
 | `front` | where they enter it (only from above) | Panda's "transparent" (30, back to front by each group's centre): after every cloud bin, before a game's translucent effects nearer than the stamps |
 
-The cloud bins 21-29 are all taken, so no new sort fits between them; these
-two need neither a new sort nor a change to Panda's own.
+Neither needs a bin of its own. The `front` stamps belong among a game's
+translucent things: Panda's transparent bin sorts them all back to front.
 
 - **The depth split** needs nothing: the far range draws before the near
   one, and everything near is in front of everything far.
@@ -562,8 +562,8 @@ volume to fly through.
 - **Shadows on the ground:** clouds do not shade the terrain; the cirrus does
   not shade the cumulus either.
 - **One cumulus-like type per planet** (cumulus in the demo), with the cirrus
-  above it; the flat field mixes types, the planet field could take one per
-  slab (the weather map could then say which).
+  above it; the planet field could take one per slab (the weather map could
+  then say which).
 - **Flying through the cirrus:** from inside its slab it is a veil fading
   near the camera, with no volume.
 - **Weather that moves:** the map is fixed; the cyclones could drift with the
