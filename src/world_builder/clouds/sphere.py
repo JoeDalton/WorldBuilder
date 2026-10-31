@@ -128,7 +128,9 @@ if TYPE_CHECKING:
 _SHADERS = Path(__file__).parent / "shaders"
 #: Cull bins, between opaque (20) and transparent (30), after the sky's (21,
 #: ``sky.SKY_BIN_SORT``): the deck's first, then one back-to-front bin per
-#: shell, the coarsest first.
+#: shell, the coarsest first. A cirrus sheet above (:mod:`cirrus`) draws in
+#: the sky's bin where it is behind them and in "transparent" where it is in
+#: front.
 CLOUD_BIN = "cloud_sphere"
 _CLOUD_BIN_SORT = 22
 #: The shells' bin sorts, shell 0 (the nearest, drawn last) first: at most
@@ -488,9 +490,12 @@ def _tile_node(tile: CloudTile) -> tuple[NodePath, GeomTriangles, float]:
     return NodePath(node), tris, reach
 
 
-def _deck_mesh(radius: float, quads: int = DECK_QUADS) -> GeomNode:
+def deck_mesh(
+    radius: float, quads: int = DECK_QUADS, name: str = "cloud_deck"
+) -> GeomNode:
     """A cube-sphere of radius *radius*, never culled (the caller makes it
-    two-sided: the camera may be above or below it)."""
+    two-sided: the camera may be above or below it). The deck's, and the
+    cirrus sheet's (:mod:`cirrus`)."""
     t = np.linspace(-1.0, 1.0, quads + 1)
     a, b = np.meshgrid(t, t)
     positions, indices = [], []
@@ -512,7 +517,7 @@ def _deck_mesh(radius: float, quads: int = DECK_QUADS) -> GeomNode:
     memoryview(tris.modify_vertices()).cast("B")[:] = index.tobytes()
     geom = Geom(vdata)
     geom.add_primitive(tris)
-    node = GeomNode("cloud_deck")
+    node = GeomNode(name)
     node.add_geom(geom)
     node.set_bounds(OmniBoundingVolume())
     node.set_final(True)
@@ -683,7 +688,7 @@ class SphericalClouds:
         self.tiles_root = self.root.attach_new_node("cloud_tiles")
         self.tiles_root.set_shader(tile_shader)
         self.deck = self.root.attach_new_node(
-            _deck_mesh(self.radius + field.slab[0] + 0.5 * field.slab[1])
+            deck_mesh(self.radius + field.slab[0] + 0.5 * field.slab[1])
         )
         self.deck.set_shader(deck_shader)
         self.deck.set_two_sided(True)

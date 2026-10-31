@@ -530,9 +530,9 @@ def test_lower_quality_places_fewer_billboards(showbase):
 
 
 def test_deck_mesh_is_a_sphere():
-    from world_builder.clouds.sphere import _deck_mesh
+    from world_builder.clouds.sphere import deck_mesh
 
-    node = _deck_mesh(R + 2700.0, quads=4)
+    node = deck_mesh(R + 2700.0, quads=4)
     vdata = node.get_geom(0).get_vertex_data()
     data = np.frombuffer(bytes(memoryview(vdata.get_array(0))), np.float32).reshape(
         -1, 3

@@ -190,7 +190,9 @@ shadow each other, and why their silhouettes are exactly as crisp as the field.
     wisp, which wants fine detail along and softness across. A cheap fix would
     modulate the sprite's thickness by a 1-D tap of the noise volume along the
     stretched axis where aspect > 1 (passing the aspect to the fragment stage).
-    Not done: the field's own anisotropy may be enough.
+    Not done on the flat field. Planets draw their cirrus as a surface instead
+    (`cirrus.py`, [atmosphere](atmosphere.md#cirrus)): fibres along the upper
+    wind's stream function, no billboards.
   - **Live vs rebuild** is decided by whether placement depends on it.
     `set_sun` and `set_optics` are pure uniform writes. `set_coverage`
     re-derives the threshold from the cached column peaks (an array index, not
@@ -217,7 +219,10 @@ into the fbm shift that gives it exactly (`shift_table`). The same shaders draw
 it, with `uSpherical` set (`field.flat_mode_inputs` switches that mode off for
 the flat field); in that mode their colour goes through the sky's tonemap
 instead of the flat field's knee (Lighting, above). The design is described in
-[Atmosphere, sky and planet clouds](atmosphere.md#planet-clouds).
+[Atmosphere, sky and planet clouds](atmosphere.md#planet-clouds). High cirrus
+above them is a sheet of its own
+([`cirrus.py`](../../src/world_builder/clouds/cirrus.py), `CirrusSheet`): see
+[Cirrus](atmosphere.md#cirrus).
 
 ## Testing and the demo
 

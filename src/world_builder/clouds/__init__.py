@@ -12,7 +12,11 @@ In-scene billboard clouds.
                  generated per cube-sphere tile in the worker pool, a deck
                  beyond); not re-exported here.
     weather.py — the planet's weather: a cube map of target coverage
-                 (WeatherSpec) and the fbm shift that gives it.
+                 (WeatherSpec) and the fbm shift that gives it; the upper
+                 wind and the cirrus's cover.
+    cirrus.py  — a planet's high cirrus (CirrusSheet: one sheet, fibres along
+                 the upper wind, drawn behind and in front of the other
+                 clouds); not re-exported here.
 
 A billboard is a sample of a volume, not a sprite, and a cloud type is one density
 field over a slab of sky whose features are the clouds. Design notes:

@@ -50,27 +50,6 @@ in float vSkyTint;
 in vec3 vTwilight;
 out vec4 fragColor;
 
-// The lit air's light on a cloud in the planet's shadow, as a share of the
-// sunlight it would take (cloudTwilight).
-const float TWILIGHT_GLOW = 0.25;
-
-float hgPhase(float x, float g) {
-    float g2 = g * g;
-    return 0.25 * ((1.0 - g2) * pow(1.0 + g2 - 2.0 * g * x, -1.5));
-}
-
-// The pre-solved weights put 1 at 90°, forwardGain at 0° and backwardGain at 180°,
-// so no normalisation is needed here.
-const float BACKWARD_G = -0.4;
-
-float phaseFunction(Field f, float x) {
-    // Clamped as a last guard: a negative radiance renders as a dark hole.
-    return max(0.0,
-               f.phaseForward   * hgPhase(x, f.forwardAnisotropy)
-             + f.phaseBackward  * hgPhase(x, BACKWARD_G)
-             + f.phaseIsotropic * 0.25);
-}
-
 // Darkens optically THIN cloud. Fed the LOCAL density over a fixed length: the
 // sunward depth would invert it, and the quad's chord would tie it to quad size.
 float powder(Field f, float density) {

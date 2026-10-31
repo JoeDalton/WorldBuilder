@@ -143,6 +143,30 @@ float cloudFbm(Field f, vec3 coord) {
     return lowOctaves(f, coord) + highOctaves(f, coord);
 }
 
+float hgPhase(float x, float g) {
+    float g2 = g * g;
+    return 0.25 * ((1.0 - g2) * pow(1.0 + g2 - 2.0 * g * x, -1.5));
+}
+
+// The pre-solved weights put 1 at 90°, forwardGain at 0° and backwardGain at 180°,
+// so no normalisation is needed here.
+const float BACKWARD_G = -0.4;
+
+// weights: (forward, backward, isotropic, forward anisotropy), as
+// noise.phase_weights solves them. Shared by the billboards and the cirrus.
+float lobePhase(vec4 weights, float x) {
+    // Clamped as a last guard: a negative radiance renders as a dark hole.
+    return max(0.0,
+               weights.x * hgPhase(x, weights.w)
+             + weights.y * hgPhase(x, BACKWARD_G)
+             + weights.z * 0.25);
+}
+
+float phaseFunction(Field f, float x) {
+    return lobePhase(
+        vec4(f.phaseForward, f.phaseBackward, f.phaseIsotropic, f.forwardAnisotropy), x);
+}
+
 // Normalised height in the slab: 0 at the base, 1 at the ceiling.
 float slabHeight(Field f, float z) {
     return (z - f.slabBase) / max(f.slabThickness, 1e-3);
@@ -228,6 +252,10 @@ float sunOpticalDepth(Field f, vec3 p) {
 
 // ── Sunlight on a planet's clouds (planet mode, through its own air) ──────────
 // For the shaders that also include atmosphere.glsl (atmoSunlight).
+
+// The lit air's light on a cloud in the planet's shadow, as a share of the
+// sunlight it would take (cloudTwilight).
+const float TWILIGHT_GLOW = 0.25;
 
 // Height above a cloud of the air whose light still reaches it once it is in
 // the planet's shadow (cloudTwilight), metres.

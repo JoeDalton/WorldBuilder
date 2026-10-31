@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- High cirrus over a planet's clouds (`world_builder.clouds.cirrus`,
+  docs/source/atmosphere.md#cirrus).
+  - `CirrusSheet`, or `BodyLook.cirrus` (`CirrusLook`) in a `World`: one
+    sheet at 8-9 km. Its fibres follow the upper wind's stream function (the
+    jet streams, bent around the weather's cyclones), and its cover comes
+    from a map of its own (anvils over the wet tropics, streaks along the
+    jets, a shield ahead of each low), calibrated so that the share of sky
+    with cirrus is the map's.
+  - It draws behind every cumulus where sight lines leave its sphere and in
+    front of them where they enter it, so the order holds from the ground to
+    orbit and in the sea's mirror, with no sorting.
+  - `World` refuses cirrus that is not above the clouds or not inside the
+    air.
+  - `weather.py` gains the upper wind (`WeatherSpec.jets`, `upper_wind`,
+    `stream_table`, `stream_vortices`) and the cirrus cover
+    (`cirrus_cover_map`).
+  - The terrain and world demos draw it (C toggles it); `terrain_shots.py`
+    gains the `cirrus_up`, `cirrus_between`, `cirrus_above` and
+    `cirrus_dusk` poses.
+  - Its cost is not measured yet: see docs/source/performance_backlog.md,
+    "Cirrus".
 - `world_builder.gravity.Gravity` and `World.gravity_field(g_constant)`: the
   bodies' raw gravity vector at many points at once, from point masses
   (`g = -G sum m (x - p) / |x - p|^3`, capped inside a body at its surface

@@ -207,3 +207,61 @@ breakdown above predates them: frames are 1–3 ms shorter now.
 The swell's finite-difference gradient, the seabed bakes' GIL time and the
 15 km handover's shader-compile hitch went with the separate ocean mesh: the
 terrain's chunks draw the sea (performance.md §16).
+
+## Cirrus (not measured yet)
+
+The planet's cirrus sheet (`clouds/cirrus.py`, `cirrus.frag`) was written
+on a machine that cannot time it (WSL with software GL, at 130-300 ms a
+frame for the whole demo). It was built to be cheap, but nothing below has
+been measured. Measure it as the other layers are measured (§ How it was
+measured), on the GTX 1070, and write the numbers here.
+
+What it costs, by construction:
+
+- **Vertices:** two draws of a 6 × 64² cube-sphere (~49k triangles each,
+  never culled), with a trivial vertex stage.
+- **Per fragment that is drawn** (cover above 0.2 %, alpha above 1/512):
+  - the ray against the sphere, one cube-map fetch;
+  - the stream function: two `texelFetch`es plus up to 16 Gaussians;
+  - 4-5 taps of hashed value noise, each 8 hashes and a quintic blend
+    (~100 ALU operations a tap, no fetch). The fibril tap is skipped past
+    about 4 px per fibril;
+  - `cloudSunTint` and `cloudTwilight` (4 `atmoSunlight`);
+  - `atmosphereAlong` at `uAtmoSteps`, the most expensive part.
+- **Per fragment discarded:** the wrong node's fragments go after the
+  ray-sphere test. A clear sky (cover under 0.2 %) costs one cube-map fetch.
+  Fragments under the threshold still pay for the noise.
+
+To measure, each as the median frame with the cirrus shown minus hidden
+(the demo's C key, or `CirrusSheet.root.hide()`), at 1600×900:
+
+| Scene | `terrain_shots.py` pose | What it stresses |
+|---|---|---|
+| From the ground, looking up | `cirrus_up` | full-screen sheet, no atmosphere savings |
+| Between the layers | `cirrus_between` | grazing sheet, long chords, the far fade |
+| Above both | `cirrus_above` | the front node over the cumulus |
+| Orbit | `orbit` | the far sheet (cover only, no noise) |
+| Dusk | `cirrus_dusk` | twilight terms |
+| The ground pose with `--half-res-clouds` | `ground` | cirrus at full resolution over half-resolution clouds |
+
+For each, also note:
+
+- the share of the sheet's fragments that are discarded: with
+  `uCloudDebug` bit 8 (flat colour), and against a build that returns
+  before the noise;
+- the cost of `atmosphereAlong`, with `uCloudDebug` bit 2 (no atmosphere)
+  on and off.
+
+If it costs too much, cheapest change first:
+
+1. **A fibril knob** in `CloudSettings` (cirrus fibrils off at LOW/MID).
+   That saves one noise tap out of 4-5.
+2. **The atmosphere per vertex** on a denser sheet (as the cumulus
+   billboards do), or once per pixel block. On the deck it is per pixel
+   because it is one layer; the cirrus is a second one.
+3. **The noise from a texture again**, with tricubic filtering (8 fetches
+   a tap). This is a trade of ALU for bandwidth, worth trying only if the
+   hash shows up as ALU-bound.
+4. **The cirrus in the half-resolution pass** (stop excluding its root in
+   `World._sync_half_res`): a quarter of the pixels, softer fibres.
+

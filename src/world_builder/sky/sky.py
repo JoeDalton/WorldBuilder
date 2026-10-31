@@ -44,6 +44,8 @@ SHADER_PATH = Path(__file__).parent / "shaders"
 #: The sky's cull bin: after the opaque bin (20), so its per-pixel atmosphere
 #: is computed only where no terrain was drawn (its vertices sit on the far
 #: plane, depth-tested), and before the clouds (``clouds.sphere``, 22-29).
+#: Fixed: the dome (draw order 0), the stars (1), then the cirrus where it
+#: is behind every other cloud (2, ``clouds.cirrus``).
 SKY_BIN = "sky"
 SKY_BIN_SORT = 21
 #: The sun's angular radius as drawn (about twice the real one: a disc that
@@ -165,7 +167,7 @@ class Sky:
                 fragment=SHADER_PATH / "sky.frag",
             )
         )
-        _ensure_sky_bin()
+        ensure_sky_bin()
         self.node.set_bin(SKY_BIN, 0)
         self.node.set_depth_write(False)
         self.node.set_attrib(DepthTestAttrib.make(DepthTestAttrib.M_less_equal))
@@ -363,7 +365,8 @@ def _sphere(segments: int, rings: int) -> GeomNode:
     return node
 
 
-def _ensure_sky_bin() -> None:
+def ensure_sky_bin() -> None:
+    """Register the sky's cull bin (once)."""
     manager = CullBinManager.get_global_ptr()
     if manager.find_bin(SKY_BIN) == -1:
         manager.add_bin(SKY_BIN, CullBinManager.BT_fixed, SKY_BIN_SORT)

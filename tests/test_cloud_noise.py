@@ -797,12 +797,13 @@ def test_both_shaders_size_layerparams_for_every_layer():
 
 
 def test_shader_phase_constant_matches_the_python_one():
-    """cloud.frag hard-codes the backward lobe's g, since it is fixed. If that
-    drifted from the Python value the pre-solved weights would be solved against a
-    different basis than the shader evaluates, and the gains would be wrong."""
-    source = Path(_SHADERS / "cloud.frag").read_text()
+    """cloud_field.glsl (the billboards' and the cirrus's phase) hard-codes the
+    backward lobe's g, since it is fixed. If that drifted from the Python value
+    the pre-solved weights would be solved against a different basis than the
+    shader evaluates, and the gains would be wrong."""
+    source = Path(_SHADERS / "cloud_field.glsl").read_text()
     match = re.search(r"BACKWARD_G\s*=\s*(-?[0-9.]+)", source)
-    assert match, "BACKWARD_G not found in cloud.frag"
+    assert match, "BACKWARD_G not found in cloud_field.glsl"
     assert float(match.group(1)) == pytest.approx(BACKWARD_ANISOTROPY)
     # And the shader must not normalise: the weights already do that.
     assert "atRightAngles" not in source
