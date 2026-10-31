@@ -177,6 +177,22 @@ def test_the_stamps_lie_on_the_sheet_turned_downwind(weather, stamps):
     assert np.mean(cos > math.cos(math.radians(20.0))) > 0.95
 
 
+def test_overlapping_stamps_stay_parallel(stamps):
+    """Real streaks side by side never cross at an angle: stamps within a
+    stamp's width of each other point the same way, within 20 degrees but
+    for a few in a thousand (they once turned each on its own, and crossed
+    in more than half the pairs)."""
+    from scipy.spatial import cKDTree
+
+    pairs = np.array(sorted(cKDTree(stamps.centres).query_pairs(20000.0)))
+    assert len(pairs) > 1000
+    cos = np.einsum("ij,ij->i", stamps.along[pairs[:, 0]], stamps.along[pairs[:, 1]])
+    angle = np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))
+    assert np.median(angle) < 5.0
+    assert np.mean(angle > 20.0) < 0.005
+    assert np.percentile(angle, 99.9) < 30.0
+
+
 def test_the_wind_blows_east_in_the_westerlies(weather):
     dirs = dirs_from_latlon(np.full(8, 30.0), np.linspace(-180.0, 135.0, 8))
     wind = upper_wind_at(CirrusSpec(meander=0.0), weather, dirs, R)

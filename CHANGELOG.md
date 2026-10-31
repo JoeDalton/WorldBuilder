@@ -23,7 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     own (anvils over the wet tropics, streaks along the jets, a shield ahead
     of each low), so that the share of sky under a stamp is the map's. Each
     has its tufts downwind along the upper wind (the jet streams, bent
-    around the weather's cyclones).
+    around the weather's cyclones). Neighbours stay parallel: their heading
+    wanders together, and stamps fade out where the wind turns along their
+    length.
   - It draws behind every cumulus where sight lines leave its sphere and in
     front of them where they enter it, so the order holds from the ground to
     orbit and in the sea's mirror, with no sorting.

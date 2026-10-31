@@ -27,7 +27,8 @@ rises with height.
 the sheet, thinned by the cirrus cover map (:func:`weather.cirrus_cover_map`)
 so that the share of the sheet under a stamp is the map's cover, each turned
 along the upper wind (:func:`upper_wind_at`: the jet streams bent around the
-cyclones, plus meanders), more at random in calm air. A pixel pays one atlas
+cyclones, plus meanders), all wandering off it together so that overlapping
+tails stay parallel. A pixel pays one atlas
 fetch per stamp over it (typically 1-3). Stamping in the shader instead would
 search a 3D lattice per pixel (a 2D grid on the cube's faces leaves seams):
 about 30 candidates for stamps this long, no cheaper than computing the
@@ -168,16 +169,21 @@ class CirrusSpec:
     :ivar scale_range: a stamp's size against the atlas's (24 x 12 km)
     :ivar aspect_range: how much wider (across the wind) a stamp is drawn
     :ivar opacity_range: a stamp's opacity
-    :ivar turn: degrees a stamp turns off the wind in calm air (none where
-        the jets blow their fastest)
-    :ivar jitter: degrees every stamp turns off the wind at random
+    :ivar turn: degrees the stamps' heading wanders off the wind, together:
+        a slow noise over ``turn_wavelength``, so stamps that overlap stay
+        parallel (each turned on its own, their tails crossed)
+    :ivar turn_wavelength: over what distance that heading wanders, metres
+    :ivar jitter: degrees each stamp turns off the others at random
+    :ivar max_turn: degrees the upper wind may turn along a stamp's length;
+        stamps where it turns more fade out (near a low's centre, where the
+        wind nears calm): a straight stamp there would cross its neighbours
     """
 
     base: float = 8000.0
     thickness: float = 1000.0
     amount: float = 1.0
-    meander: float = 6000.0
-    meander_wavelength: float = 60000.0
+    meander: float = 3000.0
+    meander_wavelength: float = 120000.0
     extinction: float = 1.5e-3
     max_optical_depth: float = 2.5
     optics: CloudOptics = PRESETS[CloudType.CIRRUS].optics
@@ -185,8 +191,10 @@ class CirrusSpec:
     scale_range: tuple = (0.6, 1.4)
     aspect_range: tuple = (0.8, 1.25)
     opacity_range: tuple = (0.6, 1.0)
-    turn: float = 40.0
-    jitter: float = 8.0
+    turn: float = 10.0
+    turn_wavelength: float = 200000.0
+    jitter: float = 2.0
+    max_turn: float = 20.0
 
     @property
     def top(self) -> float:
@@ -201,8 +209,8 @@ class CirrusSpec:
 
 # ── The noise (the stamps' baking and the wind's meanders) ─────────────────────
 
-#: Noise-space offset decorrelating the meanders.
-OFFSETS = {"meander": np.array(field_offset(11))}
+#: Noise-space offsets decorrelating the meanders and the heading's wander.
+OFFSETS = {"meander": np.array(field_offset(11)), "turn": np.array(field_offset(12))}
 
 
 #: The hash's constants.
@@ -307,6 +315,11 @@ class Stamps:
         return len(self.index)
 
 
+def _smoothstep(lo, hi, x):
+    t = np.clip((x - lo) / (hi - lo), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
 def _tangent_frame(dirs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """East and north unit vectors at unit *dirs* (any at the poles)."""
     east = np.cross([0.0, 0.0, 1.0], dirs)
@@ -352,6 +365,27 @@ def _mean_area(spec: CirrusSpec) -> float:
     return float(footprint * STAMP_METRES[0] * STAMP_METRES[1] * scale2 * aspect)
 
 
+def _wind_turn(
+    spec: CirrusSpec,
+    weather: WeatherSpec,
+    dirs: np.ndarray,
+    wind: np.ndarray,
+    sheet: float,
+) -> np.ndarray:
+    """Degrees the upper wind turns over a stamp's length (the largest
+    scale's) centred on each of *dirs*, along *wind*."""
+    half = 0.5 * STAMP_METRES[0] * spec.scale_range[1]
+    along = wind / np.maximum(np.linalg.norm(wind, axis=1, keepdims=True), 1e-12)
+    ends = []
+    for sign in (-1.0, 1.0):
+        end = dirs * sheet + sign * half * along
+        end /= np.linalg.norm(end, axis=1, keepdims=True)
+        w = upper_wind_at(spec, weather, end, sheet)
+        ends.append(w / np.maximum(np.linalg.norm(w, axis=1, keepdims=True), 1e-12))
+    cos = np.einsum("ij,ij->i", ends[0], ends[1])
+    return np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))
+
+
 #: The most cover the stamps are placed for: past it they pile up for little
 #: more cover (a Poisson field's cover is 1 - exp(-density x area)).
 MAX_COVER = 0.95
@@ -365,9 +399,13 @@ def cirrus_stamps(spec: CirrusSpec, weather: WeatherSpec, radius: float) -> Stam
     A Poisson field thinned by the cover map (:func:`weather.cirrus_cover_map`
     times ``amount``): at cover c its density is ``-ln(1 - c) / A`` for a
     stamp's mean footprint A, so the share of the sheet under at least one
-    stamp is c. Each turns its tuft downwind (:func:`upper_wind_at`): the
-    tufts lead and their tails lag upwind, as fall streaks do when the wind
-    rises with height. Calm air turns them more at random.
+    stamp is c, but where the upper wind turns more than ``max_turn`` along a
+    stamp's length (near a low's centre, or where the wind nears calm): a
+    straight stamp there would cross its neighbours. Each turns its tufts
+    downwind (:func:`upper_wind_at`): the tufts lead and their tails lag
+    upwind, as fall streaks do when the wind rises with height. Their heading
+    wanders off the wind together (``turn``, a slow noise), so overlapping
+    stamps stay parallel: real streaks side by side never cross at an angle.
 
     :param radius: the planet's sea-level radius, metres
     """
@@ -382,18 +420,21 @@ def cirrus_stamps(spec: CirrusSpec, weather: WeatherSpec, radius: float) -> Stam
     cover = np.clip(sample_cube(cover_map, dirs), 0.0, MAX_COVER)
     keep = rng.random(count) * density_max < -np.log1p(-cover) / area
     dirs = dirs[keep]
+    wind = upper_wind_at(spec, weather, dirs, sheet)
+    turn = _wind_turn(spec, weather, dirs, wind, sheet)
+    steady = rng.random(len(dirs)) < _smoothstep(
+        spec.max_turn, 0.75 * spec.max_turn, turn
+    )
+    dirs, wind = dirs[steady], wind[steady]
     n = len(dirs)
 
-    wind = upper_wind_at(spec, weather, dirs, sheet)
-    speed = np.linalg.norm(wind, axis=1)
     east, north = _tangent_frame(dirs)
     heading = np.arctan2(
         np.einsum("ij,ij->i", wind, north), np.einsum("ij,ij->i", wind, east)
     )
-    spread = np.radians(spec.turn) * (1.0 - np.minimum(speed, 1.0)) + np.radians(
-        spec.jitter
-    )
-    heading = heading + rng.normal(size=n) * spread
+    wander = value_noise(dirs * sheet / spec.turn_wavelength + OFFSETS["turn"])
+    heading += np.radians(spec.turn) * 2.0 * (wander - 0.5)
+    heading += np.radians(spec.jitter) * rng.normal(size=n)
     along = np.cos(heading)[:, None] * east + np.sin(heading)[:, None] * north
     mirror = rng.choice([-1.0, 1.0], n)
     across = np.cross(dirs, along) * mirror[:, None]

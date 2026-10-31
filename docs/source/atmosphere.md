@@ -492,11 +492,24 @@ worker pool (~0.3 s, about 12k stamps on the 600 km demo planet):
     the subtropical and polar-front jets;
   - one Gaussian per weather system (`weather.stream_vortices`), turning
     the wind around each low and over each tropical cyclone's outflow;
-  - a slow noise added to psi, so the field meanders;
+  - a slow noise added to psi, so the field meanders (3 km over 120 km);
   - the gradient taken by central differences.
-- **Variety.** Each stamp is turned a little at random, more in calm air,
-  and drawn at a random scale, width, mirror and opacity, so the 24 patches
-  do not read as repeats.
+- **Parallel neighbours.** Real streaks side by side never cross at an
+  angle. Three things kept overlapping stamps from crossing, measured as the
+  angle between stamps within 20 km of each other (pairs past 20° went from
+  54 % to 0.1 %):
+  - the stamps' heading wanders off the wind *together*, ±10° along a slow
+    noise (`turn`, `turn_wavelength`), plus 2° each. Turned each on its own,
+    as they first were, neighbours crossed;
+  - stamps fade out where the upper wind turns more than 20° along a
+    stamp's length (`max_turn`): near a low's centre, or where the wind
+    nears calm and its direction swings. A straight stamp there would cross
+    its neighbours. That is about 5 % of them;
+  - the patches' own flows bend their tails at most ~20° off the patch's
+    axis (the bake's `curl`), or two overlapping patches bent opposite ways
+    cross.
+- **Variety.** Each stamp is drawn at a random scale, width, mirror and
+  opacity, so the 24 patches do not read as repeats.
 
 **Draw order.** The cirrus lies above the cumulus slab (the `World` checks
 that its base clears the clouds' top, and that its top stays inside the air).

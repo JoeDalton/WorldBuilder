@@ -86,7 +86,9 @@ class Patch:
     :ivar front: share of the tufts on the leading front (the rest scatter
         upwind)
     :ivar front_bend: how far the front curves back at its ends, metres
-    :ivar curl: how far the flow's lines wander across, metres
+    :ivar curl: how far the flow's lines wander across, metres. At most
+        ~1300: past that a tail tilts more than ~20 degrees off the patch's
+        axis, and two overlapping patches bent opposite ways cross
     :ivar tail: the tails' e-folding length, metres
     :ivar fibre: how much the fibres cut the tails, in [0, 1]
     :ivar wisp: how much the tails break into wisps, in [0, 1]
@@ -106,18 +108,18 @@ class Patch:
 #: The dozen patches: fronts straight and bent, dense and sparse, short and
 #: long tails, calm and curling flows.
 PATCHES = (
-    Patch(1, 14, (500.0, 1300.0), 0.8, 2500.0, 1200.0, 5000.0, 0.75, 0.5),
-    Patch(2, 10, (600.0, 1500.0), 0.7, -2000.0, 1800.0, 6000.0, 0.7, 0.6),
-    Patch(3, 18, (400.0, 1000.0), 0.85, 3500.0, 900.0, 4000.0, 0.8, 0.5),
-    Patch(4, 8, (700.0, 1500.0), 0.6, 0.0, 2200.0, 7000.0, 0.7, 0.6),
-    Patch(5, 16, (450.0, 1200.0), 0.75, -3000.0, 1500.0, 5500.0, 0.75, 0.4),
-    Patch(6, 12, (500.0, 1400.0), 0.5, 1500.0, 2600.0, 4500.0, 0.8, 0.7),
-    Patch(7, 20, (400.0, 900.0), 0.9, 4000.0, 1000.0, 3500.0, 0.8, 0.5),
-    Patch(8, 9, (600.0, 1500.0), 0.65, -1000.0, 2000.0, 8000.0, 0.65, 0.5),
-    Patch(9, 15, (450.0, 1100.0), 0.8, 2000.0, 1700.0, 5000.0, 0.75, 0.6),
-    Patch(10, 11, (550.0, 1400.0), 0.7, -3500.0, 1300.0, 6500.0, 0.7, 0.4),
-    Patch(11, 13, (500.0, 1200.0), 0.6, 1000.0, 2400.0, 5000.0, 0.8, 0.6),
-    Patch(12, 17, (400.0, 1100.0), 0.85, -2500.0, 1100.0, 4500.0, 0.75, 0.5),
+    Patch(1, 14, (500.0, 1300.0), 0.8, 2500.0, 600.0, 5000.0, 0.75, 0.5),
+    Patch(2, 10, (600.0, 1500.0), 0.7, -2000.0, 900.0, 6000.0, 0.7, 0.6),
+    Patch(3, 18, (400.0, 1000.0), 0.85, 3500.0, 450.0, 4000.0, 0.8, 0.5),
+    Patch(4, 8, (700.0, 1500.0), 0.6, 0.0, 1100.0, 7000.0, 0.7, 0.6),
+    Patch(5, 16, (450.0, 1200.0), 0.75, -3000.0, 750.0, 5500.0, 0.75, 0.4),
+    Patch(6, 12, (500.0, 1400.0), 0.5, 1500.0, 1300.0, 4500.0, 0.8, 0.7),
+    Patch(7, 20, (400.0, 900.0), 0.9, 4000.0, 500.0, 3500.0, 0.8, 0.5),
+    Patch(8, 9, (600.0, 1500.0), 0.65, -1000.0, 1000.0, 8000.0, 0.65, 0.5),
+    Patch(9, 15, (450.0, 1100.0), 0.8, 2000.0, 850.0, 5000.0, 0.75, 0.6),
+    Patch(10, 11, (550.0, 1400.0), 0.7, -3500.0, 650.0, 6500.0, 0.7, 0.4),
+    Patch(11, 13, (500.0, 1200.0), 0.6, 1000.0, 1200.0, 5000.0, 0.8, 0.6),
+    Patch(12, 17, (400.0, 1100.0), 0.85, -2500.0, 550.0, 4500.0, 0.75, 0.5),
 )
 
 
@@ -134,7 +136,7 @@ def _more_patches(count: int, seed: int) -> tuple[Patch, ...]:
                 tuft_size=(small, small * rng.uniform(1.8, 2.6)),
                 front=float(rng.uniform(0.5, 0.9)),
                 front_bend=float(rng.uniform(-4000.0, 4000.0)),
-                curl=float(rng.uniform(900.0, 2600.0)),
+                curl=float(rng.uniform(450.0, 1300.0)),
                 tail=float(rng.uniform(3500.0, 8000.0)),
                 fibre=float(rng.uniform(0.65, 0.85)),
                 wisp=float(rng.uniform(0.4, 0.7)),
