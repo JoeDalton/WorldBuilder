@@ -1050,6 +1050,53 @@ load within 25 s (their tiles, the maps by depth ~1 s). In the full world
 (`terrain_shots.py --genera`): 52 ms at the ground pose, 57 ms at the coast.
 Making this affordable is the next phase.
 
+## 22. Cheaper genera (#45)
+
+Where the genera's time goes, near the big clouds (§21): even flat-coloured
+with two octaves (`--cloud-debug 12`) they cost 33-39 ms of their 60-70.
+It is **overdraw**: their billboards' screen area, summed, is 30-33 times the
+screen's between the towers and under the stratus (6 times for the
+cumulus), most of it in the nearest shells. A CPU march of the field over
+the view finds 53-64 % of those fragments behind cloud already opaque
+(optical depth 5): blended, they cannot be skipped.
+
+Whole frames, one session, the genera's poses (clouds-only bench, 1600 x 900;
+the half-resolution pass's depth passes count in the frame):
+
+| Pose | HIGH | HIGH, half resolution | MID | MID, half resolution |
+|---|---|---|---|---|
+| Between the towers | 78.8 ms | 29.3 ms | 41.1 ms | 17.5 ms |
+| Under the anvil | 63.1 ms | 24.2 ms | 34.7 ms | 15.7 ms |
+| Inside the congestus | 42.3 ms | 18.0 ms | 24.0 ms | 12.5 ms |
+| Above / under the stratus | 61.6 / 68.9 ms | 24.9 / 26.8 ms | 34.9 / 39.0 ms | 15.7 / 16.7 ms |
+| A cumulonimbus 40 km away | 13.9 ms | 8.5 ms | 9.6 ms | 6.9 ms |
+| Orbit | 12.5 ms | 8.8 ms | 11.9 ms | 8.9 ms |
+
+**Half resolution** (`CloudSettings.half_resolution`, §19) is the lever:
+a quarter of the fragments, 2.5-2.9 times faster frames near the big
+clouds. It is on at LOW and MID, where the GPU is the weak one: there it
+saves 40-50 ms near big clouds. It stays off at HIGH and ULTRA because on a
+GTX 1070, CPU-bound in low flight, its extra camera passes (~1.2 ms) cost
+more than it saved.
+
+**Larger billboards inside** (`CloudSettings.interior_growth`, on at LOW
+and MID): a billboard with cloud every way at twice its radius grows twice
+(an eighth as many), at four times, four times. 14-16 % near the
+cumulonimbus, nothing elsewhere (few billboards qualify), and softer
+detail inside the towers: a trade for the cheaper presets.
+
+Tried and dropped:
+
+- **Occluders**: depth-only discs, drawn before the clouds, behind
+  billboards whose surroundings hold optical depth 6 within two radii every
+  way. 6-13 %, and black discs at the towers' silhouettes: there the cloud
+  as drawn (each billboard capped, its sprite's profile, the shells'
+  crossfades) is not as opaque as the field, and the discs hid the sky
+  behind it.
+- **Larger, flatter stratus billboards** (twice the radius, aspect 2):
+  30 % on the stratus, but the larger quads stick out of its 500 m slab and
+  are cut flat: planes with straight edges.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

@@ -382,3 +382,32 @@ def test_the_stratus_must_stay_under_the_convective_clouds(genera):
     check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(), None, genera)
     with pytest.raises(ValueError, match="above the clouds"):
         check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(base=9000.0), None, genera)
+
+
+def test_inside_a_cloud_billboards_grow_fewer_as_the_cube(genera, convective):
+    from world_builder.clouds.sphere import (
+        INTERIOR_GROWTH,
+        _noise,
+        generate_cloud_tile,
+        interior_levels,
+    )
+
+    spec, level = _tile_spec(genera, convective)
+    cb = next(f for f in genera.features if f.genus == "cumulonimbus")
+    key = _tile_under(_at(genera, cb), level)
+    plain = generate_cloud_tile(spec, key)
+    grown = generate_cloud_tile(replace(spec, interior_growth=True), key)
+    assert len(grown.particles) < 0.95 * len(plain.particles)
+    assert grown.particles[:, 3].max() > plain.particles[:, 3].max()
+    # Only where the cloud reaches every way at the grown radius
+    weather = genus_cube(genera, CONVECTIVE, spec.genera[2])
+    points = plain.particles[:, :3] + plain.centre
+    radii = np.full(len(points), 140.0)
+    levels = interior_levels(_noise(7), weather, spec.field, points, radii, R)
+    assert levels.max() >= 1 and (levels == 0).any()
+    clear = np.array([[0.0, 0.0, R + 2200.0 + 500.0]])  # over the pole: cumulus
+    far = generate_cloud_tile(
+        replace(spec, interior_growth=True),
+        _tile_under(clear[0] / np.linalg.norm(clear[0]), level),
+    )
+    assert far.particles[:, 3].max() <= 140.0 * INTERIOR_GROWTH

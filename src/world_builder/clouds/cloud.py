@@ -238,6 +238,8 @@ class CloudSettings(QualitySettings):
         sooner once the cloud is opaque). Live
     :ivar march_resolution: the raymarch's resolution over the view's, per
         axis. Live
+    :ivar interior_growth: billboards deep inside a cloud grow, fewer of
+        them (:func:`sphere.interior_levels`). Rebuild
     :ivar count_scale: billboards relative to the types as authored: their
         sizes go as count^(-1/3), so coverage and opacity hold
         (:func:`scale_count`). Rebuild
@@ -281,6 +283,14 @@ class CloudSettings(QualitySettings):
         "Raymarch resolution",
         choices={"Quarter": 0.25, "Half": 0.5, "Full": 1.0},
         help="The raymarch's resolution, per axis, over the view's (raymarch only).",
+    )
+    interior_growth: bool = knob(
+        False,
+        "Larger billboards inside",
+        REBUILD,
+        advanced=True,
+        help="Draw the inside of big clouds with fewer, larger billboards: "
+        "some 15 % less work near them, softer detail.",
     )
     count_scale: float = knob(
         1.0,
@@ -369,6 +379,8 @@ class CloudSettings(QualitySettings):
             "reflected": False,
             "march_steps": 24,
             "march_resolution": 0.25,
+            "interior_growth": True,
+            "half_resolution": True,
         },
         QualityLevel.MID: {
             "count_scale": 0.5,
@@ -377,6 +389,8 @@ class CloudSettings(QualitySettings):
             "overlap_far": 1.5,
             "shell_octaves": (4, 4, 3, 3),
             "march_steps": 40,
+            "interior_growth": True,
+            "half_resolution": True,
         },
         QualityLevel.ULTRA: {
             "count_scale": 2.0,

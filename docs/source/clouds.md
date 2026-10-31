@@ -251,6 +251,13 @@ over 2-4 km: the genus maps are twice the weather's resolution
 **Placement** draws a tile's candidates up to its highest local top (the
 depth read over the tile), not through the whole 8.3 km slab.
 
+**Their cost** is overdraw (performance §22): near the big clouds, half
+resolution (`CloudSettings.half_resolution`, on at LOW and MID) makes
+frames 2.5-2.9 times faster on a weak GPU. At LOW and MID, billboards deep inside a cloud grow
+and thin as the cube (`CloudSettings.interior_growth`,
+`sphere.interior_levels`): the same overlap, so the same extinction, for
+14-16 % less near a cumulonimbus and softer detail inside it.
+
 **Not yet.** The anvil thickens the tops but makes no flat overhang (the
 noise would need stretching across the anvil's band). From the ground, the
 air hazes out a cumulonimbus's lower half at 40 km, and its top half reads

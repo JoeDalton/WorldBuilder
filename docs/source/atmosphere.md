@@ -308,7 +308,7 @@ new tiles, then those the camera has moved past most relative to their
 distance. A stale order composites a cloud's far side over its near side,
 which reads as shadows sliding over it.
 
-**At half resolution** (`CloudSettings.half_resolution`, off by default;
+**At half resolution** (`CloudSettings.half_resolution`, on at LOW and MID;
 `clouds.half_res.HalfResClouds`). The clouds draw into two offscreen layers
 half the view's size, one per split-depth range, each by a camera sharing
 that range's lens. Everything else draws into them as depth only (the

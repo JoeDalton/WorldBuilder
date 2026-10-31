@@ -151,6 +151,15 @@ BASE_TILE_SIZE = 8000.0
 MIN_TILE_BATCH = 2048
 #: Quads per face edge of the deck sphere.
 DECK_QUADS = 48
+#: Billboards deep inside a cloud grow (:func:`interior_levels`): by this
+#: much a level, for each level whose grown radius still has cloud every
+#: way around, at most INTERIOR_LEVELS; fewer of them, as the cube.
+INTERIOR_GROWTH = 2.0
+INTERIOR_LEVELS = 2
+#: The six ways a billboard's surroundings are probed.
+_SIX_WAYS = np.array(
+    [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)], float
+)
 #: The deck's optical depth cap (the billboards' is ~1.5 per quad).
 DECK_MAX_OPTICAL_DEPTH = 6.0
 Key = tuple[int, int, int, int]
@@ -205,6 +214,8 @@ class SphereCloudSpec:
         :func:`genera.genus_cube`'s arguments); None = the weather's
     :ivar deep_radius: the billboards' radius at convective depth 1 over
         their radius at depth 0 (``CloudSpec.deep_radius``)
+    :ivar interior_growth: billboards deep inside a cloud grow
+        (:func:`interior_levels`; ``CloudSettings.interior_growth``)
     """
 
     radius: float
@@ -216,6 +227,7 @@ class SphereCloudSpec:
     shift: tuple | None = None
     genera: tuple | None = None
     deep_radius: float = 1.0
+    interior_growth: bool = False
 
     def shell_of(self, level: int) -> int:
         """:returns: the index of the shell whose tiles are at *level*"""
@@ -494,6 +506,17 @@ def generate_cloud_tile(
         keep = rng.uniform(size=len(points)) < scale**-3
         points, scale = points[keep], scale[keep]
 
+    if spec.interior_growth and len(points):
+        # Deep inside a cloud, larger and fewer: the same overlap, so the
+        # same extinction, for fewer fragments where nothing is seen.
+        scale = np.broadcast_to(scale, len(points)).astype(np.float64)
+        inner = interior_levels(
+            volume, weather, field, points, r_hi * scale, spec.radius, shell.octaves
+        )
+        growth = INTERIOR_GROWTH**inner
+        keep = rng.uniform(size=len(points)) < growth**-3
+        points, scale = points[keep], (scale * growth)[keep]
+
     centre = grid.centre_dir(key) * mid
     n = len(points)
     particles = np.empty((n, 9), dtype=np.float32)
@@ -509,6 +532,49 @@ def generate_cloud_tile(
         particles=particles,
         gen_ms=(time.perf_counter() - start) * 1e3,
     )
+
+
+def interior_levels(
+    volume: np.ndarray,
+    weather: np.ndarray,
+    field: DensityField,
+    points: np.ndarray,
+    radii: np.ndarray,
+    radius: float,
+    octaves: int = 4,
+) -> np.ndarray:
+    """How far inside the cloud each billboard is, in levels: level k when
+    the field holds cloud in each of six ways at :data:`INTERIOR_GROWTH`
+    to the k times its radius, up to :data:`INTERIOR_LEVELS`. A billboard
+    that large then still lies in cloud: its quad carries its sample's
+    density over its chord, which near an edge would overstate it.
+
+    Most of a big cloud's billboards are deep inside it, hidden behind its
+    surface, and still shaded and blended: grown by a level they are an
+    eighth as many, each four times the area, so half the fragments.
+
+    :param points: (n, 3) the billboards, planet frame
+    :param radii: (n,) their radii, metres
+    :returns: (n,) int levels
+    """
+    level = np.zeros(len(points), dtype=np.int64)
+    alive = np.ones(len(points), dtype=bool)
+    for k in range(1, INTERIOR_LEVELS + 1):
+        index = np.nonzero(alive)[0]
+        if not len(index):
+            break
+        reach = radii[index] * INTERIOR_GROWTH**k
+        probes = points[index, None, :] + _SIX_WAYS[None] * reach[:, None, None]
+        inside = (
+            density_on_sphere(
+                volume, weather, field, probes.reshape(-1, 3), radius, octaves
+            ).reshape(len(index), 6)
+            > 0.0
+        ).all(axis=1)
+        level[index[inside]] = k
+        alive[:] = False
+        alive[index[inside]] = True
+    return level
 
 
 # ── Drawing ────────────────────────────────────────────────────────────────────
@@ -1042,6 +1108,7 @@ class CloudVolume:
             shift=None if shared is None else shared.handle,
             genera=self._genera,
             deep_radius=preset.deep_radius,
+            interior_growth=settings.interior_growth,
         )
         return params, deck_job
 

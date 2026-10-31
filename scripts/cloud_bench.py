@@ -7,7 +7,8 @@ sky and the clouds, so the clouds are most of the frame.
         [--quality low|mid|high|ultra] [--renderer billboards|march]
         [--half-res | --no-half-res]
         [--uniform-coverage C] [--no-cirrus] [--cloud-debug BITS]
-        [--move M] [--genera] [--interactive]
+        [--move M] [--genera] [--interior-growth | --no-interior-growth]
+        [--interactive]
 
     --out              where the PNGs go (default ./cloud_bench)
     --pose             the poses to time (default: all, in the order below)
@@ -27,6 +28,8 @@ sky and the clouds, so the clouds are most of the frame.
     --genera           the low clouds by genus (clouds.genera's placeholder
                        maps around the reference point: cumulonimbus,
                        congestus, stratus) and their poses (below)
+    --interior-growth  larger billboards inside clouds
+                       (CloudSettings.interior_growth), over the preset's
     --move             fly the camera (and the probe) along the view at M
                        metres a frame while timing: reprojection under motion
     --interactive      fly the probe in and out of the clouds in a window
@@ -597,6 +600,12 @@ def main() -> None:
         "--genera", action="store_true", help="the low clouds by genus, their poses"
     )
     parser.add_argument(
+        "--interior-growth",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="larger billboards inside clouds, over the preset's choice",
+    )
+    parser.add_argument(
         "--interactive", action="store_true", help="fly the probe, no timing"
     )
     args = parser.parse_args()
@@ -604,6 +613,8 @@ def main() -> None:
     window_config("Cloud bench", args.size, args.offscreen, vsync=False)
     settings = CloudSettings.preset(QualityLevel(args.quality))
     settings = replace(settings, renderer=args.renderer)
+    if args.interior_growth is not None:
+        settings = replace(settings, interior_growth=args.interior_growth)
     if args.half_res is not None:
         settings = replace(settings, half_resolution=args.half_res)
     bench = CloudBench(

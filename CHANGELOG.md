@@ -22,12 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with the depth. Neutral by default: the other types are unchanged.
   - The weather cube may carry the depth (a third channel); the coverage's
     fbm shift is tabulated by depth (`depth_shift_tables`).
-  - Expensive near the big clouds (docs/source/performance.md §21).
+  - Expensive near the big clouds (docs/source/performance.md §21, §22):
+    half resolution makes those frames 2.5-2.9 times faster on a weak GPU.
+- `CloudSettings.interior_growth` (on at LOW and MID): billboards deep
+  inside a cloud grow and thin as the cube, the same extinction for less
+  overdraw.
 
 ### Changed
 
 - `CirrusSpec.base` defaults to 11 km (was 8 km): over the cumulonimbus's
   cap, 10.5 km.
+- The LOW and MID cloud presets draw the clouds at half resolution
+  (`CloudSettings.half_resolution`): 2.5-2.9 times faster frames near big
+  clouds on a weak GPU. HIGH and ULTRA keep full resolution.
 
 - Raymarched low clouds, an experimental second renderer
   (`CloudSettings.renderer = "march"`, `world_builder.clouds.march`,
