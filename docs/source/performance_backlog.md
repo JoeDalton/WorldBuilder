@@ -193,13 +193,12 @@ breakdown above predates them: frames are 1–3 ms shorter now.
   table, and the march kept for ground inside the slab (mountain tops in
   the clouds). Part E's camera-centred map has the same re-centring: build
   them together.
-- **The mountain map's bake latency** (Part D): a new sun shows its
-  mountain shadows 1-3 s later (~2.3 s of numpy in a worker at 1024, plus
-  the 25 MB height map pickled to it each time). Cheap steps: the heights
-  in shared memory (`SharedArray`), and 512 (a quarter of the work). The
-  real fix is the bake on the GPU: a fragment per texel marching the height
-  cube toward the sun (GL 3.3, so macOS too), ~0.1 s, read back for the
-  CPU twin. Wanted once the sun moves in a game.
+- **The mountain map's bake latency** (Part D): done, the bake on the GPU
+  (`terrain.shadow_bake`, [Shadows](shadows.md): a new sun's maps within
+  a few frames). Left: the CPU twins' marches (~0.2 ms a frame in flight,
+  the local map's new nodes every ~50 m); reading back the few texels the
+  twin needs from the GPU's map (asynchronously, a frame late) would
+  replace them.
 - **The eclipse in the air's march** (Part A): 0.2-0.5 ms with no eclipse
   in view (ground 10.22 → 10.78 ms, orbit 2.25 → 2.44), from the gather
   loop's array in every segment. Two loop variants chosen per segment, the

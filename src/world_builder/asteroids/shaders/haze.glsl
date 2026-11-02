@@ -165,11 +165,17 @@ float hazeDepth(vec3 o, vec3 d, float a, float b, int samples) {
 }
 
 // The haze's colour seen along dirRender (render frame), for display: the
-// rocks as Lambert spheres lit by the sun and the sky light.
-vec3 hazeColour(vec3 dirRender) {
+// rocks as Lambert spheres lit by the sun (sunShare of them: the rest in a
+// body's shadow) and the sky light.
+vec3 hazeColourLit(vec3 dirRender, float sunShare) {
     vec3 L = normalize(uSunDir);
     float phaseAngle = acos(clamp(dot(L, -dirRender), -1.0, 1.0));
     float lambert = (sin(phaseAngle) + (HAZE_PI - phaseAngle) * cos(phaseAngle)) / HAZE_PI;
-    vec3 C = uHazeAlbedo * (uSunColor * (2.0 / 3.0) * lambert + uAmbient) * uExposure;
+    vec3 C = uHazeAlbedo * (uSunColor * ((2.0 / 3.0) * lambert * sunShare) + uAmbient)
+           * uExposure;
     return uTonemap == 1 ? aces_tonemap(C) : pow(clamp(C, 0.0, 1.0), vec3(1.0 / 2.2));
+}
+
+vec3 hazeColour(vec3 dirRender) {
+    return hazeColourLit(dirRender, 1.0);
 }

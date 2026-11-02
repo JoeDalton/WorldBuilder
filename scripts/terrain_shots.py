@@ -106,6 +106,12 @@ hidden: its spout's, handle's and lid's shadows on itself), caster_altitude
 (the textured ball 300 m up, its shadow on the ground, seen from near
 it). The ring (with
 --ring): ring_ground (the start area, 1.5 km up, looking south at its arc),
+ring_shadow_ground and ring_shadow_orbit (its shadow band on the planet,
+the sun 20 degrees north of its plane at noon: from 20 km over the band's
+northern edge, latitude -10.6, looking west along it, and from 3 radii
+over latitude 5, just north of its plane: the ring a thin line, the band
+south of it), ring_planet_shadow (ring_orbit's view, the sun low in the east: the
+planet's shadow across the ring),
 ring_orbit (6 radii over latitude 35, looking down: the planet and its
 whole ring). Every other pose has the sun at azimuth 210, elevation 35, as
 seen there.
@@ -186,6 +192,10 @@ SUNS = {
     "ball_eclipse": AimedSun(1, 0.4),
     "ball_mountain_edge": (270.0, 8.0),
     "caster_self": (210.0, 25.0),
+    # The sun 20 degrees north of the ring's (the equator's) plane, at noon.
+    "ring_shadow_ground": (0.0, 59.4),
+    "ring_shadow_orbit": (0.0, 75.0),
+    "ring_planet_shadow": (90.0, 10.0),
     "caster_altitude": (210.0, 50.0),
 }
 #: Poses whose balls are moved onto a shadow's edge once settled: the
@@ -259,6 +269,14 @@ def _poses(demo: TerrainDemo) -> dict:
     if demo.ring is not None:
         poses["ring_ground"] = (ref_lat, ref_lon, 1500.0, 180.0, 12.0, 0, 0)
         poses["ring_orbit"] = (35.0, lon0, 6.0 * radius, 0.0, -89.9, 0, 0)
+        # The ring's shadow band (the sun's rays from about 10.6-25.5
+        # degrees south cross it at noon): 20 km over its northern edge,
+        # looking west along it (lit ground on the right), and from orbit;
+        # and the planet's shadow across the ring, the sun low in the east
+        # of the whole view.
+        poses["ring_shadow_ground"] = (-10.6, lon0, 20000.0, 90.0, -30.0, 0, 0)
+        poses["ring_shadow_orbit"] = (5.0, lon0, 3.0 * radius, 0.0, -89.9, 0, 0)
+        poses["ring_planet_shadow"] = poses["ring_orbit"]
     # The clouds' shadows from above them, looking across the sun's azimuth
     # (210): under the clouds at noon, offset from them by altitude / tan
     # (elevation) at a low sun.

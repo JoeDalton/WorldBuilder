@@ -38,6 +38,16 @@ uniform vec4  uLocalChart[4];
 // the sun (cloud_field.glsl's cloudShadowDepth), 0 = no cloud shadows: a
 // quality knob (world_builder.shadows.ShadowSettings).
 uniform int   uCloudShadowSteps;
+// Rings (Shadows.add_ring): per ring three vec4s: its centre minus the
+// camera and its inner radius; its plane's normal and its outer radius;
+// the slant's floor (thickness over width) and its row in uRingDepth, which
+// holds its optical depth normal to its plane from the inner rim to the
+// outer (RING_SAMPLES texels).
+#define MAX_SHADOW_RINGS 4
+#define RING_SAMPLES 256.0
+uniform int   uRingCount;
+uniform vec4  uRings[3 * MAX_SHADOW_RINGS];
+uniform sampler2D uRingDepth;
 // The objects' shadow map (world_builder.shadows.casters.CasterMap): their
 // depth down the sun's rays, compared by the hardware; uCasterMatrix takes
 // a position from the camera (render frame) to its texture and depth;
@@ -182,6 +192,32 @@ float localShadow(vec3 planetDir, float altitude) {
     vec2 ceiling = texture(uLocalShadow, (xy / uLocalChart[1].w + 0.5 * size) / size).rg;
     float margin = (altitude - ceiling.x) / max(ceiling.y, 1.0);
     return mix(1.0, smoothstep(-uSunAngularRadius, uSunAngularRadius, margin), keep);
+}
+
+// The share of the sun the rings leave a point rel (from the camera,
+// render frame), toward L: where its ray crosses each ring's plane, the
+// optical depth there over the slant (no flatter than the ring's thickness
+// over its width allows). Shadows.ring_visibility on the CPU.
+float ringVisibility(vec3 rel, vec3 L) {
+    float visible = 1.0;
+    for (int k = 0; k < uRingCount; ++k) {
+        vec4 a = uRings[3 * k];
+        vec4 b = uRings[3 * k + 1];
+        vec4 c = uRings[3 * k + 2];
+        float cosL = dot(L, b.xyz);
+        if (abs(cosL) < 1e-6) {
+            continue;
+        }
+        float t = dot(a.xyz - rel, b.xyz) / cosL;
+        float u = (length(rel + L * t - a.xyz) - a.w) / (b.w - a.w);
+        if (t <= 0.0 || u < 0.0 || u > 1.0) {
+            continue;
+        }
+        float tc = (u * (RING_SAMPLES - 1.0) + 0.5) / RING_SAMPLES;
+        float depth = texture(uRingDepth, vec2(tc, c.y)).r;
+        visible *= exp(-depth / max(abs(cosL), c.x));
+    }
+    return visible;
 }
 
 // The share of the sun the objects (the casters) leave a point rel (from

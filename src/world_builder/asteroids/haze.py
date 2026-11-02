@@ -22,7 +22,11 @@ of light from afar and fills the distance between drawn rocks up close.
 - **Light.** The rocks are Lambert spheres of the rocks' mean albedo: seen
   from where the sun is behind, full; against it, dark (:func:`phase`),
   plus the sky light. Coverage 1 - exp(-optical depth), then the field's
-  exposure and tonemap. No shadows (not even the planet's on its ring).
+  exposure and tonemap. The bodies' shadows (a planet's across its ring:
+  ``shadows.glsl``'s ``eclipseVisibility``) dim the sun on each sample's
+  share, taken at four points along the ray (``haze.frag``'s
+  ``LIT_GROUPS``). A ring's own shadow, on its planet, is
+  :func:`ring_depth`'s.
 - **Drawing.** A hull around the field's shape, drawn on both sides: each
   pixel where a ray leaves the field integrates the interval that ends
   there, so nothing is counted twice. Depth-tested, not written: a planet in
@@ -246,6 +250,26 @@ class HazeModel:
         r = np.maximum(np.asarray(r_cut, dtype=np.float64), self.lo)
         x = np.clip(np.log(r / self.lo) / self.log_span, 0.0, 1.0)
         return self.density * self.cover * interpolate(self.table, x) + self.dust
+
+
+def ring_depth(
+    spec: FieldSpec, cover: float = DEFAULT_COVER, samples: int = PROFILE
+) -> np.ndarray:
+    """A ring's optical depth normal to its plane, across it: every rock's
+    cross-section and the dust (:meth:`HazeModel.extinction` of the largest
+    rock), times its profile across (rims, ringlets), times its thickness
+    (less the faces' fade), at *samples* radii evenly spaced from its inner
+    rim to its outer: the shadow it casts (``Shadows.add_ring``).
+
+    :raises TypeError: for a field that is not a ring
+    """
+    shape = spec.shape
+    if not isinstance(shape, Annulus):
+        raise TypeError("only a ring (an Annulus) casts a ring's shadow")
+    model = HazeModel(spec, cover)
+    rho = np.linspace(shape.inner, shape.outer, samples)
+    thickness = shape.thickness - shape.edge
+    return model.extinction(model.hi) * shape.radial(rho) * thickness
 
 
 def _kept(r: np.ndarray, per_m3: float) -> np.ndarray:

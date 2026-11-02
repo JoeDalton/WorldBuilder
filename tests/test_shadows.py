@@ -309,3 +309,158 @@ void main() {
     finally:
         window.graphicsEngine.remove_window(buffer)
         root.remove_node()
+
+
+# ── rings ──────────────────────────────────────────────────────────────────────
+
+
+def _ring(shadows, centre=(0.0, 0.0, 0.0), normal=(0.0, 0.0, 1.0)):
+    """A ring 900-1260 km out, its depth rising from 0.1 to 0.3 across."""
+    return shadows.add_ring(
+        centre, normal, 900e3, 1260e3, np.linspace(0.1, 0.3, 64), thickness=1000.0
+    )
+
+
+def test_a_ring_dims_the_sun_crossing_it_by_its_slanted_depth():
+    """Under the ring, the sun's ray crosses it: exp(-depth / cos) at the
+    radius it crosses; a ray missing it (inside, outside, away from it) is
+    clear; edge-on, the slant is held at its thickness over its width."""
+    shadows = Shadows()
+    _ring(shadows)
+    sun = np.array([0.0, math.sin(0.4), math.cos(0.4)])  # 0.4 rad off the normal
+    # Points under the ring's plane whose ray toward the sun crosses it at
+    # 1000 km and 1200 km, at the middle and three quarters of its depth.
+    crossings = np.array([[0.0, 1000e3, 0.0], [0.0, 1200e3, 0.0]])
+    points = crossings - sun * 400e3
+    got = shadows.ring_visibility(points, sun)
+    depth = np.interp([100e3 / 360e3, 300e3 / 360e3], [0.0, 1.0], [0.1, 0.3])
+    np.testing.assert_allclose(got, np.exp(-depth / math.cos(0.4)), rtol=1e-3)
+    clear = np.array(
+        [
+            [0.0, 500e3, 0.0] - sun * 400e3,  # through the hole
+            [0.0, 1500e3, 0.0] - sun * 400e3,  # past its rim
+            [0.0, 1000e3, 0.0] + sun * 400e3,  # over it, toward the sun
+        ]
+    )
+    np.testing.assert_allclose(shadows.ring_visibility(clear, sun), 1.0)
+    # The sun 1e-5 rad off its plane: the slant held at 1000 m / 360 km.
+    flat = np.array([0.0, 1.0, 1e-5])
+    flat /= np.linalg.norm(flat)
+    point = np.array([0.0, 1100e3, 0.0]) - flat * 400e3
+    depth = np.interp(200e3 / 360e3, [0.0, 1.0], [0.1, 0.3])
+    got = shadows.ring_visibility(point[None], flat)[0]
+    assert got == pytest.approx(math.exp(-depth / (1000.0 / 360e3)))
+
+
+def test_a_rings_depth_is_its_rocks_and_dust_across_it():
+    from dataclasses import replace
+
+    from world_builder.asteroids.haze import HazeModel, ring_depth
+    from world_builder.asteroids.spec import PRESETS, Annulus, Sphere
+
+    spec = next(s for s in PRESETS.values() if isinstance(s.shape, Annulus))
+    shape = spec.shape
+    depth = ring_depth(spec, samples=33)
+    model = HazeModel(spec)
+    rho = np.linspace(shape.inner, shape.outer, 33)
+    expected = model.extinction(model.hi) * shape.radial(rho)
+    np.testing.assert_allclose(depth, expected * (shape.thickness - shape.edge))
+    assert depth.max() > 0.0
+    with pytest.raises(TypeError):
+        ring_depth(replace(spec, shape=Sphere(5e3)))
+
+
+def test_the_shader_ring_is_the_cpus(window):
+    """ringVisibility (float32, from the camera, the depth texture's
+    filtering) matches Shadows.ring_visibility over a planet's ground under
+    its tilted ring."""
+    from panda3d.core import (
+        Geom,
+        GeomNode,
+        GeomPoints,
+        GeomVertexData,
+        GeomVertexFormat,
+        GeomVertexWriter,
+        OmniBoundingVolume,
+        Shader,
+        Texture,
+    )
+
+    size = 32
+    centre = np.array([2e6, -1e6, 3e5])
+    tilt = np.array([0.0, math.sin(0.3), math.cos(0.3)])
+    shadows = Shadows()
+    shadows.add_ring(
+        centre,
+        tilt,
+        900e3,
+        1260e3,
+        0.1 + 0.2 * np.sin(np.linspace(0.0, 9.0, 300)) ** 2,
+        thickness=1000.0,
+    )
+    sun = np.array([0.5, -0.6, 0.4])
+    sun /= np.linalg.norm(sun)
+    rng = np.random.default_rng(12)
+    dirs = rng.normal(size=(size * size, 3))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    points = centre + dirs * 600e3
+    camera = points[0] + 1000.0 * dirs[0]
+    shadows.update(camera)
+    expected = shadows.ring_visibility(points, sun)
+    assert expected.min() < 0.7 and expected.max() == 1.0
+    assert (expected < 1.0).sum() > 50
+
+    vdata = GeomVertexData("points", GeomVertexFormat.get_v3(), Geom.UH_static)
+    writer = GeomVertexWriter(vdata, "vertex")
+    for x, y, z in (points - camera).astype(np.float32):
+        writer.add_data3f(float(x), float(y), float(z))
+    prim = GeomPoints(Geom.UH_static)
+    prim.add_next_vertices(len(points))
+    geom = Geom(vdata)
+    geom.add_primitive(prim)
+    node = GeomNode("ring_points")
+    node.add_geom(geom)
+    node.set_bounds(OmniBoundingVolume())
+    node.set_final(True)
+    include = (SHADER_PATH / "shadows.glsl").read_text().replace("#pragma once", "")
+    vertex = f"""#version 330
+in vec4 p3d_Vertex;
+uniform vec3 uSun;
+flat out float vVisible;
+{include}
+void main() {{
+    vVisible = ringVisibility(p3d_Vertex.xyz, uSun);
+    int x = gl_VertexID % {size}, y = gl_VertexID / {size};
+    gl_Position = vec4((vec2(x, y) + 0.5) / {size}.0 * 2.0 - 1.0, 0.0, 1.0);
+}}
+"""
+    fragment = """#version 330
+flat in float vVisible;
+out vec4 fragColor;
+void main() {
+    float v = floor(clamp(vVisible, 0.0, 1.0) * 16711680.0 + 0.5);
+    float r = floor(v / 65536.0);
+    float g = floor((v - r * 65536.0) / 256.0);
+    fragColor = vec4(r, g, v - r * 65536.0 - g * 256.0, 255.0) / 255.0;
+}
+"""
+    root = NodePath("ring_check")
+    points_np = root.attach_new_node(node)
+    points_np.set_shader(Shader.make(Shader.SL_GLSL, vertex, fragment))
+    bind_defaults(points_np)
+    shadows.bind(points_np)
+    points_np.set_shader_input("uSun", tuple(float(v) for v in sun))
+    texture = Texture("ring_check")
+    buffer = window.win.make_texture_buffer("ring_check", size, size, texture, True)
+    try:
+        camera_np = window.makeCamera(buffer)
+        camera_np.node().set_scene(root)
+        window.graphicsEngine.render_frame()
+        window.graphicsEngine.render_frame()
+        ram = np.frombuffer(texture.get_ram_image_as("RGB").get_data(), np.uint8)
+        rgb = ram.reshape(size, size, 3).astype(np.int64)
+        got = (rgb[..., 0] * 65536 + rgb[..., 1] * 256 + rgb[..., 2]) / 16711680.0
+        np.testing.assert_allclose(got.ravel(), expected, atol=2e-3)
+    finally:
+        window.graphicsEngine.remove_window(buffer)
+        root.remove_node()

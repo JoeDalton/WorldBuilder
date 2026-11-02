@@ -113,7 +113,8 @@ void main() {
         bool raw;
         float sunShade = cloudShade(L, footprint)
                        * terrainShadow(normalize(vPlanetPos), vHeight)
-                       * casterShadow(vRelPos, up, L);
+                       * casterShadow(vRelPos, up, L)
+                       * ringVisibility(vRelPos, L);
         vec3 near = seaShade(uCamPos + vRelPos, vSwell,
                              vRelPos / max(dist, 1e-3), dist,
                              -vSeabed, vStep, sunShade, raw);
@@ -219,8 +220,9 @@ void main() {
                                                               : 1.0;
     // The mountains' (one fetch): what the sun clears from this height.
     shade *= terrainShadow(normalize(vPlanetPos), vHeight);
-    // The game's objects' (their map: nothing to do without one).
-    shade *= casterShadow(vRelPos, N, L);
+    // The game's objects' (their map: nothing to do without one), and the
+    // rings'.
+    shade *= casterShadow(vRelPos, N, L) * ringVisibility(vRelPos, L);
     vec3 sunlight = uSunColor * (eclipse * shade);
     float sunDay = day;
     if (uOwnAtmosphere >= 0) {

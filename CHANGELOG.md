@@ -174,6 +174,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one) use it; M switches them to Panda3D's lighting. `terrain_shots.py`
   gains `ball_noon`, `ball_sunset`, `ball_eclipse`, `ball_cloud_edge`,
   `ball_mountain_edge` and `--panda-lights`.
+- The mountains' shadow maps are baked on the GPU (#11): with a window,
+  `ShadowMap` (`output=`, which `World` passes) marches each texel of the
+  global cube map and each node of the local map toward the sun in a
+  fragment shader (`terrain.shadow_bake`), a band of rows a frame: a new
+  sun's maps within a few frames, not seconds, and the worker pool left
+  to the terrain. The CPU twins march the texels around a point
+  (`march_ceiling`, `march_local`). Without a window, the pool bakes as
+  before. `sky.starfield.texel_directions`.
+- Ring shadows (#13): a ring dims the sun crossing it, on its planet's
+  terrain, sea, clouds, air and models: a band of shadow with its ringlets
+  in it (`Shadows.add_ring`, `shadows.glsl`'s `ringVisibility`, CPU twin
+  `Shadows.ring_visibility`; its depth from its rocks and dust,
+  `asteroids.haze.ring_depth`). `World` adds every ring field's. The
+  bodies' shadows fall on the rocks and the haze (a planet's across its
+  ring). `terrain_shots.py` gains `ring_shadow_ground`,
+  `ring_shadow_orbit` and `ring_planet_shadow`.
 - Objects cast shadows (#13): a model tracked with
   `World.track_light(node, cast=True)` shadows the terrain, the sea and
   the models the model shader draws, itself too, through a sun-space depth

@@ -5,13 +5,15 @@
 // (the normal map's fourth channel, shape.IcePatches: ice on the share of
 // the surface ranked above 1 - its ice; terrain_material.glsl: rock
 // projected from the sides on steep flanks),
-// lit as the terrain lights its ground (object_light.glsl), then either the
+// lit as the terrain lights its ground (object_light.glsl), in the bodies'
+// shadows (shadows.glsl: a planet's across its ring), then either the
 // world's exposure and tonemap or a plain display encoding (for scenes lit
 // by Panda's fixed-function lights). The field's haze between the camera
 // and the rock veils it (haze.glsl): far rocks melt into the haze they leave
 // to. Rocks fading out at their drawing distance are dithered away.
 
 #pragma include "../../atmosphere/shaders/display.glsl"
+#pragma include "../../shadows/shaders/shadows.glsl"
 #pragma include "../../terrain/shaders/terrain_material.glsl"
 #pragma include "../../terrain/shaders/object_light.glsl"
 
@@ -106,9 +108,11 @@ void main() {
 
     vec3 L = normalize(uSunDir);
     vec3 V = normalize(-vRelPos);
-    // A rock has no "up" for the sky light: it lights every face alike.
+    // A rock has no "up" for the sky light: it lights every face alike. The
+    // bodies' shadows (a planet's across its ring) hide its sun.
+    vec3 sunlight = uSunColor * eclipseVisibility(vRelPos, L, -1);
     vec3 C = objectLight(albedo, surfaceN, roughness, ao, surfaceN, L, V,
-                         uSunColor, 1.0, uAmbient);
+                         sunlight, 1.0, uAmbient);
     C *= uExposure;
     vec3 rgb = uTonemap == 1 ? aces_tonemap(C) : pow(clamp(C, 0.0, 1.0), vec3(1.0 / 2.2));
     if (uVeil == 1) {

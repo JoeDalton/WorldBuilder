@@ -26,9 +26,9 @@ and roughness. Left out:
   as an occluder (only its depth is kept), where the terrain swaps in a
   depth-only fragment stage (the `PASS_TAG` tag state). A tag and a
   depth-only model stage would do the same.
-- **The asteroids.** Their shaders include `shadows.glsl` but take none of
-  its terms: a rock in a ring is not eclipsed, and not in its planet's
-  shadow per pixel. Wiring them is the plan's small follow-up (part G, #14).
+- **The asteroids.** Their rocks and haze take the bodies' shadows (part
+  I: a planet's across its ring), but not the world's other terms (the
+  objects' shadows, a ring's own).
 
 ## Objects' shadows (shadows' part H, #13)
 
@@ -52,6 +52,15 @@ out:
   is left out, but one near the camera whose shadow falls behind it still
   costs the pass. Testing its shadow's cylinder against the view's
   frustum would save it.
+
+## Rings (shadows' part I, #13)
+
+- **A ring's own shadow on itself.** Its rocks and haze are not shaded by
+  the ring between them and the sun (at a low sun across it, its far side
+  should be dimmer).
+- **The sun through the planet's air.** On its way to the ring, the sun
+  grazing the planet's limb is not reddened: the planet's shadow on the
+  ring has a penumbra but no red edge.
 
 ## Clouds (shadows' part F, #11)
 

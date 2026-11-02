@@ -193,12 +193,13 @@ sun.
   at 1024 on a 600 km planet): a texel's own slope never shadows it, and a
   ridge nearer than that casts nothing here. Part E's local map covers
   that; the demo's 750 m mesas show only the far ends of their shadows.
-- **`ShadowMap`** (one per body: `Body.shadow_map` in `World`). Bakes in
-  the worker pool: the heights once, the ceiling for each sun
-  (`set_sun`; the last map stays until the new one is in, so a swinging
-  sun gets a new map every ~2-3 s). One half-float cube texture in km,
-  mipmapped (read across a whole face from orbit, it thrashed the texture
-  cache without), uploaded in place: `bind(node)` once. `loading` until
+- **`ShadowMap`** (one per body: `Body.shadow_map` in `World`). Samples
+  the heights once in the worker pool, then bakes the ceiling for each sun
+  on the GPU (see [Baked on the GPU](#baked-on-the-gpu)), or, with no
+  window, in the pool (`set_sun`; the last map stays until the new one is
+  in, so a swinging sun gets a new map every ~2-3 s there). One half-float
+  cube texture in km (the pool's mipmapped, the GPU's not: see below):
+  `bind(node)` once. `loading` until
   the first map (`World.loading` counts it), `current` once the map is the
   sun's (the shots wait for it).
 - **Receivers.** The terrain (land, far water) per pixel at its planet-frame
@@ -219,6 +220,66 @@ The clouds' `grazingLight` (the sun's path below a cloud's altitude dims it
 toward the terminator) is kept: it stands for the haze and the clouds on
 that path, which the map does not hold, and the map only darkens the
 clouds behind real peaks.
+
+## Baked on the GPU
+
+With a window (`ShadowMap(..., output=)`: `World` and the demo pass
+theirs), both maps are baked by the GPU (`terrain.shadow_bake`): a sun's
+change shows within a few frames, not 1-3 s (global, ~1 s local) later,
+and the worker pool is left to the terrain.
+
+- **The march.** The pool's sweep is sequential (a row from the last).
+  Marching each texel toward the sun over the ground instead stands alone
+  per texel: from the first counted step (two texels) on, a node `k` half
+  texels toward the sun along the great circle bounds the ceiling at its
+  ground less the ray's rise from here (`ray_gain`); it stops once no
+  ground can rise above the ceiling found (past the ray's lowest point),
+  or at the sub-solar point (`march_limits`: at most ~3 horizon arcs).
+  Against the straight ray cleared by bisection it is within the grid's
+  resolution, as the sweep (closer: 0-130 m where the sweep was up to 140
+  m high, `test_the_march_is_closer_to_the_ray_than_the_sweep`).
+  `shadow_bake_cube.frag`, a card per cube face; its CPU twin
+  `march_ceiling`. The local map's (`shadow_bake_local.frag`,
+  `march_local`) is `local_ceiling`'s own march, at each node directly.
+- **The ground** is still sampled in the pool (the planet's noise is on the
+  CPU), once per size (the global map) or per square (the local map), and
+  uploaded once as a float texture.
+- **Over frames.** A bake is drawn a band of rows a frame, at most
+  `BAKE_TEXELS` (512K) for the global map, `LOCAL_BAKE_TEXELS` (128K) for
+  the local one (dearer per node): 12 frames for the 1024 cube (48 for
+  2048), 8 for the 1024 local map; ~0.4 ms a frame of the global's in the
+  demo's views. A moving sun gets a new map as soon as the last is done:
+  every ~0.2 s at 1024.
+- **Stopping early.** The march stops once no ground can rise above the
+  ceiling found: on the highest ground near its texel (`local_tops`: per
+  64-texel block, within 128 texels, made once per size in the pool), not
+  the planet's, while that near. A lowland texel stops after a few steps
+  instead of climbing past the highest peak; the result is the same.
+- **Not mipmapped.** A render target with mipmaps had them made again after
+  every frame its buffer drew: +2.7 ms a frame during a bake, in the views'
+  own draws (the GPU makes them when they are first read). Without them
+  the views cost the same as the pool's mipmapped map (orbit 3.75 / 3.69,
+  stratosphere 6.98 / 6.90, ground 15.55 / 15.65 ms).
+- **The CPU twins** (`ShadowMap.visibility`) march the texels (nodes)
+  around a point on the CPU, once each per map, then filter them as the
+  GPU does (bilinear): a flying camera reaches a new global texel every
+  few seconds, a new local node every ~50 m. A march per 25 m cell cost
+  ~9 ms of the demo's update in flight.
+- **Cost.** `flight_bench.py --flight low` (mean / p95 ms), alternating
+  with the pool's bakes: 11.8 / 18.8 and 12.4 / 19.5 against 11.5 / 18.8
+  twice. Of the ~0.6 ms, ~0.3 ms is the maps' own work on the main thread
+  (their update, the twins); the rest is more terrain: the pool no longer
+  bakes, so it makes ~10 % more chunks a second (finest level 1.8 against
+  2.0), uploaded on the main thread. A sun swinging 0.5° a frame
+  (`mountains_low`'s view): 17.3 / 25.8 ms, the pool's 17.5 / 27.2 (a
+  still sun 13.3 / 17.5): the same cost, the maps redrawn every ~12
+  frames, not every ~2-3 s. The views' frame times are the pool's
+  (`mountains_low` 13.10 / 13.30, `mountains_orbit` 7.75 / 7.41,
+  `mesas_low` 15.51 / 15.58), and their shadows the same but for the
+  march's small differences (`compare_shots.py`: 0.7-5.7 % of pixels, at
+  shadows' edges).
+- **Without a window** (headless tools, the tests' stand-ins) the pool
+  bakes as before (`ceiling_cube`, `local_ceiling`).
 
 ## Nearby ridges (the local map)
 
@@ -422,6 +483,55 @@ ball against its geometric shadow (the plane's points whose ray to the
 sun crosses the ball), with points over it, off the map and on its lit
 side; and that only the casters show to the map's camera.
 
+## Rings (part I)
+
+A ring dims the sun crossing it: on its planet, a band of shadow (its
+ringlets and gaps in it); and its planet's shadow falls across it.
+
+- **The term.** `Shadows.add_ring(centre, normal, inner, outer, depth,
+  thickness)` (up to `MAX_SHADOW_RINGS`, 4): its optical depth normal to
+  its plane across it, a row of 256 texels in `uRingDepth`.
+  `shadows.glsl`'s `ringVisibility`: where a point's ray toward the sun
+  crosses each ring's plane, `exp(-depth / |L.n|)` at that radius (the
+  slant held at its thickness over its width when the sun is near its
+  plane). CPU twin `Shadows.ring_visibility`, in `World.sun_visibility`
+  and `lights_at` with the local shadows.
+- **The depth** is the ring's own (`asteroids.haze.ring_depth`): every
+  rock's cross-section and the dust per metre at full profile
+  (`HazeModel.extinction` of the largest rock), times its profile across
+  (rims, ringlets), times its thickness less the faces' fade. The demo's
+  ring: 0.13-0.19 normal to it, about 0.6 of the sun through it with the
+  sun 20° off its plane. `World` adds every ring field's
+  (`FieldLook` with an `Annulus`); the hand-built demo its `--ring`.
+- **Receivers.** The terrain (land, far water, the near sea), the models,
+  the clouds (per billboard, the cirrus per vertex, and the deck per
+  fragment), and the air: the
+  direct sun of its samples (not the lit sky's fill, as the clouds'
+  shadow), taken at a quarter and three quarters of each segment, linear
+  between. Per sample it cost ~2.5 ms a frame with the ring in the sky;
+  the band's edges are kilometres wide and the air's light a smooth
+  integral.
+- **The planet's shadow on the ring.** The rocks (`asteroid.frag`) and the
+  haze (`haze.frag`) take `eclipseVisibility` (every body, `World` binds
+  its `Shadows` to every field). The haze weighs each sample's share of
+  its depth by it, taken at four points along the ray (`LIT_GROUPS`): per
+  sample it cost up to 14 ms with the ring in the planet's shadow, and a
+  shadow's edge there is tens of km wide (19 km at 1 Mm).
+- **Not done.** A ring does not shade itself (its rocks and haze in its
+  own shadow), nor is the sun reddened through the planet's air on its way
+  to the ring.
+
+`tests/test_shadows.py`: the term's geometry (the slanted depth at the
+radius crossed; clear through the hole, past the rim, toward the sun; the
+slant's floor edge-on), `ring_depth` against the haze model, and
+`ringVisibility` read back over a planet under a tilted ring against the
+CPU.
+
+Cost (median frame ms, `terrain_shots.py --ring`, Part H then Part I):
+ground 17.33 / 17.59, in_clouds 17.02 / 17.64, ring_ground 13.25 /
+13.11, ring_orbit 5.48 / 5.41: within run-to-run noise. Without `--ring`
+the terms cost nothing (no ring: `uRingCount` 0).
+
 ## Demo and shots
 
 F7 in the terrain demos cycles the shadows' preset (`--shadows-quality` at
@@ -442,6 +552,14 @@ its shadow: the sun 3° up in the west, and 0.4° off the moon's centre),
 nearest edge of a cloud's or a mesa's shadow around the start, where the
 CPU twin leaves half the sun, seen from 150 m across the sun). A cloud's
 shadow edge is hundreds of metres wide: a ball on it is dimmed evenly.
+
+The rings (part I, with `--ring`): `ring_shadow_ground` (20 km over the
+band's northern edge, latitude -10.6, looking west along it: the band on
+the left), `ring_shadow_orbit` (3 radii over latitude 5, just north of the
+ring's plane: the ring a thin line, the band south of it, its ringlets in
+it), both with the sun 20° north of the ring's plane at noon, and
+`ring_planet_shadow` (`ring_orbit`'s view, the sun low in the east: the
+planet's shadow across the ring).
 
 The objects' shadows (part H; the balls cast theirs): `caster_pad` (the
 white ball resting on the ground, the textured one 60 m up beside it, both

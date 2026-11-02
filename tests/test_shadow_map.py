@@ -527,3 +527,252 @@ void main() {
     finally:
         window.graphicsEngine.remove_window(buffer)
         root.remove_node()
+
+
+# ── the GPU bake ───────────────────────────────────────────────────────────────
+
+
+def test_the_march_is_closer_to_the_ray_than_the_sweep(baked, heights):
+    """march_ceiling (the GPU bake's twin) against the straight ray cleared
+    by bisection, in the peak's shadow: within the grid's resolution, as the
+    sweep is; past it, below the ground as the ray (the nearest ground is
+    the local map's)."""
+    from world_builder.terrain.shadow_map import march_ceiling
+
+    _, sun, east = baked
+    unit = sun / np.linalg.norm(sun)
+    ground = heights[..., None]
+    t = np.linspace(100.0, 80e3, 8000)
+    for distance in (10e3, 14e3, 18e3, 20e3, 25e3):
+        p = _behind(distance, east)
+
+        def clears(a):
+            q = p[None] * (R + a) + unit[None] * t[:, None]
+            r = np.linalg.norm(q, axis=1)
+            return np.all(r >= R + sample_cube(ground, q)[:, 0])
+
+        lo, hi = -5000.0, 10000.0
+        for _ in range(40):
+            mid = 0.5 * (lo + hi)
+            lo, hi = (lo, mid) if clears(mid) else (mid, hi)
+        marched = march_ceiling(heights, R, sun, p[None])[0, 0]
+        if hi > 0.0:
+            assert marched == pytest.approx(hi, abs=150.0)
+        else:
+            assert marched <= 0.0
+
+
+def test_the_gpu_bake_is_the_march(window, heights):
+    """CeilingBake's cube map (half floats, km), read back, at random
+    texels: march_ceiling at their directions (the faces' layout too)."""
+    from panda3d.core import Texture
+
+    from world_builder.terrain.shadow_bake import (
+        CeilingBake,
+        heights_texture,
+        tops_texture,
+    )
+    from world_builder.terrain.shadow_map import local_tops, march_ceiling
+
+    sun, _ = _sun(10.0)
+    bake = CeilingBake(window.win, SIZE, to_ram=True)
+    try:
+        tops = tops_texture(local_tops(heights))
+        bake.bake(heights_texture(heights), tops, sun, R, float(heights.max()))
+        window.graphicsEngine.render_frame()
+        frames = 1
+        while not bake.step():  # its bands, a few a frame
+            window.graphicsEngine.render_frame()
+            frames += 1
+        assert frames == 3  # two 512 faces a frame
+        window.graphicsEngine.render_frame()
+        texture = bake.texture
+        half = texture.get_component_type() == Texture.T_half_float
+        ram = np.frombuffer(
+            texture.get_ram_image_as("RGBA").get_data(),
+            np.float16 if half else np.float32,
+        )
+        got = ram.astype(np.float64).reshape(6, SIZE, SIZE, 4)[..., :2] * 1e3
+    finally:
+        bake.destroy()
+    rng = np.random.default_rng(2)
+    # Texels across the peak's shadow and elsewhere.
+    dirs = cube_directions(SIZE)
+    near = np.argwhere(dirs @ PEAK > np.cos(40e3 / R))
+    anywhere = rng.integers(0, SIZE, (500, 3)) % [6, SIZE, SIZE]
+    picks = np.concatenate([near[rng.choice(len(near), 1500)], anywhere])
+    face, row, column = picks.T
+    expected = march_ceiling(heights, R, sun, dirs[face, row, column])
+    values = got[face, row, column]
+    shaded = expected[:, 0] > 0.0
+    assert shaded.sum() > 100
+    # GPU filtering (8-bit weights) and half floats: a few metres, and a
+    # crest where two steps tie now and then.
+    error = np.abs(values[:, 0] - expected[:, 0])
+    assert np.percentile(error, 99) < 30.0
+    free = expected[:, 0] <= -1e4  # nothing occludes: no ceiling either
+    np.testing.assert_allclose(values[free, 0], expected[free, 0], rtol=1e-2)
+
+
+def test_the_gpu_local_bake_is_the_march(window):
+    """LocalBake's map (float32, metres), read back at random nodes:
+    march_local there; whose ceilings are local_ceiling's."""
+    from world_builder.terrain.shadow_bake import LocalBake, local_heights_texture
+    from world_builder.terrain.shadow_map import march_local
+
+    chart, heights, sun = _ridge_chart()
+    near, far = 2.0 * SPACING, 2300.0
+    bake = LocalBake(window.win, LOCAL, to_ram=True)
+    try:
+        bake.bake(
+            local_heights_texture(heights),
+            chart,
+            SPACING,
+            sun,
+            near,
+            far,
+            float(heights.max()),
+        )
+        window.graphicsEngine.render_frame()
+        while not bake.step():
+            window.graphicsEngine.render_frame()
+        window.graphicsEngine.render_frame()
+        ram = np.frombuffer(bake.texture.get_ram_image().get_data(), np.float32)
+        got = ram.astype(np.float64).reshape(LOCAL, LOCAL, 2)
+    finally:
+        bake.destroy()
+    rng = np.random.default_rng(6)
+    row, column = rng.integers(0, LOCAL, (2, 2000))
+    nodes = chart_nodes(LOCAL, SPACING)
+    dirs = chart.to_dirs(nodes[column], nodes[row]).reshape(-1, 3)
+    expected = march_local(heights, chart, SPACING, sun, near, far, dirs)
+    values = got[row, column]
+    shaded = expected[:, 0] > 0.0
+    assert shaded.sum() > 100
+    np.testing.assert_allclose(values[shaded], expected[shaded], atol=3.0)
+    # The pool's bake: its grid read back bilinearly (distances in between),
+    # and near the square's sunward edge its own: the ceilings agree.
+    grid = local_ceiling(heights, chart, SPACING, sun, near, far)
+    error = np.abs(grid[row, column, 0] - expected[:, 0])[shaded]
+    assert np.percentile(error, 95) < 3.0
+
+
+def test_a_shadow_map_bakes_on_the_gpu_for_each_sun(window):
+    """ShadowMap with a window: the heights in the pool, then each sun's
+    maps (global and local) drawn by the GPU with the next frame; the
+    shaders bound to its textures; the CPU twin marches the same maps;
+    destroy removes the buffers."""
+    spec = PRESETS["moon"]
+    executor = ChunkExecutor(backend="inline")
+    engine = window.graphicsEngine
+    try:
+        shadow = ShadowMap(
+            _stand_in(spec), executor, 64, (0.0, 0.3, 1.0), 64, 50.0, output=window.win
+        )
+        node = NodePath("ground")
+        shadow.bind(node)
+        assert shadow._gpu.buffer is not None and shadow.local._gpu is not None
+        camera = np.array([0.0, 0.0, spec.radius + 500.0])
+        assert shadow.loading and not shadow.current
+        for _ in range(4):
+            shadow.update(camera)
+            engine.render_frame()
+        assert not shadow.loading and shadow.current
+        assert shadow.cube is None and shadow._on[0] == 1
+        texture = node.get_shader_input("uTerrainShadow").get_texture()
+        assert texture == shadow._gpu.texture and texture.get_x_size() == 64
+        local = node.get_shader_input("uLocalShadow").get_texture()
+        assert local == shadow.local._gpu.texture
+        # A new sun: started at once, drawn within a few frames (small maps:
+        # their whole cube in one).
+        shadow.set_sun((1.0, 0.0, 0.2))
+        shadow.update(camera)
+        assert not shadow.current
+        for frames in range(1, 5):
+            engine.render_frame()
+            shadow.update(camera)
+            if shadow.current:
+                break
+        assert shadow.current and frames <= 2
+        points = np.array([[0.0, 0.0, spec.radius + 5e4], [spec.radius, 0.0, 0.0]])
+        seen = shadow.visibility(points, SUN_ANGULAR_RADIUS)
+        assert seen.shape == (2,) and seen[0] == 1.0
+    finally:
+        shadow.destroy()
+        executor.shutdown()
+    assert shadow._gpu is None and shadow.local._gpu is None
+
+
+def test_the_gpu_maps_twins_are_their_texels_filtered(heights):
+    """The CPU twins of the GPU's maps march only the texels (nodes) around
+    each point, once each, then filter them as the GPU does: the same as
+    marching every texel and filtering the whole map."""
+    from world_builder.terrain.shadow_map import (
+        LocalShadowMap,
+        march_ceiling,
+        march_local,
+    )
+
+    sun, east = _sun(10.0)
+    size = 64
+    small = _peak(cube_directions(size)).astype(np.float32)
+    shadow = object.__new__(ShadowMap)
+    shadow.size = size
+    shadow._heights = small
+    shadow._top = float(small.max())
+    shadow._drawn_sun = sun / np.linalg.norm(sun)
+    shadow._terrain = _stand_in(PRESETS["moon"])
+    shadow._terrain.radius = R
+    shadow._texels, shadow._texels_for = {}, None
+    whole = march_ceiling(small, R, shadow._drawn_sun, cube_directions(size))
+    points = np.array([_behind(d, east) for d in np.linspace(5e3, 60e3, 12)])
+    np.testing.assert_allclose(
+        shadow._gpu_twin(points), sample_cube(whole, points), rtol=1e-9, atol=1e-6
+    )
+    marched = len(shadow._texels)
+    shadow._gpu_twin(points)
+    assert len(shadow._texels) == marched <= 4 * len(points)  # kept
+
+    chart, local_heights, local_sun = _ridge_chart()
+    local = LocalShadowMap(_stand_in(PRESETS["moon"]), None)
+    local.spacing = SPACING
+    local.drawn = (chart, local_heights, local_sun, 100.0, 2300.0, 2300.0)
+    nodes = chart_nodes(LOCAL, SPACING)
+    x, y = np.meshgrid(nodes, nodes)
+    every = march_local(
+        local_heights, chart, SPACING, local_sun, 100.0, 2300.0, chart.to_dirs(x, y)
+    ).reshape(LOCAL, LOCAL, 2)
+    rng = np.random.default_rng(8)
+    gy, gx = rng.uniform(0.0, LOCAL - 1.0, (2, 40))
+    np.testing.assert_allclose(
+        local._gpu_twin(gy, gx, LOCAL), _bilinear(every, gy, gx), atol=1e-6
+    )
+
+
+def test_the_local_tops_bound_every_ground_in_reach():
+    """local_tops: each block's value is at least every texel's ground
+    within TOPS_REACH_TEXELS (an angle) of any of its texels, and well
+    under the planet's highest where that is far."""
+    from world_builder.terrain.shadow_map import (
+        TOPS_BLOCK_TEXELS,
+        TOPS_REACH_TEXELS,
+        local_tops,
+    )
+
+    size = 256
+    rng = np.random.default_rng(9)
+    heights = (rng.random((6, size, size)) ** 8 * 4000.0).astype(np.float32)
+    tops = local_tops(heights)
+    dirs = cube_directions(size)
+    flat = dirs.reshape(-1, 3)
+    ground = heights.reshape(-1)
+    reach = math.cos(TOPS_REACH_TEXELS * 2.0 / size)
+    block = TOPS_BLOCK_TEXELS
+    for face, row, column in rng.integers(0, size, (40, 3)) % [6, size, size]:
+        near = flat @ dirs[face, row, column] >= reach
+        assert tops[face, row // block, column // block] >= ground[near].max()
+    # A single peak (on +z): far from it, the opposite face, nothing.
+    peak = np.zeros((6, size, size), np.float32)
+    peak[4, 128, 128] = 3000.0
+    peaked = local_tops(peak)
+    assert peaked[4].max() == 3000.0 and peaked[5].max() == 0.0

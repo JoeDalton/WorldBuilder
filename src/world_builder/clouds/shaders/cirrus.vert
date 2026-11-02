@@ -56,7 +56,8 @@ void main() {
     // Other bodies eclipsing the sun (as cloud_sphere.vert).
     float eclipse = eclipseVisibility(p - camPos, sunDir, uShadowSelf);
     // And the mountains between the cirrus and a low sun (the body's map).
-    vSunTint *= eclipse * terrainShadow(normalize(p), length(p) - planetRadius);
+    vSunTint *= eclipse * terrainShadow(normalize(p), length(p) - planetRadius)
+              * ringVisibility(p - camPos, sunDir);
     vTwilight *= eclipse;
     vSkyTint *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
 }

@@ -59,6 +59,24 @@ def cube_directions(size: int) -> np.ndarray:
     return out
 
 
+def texel_directions(
+    size: int, face: ArrayLike, row: ArrayLike, column: ArrayLike
+) -> np.ndarray:
+    """The unit directions of given texels' centres (:func:`cube_directions`
+    at those indices only).
+
+    :param face: (N,) faces
+    :param row: (N,) rows (t), integers
+    :param column: (N,) columns (s), integers
+    :returns: (N, 3)
+    """
+    face = np.asarray(face, dtype=np.int64)
+    sc = (np.asarray(column, dtype=np.float64) + 0.5) / size * 2.0 - 1.0
+    tc = (np.asarray(row, dtype=np.float64) + 0.5) / size * 2.0 - 1.0
+    d = _FACES[face, 0] + sc[:, None] * _FACES[face, 1] + tc[:, None] * _FACES[face, 2]
+    return d / np.linalg.norm(d, axis=1, keepdims=True)
+
+
 def directions_to_texels(
     dirs: ArrayLike, size: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

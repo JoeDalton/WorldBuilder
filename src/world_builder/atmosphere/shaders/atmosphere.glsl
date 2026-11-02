@@ -197,6 +197,17 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
                                             uAtmoBody[i]);
         }
     }
+    // The rings' shadow on the air: at a quarter and three quarters of the
+    // segment, linear between (its edges are kilometres wide, the air's
+    // light a smooth integral). Per sample it cost ~2.5 ms a frame with a
+    // ring in the sky.
+    bool ringed = uRingCount > 0;
+    float ringNear = 1.0;
+    float ringFar = 1.0;
+    if (ringed) {
+        ringNear = ringVisibility(dir * (t0 + 0.25 * (t1 - t0)), sunDir);
+        ringFar = ringVisibility(dir * (t0 + 0.75 * (t1 - t0)), sunDir);
+    }
     float depthR = 0.0;
     float depthM = 0.0;
     vec3 sumR = vec3(0.0);
@@ -223,12 +234,15 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
         float rs = length(ps);
         float cosSun = dot(ps, sunDir) / rs;
         float eclipse = eclipsable ? eclipses[min(k, ATMO_MAX_STEPS - 1)] : 1.0;
+        // The rings dim the direct sun, not the lit sky's fill.
+        float ring = mix(ringNear, ringFar,
+                         clamp(2.0 * (tc - t0) / (t1 - t0) - 0.5, 0.0, 1.0));
         vec3 direct = vec3(0.0);
         if (lit > 0.0) {
             float curve = max(uAtmoExtra[i].y, 1.0);
             vec2 sun = atmoDepthToward(rs, cosSun, R, vec2(Hr, Hm), curve);
             direct = exp(-(betaR * (depthR + sun.x) + betaMExt * (depthM + sun.y)))
-                   * (lit * eclipse);
+                   * (lit * eclipse * ring);
         }
         // Light scattered more than once: a share of the sunlight, wherever
         // the sky above is lit (fading through twilight, dimmed in an

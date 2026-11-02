@@ -274,7 +274,9 @@ sits at `position` with `orientation` (world from field) in the world.
   (the full-detail shape) turned with the rock, the terrain's snow textures
   on the rock's ice patches and its rock textures elsewhere
   (`terrain_material.glsl`: rock projected from the sides on steep flanks), lit as the terrain lights its
-  ground (`object_light.glsl`), no shadows. Then either the world's exposure
+  ground (`object_light.glsl`), in the bodies' shadows (`shadows.glsl`'s
+  `eclipseVisibility`: a planet's across its ring, with `World`'s
+  `Shadows` bound). Then either the world's exposure
   and ACES tonemap, or, with `tonemap=False`, a plain display encoding to
   match models lit by Panda's fixed-function lights. Last, the haze between
   the camera and the rock veils it ([Haze](#haze)): a far rock takes the
@@ -458,7 +460,10 @@ approaching, rocks appear out of it while it thins by as much.
   the backlog.
 - **Light.** Lambert spheres of the rocks' mean far colour: full with the
   sun behind the camera, dark against it, plus the sky light; then the
-  field's exposure and tonemap. No shadows, not even a planet's on its ring.
+  field's exposure and tonemap. The bodies' shadows dim the sun on each
+  sample's share (a planet's across its ring), taken at four points along
+  the ray. A ring casts its own shadow on its planet: see
+  [Shadows](shadows.md), part I.
 - **Drawing.** A hull around the shape (1,024 segments for a ring), drawn on
   both sides with depth test and no depth write, after the sky and clouds:
   a planet in front hides it. Hull points beyond the far plane are pulled

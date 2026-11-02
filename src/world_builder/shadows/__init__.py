@@ -69,6 +69,10 @@ from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 SHADER_PATH = Path(__file__).parent / "shaders"
 #: Bodies one shader can take (must match MAX_SHADOW_BODIES in the GLSL).
 MAX_SHADOW_BODIES = 8
+#: Rings one shader can take (MAX_SHADOW_RINGS in the GLSL), and the
+#: entries of each one's optical depth across it (its row of uRingDepth).
+MAX_SHADOW_RINGS = 4
+RING_SAMPLES = 256
 #: The sun's angular radius, radians: as the sky draws it (about twice the
 #: real one: a disc that reads at any resolution), and every penumbra.
 SUN_ANGULAR_RADIUS = math.radians(0.55)
@@ -119,8 +123,9 @@ class ShadowSettings(QualitySettings):
         unit="px",
         choices={"off": 0, "256": 256, "512": 512, "1024": 1024, "2048": 2048},
         help="The mountains' shadow map, per cube face: finer draws smaller "
-        "ridges' shadows. Made in the background at load and whenever the "
-        "sun moves (~2 s at 1024, four times that at 2048).",
+        "ridges' shadows. Its ground is sampled in the background at load; "
+        "the GPU redraws it within a few frames whenever the sun moves (12 "
+        "frames at 1024, 48 at 2048).",
     )
 
     local_map_size: int = knob(
@@ -130,8 +135,9 @@ class ShadowSettings(QualitySettings):
         unit="nodes",
         choices={"off": 0, "512": 512, "1024": 1024, "2048": 2048},
         help="The shadows of ridges nearer than ~2 km, from a map around the "
-        "camera made in the background (~1 s) as it moves and as the sun "
-        "does: wider is farther before it fades.",
+        "camera: its ground sampled in the background (~1 s) as the camera "
+        "moves, redrawn by the GPU within a few frames as the sun does: "
+        "wider is farther before it fades.",
     )
     local_map_spacing: float = knob(
         50.0,
@@ -252,6 +258,11 @@ class Shadows:
         self._atmosphere_bodies = PTA_int.empty_array(MAX_ATMOSPHERES)
         for index in range(MAX_ATMOSPHERES):
             self._atmosphere_bodies[index] = -1
+        # Rings: [centre, normal, inner, outer, depths across, slant floor]
+        self._rings: list[list] = []
+        self._ring_count = PTA_int.empty_array(1)
+        self._ring_params = PTA_LVecBase4f.empty_array(3 * MAX_SHADOW_RINGS)
+        self._ring_depth = _ring_texture(np.zeros((MAX_SHADOW_RINGS, RING_SAMPLES)))
 
     @property
     def settings(self) -> ShadowSettings:
@@ -369,16 +380,101 @@ class Shadows:
         node.set_shader_input("uCloudShadowSteps", self._cloud_steps)
         node.set_shader_input("uCloudFarReach", self._cloud_far)
         node.set_shader_input("uShadowSelf", -1 if body is None else int(body))
+        node.set_shader_input("uRingCount", self._ring_count)
+        node.set_shader_input("uRings", self._ring_params)
+        node.set_shader_input("uRingDepth", self._ring_depth)
+
+    def add_ring(
+        self,
+        centre: ArrayLike,
+        normal: ArrayLike,
+        inner: float,
+        outer: float,
+        depth: ArrayLike,
+        thickness: float = 0.0,
+    ) -> int:
+        """Add a ring that dims the sun crossing it (shadows.glsl's
+        ``ringVisibility``).
+
+        :param centre: its centre, world frame
+        :param normal: its plane's normal (any length)
+        :param inner: its inner radius, metres
+        :param outer: its outer radius
+        :param depth: its optical depth normal to its plane, at radii evenly
+            spaced from *inner* to *outer* (any count; resampled to
+            :data:`RING_SAMPLES`): ``asteroids.haze.ring_depth``
+        :param thickness: its thickness: a sun near its plane crosses no
+            more than ``(outer - inner) / thickness`` times the normal depth
+        :returns: its index
+        :raises ValueError: past :data:`MAX_SHADOW_RINGS`
+        """
+        if len(self._rings) >= MAX_SHADOW_RINGS:
+            raise ValueError(f"at most {MAX_SHADOW_RINGS} rings cast shadows")
+        depth = np.asarray(depth, dtype=np.float64)
+        given = np.linspace(0.0, 1.0, len(depth))
+        across = np.interp(np.linspace(0.0, 1.0, RING_SAMPLES), given, depth)
+        floor = float(thickness) / max(outer - inner, 1e-9)
+        self._rings.append(
+            [np.zeros(3), np.zeros(3), float(inner), float(outer), across, floor]
+        )
+        index = len(self._rings) - 1
+        self.set_ring(index, centre, normal)
+        rows = np.zeros((MAX_SHADOW_RINGS, RING_SAMPLES))
+        for k, ring in enumerate(self._rings):
+            rows[k] = ring[4]
+        _fill_ring_texture(self._ring_depth, rows)
+        self._ring_count[0] = len(self._rings)
+        return index
+
+    def set_ring(self, index: int, centre: ArrayLike, normal: ArrayLike) -> None:
+        """Move or turn a ring (the shaders follow at :meth:`update`)."""
+        ring = self._rings[index]
+        normal = np.asarray(normal, dtype=np.float64)
+        ring[0] = np.asarray(centre, dtype=np.float64)
+        ring[1] = normal / np.linalg.norm(normal)
+        self._ring_params[3 * index + 1] = LVecBase4f(*ring[1], ring[3])
+        self._ring_params[3 * index + 2] = LVecBase4f(
+            ring[5], (index + 0.5) / MAX_SHADOW_RINGS, 0.0, 0.0
+        )
 
     def update(self, camera_world: ArrayLike) -> None:
-        """Per frame: each body's centre relative to the camera (float64
-        maths, the render frame's axes).
+        """Per frame: each body's and ring's centre relative to the camera
+        (float64 maths, the render frame's axes).
 
         :param camera_world: the camera in the world frame, metres
         """
         camera = np.asarray(camera_world, dtype=np.float64)
         for index, (radius, position, _) in enumerate(self._bodies):
             self._spheres[index] = LVecBase4f(*(position - camera), radius)
+        for index, ring in enumerate(self._rings):
+            self._ring_params[3 * index] = LVecBase4f(*(ring[0] - camera), ring[2])
+
+    def ring_visibility(
+        self, points_world: ArrayLike, sun_direction: ArrayLike
+    ) -> np.ndarray:
+        """The share of the sun the rings leave each point: shadows.glsl's
+        ``ringVisibility`` on the CPU, in float64.
+
+        :param points_world: (..., 3) world frame, metres
+        :param sun_direction: toward the sun, world frame (any length)
+        :returns: (...) in [0, 1]
+        """
+        points = np.asarray(points_world, dtype=np.float64)
+        sun = np.asarray(sun_direction, dtype=np.float64)
+        sun = sun / np.linalg.norm(sun)
+        visible = np.ones(points.shape[:-1])
+        for centre, normal, inner, outer, across, floor in self._rings:
+            cos_sun = float(sun @ normal)
+            if abs(cos_sun) < 1e-9:
+                continue
+            t = ((centre - points) @ normal) / cos_sun
+            rho = np.linalg.norm(points + t[..., None] * sun - centre, axis=-1)
+            u = (rho - inner) / (outer - inner)
+            depth = np.interp(u, np.linspace(0.0, 1.0, RING_SAMPLES), across)
+            crossed = (t > 0.0) & (u >= 0.0) & (u <= 1.0)
+            slant = max(abs(cos_sun), floor)
+            visible *= np.where(crossed, np.exp(-depth / slant), 1.0)
+        return visible
 
     def eclipse(
         self,
@@ -490,6 +586,23 @@ def disc_coverage(sun: ArrayLike, body: ArrayLike, separation: ArrayLike) -> np.
 _DEFAULTS: dict | None = None
 
 
+def _ring_texture(rows: np.ndarray) -> Texture:
+    """The rings' optical depths, a row each, as a float texture."""
+    tex = Texture("ring_depth")
+    _fill_ring_texture(tex, rows)
+    tex.set_minfilter(SamplerState.FT_linear)
+    tex.set_magfilter(SamplerState.FT_linear)
+    tex.set_wrap_u(SamplerState.WM_clamp)
+    tex.set_wrap_v(SamplerState.WM_clamp)
+    return tex
+
+
+def _fill_ring_texture(tex: Texture, rows: np.ndarray) -> None:
+    height, width = rows.shape
+    tex.setup_2d_texture(width, height, Texture.T_float, Texture.F_r32)
+    tex.set_ram_image(np.ascontiguousarray(rows, dtype=np.float32).tobytes())
+
+
 def _no_local_shadow() -> Texture:
     """A 1-texel map for shaders with no local mountain shadow (off)."""
     tex = Texture("no_local_shadow")
@@ -549,6 +662,9 @@ def bind_defaults(node: NodePath) -> None:
             "uLocalShadow": _no_local_shadow(),
             "uLocalShadowOn": 0,
             "uLocalChart": PTA_LVecBase4f.empty_array(4),
+            "uRingCount": 0,
+            "uRings": PTA_LVecBase4f.empty_array(3 * MAX_SHADOW_RINGS),
+            "uRingDepth": _ring_texture(np.zeros((1, 1))),
             "uCasterMap": _no_caster_map(),
             "uCasterOn": 0,
             "uCasterMatrix": LMatrix4f.ident_mat(),

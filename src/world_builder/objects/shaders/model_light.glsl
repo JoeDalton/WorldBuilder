@@ -1,7 +1,7 @@
 // The sunlight reaching a game's model, per pixel, in every world shadow
 // (world_builder.objects.ModelLighting binds its inputs): the model's
 // body's air, the other bodies' eclipses (an airless body's own horizon),
-// its clouds and its mountains. Include once per shader with
+// the rings, its clouds and its mountains. Include once per shader with
 // #pragma include, after atmosphere.glsl (and shadows.glsl with it) and
 // cloud_field.glsl.
 
@@ -28,7 +28,7 @@ vec3 modelUp(vec3 rel, vec3 fallback) {
 // on the CPU (an airless body's own horizon: Shadows.own_shadow).
 vec3 modelSunlight(vec3 rel, vec3 L, float footprint) {
     int self = uShadowSelf;
-    vec3 sunlight = uSunColor * eclipseVisibility(rel, L, self);
+    vec3 sunlight = uSunColor * (eclipseVisibility(rel, L, self) * ringVisibility(rel, L));
     if (self < 0) {
         return sunlight;  // open space: the other bodies alone
     }

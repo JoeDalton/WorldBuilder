@@ -75,7 +75,8 @@ from panda3d.core import (
 
 from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 from world_builder.asteroids.field import AsteroidField
-from world_builder.asteroids.spec import FieldSpec, KeepOut
+from world_builder.asteroids.haze import ring_depth
+from world_builder.asteroids.spec import Annulus, FieldSpec, KeepOut
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.cloud import CloudType
@@ -487,6 +488,7 @@ class World:
                 self._sun,
                 shadow_settings.local_map_size,
                 shadow_settings.local_map_spacing,
+                output=output,  # baked on its GPU (none: in the pool)
             )
             body.shadow_map.bind(terrain.root)
             if self.casters is not None:
@@ -552,6 +554,20 @@ class World:
                     haze=look.haze,
                 )
             )
+            built = self.fields[-1]
+            # The bodies' shadows across it (a planet's on its ring), and a
+            # ring's own across the planet.
+            self.shadows.bind(built.root)
+            shape = look.spec.shape
+            if isinstance(shape, Annulus):
+                self.shadows.add_ring(
+                    built.position,
+                    built.axis,
+                    shape.inner,
+                    shape.outer,
+                    ring_depth(look.spec, built.haze.model.cover),
+                    shape.thickness,
+                )
 
         self.sky = None
         if sky is not None:
@@ -786,9 +802,10 @@ class World:
     def sun_visibility(self, points_world: ArrayLike) -> np.ndarray:
         """The share of the sun the world's shadows leave each point, each
         by its nearest body: the product of the shadow terms the shaders
-        draw (:mod:`world_builder.shadows`: the other bodies' eclipses and
-        the planet's clouds). The nearest body's own shadow is not in it:
-        that is its air's or its day and night (:meth:`light_at` has both).
+        draw (:mod:`world_builder.shadows`: the other bodies' eclipses, the
+        rings, the planet's clouds and its mountains). The nearest body's own
+        shadow is not in it: that is its air's or its day and night
+        (:meth:`light_at` has both).
 
         :param points_world: (n, 3) world frame, metres
         :returns: (n,) in [0, 1]
@@ -817,7 +834,7 @@ class World:
     ) -> tuple[np.ndarray, np.ndarray]:
         """:meth:`sun_visibility` for points of body *index*, as its terms:
         (the eclipses, the local shadows where *local*: the clouds', the
-        mountains'), (n,) each."""
+        rings', the mountains'), (n,) each."""
         eclipse = self.shadows.eclipse(points, self._sun, index)
         shade = np.ones(len(points))
         body = self.bodies[index]
@@ -827,6 +844,7 @@ class World:
         steps = self.shadows.settings.cloud_shadow_steps
         if body.clouds is not None and steps > 0:
             shade[shaded] = body.clouds.sun_visibility(points[shaded], self._sun, steps)
+        shade[shaded] *= self.shadows.ring_visibility(points[shaded], self._sun)
         if body.shadow_map is not None:
             shade[shaded] *= body.shadow_map.visibility(
                 points[shaded], self.shadows.sun_angular_radius
@@ -1161,6 +1179,8 @@ class World:
                 body.cloud_maps.destroy()
             if body.models is not None:
                 body.models.destroy()
+            if body.shadow_map is not None:
+                body.shadow_map.destroy()
             if body.clouds is not None:
                 body.clouds.remove()
             body.terrain.destroy()

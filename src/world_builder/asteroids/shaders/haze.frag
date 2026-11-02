@@ -5,9 +5,11 @@
 // quadrature in numpy). Drawn where the ray leaves the field's hull: the
 // interval that ends there, from this camera's near plane on (the far
 // camera of a split starts at the split) to where it leaves the field, past
-// the far plane if it must.
+// the far plane if it must. The bodies' shadows across the field (a
+// planet's on its ring) dim each sample's sunlight.
 
 #pragma include "../../atmosphere/shaders/display.glsl"
+#pragma include "../../shadows/shaders/shadows.glsl"
 
 uniform mat4 p3d_ViewProjectionMatrix;
 uniform vec3 uCamRender;
@@ -26,6 +28,45 @@ in vec3 vNormal;
 out vec4 fragColor;
 
 const int SAMPLES = 32;
+// The bodies' shadows are taken at this many points along a ray, each for
+// its share of the samples: a shadow's edge is tens of km wide at a ring
+// (the sun's angular size times the planet's distance), and taking them
+// per sample cost up to 14 ms with a ring in a planet's shadow.
+const int LIT_GROUPS = 4;
+
+// hazeDepth (haze.glsl), and the share of it in the sun: each sample's
+// depth weighted by what the bodies leave of the sun there (dRender: the
+// ray, render frame, for the samples relative to the camera).
+float hazeDepthLit(vec3 o, vec3 d, vec3 dRender, float a, float b, int samples,
+                   out float lit) {
+    lit = 1.0;
+    a = max(a, uHazeStart);
+    if (b <= a) return 0.0;
+    a = max(a, 1e-3);
+    vec3 L = normalize(uSunDir);
+    float ratio = b / a;
+    float tau = 0.0;
+    float sunlit = 0.0;
+    float prev = a;
+    int group = max(samples / LIT_GROUPS, 1);
+    float shade = 1.0;
+    for (int i = 1; i <= samples; ++i) {
+        if ((i - 1) % group == 0) {
+            // At the middle of this group of samples (geometric, as they).
+            float middle = float(i - 1) + 0.5 * float(group);
+            shade = eclipseVisibility(dRender * (a * pow(ratio, middle / float(samples))),
+                                      L, -1);
+        }
+        float t = a * pow(ratio, float(i) / float(samples));
+        float mid = sqrt(prev * t);
+        float dtau = hazeProfile(o + d * mid) * hazeMissing(mid) * (t - prev);
+        tau += dtau;
+        sunlit += dtau * shade;
+        prev = t;
+    }
+    lit = tau > 0.0 ? sunlit / tau : 1.0;
+    return tau;
+}
 
 void main() {
     vec3 dir = normalize(vRay);
@@ -44,8 +85,10 @@ void main() {
     int n = hazeIntervals(o, dir, s0, s1);
     if (n == 0) discard;
     vec2 span = (n == 2 && abs(s1.y - tFrag) < abs(s0.y - tFrag)) ? s1 : s0;
-    float tau = hazeDepth(o, dir, max(span.x, max(tNear, 0.0)), span.y, SAMPLES);
+    float lit;
+    float tau = hazeDepthLit(o, dir, dirRender, max(span.x, max(tNear, 0.0)), span.y,
+                             SAMPLES, lit);
     float alpha = 1.0 - exp(-tau);
     if (alpha < 1.0 / 1024.0) discard;
-    fragColor = vec4(hazeColour(dirRender), alpha);
+    fragColor = vec4(hazeColourLit(dirRender, lit), alpha);
 }

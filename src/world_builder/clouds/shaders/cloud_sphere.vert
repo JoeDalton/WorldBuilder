@@ -126,7 +126,8 @@ void main() {
     float eclipse = eclipseVisibility(centre - uCamRender, sunDir, uShadowSelf);
     // And the mountains between the cloud and a low sun (the body's map).
     vec3 planet = centre - uPlanetCentre;
-    vSunTint *= eclipse * terrainShadow(normalize(planet), length(planet) - planetRadius);
+    vSunTint *= eclipse * terrainShadow(normalize(planet), length(planet) - planetRadius)
+              * ringVisibility(centre - uCamRender, sunDir);
     // And the clouds far along it, past the fragment's own march: the long
     // shadows of a low sun across the deck (only their slow part, here).
     if (uCloudFarReach > 0.0) {

@@ -143,6 +143,7 @@ from panda3d.core import (
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
+from world_builder.asteroids.haze import ring_depth
 from world_builder.asteroids.spec import PRESETS as FIELD_PRESETS
 from world_builder.asteroids.spec import Annulus, Clumping, Density, FieldSpec
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
@@ -513,6 +514,7 @@ class TerrainDemo(ShowBase):
                 self._sun,
                 world.shadows.local_map_size,
                 world.shadows.local_map_spacing,
+                output=self.win,  # baked on the GPU
             )
             body.shadow_map.bind(body.terrain.root)
         # The casting models' shadow map (the test balls'), and the models'
@@ -539,6 +541,17 @@ class TerrainDemo(ShowBase):
                 ambient=SPACE_AMBIENT,
                 materials=self.terrain.materials,
                 name="ring",
+            )
+            # The planet's shadow across it, and its own across the planet.
+            self.shadows.bind(self.ring.root)
+            shape = self.ring.spec.shape
+            self.shadows.add_ring(
+                self.ring.position,
+                self.ring.axis,
+                shape.inner,
+                shape.outer,
+                ring_depth(self.ring.spec, self.ring.haze.model.cover),
+                shape.thickness,
             )
         self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
         self.shadows.bind(self.sky.node)
@@ -882,7 +895,7 @@ class TerrainDemo(ShowBase):
         radius = self.shadows.sun_angular_radius
         for i, body in enumerate(nearest):
             shades[i] *= float(body.shadow_map.visibility(points[i], radius))
-        return shades
+        return shades * self.shadows.ring_visibility(points, self._sun)
 
     def _update_lights(self) -> None:
         """Panda3D's sun and ambient lights as they are at the camera, the
@@ -1246,6 +1259,8 @@ class TerrainDemo(ShowBase):
             self.ring.destroy()
         self.tracked.clear()
         self.casters.destroy()
+        for body in self.bodies:
+            body.shadow_map.destroy()
         if self.cloud_maps is not None:
             self.cloud_maps.destroy()
         for terrain in self._terrains():
