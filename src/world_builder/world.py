@@ -559,6 +559,12 @@ class World:
             # ring's own across the planet.
             self.shadows.bind(built.root)
             shape = look.spec.shape
+            # Its haze split at its planet's clouds' tops: what is beyond them
+            # drawn before them (a ring is centred on its planet).
+            for body in self.bodies:
+                centred = np.allclose(body.position, built.position, atol=1.0)
+                if centred and body.clouds is not None:
+                    built.haze.set_clouds_top(body.clouds.top_radius)
             if isinstance(shape, Annulus):
                 self.shadows.add_ring(
                     built.position,

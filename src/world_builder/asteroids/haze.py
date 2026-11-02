@@ -29,7 +29,14 @@ of light from afar and fills the distance between drawn rocks up close.
   :func:`ring_depth`'s.
 - **Drawing.** A hull around the field's shape, drawn on both sides: each
   pixel where a ray leaves the field integrates the interval that ends
-  there, so nothing is counted twice. Depth-tested, not written: a planet in
+  there, so nothing is counted twice. A ring around a planet with clouds
+  (:meth:`FieldHaze.set_clouds_top`) is drawn in two passes, split where the
+  ray enters the sphere of the clouds' tops: what lies beyond it before the
+  clouds (in the sky's bin, after the stars, before the cirrus's far side),
+  what lies before it after
+  them. The clouds write no depth: drawn after them, the ring seen from the
+  ground covered them. Along a ray a ring (well outside the planet) and
+  the clouds never overlap. Depth-tested, not written: a planet in
   front hides it. Hull points beyond the far plane are pulled onto it (as the
   sky's), so a ring across the sky is drawn whole. Only the far camera of
   a split draws it (``HIDE_FROM_NEAR``), from its near plane on (read from
@@ -67,6 +74,7 @@ from world_builder.asteroids.distributions import interpolate
 from world_builder.asteroids.population import FAR_FADE
 from world_builder.asteroids.spec import Annulus, Box, FieldShape, FieldSpec, Sphere
 from world_builder.depth import HIDE_FROM_NEAR
+from world_builder.sky.sky import SKY_BIN, ensure_sky_bin
 
 if TYPE_CHECKING:
     from world_builder.asteroids.field import AsteroidField
@@ -94,6 +102,9 @@ RING_SEGMENTS = 1024
 #: The cull bin: after the sky (21) and the clouds (22-28), blended over them.
 HAZE_BIN = "fixed"
 HAZE_BIN_SORT = 30
+#: What lies beyond the clouds' tops: in the sky's bin, after the sky (0)
+#: and the stars (1), before the clouds.
+HAZE_BEHIND_ORDER = 2
 
 
 def phase(alpha: ArrayLike) -> np.ndarray:
@@ -497,8 +508,20 @@ class FieldHaze:
         spec = field.spec
         self.model = HazeModel(spec)
         tris, normals = hull_triangles(spec.shape)
-        self.node = field.root.attach_new_node(_hull_node(tris, normals))
+        # Both passes' state here; each its bin and part of the rays.
+        self.node = field.root.attach_new_node("haze")
         node = self.node
+        ensure_sky_bin()
+        front = node.attach_new_node("haze_front")
+        front.set_bin(HAZE_BIN, HAZE_BIN_SORT)
+        front.set_shader_input("uHazePass", 1)
+        behind = node.attach_new_node("haze_behind")
+        behind.set_bin(SKY_BIN, HAZE_BEHIND_ORDER)
+        behind.set_shader_input("uHazePass", 2)
+        hull = front.attach_new_node(_hull_node(tris, normals))
+        hull.instance_to(behind)
+        self._clouds_top = PTA_float.empty_array(1)
+        node.set_shader_input("uCloudTop", self._clouds_top)
         node.set_shader(
             Shader.load(
                 Shader.SL_GLSL,
@@ -507,7 +530,6 @@ class FieldHaze:
             )
         )
         node.hide(HIDE_FROM_NEAR)
-        node.set_bin(HAZE_BIN, HAZE_BIN_SORT)
         node.set_depth_write(False)
         node.set_attrib(DepthTestAttrib.make(DepthTestAttrib.M_less_equal))
         node.set_attrib(CullFaceAttrib.make(CullFaceAttrib.M_cull_none))
@@ -564,6 +586,12 @@ class FieldHaze:
         root.set_shader_input("uEdges", edges)
         root.set_shader_input("uProfiled", profiled)
         root.set_shader_input("uProfile", _floats(profile, PROFILE))
+
+    def set_clouds_top(self, radius: float) -> None:
+        """The field's planet's clouds' tops, from the field's origin (its
+        centre: a ring's planet's), metres; 0: none (one pass, after the
+        clouds)."""
+        self._clouds_top[0] = float(radius)
 
     def set_cover(self, cover: float) -> None:
         """The rocks' mean projected area over their bounding disc's."""

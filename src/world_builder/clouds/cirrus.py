@@ -124,9 +124,10 @@ if TYPE_CHECKING:
     from world_builder.terrain.workers import ChunkExecutor
 
 _SHADERS = Path(__file__).parent / "shaders"
-#: The behind node's draw order in the sky's bin: after the dome (0) and the
-#: stars (1).
-BEHIND_DRAW_ORDER = 2
+#: The behind node's draw order in the sky's bin: after the dome (0), the
+#: stars (1) and a ring's haze beyond the clouds
+#: (``asteroids.haze.HAZE_BEHIND_ORDER``, farther still).
+BEHIND_DRAW_ORDER = 3
 #: Panda's own bin for translucent objects, sorted back to front.
 FRONT_BIN = "transparent"
 #: The baked stamps (scripts/bake_cirrus_atlas.py): patches of tufts at +x

@@ -569,7 +569,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   move or for the 15-frame fallback before being shown. (#20)
 - `flight_bench.py`'s descent stopped only over dry land; over a calm sea it
   flew on to its time limit. (#20)
-- `SphericalClouds.sun_visibility` raised a `KeyError` once its cache of
+- A ring seen from the ground was drawn over the clouds (their billboards
+  write no depth, the ring's haze was drawn after them), veiling and
+  dimming them where it passed behind. Its haze is now split at its
+  planet's clouds' tops (`FieldHaze.set_clouds_top`,
+  `PlanetClouds.top_radius`, the cirrus's included): what lies beyond them
+  is drawn before them, and before the cirrus's far side. (#14)
+- `CloudVolume.sun_visibility` raised a `KeyError` once its cache of
   shades had grown past its size, on a call with a cell already in it and
   a new one (in flight, after a few thousand 25 m cells): the cache is now
   dropped before the lookup, not in it. (#11)

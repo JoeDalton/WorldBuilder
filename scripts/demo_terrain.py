@@ -1042,6 +1042,8 @@ class TerrainDemo(ShowBase):
                 self.cloud_maps.destroy()
                 self.cloud_maps = None
             self.clouds = None
+        if self.ring is not None:
+            self.ring.haze.set_clouds_top(0.0)  # none: one pass, after them
         if not self._clouds_on:
             return
         self.clouds = PlanetClouds(
@@ -1068,6 +1070,9 @@ class TerrainDemo(ShowBase):
         )
         self.cloud_maps.bind(self.terrain.root)
         self.cloud_maps.bind(self.home.models.inputs)
+        if self.ring is not None:
+            # Its haze split at their tops: what is beyond them drawn first.
+            self.ring.haze.set_clouds_top(self.clouds.top_radius)
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
         if getattr(self, "depth", None) is not None:

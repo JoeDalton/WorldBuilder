@@ -38,7 +38,7 @@ from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
 from world_builder.clouds.march import CloudMarch
 from world_builder.clouds.noise import DensityField
 from world_builder.clouds.shadow_defaults import cloud_shadow_defaults
-from world_builder.clouds.sphere import CLOUD_BIN, CloudVolume
+from world_builder.clouds.sphere import CLOUD_BIN, CLOUD_TOP_MARGIN, CloudVolume
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS
 from world_builder.terrain.planet import PlanetSpec
@@ -367,6 +367,22 @@ class PlanetClouds:
         else:
             for node in nodes:
                 cloud_shadow_defaults(node)
+
+    @property
+    def top_radius(self) -> float:
+        """How far from the planet's centre the clouds reach, metres: the
+        highest layer's top (the cirrus's, when there is one). What a ray
+        meets past where it enters this sphere is behind them (a ring's
+        haze, :meth:`asteroids.haze.FieldHaze.set_clouds_top`)."""
+        tops = [
+            volume.top_radius
+            if isinstance(volume, CloudVolume)
+            else self.radius + sum(volume.field.slab) + CLOUD_TOP_MARGIN
+            for volume in self._volumes()
+        ]
+        if self.sheet is not None:
+            tops.append(self.radius + self.sheet.spec.top)
+        return max(tops)
 
     @property
     def shadow_layer(self) -> int:

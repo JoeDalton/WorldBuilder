@@ -19,6 +19,11 @@ uniform vec3 uSunColor;
 uniform vec3 uAmbient;
 uniform float uExposure;
 uniform int uTonemap;
+// The pass: 1 what lies before the sphere of the planet's clouds' tops
+// (drawn after the clouds), 2 what lies beyond it (before them); its
+// radius from the field's origin, 0: no clouds (all in pass 1).
+uniform int uHazePass;
+uniform float uCloudTop;
 
 #pragma include "haze.glsl"
 
@@ -85,9 +90,29 @@ void main() {
     int n = hazeIntervals(o, dir, s0, s1);
     if (n == 0) discard;
     vec2 span = (n == 2 && abs(s1.y - tFrag) < abs(s0.y - tFrag)) ? s1 : s0;
+
+    // Where the ray enters the clouds' tops: from under them, at once.
+    float split = 1e30;
+    if (uCloudTop > 0.0) {
+        float r = length(o);
+        float c = (r - uCloudTop) * (r + uCloudTop);
+        float b = dot(o, dir);
+        if (c <= 0.0) {
+            split = 0.0;
+        } else if (b < 0.0 && b * b >= c) {
+            split = -b - sqrt(b * b - c);
+        }
+    }
+    float a = max(span.x, max(tNear, 0.0));
+    float e = span.y;
+    if (uHazePass == 2) {
+        a = max(a, split);
+    } else {
+        e = min(e, split);
+    }
+    if (e <= a) discard;
     float lit;
-    float tau = hazeDepthLit(o, dir, dirRender, max(span.x, max(tNear, 0.0)), span.y,
-                             SAMPLES, lit);
+    float tau = hazeDepthLit(o, dir, dirRender, a, e, SAMPLES, lit);
     float alpha = 1.0 - exp(-tau);
     if (alpha < 1.0 / 1024.0) discard;
     fragColor = vec4(hazeColourLit(dirRender, lit), alpha);

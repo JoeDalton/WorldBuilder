@@ -256,6 +256,31 @@ def test_the_shader_draws_the_models_haze_from_above(window, ring):
     assert _compare(window, ring, camera, frame, rocks) > 40
 
 
+def test_the_haze_beyond_the_clouds_tops_is_drawn_before_them(window, ring):
+    """Split at a planet's clouds' tops, the haze is drawn in two passes,
+    the part beyond them in the sky's bin (before the clouds): with nothing
+    between, the same ring. Under the tops (a radius past the camera), all
+    of it in that pass; past them (a small radius under the ring), all of
+    it after the clouds."""
+    from world_builder.asteroids.haze import HAZE_BEHIND_ORDER
+    from world_builder.sky.sky import SKY_BIN
+
+    haze = ring.haze
+    behind = haze.node.find("haze_behind")
+    assert behind.get_bin_name() == SKY_BIN
+    assert behind.get_bin_draw_order() == HAZE_BEHIND_ORDER
+    camera = np.array([0.0, 2.5e6, 5.0e6])
+    one, _ = _shoot(window, ring, camera, (0.0, 0.0, -1.0))
+    try:
+        for top in (1.0e7, 1.0e3):  # the camera under the tops, then over
+            haze.set_clouds_top(top)
+            split, _ = _shoot(window, ring, camera, (0.0, 0.0, -1.0))
+            assert one[SIZE // 2, SIZE // 2].mean() > 10.0
+            np.testing.assert_allclose(split, one, atol=2.0)
+    finally:
+        haze.set_clouds_top(0.0)
+
+
 def test_rocks_appear_out_of_the_haze(window, ring):
     """20 km over the ring: the big rocks drawn, the haze of the others
     between them as the model has it."""

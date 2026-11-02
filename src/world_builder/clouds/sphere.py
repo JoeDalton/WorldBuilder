@@ -144,6 +144,9 @@ _SHADERS = Path(__file__).parent / "shaders"
 #: the sky's bin where it is behind them and in "transparent" where it is in
 #: front.
 CLOUD_BIN = "cloud_sphere"
+#: A cloud's billboard may stand this far over the slab's top, metres (its
+#: radius): CloudVolume.top_radius.
+CLOUD_TOP_MARGIN = 2000.0
 _CLOUD_BIN_SORT = 22
 #: The shells' bin sorts, shell 0 (the nearest, drawn last) first: at most
 #: :data:`cloud.MAX_SHELLS` shells.
@@ -1010,6 +1013,13 @@ class CloudVolume:
         self._selector = LodSelector(self.grid)
         self._slab_box = (field.slab[0], field.slab[0] + field.slab[1])
         self._apply_live(settings)
+
+    @property
+    def top_radius(self) -> float:
+        """How far from the planet's centre the clouds reach, metres: the
+        slab's top and a cloud's height over it. What a ray meets past where
+        it enters this sphere is behind them (a ring's haze)."""
+        return self.radius + self._slab_box[1] + CLOUD_TOP_MARGIN
 
     # ── settings ──────────────────────────────────────────────────────────────
 

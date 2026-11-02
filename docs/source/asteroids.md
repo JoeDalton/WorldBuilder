@@ -471,6 +471,18 @@ approaching, rocks appear out of it while it thins by as much.
   plane out. Only the far camera of a split draws it, from its near plane
   (read from its projection): nearer than the split every rock is drawn, so
   nothing but a little dust is lost there.
+- **Behind the clouds.** The clouds write no depth: drawn after them, a ring
+  seen from the ground covered them (and dimmed the clouds round a peak
+  the ring passes behind). Around a planet with clouds
+  (`FieldHaze.set_clouds_top`, which `World` and the demo set for a ring
+  centred on it, `PlanetClouds.top_radius`: its highest layer's, the
+  cirrus's when there is one), the haze is drawn in two passes split where
+  each ray enters the sphere of the clouds' tops: what lies beyond it in
+  the sky's bin, after the stars, before the clouds (the cirrus's far side
+  included); what lies before it after them, as before. Along a ray a ring and the clouds
+  never overlap, so the split is exact. No cost seen (`ring_ground` 13.09
+  / 13.12 ms, `ring_orbit` 5.93 / 5.58); `terrain_shots.py --ring` gains
+  `ring_behind_clouds`.
 - `AsteroidField(haze=False)` leaves it out. In a 15 km field it costs
   nothing seen: nothing is missing nearer than about 57 km.
 

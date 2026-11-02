@@ -370,7 +370,8 @@ def _sphere(segments: int, rings: int) -> GeomNode:
 
 
 def ensure_sky_bin() -> None:
-    """Register the sky's cull bin (once)."""
+    """The sky's cull bin (after the terrain, before the clouds): the
+    sky, the stars, and what a ring's haze holds beyond the clouds."""
     manager = CullBinManager.get_global_ptr()
     if manager.find_bin(SKY_BIN) == -1:
         manager.add_bin(SKY_BIN, CullBinManager.BT_fixed, SKY_BIN_SORT)

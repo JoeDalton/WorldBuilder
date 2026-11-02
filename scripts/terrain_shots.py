@@ -110,8 +110,9 @@ ring_shadow_ground and ring_shadow_orbit (its shadow band on the planet,
 the sun 20 degrees north of its plane at noon: from 20 km over the band's
 northern edge, latitude -10.6, looking west along it, and from 3 radii
 over latitude 5, just north of its plane: the ring a thin line, the band
-south of it), ring_planet_shadow (ring_orbit's view, the sun low in the east: the
-planet's shadow across the ring),
+south of it), ring_planet_shadow (ring_orbit's view, the sun low in the
+east: the planet's shadow across the ring), ring_behind_clouds (from the
+ground over a peak in the clouds: the clouds cover the ring),
 ring_orbit (6 radii over latitude 35, looking down: the planet and its
 whole ring). Every other pose has the sun at azimuth 210, elevation 35, as
 seen there.
@@ -277,6 +278,9 @@ def _poses(demo: TerrainDemo) -> dict:
         poses["ring_shadow_ground"] = (-10.6, lon0, 20000.0, 90.0, -30.0, 0, 0)
         poses["ring_shadow_orbit"] = (5.0, lon0, 3.0 * radius, 0.0, -89.9, 0, 0)
         poses["ring_planet_shadow"] = poses["ring_orbit"]
+        # The ring behind the clouds, over a snowy peak in the clouds: they
+        # must cover it, the peak too.
+        poses["ring_behind_clouds"] = (38.0022, -124.9942, 1130.0, 131.0, 7.0, 0, 0)
     # The clouds' shadows from above them, looking across the sun's azimuth
     # (210): under the clouds at noon, offset from them by altitude / tan
     # (elevation) at a low sun.
