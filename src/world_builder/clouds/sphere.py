@@ -118,6 +118,7 @@ from world_builder.clouds.noise import (
     with_shelf,
     with_threshold,
 )
+from world_builder.clouds.shadow_defaults import _no_deck_light, _no_weather
 from world_builder.clouds.weather import (
     WeatherSpec,
     build_weather_texture,
@@ -265,6 +266,10 @@ class CloudTile:
 #: side, metres, and at most this many of them.
 SHADE_CELL = 25.0
 SHADE_CACHE_SIZE = 4096
+#: The layer of ``layerParams`` that holds the other genus family's deck
+#: field (:meth:`CloudVolume.take_shadow_of`): the last, past every shell's
+#: and the deck's (at most ``cloud.MAX_SHELLS`` + 1 of them).
+OTHER_LAYER = MAX_LAYERS - 1
 
 
 @functools.cache
@@ -922,6 +927,14 @@ class CloudVolume:
         # weather they read, once made.
         self._shadow_nodes: list[NodePath] = []
         self._weather_texture = None
+        # With genera, the other family (take_shadow_of): whose shadow this
+        # one's billboards and receivers take too (its deck's field in
+        # OTHER_LAYER, uCloudShadowOther once it is ready), and the volumes
+        # that take this one's.
+        self._other: CloudVolume | None = None
+        self._takers: list[CloudVolume] = []
+        self._other_layer = PTA_int.empty_array(1)
+        self._other_layer[0] = -1
         # Their uCloudShadowLayer, shared: the deck's layer once ready
         self._shadow_layer = PTA_int.empty_array(1)
         # sun_visibility's shades by cell, for one sun and step count
@@ -997,6 +1010,8 @@ class CloudVolume:
             exposure=float(exposure),
             uPixelAngle=0.001,
             nearFadeRadii=float(near_fade_radii),
+            uCloudShadowOther=self._other_layer,
+            otherWeather=_no_weather(),
             uCloudDebug=0,
         )
 
@@ -1060,6 +1075,8 @@ class CloudVolume:
             self.deck.set_shader_input("uDeckLayer", self._deck_layer)
         for i, row in enumerate(params.reshape(-1, 4)):
             self._layer_params[i] = LVecBase4f(*(float(v) for v in row))
+        self._pull_other()  # its row again: written over just now
+        self._push_takers()
         self._apply_live(settings)
 
     def _apply_live(self, settings: CloudSettings) -> None:
@@ -1291,9 +1308,52 @@ class CloudVolume:
             deckLightCosMin=DECK_LIGHT_COS_MIN,
             uCloudDebug=0,
             uCloudShadowLayer=self._shadow_layer,
+            uCloudShadowOther=self._other_layer,
+            otherWeather=_no_weather(),
+            otherDeckLight=_no_deck_light(),
         )
         self._shadow_nodes.append(node)
         self._update_shadow_nodes()
+        self._pull_other()
+
+    def take_shadow_of(self, other: CloudVolume) -> None:
+        """Take another volume's shadow too (the genera's other family,
+        :mod:`genera`): its deck's field in :data:`OTHER_LAYER` of this
+        one's ``layerParams``, its weather and far table, for this one's
+        billboards (the convective clouds over the stratus shade them) and
+        the nodes it shades (``uCloudShadowOther``: the ground under both).
+        Kept in step with the other's set-up and settings.
+
+        :param other: the volume whose shadow this one takes
+        """
+        self._other = other
+        other._takers.append(self)
+        self._pull_other()
+
+    def _pull_other(self) -> None:
+        """The other volume's field, weather and far table, once ready."""
+        other = self._other
+        if other is None:
+            return
+        ready = other._weather_texture is not None and other._shadow_layer[0] >= 0
+        if not ready:
+            self._other_layer[0] = -1
+            return
+        rows = OTHER_LAYER * LAYER_VEC4S
+        source = other._deck_layer * LAYER_VEC4S
+        for k in range(LAYER_VEC4S):
+            self._layer_params[rows + k] = other._layer_params[source + k]
+        self._shadow_nodes = [n for n in self._shadow_nodes if not n.is_empty()]
+        for node in [self.root, *self._shadow_nodes]:
+            node.set_shader_inputs(
+                otherWeather=other._weather_texture,
+                otherDeckLight=other._deck_light_texture,
+            )
+        self._other_layer[0] = OTHER_LAYER
+
+    def _push_takers(self) -> None:
+        for taker in self._takers:
+            taker._pull_other()
 
     def sun_visibility(
         self, points_world: ArrayLike, sun_direction: ArrayLike, max_steps: int
@@ -1362,9 +1422,14 @@ class CloudVolume:
 
     def remove(self) -> None:
         """Take the clouds off the scene and drop their queued tiles (and
-        their shadow off the nodes they shaded)."""
+        their shadow off the nodes they shaded, and off the volumes that took
+        it)."""
         self._shadow_layer[0] = -1
+        self._other_layer[0] = -1
         self._shadow_nodes = []
+        for taker in self._takers:
+            taker._pull_other()
+        self._takers = []
         self.executor.request([], self._channel)
         self.root.remove_node()
         if self._shared_shift is not None:
@@ -1394,6 +1459,7 @@ class CloudVolume:
         )
         self.root.unstash()
         self._update_shadow_nodes()
+        self._push_takers()
 
     # ── internals ─────────────────────────────────────────────────────────────
 

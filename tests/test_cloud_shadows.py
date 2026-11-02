@@ -22,6 +22,7 @@ from world_builder.clouds.noise import (
     MAX_LAYERS,
     NOISE_FEATURE,
     NOISE_SIZE,
+    build_deck_light_texture,
     build_noise_texture,
     cloud_shadow_on_sphere,
     far_cloud_depth,
@@ -29,6 +30,7 @@ from world_builder.clouds.noise import (
     ground_shadow_table,
     pack_layer_params,
     sphere_column_peaks,
+    with_shelf,
     with_threshold,
 )
 from world_builder.clouds.sphere import SHADE_CACHE_SIZE, _noise
@@ -182,10 +184,87 @@ def window(showbase):
     return showbase
 
 
-def test_the_shader_cloud_shadow_is_the_cpus(window, field, table):
+@pytest.fixture(scope="module")
+def convective():
+    """The genera's convective field (clouds.genera): its top rising with
+    the depth, its cell octave, its anvil and shelf."""
+    raw = PRESETS[CloudType.CONVECTIVE].field
+    volume = _noise(7)
+    peaks = sphere_column_peaks(volume, raw, R)
+    return with_shelf(with_threshold(raw, peaks, fbm_sigma(volume, raw)), volume, R)
+
+
+def _genus_weather(cube):
+    """A four-channel weather cube from a two-channel one: a convective
+    depth and an anvil's spread that vary with the coverage."""
+    depth = np.clip(1.4 * cube[..., 0] - 0.1, 0.0, 1.0)
+    spread = np.clip(2.0 * cube[..., 0] - 0.8, 0.0, 1.0)
+    return np.concatenate([cube, depth[..., None], spread[..., None]], axis=-1).astype(
+        np.float32
+    )
+
+
+def _read_back(window, colour, uniform, texture):
+    """One 4x4 offscreen draw of a card whose colour is *colour* (an rgb
+    expression of the sampler *uniform*, *texture*), as its first pixel's
+    8-bit rgb."""
+    from panda3d.core import CardMaker, Shader, Texture
+
+    vertex = """#version 330
+in vec4 p3d_Vertex;
+uniform mat4 p3d_ModelViewProjectionMatrix;
+void main() { gl_Position = p3d_ModelViewProjectionMatrix * p3d_Vertex; }
+"""
+    fragment = f"""#version 330
+{uniform}
+out vec4 colour;
+void main() {{ colour = vec4({colour}, 1.0); }}
+"""
+    maker = CardMaker("channels")
+    maker.set_frame(-1.0, 1.0, -1.0, 1.0)
+    root = NodePath("channels")
+    card = root.attach_new_node(maker.generate())
+    card.set_shader(Shader.make(Shader.SL_GLSL, vertex, fragment))
+    card.set_shader_input("w", texture)
+    target = Texture("channels")
+    buffer = window.win.make_texture_buffer("channels", 4, 4, target, True)
+    try:
+        camera = window.makeCamera2d(buffer)
+        camera.reparent_to(root)
+        window.graphicsEngine.render_frame()
+        window.graphicsEngine.render_frame()
+        ram = np.frombuffer(target.get_ram_image_as("RGBA").get_data(), np.uint8)
+        return ram[:3] / 255.0
+    finally:
+        window.graphicsEngine.remove_window(buffer)
+        root.remove_node()
+
+
+def test_the_textures_channels_reach_the_shader_in_order(window):
+    """Panda keeps RGB and RGBA RAM images as BGR(A): the genera's
+    four-channel weather and the far table's three channels reach the
+    shader as built."""
+    cube = np.zeros((6, 2, 2, 4), np.float32)
+    cube[...] = (0.1, 0.2, 0.3, 0.4)
+    weather = build_weather_texture(cube)
+    at = "texture(w, vec3(1.0, 0.2, 0.1))"
+    got = _read_back(window, f"{at}.gba", "uniform samplerCube w;", weather)
+    np.testing.assert_allclose(got, (0.2, 0.3, 0.4), atol=2.0 / 255.0)
+    got = _read_back(window, f"{at}.rrr", "uniform samplerCube w;", weather)
+    np.testing.assert_allclose(got, (0.1,) * 3, atol=2.0 / 255.0)
+    table = np.zeros((2, 2, 3), np.float32)
+    table[...] = (0.1, 0.2, 0.3)
+    far = build_deck_light_texture(table)
+    got = _read_back(window, "texture(w, vec2(0.5)).rgb", "uniform sampler2D w;", far)
+    np.testing.assert_allclose(got, (0.1, 0.2, 0.3), atol=2.0 / 255.0)
+
+
+@pytest.mark.parametrize("genus", [False, True])
+def test_the_shader_cloud_shadow_is_the_cpus(window, field, table, convective, genus):
     """cloudShadowDepth (float32, the noise and the weather through the
     GPU's filtering) matches cloud_shadow_on_sphere under a real weather
-    map, from overhead to a low sun."""
+    map, from overhead to a low sun: a cumulus field's, and a convective
+    one's with its depth, cell octave and anvil shelf."""
     from panda3d.core import (
         Geom,
         GeomNode,
@@ -202,6 +281,9 @@ def test_the_shader_cloud_shadow_is_the_cpus(window, field, table):
 
     size = 32
     cube = weather_cube(WeatherSpec(PLANETS["earthlike"]), table)
+    if genus:
+        field = convective
+        cube = _genus_weather(cube)
     frame = TangentFrame.at(5.0, 30.0)
     rng = np.random.default_rng(6)
     offsets = rng.uniform(-40e3, 40e3, size=(size * size, 2))
@@ -222,6 +304,8 @@ def test_the_shader_cloud_shadow_is_the_cpus(window, field, table):
             R,
             steps,
             shift_at=lambda p: sample_cube(cube[..., 1], p),
+            depth_at=(lambda p: sample_cube(cube[..., 2], p)) if genus else None,
+            spread_at=(lambda p: sample_cube(cube[..., 3], p)) if genus else None,
         )
     )
     assert expected.min() < 0.5 and expected.max() == 1.0  # shade and sun
@@ -459,7 +543,7 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
         sun = 0.8 * frame.up + 0.6 * frame.east
         clouds.set_sun(sun)
         maps.update(camera, sun / np.linalg.norm(sun), steps)
-        assert maps._on[0] == 1 and maps.near.drawn is not None
+        assert maps._on[0][0] == 1 and maps.near.drawn is not None
         window.graphicsEngine.render_frame()
         window.graphicsEngine.render_frame()
         texture = maps.near.texture

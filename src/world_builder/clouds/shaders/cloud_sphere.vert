@@ -133,6 +133,13 @@ void main() {
     if (uCloudFarReach > 0.0) {
         vSunTint *= exp2(-cloudFarDepth(getField(vLayer), planet, sunDir, uCloudFarReach));
     }
+    // And, with genera, the other family's clouds between it and the sun
+    // (the convective clouds over the stratus): their whole chord, as on
+    // the ground under them (none over the convective clouds' own).
+    if (uCloudShadowOther >= 0) {
+        vSunTint *= exp2(-cloudShadowDepthIn(getField(uCloudShadowOther), otherWeather,
+                                             planet, sunDir, uCloudShadowSteps));
+    }
     vTwilight *= eclipse;
     vSkyTint *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
 }

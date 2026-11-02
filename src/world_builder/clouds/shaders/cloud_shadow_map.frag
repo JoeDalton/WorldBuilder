@@ -9,7 +9,6 @@
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "cloud_field.glsl"
 
-uniform int  uCloudShadowLayer;
 uniform int  uMapSteps;
 uniform vec4 uMapChart[4];
 

@@ -63,6 +63,14 @@ def cloud_shadow_defaults(node: NodePath) -> None:
         cloudNearChart=PTA_LVecBase4f.empty_array(4),
         cloudFarChart=PTA_LVecBase4f.empty_array(4),
         cloudShadowMapOn=0,
+        uCloudShadowOther=-1,
+        otherWeather=_no_weather(),
+        otherDeckLight=_no_deck_light(),
+        otherShadowNear=_no_cloud_map(),
+        otherShadowFar=_no_cloud_map(),
+        otherNearChart=PTA_LVecBase4f.empty_array(4),
+        otherFarChart=PTA_LVecBase4f.empty_array(4),
+        otherShadowMapOn=0,
     )
 
 

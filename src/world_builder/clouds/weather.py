@@ -244,7 +244,8 @@ def build_weather_texture(cube: np.ndarray) -> Texture:
     else:
         tex.setup_cube_map(size, Texture.T_float, Texture.F_rgba32)
         pad = np.zeros(cube.shape[:-1] + (4 - cube.shape[-1],), dtype=np.float32)
-        cube = np.concatenate([cube, pad], axis=-1)
+        # Panda keeps an RGBA texture's RAM image as BGRA.
+        cube = np.concatenate([cube, pad], axis=-1)[..., [2, 1, 0, 3]]
     # Pages in face order, rows bottom-up = t up, as the star field's.
     tex.set_ram_image(np.ascontiguousarray(cube, dtype=np.float32).tobytes())
     tex.set_magfilter(SamplerState.FT_linear)

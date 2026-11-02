@@ -609,3 +609,63 @@ def test_inside_a_cloud_billboards_grow_fewer_as_the_cube(genera, convective):
         _tile_under(clear[0] / np.linalg.norm(clear[0]), level),
     )
     assert far.particles[:, 3].max() <= 140.0 * INTERIOR_GROWTH
+
+
+def test_both_families_cast_their_shadow(showbase, executor, genera):
+    """With genera each volume takes the other's shadow (its deck's field
+    in OTHER_LAYER, its weather and far table), and so do the nodes the
+    clouds shade: the ground under both takes the product of the two, on
+    the CPU as in the shaders; a change of settings carries over."""
+    from panda3d.core import NodePath
+
+    from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.noise import LAYER_VEC4S
+    from world_builder.clouds.planet import PlanetClouds
+    from world_builder.clouds.sphere import OTHER_LAYER
+
+    clouds = PlanetClouds(
+        showbase.render,
+        R,
+        executor,
+        altitude=2200.0,
+        settings=CloudSettings(shells=2),
+        genera=genera,
+    )
+    ground = NodePath("ground")
+    try:
+        assert clouds.shadow_families == 2
+        clouds.bind_shadow_inputs(ground)
+        other = ground.get_shader_input("uCloudShadowOther")
+        frame = TangentFrame.at(*genera.focus)
+        clouds.update(frame.up * (R + 1000.0))
+        convective, stratus = clouds.volume, clouds.stratus
+        assert convective.shadow_layer >= 0 and stratus.shadow_layer >= 0
+        assert convective._other_layer[0] == stratus._other_layer[0] == OTHER_LAYER
+        assert ground.get_shader_input("uCloudShadowOther") == other  # in place
+        assert (
+            ground.get_shader_input("otherWeather").get_texture()
+            == stratus._weather_texture
+        )
+
+        def rows(volume, layer):
+            start = layer * LAYER_VEC4S
+            return [tuple(volume._layer_params[start + k]) for k in range(LAYER_VEC4S)]
+
+        assert rows(convective, OTHER_LAYER) == rows(stratus, stratus._deck_layer)
+        assert rows(stratus, OTHER_LAYER) == rows(convective, convective._deck_layer)
+
+        points = frame.up * (R + 20.0) + np.array([[0.0, 0.0, 0.0], [2e3, 1e3, 0.0]])
+        sun = 0.8 * frame.up + 0.6 * frame.east
+        both = clouds.sun_visibility(points, sun, 8)
+        np.testing.assert_allclose(
+            both,
+            convective.sun_visibility(points, sun, 8)
+            * stratus.sun_visibility(points, sun, 8),
+        )
+
+        clouds.set_settings(CloudSettings(shells=3))
+        assert rows(convective, OTHER_LAYER) == rows(stratus, stratus._deck_layer)
+        assert rows(stratus, OTHER_LAYER) == rows(convective, convective._deck_layer)
+    finally:
+        clouds.remove()
+    assert convective._other_layer[0] == stratus._other_layer[0] == -1

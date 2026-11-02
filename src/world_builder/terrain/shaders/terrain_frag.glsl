@@ -59,9 +59,6 @@ uniform float uShallowDepth;      // and its e-folding depth, metres
 uniform sampler2D uStrata;        // the rock strata's tints by altitude (one row)
 uniform vec2  uStrataRange;       // the altitudes its first and last texels span
 uniform int   uDebugMode;  // 0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts
-// The planet's clouds' layer in layerParams whose shadow falls here, -1 none
-// (CloudVolume.bind_shadow_inputs).
-uniform int   uCloudShadowLayer;
 uniform int   uMaxLevel;
 
 out vec4 fragColor;
@@ -81,16 +78,18 @@ vec3 hue(float t) {
 }
 
 // The share of the sun the planet's clouds leave here: their shadow, marched
-// through the deck's field toward the sun, or its mean where the pixel's
-// footprint (metres) spans several clouds (cloud_field.glsl's cloudShadow).
-// Clouds only come with air: the planet frame is the air's.
+// through the deck's field toward the sun (both families' with genera), or
+// its mean where the pixel's footprint (metres) spans several clouds
+// (cloud_field.glsl's planetCloudShadow; uCloudShadowLayer and Other, -1
+// none: CloudVolume.bind_shadow_inputs). Clouds only come with air: the
+// planet frame is the air's.
 float cloudShade(vec3 L, float footprint) {
-    if (uCloudShadowLayer < 0 || uCloudShadowSteps <= 0 || uOwnAtmosphere < 0) {
+    if ((uCloudShadowLayer < 0 && uCloudShadowOther < 0) || uCloudShadowSteps <= 0
+            || uOwnAtmosphere < 0) {
         return 1.0;
     }
     vec3 planet = uAtmoCam[uOwnAtmosphere].xyz + vRelPos;
-    return cloudShadow(getField(uCloudShadowLayer), planet, L, uCloudShadowSteps,
-                       footprint);
+    return planetCloudShadow(planet, L, uCloudShadowSteps, footprint);
 }
 
 void main() {

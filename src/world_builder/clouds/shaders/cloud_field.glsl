@@ -43,6 +43,21 @@ uniform sampler2D cloudShadowFar;
 uniform vec4  cloudNearChart[4];
 uniform vec4  cloudFarChart[4];
 uniform int   cloudShadowMapOn;
+// The clouds' shadow's layer in layerParams (-1: none), for its receivers
+// (the terrain, the models: planetCloudShadow) and the maps' bake.
+uniform int   uCloudShadowLayer;
+// The other family's (clouds.genera: the stratus's for the convective
+// clouds and their receivers, theirs for the stratus): its deck's layer in
+// layerParams (sphere.OTHER_LAYER; -1: none), its weather, its far table
+// and its shadow maps.
+uniform int   uCloudShadowOther;
+uniform samplerCube otherWeather;
+uniform sampler2D otherDeckLight;
+uniform sampler2D otherShadowNear;
+uniform sampler2D otherShadowFar;
+uniform vec4  otherNearChart[4];
+uniform vec4  otherFarChart[4];
+uniform int   otherShadowMapOn;
 
 const int LAYER_VEC4S = 13;
 // A noise lattice cell, in noise coordinates (noise.NOISE_FEATURE).
@@ -447,17 +462,18 @@ int cloudShadowSteps(Field f, float chord, int maxSteps) {
 
 // The planet's clouds between a point (planet frame) and the sun toward dir
 // (unit): the optical depth of their chord (cloudShadowChord), marched in
-// cloudShadowSteps, the weather taken where the chord enters the slab. 0
-// above the slab, or where the weather leaves no cloud. What a cloud's
-// shadow on the ground is: exp2(-depth). noise.cloud_shadow_on_sphere on
-// the CPU.
-float cloudShadowDepth(Field f, vec3 p, vec3 dir, int maxSteps) {
+// cloudShadowSteps, the weather (the field's own map) taken where the chord
+// enters the slab. 0 above the slab, or where the weather leaves no cloud.
+// What a cloud's shadow on the ground is: exp2(-depth).
+// noise.cloud_shadow_on_sphere on the CPU.
+float cloudShadowDepthIn(Field f, samplerCube weatherCube, vec3 p, vec3 dir,
+                         int maxSteps) {
     vec3 start;
     float chord;
     if (maxSteps <= 0 || !cloudShadowChord(f, p, dir, start, chord)) {
         return 0.0;
     }
-    vec3 weather = weatherAt(start);
+    vec3 weather = texture(weatherCube, start).gba;
     float cell = cellShift(f, start * f.noiseScale + f.noiseOrigin, weather.y);
     // Exact: where the two octaves at their most stay under the threshold
     // at its lowest (an anvil's lowers it; its shelf's rest at their mean),
@@ -477,16 +493,10 @@ float cloudShadowDepth(Field f, vec3 p, vec3 dir, int maxSteps) {
                                 cell);
 }
 
-// The clouds' shadow on what is under them (planet frame p), as a share of
-// the sun toward dir: the march (cloudShadowDepth) where it can follow the
-// clouds' shapes, their mean for the weather there (deckLight's b) where it
-// cannot, which costs nothing:
-// * where a pixel's footprint (metres) spans several clouds (the march
-//   would sparkle);
-// * where the steps are longer than the clouds (a grazing sun's long chord:
-//   the march would band, each height of ground stepping onto other
-//   clouds).
-// Faded over the second octave's cell.
+float cloudShadowDepth(Field f, vec3 p, vec3 dir, int maxSteps) {
+    return cloudShadowDepthIn(f, weatherMap, p, dir, maxSteps);
+}
+
 // The clouds far along the sun's ray from a cloud at p (planet frame): the
 // optical depth from where the cloud's own march stops (sunSteps steps of
 // sunStepLength) out to reach metres, or to where the ray leaves the
@@ -531,17 +541,19 @@ float cloudMapDepth(sampler2D map, vec4 chart[4], vec3 dir, out float keep) {
     return texture(map, (xy / chart[1].w + 0.5 * size) / size).r;
 }
 
-// cloudShadowDepth from the maps where they hold it (the ray enters the
-// base: ground under the slab), the near one first; false elsewhere.
-bool cloudMapsDepth(Field f, vec3 p, vec3 start, out float depth) {
-    if (cloudShadowMapOn == 0 || length(p) >= planetRadius + f.slabBase) {
+// cloudShadowDepth from a field's maps where they hold it (the ray enters
+// the base: ground under the slab), the near one first; false elsewhere.
+bool cloudMapsDepthIn(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
+                      sampler2D farMap, vec4 farChart[4], vec3 p, vec3 start,
+                      out float depth) {
+    if (on == 0 || length(p) >= planetRadius + f.slabBase) {
         return false;
     }
     vec3 dir = normalize(start);
     float keepFar;
-    float far = cloudMapDepth(cloudShadowFar, cloudFarChart, dir, keepFar);
+    float far = cloudMapDepth(farMap, farChart, dir, keepFar);
     float keepNear;
-    float near = cloudMapDepth(cloudShadowNear, cloudNearChart, dir, keepNear);
+    float near = cloudMapDepth(nearMap, nearChart, dir, keepNear);
     if (keepNear <= 0.0 && keepFar <= 0.0) {
         return false;
     }
@@ -549,7 +561,26 @@ bool cloudMapsDepth(Field f, vec3 p, vec3 start, out float depth) {
     return keepNear > 0.0 || keepFar >= 1.0;
 }
 
-float cloudShadow(Field f, vec3 p, vec3 dir, int maxSteps, float footprint) {
+bool cloudMapsDepth(Field f, vec3 p, vec3 start, out float depth) {
+    return cloudMapsDepthIn(f, cloudShadowMapOn, cloudShadowNear, cloudNearChart,
+                            cloudShadowFar, cloudFarChart, p, start, depth);
+}
+
+// The clouds' shadow on what is under them (planet frame p), as a share of
+// the sun toward dir: the march (cloudShadowDepth: the field's maps where
+// they hold it) where it can follow the clouds' shapes, their mean for the
+// weather there (the far table's b) where it cannot, which costs nothing:
+// * where a pixel's footprint (metres) spans several clouds (the march
+//   would sparkle);
+// * where the steps are longer than the clouds (a grazing sun's long chord:
+//   the march would band, each height of ground stepping onto other
+//   clouds).
+// Faded over the second octave's cell. The field's weather, far table and
+// maps given.
+float cloudShadowIn(Field f, samplerCube weatherCube, sampler2D farTable, int mapsOn,
+                    sampler2D nearMap, vec4 nearChart[4], sampler2D farMap,
+                    vec4 farChart[4], vec3 p, vec3 dir, int maxSteps,
+                    float footprint) {
     vec3 start;
     float chord;
     if (maxSteps <= 0 || !cloudShadowChord(f, p, dir, start, chord)) {
@@ -561,20 +592,45 @@ float cloudShadow(Field f, vec3 p, vec3 dir, int maxSteps, float footprint) {
                     smoothstep(0.5 * cell, cell, step));
     float mean = 1.0;
     if (far > 0.0) {
-        vec2 size = vec2(textureSize(deckLight, 0));
+        vec2 size = vec2(textureSize(farTable, 0));
         float cosSun = dot(normalize(p), dir);
         vec2 at = vec2((cosSun - deckLightCosMin) / (1.0 - deckLightCosMin),
-                       texture(weatherMap, p).r);
-        mean = texture(deckLight, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size).b;
+                       texture(weatherCube, p).r);
+        mean = texture(farTable, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size).b;
     }
     if (far >= 1.0) {
         return mean;
     }
     float depth;
-    if (!cloudMapsDepth(f, p, start, depth)) {
-        depth = cloudShadowDepth(f, p, dir, maxSteps);
+    if (!cloudMapsDepthIn(f, mapsOn, nearMap, nearChart, farMap, farChart, p, start,
+                          depth)) {
+        depth = cloudShadowDepthIn(f, weatherCube, p, dir, maxSteps);
     }
     return mix(exp2(-depth), mean, far);
+}
+
+float cloudShadow(Field f, vec3 p, vec3 dir, int maxSteps, float footprint) {
+    return cloudShadowIn(f, weatherMap, deckLight, cloudShadowMapOn, cloudShadowNear,
+                         cloudNearChart, cloudShadowFar, cloudFarChart, p, dir,
+                         maxSteps, footprint);
+}
+
+// The planet's clouds' shadow on what is under them: the field bound's
+// (uCloudShadowLayer) and, with genera (clouds.genera), the other family's
+// (uCloudShadowOther: the stratus under the convective clouds), the product
+// of the two. 1 where neither is bound.
+float planetCloudShadow(vec3 p, vec3 dir, int maxSteps, float footprint) {
+    float shade = 1.0;
+    if (uCloudShadowLayer >= 0) {
+        shade = cloudShadow(getField(uCloudShadowLayer), p, dir, maxSteps, footprint);
+    }
+    if (uCloudShadowOther >= 0) {
+        shade *= cloudShadowIn(getField(uCloudShadowOther), otherWeather,
+                               otherDeckLight, otherShadowMapOn, otherShadowNear,
+                               otherNearChart, otherShadowFar, otherFarChart, p, dir,
+                               maxSteps, footprint);
+    }
+    return shade;
 }
 
 // ── Sunlight on a planet's clouds (through its own air) ───────────────────────

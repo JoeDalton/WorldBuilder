@@ -14,6 +14,11 @@ pixel, and farther the shadow's mean (as before). Ground inside the slab
 (mountain tops in the clouds) still marches: its ray does not start on the
 base.
 
+With genera (:mod:`genera`), each family has its own pair: the stratus's
+maps are on its own base's sphere, and the ground under both takes the two
+shadows' product (cloud_field.glsl's ``planetCloudShadow``, the second
+pair as ``otherShadowNear`` and the rest).
+
 A map is drawn again (one frame of its buffer) once the camera has moved a
 quarter of it, the sun has turned, the steps or the clouds' layer changed:
 with the sun still, the shadow costs a fetch; with the sun swinging, a
@@ -57,7 +62,7 @@ class _Map:
     def __init__(
         self,
         output: Any,
-        clouds: Any,
+        bind: Any,
         name: str,
         size: int,
         spacing: float,
@@ -91,7 +96,7 @@ class _Map:
         card.set_depth_test(False)
         card.set_depth_write(False)
         card.set_shader(_bake_shader())
-        clouds.bind_shadow_inputs(card)
+        bind(card)  # the field's inputs: its volume's bind_shadow_inputs
         self.chart = PTA_LVecBase4f.empty_array(4)  # the receivers' too
         self.steps = PTA_int.empty_array(1)
         card.set_shader_inputs(uMapChart=self.chart, uMapSteps=self.steps)
@@ -139,26 +144,57 @@ class CloudShadowMaps:
         least 256); 0 = none (the march per pixel)
     """
 
+    #: The receivers' inputs of each family's pair: (near map, far map,
+    #: near chart, far chart, on).
+    _INPUTS = (
+        (
+            "cloudShadowNear",
+            "cloudShadowFar",
+            "cloudNearChart",
+            "cloudFarChart",
+            "cloudShadowMapOn",
+        ),
+        (
+            "otherShadowNear",
+            "otherShadowFar",
+            "otherNearChart",
+            "otherFarChart",
+            "otherShadowMapOn",
+        ),
+    )
+
     def __init__(
         self, output: Any, clouds: Any, size: int, to_ram: bool = False
     ) -> None:
         """
         :param output: the window (its GSG draws the maps)
         :param clouds: the planet's clouds
-            (:class:`~world_builder.clouds.planet.PlanetClouds`, or a
-            :class:`~world_builder.clouds.sphere.CloudVolume`)
+            (:class:`~world_builder.clouds.planet.PlanetClouds`: a pair of
+            maps per family that casts a shadow, or a
+            :class:`~world_builder.clouds.sphere.CloudVolume`: one)
         :param size: ``ShadowSettings.cloud_map_size`` (0: none)
         :param to_ram: copy each map to RAM when drawn (tests)
         """
         self._output = output
         self._clouds = clouds
         self._to_ram = to_ram
-        self._on = PTA_int.empty_array(1)
+        self._families = int(getattr(clouds, "shadow_families", 1))
+        self._on = [PTA_int.empty_array(1) for _ in range(self._families)]
         self._nodes: list[NodePath] = []
-        self.near: _Map | None = None
-        self.far: _Map | None = None
+        #: (near, far) per family; empty with no maps
+        self.pairs: list[tuple[_Map, _Map]] = []
         self.size = 0
         self.set_size(size)
+
+    @property
+    def near(self) -> _Map | None:
+        """The (first family's) near map, or None."""
+        return self.pairs[0][0] if self.pairs else None
+
+    @property
+    def far(self) -> _Map | None:
+        """The (first family's) far map, or None."""
+        return self.pairs[0][1] if self.pairs else None
 
     def bind(self, node: NodePath) -> None:
         """Give a node's shaders the maps (off until drawn)."""
@@ -166,14 +202,25 @@ class CloudShadowMaps:
         self._bind(node)
 
     def _bind(self, node: NodePath) -> None:
-        node.set_shader_input("cloudShadowMapOn", self._on)
-        if self.near is not None:
-            node.set_shader_inputs(
-                cloudShadowNear=self.near.texture,
-                cloudShadowFar=self.far.texture,
-                cloudNearChart=self.near.chart,
-                cloudFarChart=self.far.chart,
-            )
+        for family in range(self._families):
+            near, far, near_chart, far_chart, on = self._INPUTS[family]
+            node.set_shader_input(on, self._on[family])
+            if self.pairs:
+                pair = self.pairs[family]
+                node.set_shader_inputs(
+                    **{
+                        near: pair[0].texture,
+                        far: pair[1].texture,
+                        near_chart: pair[0].chart,
+                        far_chart: pair[1].chart,
+                    }
+                )
+
+    def _binder(self, family: int):
+        clouds = self._clouds
+        if family == 0:
+            return clouds.bind_shadow_inputs
+        return lambda node: clouds.bind_shadow_inputs(node, family=family)
 
     def set_size(self, size: int) -> None:
         """A new size (0: none): the maps made again."""
@@ -183,25 +230,38 @@ class CloudShadowMaps:
         self.size = int(size)
         if self.size:
             far = max(self.size // 2, 256)
-            self.near = _Map(
-                self._output,
-                self._clouds,
-                "cloud_shadow_near",
-                self.size,
-                NEAR_SPACING,
-                self._to_ram,
-            )
-            self.far = _Map(
-                self._output,
-                self._clouds,
-                "cloud_shadow_far",
-                far,
-                FAR_SPACING,
-                self._to_ram,
-            )
+            for family in range(self._families):
+                suffix = "" if family == 0 else f"_{family}"
+                bind = self._binder(family)
+                self.pairs.append(
+                    (
+                        _Map(
+                            self._output,
+                            bind,
+                            f"cloud_shadow_near{suffix}",
+                            self.size,
+                            NEAR_SPACING,
+                            self._to_ram,
+                        ),
+                        _Map(
+                            self._output,
+                            bind,
+                            f"cloud_shadow_far{suffix}",
+                            far,
+                            FAR_SPACING,
+                            self._to_ram,
+                        ),
+                    )
+                )
         self._nodes = [node for node in self._nodes if not node.is_empty()]
         for node in self._nodes:
             self._bind(node)
+
+    def _caster(self, family: int):
+        clouds = self._clouds
+        if hasattr(clouds, "shadow_caster"):
+            return clouds.shadow_caster(family)
+        return clouds
 
     def update(self, camera_world: ArrayLike, sun: ArrayLike, steps: int) -> None:
         """Per frame, before the frame is drawn: each map drawn again if it
@@ -212,25 +272,28 @@ class CloudShadowMaps:
         :param steps: ``ShadowSettings.cloud_shadow_steps``
         """
         clouds = self._clouds
-        layer = clouds.shadow_layer
-        if self.near is None or layer < 0 or steps <= 0:
-            self._on[0] = 0
-            return
         relative = np.asarray(camera_world, dtype=np.float64) - clouds.position
         up = relative / np.linalg.norm(relative)
         sun = np.asarray(sun, dtype=np.float64)
-        base = clouds.radius + clouds.shadow_field.slab[0]
-        for shadow_map in (self.near, self.far):
-            if shadow_map.wanted(up, sun, steps, layer, base):
-                shadow_map.draw(up, sun, steps, layer, base)
-        self._on[0] = 1
+        for family in range(self._families):
+            caster = self._caster(family)
+            layer = -1 if caster is None else caster.shadow_layer
+            if not self.pairs or layer < 0 or steps <= 0:
+                self._on[family][0] = 0
+                continue
+            base = clouds.radius + caster.shadow_field.slab[0]
+            for shadow_map in self.pairs[family]:
+                if shadow_map.wanted(up, sun, steps, layer, base):
+                    shadow_map.draw(up, sun, steps, layer, base)
+            self._on[family][0] = 1
 
     def _destroy_maps(self) -> None:
-        for shadow_map in (self.near, self.far):
-            if shadow_map is not None:
+        for pair in self.pairs:
+            for shadow_map in pair:
                 shadow_map.destroy(self._output)
-        self.near = self.far = None
-        self._on[0] = 0
+        self.pairs = []
+        for on in self._on:
+            on[0] = 0
 
     def destroy(self) -> None:
         """Remove the maps' buffers; the nodes shade by the march again."""

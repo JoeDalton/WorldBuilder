@@ -256,6 +256,11 @@ class PlanetClouds:
                     "channel": None if channel is None else f"{channel}:stratus",
                 },
             )
+        if self.stratus is not None:
+            # Each family takes the other's shadow (the convective clouds'
+            # on the stratus under them), and so does what they shade.
+            self.volume.take_shadow_of(self.stratus)
+            self.stratus.take_shadow_of(self.volume)
         self._deck_order: tuple | None = None
         self.sheet: CloudSheet | None = None
         if cirrus is not None:
@@ -348,15 +353,33 @@ class PlanetClouds:
         for bind in self._binders if binders is None else binders:
             bind(layer.root)
 
-    def bind_shadow_inputs(self, node: NodePath) -> None:
+    @property
+    def shadow_families(self) -> int:
+        """How many volumes cast a shadow: two with genera (the convective
+        one, then the stratus), else one."""
+        return 2 if self.stratus is not None else 1
+
+    def shadow_caster(self, family: int = 0) -> CloudVolume | None:
+        """The volume whose shadow is *family*'s (0: :attr:`volume`, 1: the
+        stratus); None for a raymarch, which casts none yet."""
+        caster = self.volume if family == 0 else self.stratus
+        return caster if isinstance(caster, CloudVolume) else None
+
+    def bind_shadow_inputs(self, node: NodePath, family: int = 0) -> None:
         """Let the shaders on a node (the planet's terrain) darken the sun
-        under the clouds: the volume's shadow
-        (:meth:`sphere.CloudVolume.bind_shadow_inputs`), kept across a change
-        of renderer. A raymarched volume casts none yet.
+        under the clouds: the volume's shadow, and with genera the stratus's
+        too (:meth:`sphere.CloudVolume.bind_shadow_inputs`,
+        ``uCloudShadowOther``), kept across a change of renderer. A
+        raymarched volume casts none yet.
 
         :param node: the node whose shaders include cloud_field.glsl's
-            ``cloudShadow``
+            ``planetCloudShadow``
+        :param family: 1 binds the stratus's alone, as the first (its shadow
+            maps' bake: :class:`shadow_map.CloudShadowMaps`)
         """
+        if family == 1:
+            self.stratus.bind_shadow_inputs(node)
+            return
         self._shadow_nodes.append(node)
         self._shade([node])
 
@@ -405,8 +428,9 @@ class PlanetClouds:
         self, points_world: ArrayLike, sun_direction: ArrayLike, max_steps: int
     ) -> np.ndarray:
         """The share of the sun the clouds leave points under them (or in
-        them), as their shaders draw it on the ground
-        (:meth:`sphere.CloudVolume.sun_visibility`; 1 with a raymarch).
+        them), as their shaders draw it on the ground: both families' with
+        genera (:meth:`sphere.CloudVolume.sun_visibility`; 1 with a
+        raymarch).
 
         :param points_world: (..., 3) world frame, metres
         :param sun_direction: toward the sun, world frame (any length)
@@ -414,9 +438,14 @@ class PlanetClouds:
             (``ShadowSettings.cloud_shadow_steps``; 0 = none)
         :returns: (...) in [0, 1]
         """
-        if isinstance(self.volume, CloudVolume):
-            return self.volume.sun_visibility(points_world, sun_direction, max_steps)
-        return np.ones(np.shape(points_world)[:-1])
+        shade = np.ones(np.shape(points_world)[:-1])
+        for family in range(self.shadow_families):
+            caster = self.shadow_caster(family)
+            if caster is not None:
+                shade = shade * caster.sun_visibility(
+                    points_world, sun_direction, max_steps
+                )
+        return shade
 
     # ── live ──────────────────────────────────────────────────────────────────
 

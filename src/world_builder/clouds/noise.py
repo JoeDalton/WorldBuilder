@@ -1372,6 +1372,8 @@ def build_deck_light_texture(table: np.ndarray) -> Texture:
     tex = Texture("cloud_deck_light")
     layout = Texture.F_rgb32 if channels == 3 else Texture.F_rg32
     tex.setup_2d_texture(cosines, coverages, Texture.T_float, layout)
+    if channels == 3:
+        table = table[..., ::-1]  # Panda keeps an RGB texture's RAM image as BGR
     tex.set_ram_image(np.ascontiguousarray(table, dtype=np.float32).tobytes())
     tex.set_magfilter(SamplerState.FT_linear)
     tex.set_minfilter(SamplerState.FT_linear)

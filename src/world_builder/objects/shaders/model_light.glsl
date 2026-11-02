@@ -9,9 +9,8 @@ uniform vec3 uSunColor;       // sunlight above any air, linear
 uniform int  uOwnAtmosphere;  // the body's atmosphere index, -1 = airless
 uniform mat3 uPlanetAxes;     // the body's own axes to the render frame
                               // (Terrain.rotation): its shadow map's
-// The body's clouds' layer in layerParams whose shadow falls here, -1 none
-// (CloudVolume.bind_shadow_inputs).
-uniform int  uCloudShadowLayer;
+// The body's clouds' shadow: cloud_field.glsl's uCloudShadowLayer (and, with
+// genera, uCloudShadowOther), -1 none (CloudVolume.bind_shadow_inputs).
 
 // The body's vertical at a point rel (from the camera, render frame), or
 // fallback where there is no body (open space).
@@ -36,9 +35,8 @@ vec3 modelSunlight(vec3 rel, vec3 L, float footprint) {
     if (uOwnAtmosphere >= 0) {
         // Its air reddens the sun, and hides it past its terminator.
         sunlight *= atmoSunlight(uOwnAtmosphere, planet, L);
-        if (uCloudShadowLayer >= 0 && uCloudShadowSteps > 0) {
-            sunlight *= cloudShadow(getField(uCloudShadowLayer), planet, L,
-                                    uCloudShadowSteps, footprint);
+        if (uCloudShadowSteps > 0) {
+            sunlight *= planetCloudShadow(planet, L, uCloudShadowSteps, footprint);
         }
     } else {
         sunlight *= ownShadow(rel, L, self);
