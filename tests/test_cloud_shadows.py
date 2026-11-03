@@ -816,10 +816,10 @@ def _slab_points(field, n=300, seed=3):
 @pytest.mark.parametrize("elevation", [50.0, 25.0])
 def test_the_map_with_a_local_march_is_the_sun_march(field, table, elevation):
     """A cloud's depth toward the sun taken from a cloud shadow map's levels
-    (the local march's two steps, then the total less the depth up to there,
-    :func:`sun_depth_from_map`) matches a fine march through the whole chord
-    (the reference the levels summarise): the shade within a few per cent,
-    the depth's mean close."""
+    (the local march's two steps, then the chord's depth out to where the sun
+    march would have reached, :func:`sun_depth_from_map`) matches a fine
+    march over that reach (the reference the levels summarise) and the sun
+    march itself: the shade within a few per cent, the depth's mean close."""
     from world_builder.clouds.noise import (
         sun_depth_from_map,
         sun_optical_depth_on_sphere,
@@ -835,11 +835,18 @@ def test_the_map_with_a_local_march_is_the_sun_march(field, table, elevation):
     full = sun_optical_depth_on_sphere(
         _noise(7),
         field,
-        replace(OPTICS, sun_steps=400, sun_step_length=6.0),
+        replace(
+            OPTICS,
+            sun_steps=int(OPTICS.sun_steps * OPTICS.sun_step_length / 6.0),
+            sun_step_length=6.0,
+        ),
         points,
         sun,
         R,
         shift=shift,
+    )
+    coarse = sun_optical_depth_on_sphere(
+        _noise(7), field, OPTICS, points, sun, R, shift=shift
     )
     mapped = sun_depth_from_map(
         _noise(7),
@@ -857,3 +864,127 @@ def test_the_map_with_a_local_march_is_the_sun_march(field, table, elevation):
     assert np.median(error) < 0.03
     assert np.percentile(error, 90) < 0.12
     assert abs(np.mean(mapped) - np.mean(full)) < 0.1 * np.mean(full)
+    # and the sun march's own (three midpoint samples): the same sort of error
+    march_error = np.abs(np.exp2(-coarse) - np.exp2(-full))
+    assert np.median(error) <= np.median(march_error) + 0.02
+
+
+def test_a_change_of_renderer_gives_the_shadow_maps_the_new_volume(window):
+    """The maps' bake cards take their field's inputs from the clouds' volume:
+    a change of renderer makes a new volume, which they must take, or the
+    ground loses its cloud shadow (it was baked from the removed one)."""
+    from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.planet import PlanetClouds
+    from world_builder.clouds.shadow_map import CloudShadowMaps
+    from world_builder.terrain.workers import ChunkExecutor
+
+    executor = ChunkExecutor(backend="inline", inline_budget=64)
+    clouds = PlanetClouds(
+        window.render,
+        R,
+        executor,
+        altitude=2200.0,
+        settings=CloudSettings(shells=2, renderer="billboards"),
+        planet=PLANETS["forest"],
+    )
+    maps = CloudShadowMaps(window.win, clouds, 64)
+    camera = np.array([0.0, 0.0, R + 1000.0])
+    sun = np.array([0.0, 0.6, 0.8])
+    try:
+        clouds.update(camera)
+        maps.update(camera, sun, 8)
+        assert maps._casters_bound[0] is clouds.volume
+        clouds.set_settings(replace(clouds.settings, renderer="march"))
+        clouds.update(camera)
+        maps.near.drawn = ("drawn",)
+        maps.update(camera, sun, 8)
+        assert maps._casters_bound[0] is clouds.shadow_caster(0)
+        assert maps._casters_bound[0] is not clouds.volume
+        # Drawn again from the new volume, not kept
+        assert not isinstance(maps.near.drawn[0], str)
+    finally:
+        maps.destroy()
+        clouds.remove()
+        executor.shutdown()
+
+
+@pytest.mark.parametrize("family", [0, 1])
+def test_the_raymarchs_shadow_maps_match_the_cpu_twin_for_each_family(window, family):
+    """With genera a raymarch bakes each family's map from its own deck layer
+    and weather (the convective one's depth cutting its chord at the clouds'
+    own top): the near map's total against the CPU twin."""
+    from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.genera import GeneraSpec
+    from world_builder.clouds.planet import PlanetClouds
+    from world_builder.clouds.shadow_map import NEAR_SPACING, CloudShadowMaps
+    from world_builder.clouds.weather import WeatherSpec
+    from world_builder.terrain.planet import PlanetSpec
+    from world_builder.terrain.workers import ChunkExecutor
+
+    executor = ChunkExecutor(backend="inline", inline_budget=64)
+    spec = PlanetSpec(name="clouds", radius=R)
+    genera = GeneraSpec(weather=WeatherSpec(spec, seed=11))
+    clouds = PlanetClouds(
+        window.render,
+        R,
+        executor,
+        settings=CloudSettings(shells=2, renderer="march"),
+        genera=genera,
+    )
+    size, steps = 128, 16
+    maps = CloudShadowMaps(window.win, clouds, size, to_ram=True)
+    try:
+        # Over the family's own clouds: the convective ones around the focus,
+        # the stratus deck 30 km south of it (genera.DEFAULT_FEATURES)
+        frame = TangentFrame.at(-2.86 if family else 0.0, 0.0)
+        camera = frame.up * (R + 1000.0)
+        for _ in range(400):
+            clouds.update(camera)
+            if clouds.volume.weather is not None:
+                break
+        sun = 0.8 * frame.up + 0.6 * frame.east
+        clouds.set_sun(sun)
+        maps.update(camera, sun / np.linalg.norm(sun), steps)
+        window.graphicsEngine.render_frame()
+        window.graphicsEngine.render_frame()
+        caster = clouds.shadow_caster(family)
+        texture = maps.pairs[family][0].texture
+        dtype = np.float32 if texture.get_component_width() == 4 else np.float16
+        ram = np.frombuffer(texture.get_ram_image_as("RGBA"), dtype)
+        got = ram.reshape(size, size, 4)[..., 0].astype(np.float64)
+
+        nodes = (np.arange(size) - 0.5 * size + 0.5) * NEAR_SPACING
+        x, y = np.meshgrid(nodes, nodes)
+        base = R + caster.shadow_field.slab[0]
+        angle = np.hypot(x, y) / base
+        toward = np.stack([x, y], -1) / np.maximum(np.hypot(x, y), 1e-9)[..., None]
+        dirs = np.cos(angle)[..., None] * frame.up + np.sin(angle)[..., None] * (
+            toward[..., :1] * frame.east + toward[..., 1:] * frame.north
+        )
+        weather = caster.weather
+
+        def channel(k):
+            if weather.shape[-1] <= k:
+                return None
+            return lambda p: sample_cube(weather[..., k], p)
+
+        expected = cloud_shadow_on_sphere(
+            _noise(7),
+            caster.shadow_field,
+            caster._deck_optics,
+            dirs.reshape(-1, 3) * base,
+            sun / np.linalg.norm(sun),
+            R,
+            steps,
+            shift_at=channel(1),
+            depth_at=channel(2),
+            spread_at=channel(3),
+        ).reshape(size, size)
+        assert expected.max() > 0.2  # some cloud in it
+        shade_error = np.abs(np.exp2(-got) - np.exp2(-expected))
+        assert np.median(shade_error) < 5e-3
+        assert np.percentile(shade_error, 99) < 0.08
+    finally:
+        maps.destroy()
+        clouds.remove()
+        executor.shutdown()

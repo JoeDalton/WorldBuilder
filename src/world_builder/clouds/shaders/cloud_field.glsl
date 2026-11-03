@@ -24,7 +24,8 @@ uniform float planetRadius;      // sea-level radius
 uniform samplerCube weatherMap;
 // A/B switches for profiling (bits, 0 = normal): 1 no sun march, 2 no
 // atmosphere, 4 two octaves only, 8 flat colour after the density; the
-// raymarch's: 16 its steps per pixel, red over the budget, 32 no billows.
+// raymarch's: 16 its steps per pixel, red over the budget, 32 no billows, 64 the
+// clouds' light from the sun march, not the shadow maps.
 uniform int   uCloudDebug;
 // The far clouds' averages, by the sun's cosine (x, from deckLightCosMin to
 // 1) and the weather's coverage (y): the deck's lighting
@@ -487,6 +488,23 @@ bool cloudShadowChord(Field f, vec3 p, vec3 dir, out vec3 start, out float chord
     return chord > 0.0;
 }
 
+// A chord that starts at *start* (on the slab's base, or inside it), cut at the
+// clouds' own top there: a convective field's column reaches its local top
+// only (its depth: topFraction), or the slab's when an anvil's shelf spreads
+// there. Steps and levels spread over the cloud, not over the 10 km of slab
+// a fair-weather cumulus fills a tenth of. The slab's own chord otherwise.
+// noise._cloud_shadow_samples on the CPU.
+float cloudChordToTop(Field f, vec3 start, vec3 dir, vec3 weather, float chord) {
+    if (f.minTop >= 1.0) {
+        return chord;
+    }
+    float fraction = f.anvil > 0.0 && weather.z > 0.0 ? 1.0 : topFraction(f, weather.y);
+    float outer = planetRadius + f.slabBase + f.slabThickness * fraction;
+    float r = length(start);
+    float b = dot(start, dir);
+    return min(chord, -b + sqrt(max((outer - r) * (outer + r) + b * b, 0.0)));
+}
+
 // The steps of a chord: about CLOUD_SHADOW_STEP_SCALE sunStepLength long,
 // at most maxSteps (a long, low chord takes longer steps).
 int cloudShadowSteps(Field f, float chord, int maxSteps) {
@@ -514,6 +532,10 @@ bool cloudShadowMarch(Field f, samplerCube weatherCube, vec3 p, vec3 dir, int ma
         return false;
     }
     weather = texture(weatherCube, start).gba;
+    chord = cloudChordToTop(f, start, dir, weather, chord);
+    if (chord <= 0.0) {
+        return false;
+    }
     cell = cellShift(f, start * f.noiseScale + f.noiseOrigin, weather.y);
     float most = f.octaveWeights.x + f.octaveWeights.y;
     float column = most * f.shadowGain + f.shadowBias + cell + weather.x
@@ -604,22 +626,32 @@ vec4 cloudMapTexel(sampler2D map, vec4 chart[4], vec3 dir, out float keep) {
 }
 
 // The texel of a field's maps at a point of the base's sphere (unit dir), the
-// near map's where it holds it, the far one's beyond, blended between; false
-// where neither does.
-bool cloudMapsTexelIn(int on, sampler2D nearMap, vec4 nearChart[4], sampler2D farMap,
-                      vec4 farChart[4], vec3 dir, out vec4 texel) {
+// near map's where it holds it, the far one's beyond, blended between, and how
+// much the maps hold it: 1 inside the far map's solid part, fading to 0 over its
+// last eighth (and 0 with the maps off).
+float cloudMapsTexelWeightIn(int on, sampler2D nearMap, vec4 nearChart[4],
+                             sampler2D farMap, vec4 farChart[4], vec3 dir,
+                             out vec4 texel, out float keepNear) {
+    texel = vec4(0.0);
+    keepNear = 0.0;
     if (on == 0) {
-        return false;
+        return 0.0;
     }
     float keepFar;
     vec4 far = cloudMapTexel(farMap, farChart, dir, keepFar);
-    float keepNear;
     vec4 near = cloudMapTexel(nearMap, nearChart, dir, keepNear);
-    if (keepNear <= 0.0 && keepFar <= 0.0) {
-        return false;
-    }
     texel = keepNear >= 1.0 ? near : mix(far, near, keepNear);
-    return keepNear > 0.0 || keepFar >= 1.0;
+    return max(keepNear, keepFar);
+}
+
+// As cloudMapsTexelWeightIn, true where the maps hold the texel wholly (or the
+// near map does at all): the ground's.
+bool cloudMapsTexelIn(int on, sampler2D nearMap, vec4 nearChart[4], sampler2D farMap,
+                      vec4 farChart[4], vec3 dir, out vec4 texel) {
+    float keepNear;
+    float weight = cloudMapsTexelWeightIn(on, nearMap, nearChart, farMap, farChart, dir,
+                                          texel, keepNear);
+    return on != 0 && (keepNear > 0.0 || weight >= 1.0);
 }
 
 // cloudShadowDepth from a field's maps where they hold it (the ray enters
@@ -641,17 +673,29 @@ bool cloudMapsDepthIn(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
 // beyond them from the shadow map (cloudMapSunDepth).
 const int MAP_LOCAL_STEPS = 2;
 
+// The depth accumulated up to a point of the baked chord (u, its fraction along
+// it, 0 to 1), from a map texel's levels (the total, then the depth at a
+// quarter, a half and three quarters of the chord), linearly between them.
+float cloudLevelDepth(vec4 levels, float u) {
+    float x = 4.0 * clamp(u, 0.0, 1.0);
+    int k = int(min(floor(x), 3.0));
+    float t = x - float(k);
+    float lower = k == 0 ? 0.0 : (k == 1 ? levels.g : (k == 2 ? levels.b : levels.a));
+    float upper = k == 0 ? levels.g : (k == 1 ? levels.b : (k == 2 ? levels.a : levels.r));
+    return mix(lower, upper, t);
+}
+
 // The optical depth toward the sun (unit dir) from a point p in the slab,
 // from the field's shadow maps: the sun march's first localSteps steps through
 // the field itself (the nearby clouds' shape), then the rest of the chord from
 // the map's levels at the point where the sun's line left the slab's base: its
 // total less the depth up to where the local march ended, linearly between
-// the levels (cloudShadowLevelsIn). False where the maps do not hold that
-// line (beyond them, or a sun too low for the line to have left the base):
-// the sun march then. noise.sun_depth_from_map on the CPU.
-bool cloudMapSunDepth(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
-                      sampler2D farMap, vec4 farChart[4], vec3 p, vec3 dir,
-                      vec3 weather, int localSteps, out float depth) {
+// the levels (cloudShadowLevelsIn). Returns how much the maps hold the line
+// (1: wholly, fading to 0 at the far map's edge; 0 beyond it, or for a sun too
+// low for the line to have left the base): the sun march fills in the rest. noise.sun_depth_from_map on the CPU.
+float cloudMapSunDepth(Field f, samplerCube weatherCube, int on, sampler2D nearMap,
+                       vec4 nearChart[4], sampler2D farMap, vec4 farChart[4], vec3 p,
+                       vec3 dir, vec3 weather, int localSteps, out float depth) {
     float inner = planetRadius + f.slabBase;
     float outer = inner + f.slabThickness;
     float r = length(p);
@@ -659,32 +703,43 @@ bool cloudMapSunDepth(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
     // Back along the line to where it left the base's sphere: a negative
     // distance for a point in the slab under a sun above the horizon.
     float root = (inner - r) * (inner + r) + b * b;
+    depth = 0.0;
     if (on == 0 || root <= 0.0 || r <= inner || r >= outer) {
-        return false;
+        return 0.0;
     }
     float back = -b + sqrt(root);
     if (back >= 0.0) {
-        return false;
+        return 0.0;
     }
     vec3 entry = p + dir * back;
     vec4 levels;
-    if (!cloudMapsTexelIn(on, nearMap, nearChart, farMap, farChart, normalize(entry),
-                          levels)) {
-        return false;
+    float keepNear;
+    float held = cloudMapsTexelWeightIn(on, nearMap, nearChart, farMap, farChart,
+                                        normalize(entry), levels, keepNear);
+    if (held <= 0.0) {
+        return 0.0;
     }
     float rEntry = length(entry);
     float bEntry = dot(entry, dir);
     float chord = -bEntry + sqrt(max((outer - rEntry) * (outer + rEntry) + bEntry * bEntry,
                                      0.0));
+    // The chord the bake marched: to the clouds' own top where the ray enters.
+    chord = cloudChordToTop(f, entry, dir, texture(weatherCube, entry).gba, chord);
     float reach = float(localSteps) * f.sunStepLength;
-    float x = 4.0 * clamp((reach - back) / max(chord, 1.0), 0.0, 1.0);
-    int k = int(min(floor(x), 3.0));
-    float t = x - float(k);
-    float lower = k == 0 ? 0.0 : (k == 1 ? levels.g : (k == 2 ? levels.b : levels.a));
-    float upper = k == 0 ? levels.g : (k == 1 ? levels.b : (k == 2 ? levels.a : levels.r));
+    // The clouds count out to where the sun march reached (its steps), no
+    // farther: a tower's interior is dark but its sunlit face is lit, the light
+    // that reaches a sample coming from the clouds near it; counting the whole
+    // 10 km chord left every tower black. The map gives the march's far steps in
+    // a fetch, and the shape of its field there (a thicker slab: more levels).
+    float window = float(max(f.sunSteps - localSteps, 0)) * f.sunStepLength;
+    // What lies beyond the local march, out to the window: the depth the chord
+    // accumulates between the two points, linearly between the levels. (A line
+    // in transmittance blows up near a level that holds almost all the depth.)
+    float near = cloudLevelDepth(levels, (reach - back) / max(chord, 1.0));
+    float far = cloudLevelDepth(levels, (reach - back + window) / max(chord, 1.0));
     depth = slabOpticalDepthAt(f, p, dir, f.sunStepLength, localSteps, weather)
-          + levels.r - mix(lower, upper, t);
-    return true;
+          + far - near;
+    return held;
 }
 
 // The optical depth toward the sun from a cloud at p: from the shadow maps
@@ -692,20 +747,26 @@ bool cloudMapSunDepth(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
 // raymarch's, whose nodes the maps are bound to) and they hold it, else the
 // sun march's own.
 #ifdef CLOUD_MAP_LIGHTING
-float cloudSunDepthIn(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
-                      sampler2D farMap, vec4 farChart[4], vec3 p, vec3 weather) {
-    float depth;
-    if (f.sunSteps > 0
-        && cloudMapSunDepth(f, on, nearMap, nearChart, farMap, farChart, p, sunDir,
-                            weather, min(f.sunSteps, MAP_LOCAL_STEPS), depth)) {
+float cloudSunDepthIn(Field f, samplerCube weatherCube, int on, sampler2D nearMap,
+                      vec4 nearChart[4], sampler2D farMap, vec4 farChart[4], vec3 p,
+                      vec3 weather) {
+    float depth = 0.0;
+    float held = 0.0;
+    if (f.sunSteps > 0 && (uCloudDebug & 64) == 0) {
+        held = cloudMapSunDepth(f, weatherCube, on, nearMap, nearChart, farMap, farChart,
+                                p, sunDir, weather, min(f.sunSteps, MAP_LOCAL_STEPS),
+                                depth);
+    }
+    if (held >= 1.0) {
         return depth;
     }
-    return sunOpticalDepthAt(f, p, weather);
+    float march = sunOpticalDepthAt(f, p, weather);
+    return held > 0.0 ? mix(march, depth, held) : march;
 }
 
 float cloudSunDepth(Field f, vec3 p, vec3 weather) {
-    return cloudSunDepthIn(f, cloudShadowMapOn, cloudShadowNear, cloudNearChart,
-                           cloudShadowFar, cloudFarChart, p, weather);
+    return cloudSunDepthIn(f, weatherMap, cloudShadowMapOn, cloudShadowNear,
+                           cloudNearChart, cloudShadowFar, cloudFarChart, p, weather);
 }
 
 // The same for a cloud of the second family (the stratus, under the first's
@@ -713,15 +774,18 @@ float cloudSunDepth(Field f, vec3 p, vec3 weather) {
 // and the convective clouds' optical depth along the sun's ray from p, from
 // theirs where the ray enters their base, which shades it.
 float cloudSunDepthOther(Field f, Field above, vec3 p, vec3 weather) {
-    float depth = cloudSunDepthIn(f, otherShadowMapOn, otherShadowNear, otherNearChart,
-                                  otherShadowFar, otherFarChart, p, weather);
+    float depth = cloudSunDepthIn(f, otherWeather, otherShadowMapOn, otherShadowNear,
+                                  otherNearChart, otherShadowFar, otherFarChart, p,
+                                  weather);
     vec3 start;
     float chord;
-    float total;
-    if (cloudShadowChord(above, p, sunDir, start, chord)
-        && cloudMapsDepthIn(above, cloudShadowMapOn, cloudShadowNear, cloudNearChart,
-                            cloudShadowFar, cloudFarChart, p, start, total)) {
-        depth += total;
+    if (cloudShadowChord(above, p, sunDir, start, chord)) {
+        vec4 texel;
+        float keepNear;
+        float held = cloudMapsTexelWeightIn(cloudShadowMapOn, cloudShadowNear,
+                                            cloudNearChart, cloudShadowFar, cloudFarChart,
+                                            normalize(start), texel, keepNear);
+        depth += held * texel.r;
     }
     return depth;
 }
@@ -755,6 +819,15 @@ float cloudShadowIn(Field f, samplerCube weatherCube, sampler2D farTable, int ma
     float chord;
     if (maxSteps <= 0 || !cloudShadowChord(f, p, dir, start, chord)) {
         return 1.0;
+    }
+    if (f.minTop < 1.0) {
+        // A convective field's chord ends at its clouds' own top there, as the
+        // march's (cloudShadowMarch) and the maps' do: its steps are then
+        // short enough to follow a cumulus, not a 10 km slab's.
+        chord = cloudChordToTop(f, start, dir, texture(weatherCube, start).gba, chord);
+        if (chord <= 0.0) {
+            return 1.0;
+        }
     }
     float cell = NOISE_FEATURE / (f.noiseScale.x * f.octaveScales.y);
     float step = chord / float(cloudShadowSteps(f, chord, maxSteps));

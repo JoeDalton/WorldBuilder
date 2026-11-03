@@ -1028,7 +1028,15 @@ def cloud_shadow_on_sphere(
     if not under.any():
         return depth
     march = _cloud_shadow_samples(
-        volume, spec, optics, points[under], dirs[under], radius, max_steps
+        volume,
+        spec,
+        optics,
+        points[under],
+        dirs[under],
+        radius,
+        max_steps,
+        depth_at,
+        spread_at,
     )
     start = march[-1]
 
@@ -1055,6 +1063,30 @@ def cloud_shadow_on_sphere(
     return depth
 
 
+def _chord_to_top(
+    spec: DensityField,
+    radius: float,
+    start: np.ndarray,
+    dirs: np.ndarray,
+    chord: np.ndarray,
+    depth_at: Callable[[np.ndarray], np.ndarray],
+    spread_at: Callable[[np.ndarray], np.ndarray] | None,
+) -> np.ndarray:
+    """The shader's ``cloudChordToTop``: a chord from *start* cut at the
+    clouds' own top there (the slab's top where an anvil's shelf spreads)."""
+    depth = np.reshape(depth_at(start.reshape(-1, 3)), start.shape[:-1])
+    fraction = top_fraction(spec, depth)
+    if spec.anvil and spread_at is not None:
+        spread = np.reshape(spread_at(start.reshape(-1, 3)), start.shape[:-1])
+        fraction = np.where(spread > 0.0, 1.0, fraction)
+    base, thickness = spec.slab
+    outer = radius + base + thickness * fraction
+    r = np.linalg.norm(start, axis=-1)
+    b = np.sum(start * dirs, axis=-1)
+    leave = -b + np.sqrt(np.maximum((outer - r) * (outer + r) + b * b, 0.0))
+    return np.minimum(chord, leave)
+
+
 def _cloud_shadow_samples(
     volume: np.ndarray,
     spec: DensityField,
@@ -1063,11 +1095,16 @@ def _cloud_shadow_samples(
     sun_dirs: np.ndarray,
     radius: float,
     max_steps: int,
+    depth_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    spread_at: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> tuple[np.ndarray, ...]:
     """:func:`cloud_shadow_on_sphere`'s samples before the weather and the
     calibration: their slab heights and two-octave sums (..., max_steps),
     which steps count, each chord's step length and whether it crosses the
-    slab, and where it enters it (..., 3)."""
+    slab, and where it enters it (..., 3). A convective field's chord is cut
+    at the clouds' own top where it enters (*depth_at*, *spread_at*: the
+    weather's convective depth and anvil spread there; the shader's
+    ``cloudChordToTop``)."""
     dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
     base, thickness = spec.slab
     inner, outer = radius + base, radius + base + thickness
@@ -1080,6 +1117,11 @@ def _cloud_shadow_samples(
         0.0,
     )
     chord = leave - enter
+    if spec.min_top < 1.0 and depth_at is not None:
+        chord = _chord_to_top(
+            spec, radius, points + dirs * enter[..., None], dirs, chord, depth_at,
+            spread_at,
+        )  # fmt: skip
     alive = (r < outer) & (chord > 0.0)
     target = max(optics.sun_step_length * CLOUD_SHADOW_STEP_SCALE, 1.0)
     steps = np.clip(np.ceil(chord / target), 1, max_steps).astype(np.int64)
@@ -1156,14 +1198,17 @@ def sun_depth_from_map(
     local_steps: int,
     shift_at: Callable[[np.ndarray], np.ndarray] | None = None,
     octave_mean: float | None = None,
+    depth_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    spread_at: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> np.ndarray:
     """The shader's ``cloudMapSunDepth``: the optical depth toward the sun from
     points in the slab, as a cloud's lighting takes it from a cloud shadow
     map: the sun march's first *local_steps* steps through the field itself
     (the nearby clouds' shape), then the rest of the chord from the map's
     levels (:func:`cloud_shadow_on_sphere` with ``levels``, at the point where
-    the sun's line enters the slab's base): the total less the depth up to
-    where the local march ended, linearly between the levels. 0 where that
+    the sun's line enters the slab's base): the depth the chord accumulates
+    from where the local march ended to where the sun march (``optics.sun_steps``)
+    would have, linearly between the levels. 0 where that
     line does not enter the base (a low sun), which the shader leaves to the
     full sun march.
 
@@ -1188,21 +1233,32 @@ def sun_depth_from_map(
     levels = cloud_shadow_on_sphere(
         volume, spec, optics, entry, dirs, radius, max_steps,
         shift_at=shift_at, octave_mean=octave_mean, levels=True,
+        depth_at=depth_at, spread_at=spread_at,
     )  # fmt: skip
     # The chord from the entry to the slab's top
     r_e = np.linalg.norm(entry, axis=-1)
     b_e = np.sum(entry * dirs, axis=-1)
     chord = -b_e + np.sqrt(np.maximum((outer - r_e) * (outer + r_e) + b_e * b_e, 0.0))
+    if spec.min_top < 1.0 and depth_at is not None:
+        chord = _chord_to_top(spec, radius, entry, dirs, chord, depth_at, spread_at)
     reach = local_steps * optics.sun_step_length
-    fraction = np.clip((-back + reach) / np.maximum(chord, 1e-9), 0.0, 1.0)
+    # Out to where the sun march would have reached (its steps), no farther
+    window = max(optics.sun_steps - local_steps, 0) * optics.sun_step_length
     xs = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
     ys = np.stack(
         [np.zeros_like(levels[..., 0]), *(levels[..., k] for k in (1, 2, 3, 0))], -1
+    ).reshape(-1, 5)
+    safe = np.maximum(chord, 1e-9).ravel()
+
+    def accumulated(distance):
+        """The depth up to *distance* along the chord, linearly between the
+        levels (the shader's ``cloudLevelDepth``)."""
+        u = np.clip(distance.ravel() / safe, 0.0, 1.0)
+        return np.array([np.interp(f, xs, y) for f, y in zip(u, ys)])
+
+    tail = (accumulated(-back + reach + window) - accumulated(-back + reach)).reshape(
+        back.shape
     )
-    up_to = np.array(
-        [np.interp(f, xs, y) for f, y in zip(fraction.ravel(), ys.reshape(-1, 5))]
-    )
-    tail = levels[..., 0] - up_to.reshape(fraction.shape)
     local = sun_optical_depth_on_sphere(
         volume,
         spec,

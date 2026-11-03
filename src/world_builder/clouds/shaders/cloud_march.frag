@@ -120,8 +120,11 @@ const float SEGMENT_SAMPLES = 8.0;
 const float OPAQUE = 0.01;
 // A cloudy column's alpha seen from afar: the deck's.
 const float FAR_ALPHA = 0.92;
-// The weather's shift is read once this far along the ray, metres.
-const float WEATHER_STRETCH = 1000.0;
+// The weather is read once this far along the ray, metres (uWeatherStretch):
+// the fair-weather shift varies over kilometres, but a convective cloud's depth
+// (its top) changes over a fraction of a tower's width: read once a kilometre
+// it shows as bands across the tower, one per stretch.
+uniform float uWeatherStretch;
 
 vec3 unproject(vec3 ndc) {
     vec4 p = uClipToRender * vec4(ndc, 1.0);
@@ -299,7 +302,7 @@ void main() {
             if (t > weatherUntil) {
                 weather = fam == 0 ? texture(weatherMap, p).gba
                                    : texture(otherWeather, p).gba;
-                weatherUntil = t + WEATHER_STRETCH;
+                weatherUntil = t + uWeatherStretch;
             }
             // Far away a pixel spans more than the clouds' features: their
             // expected coverage (the deck's), as a homogeneous slab whose

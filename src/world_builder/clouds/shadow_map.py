@@ -96,11 +96,18 @@ class _Map:
         card.set_depth_test(False)
         card.set_depth_write(False)
         card.set_shader(_bake_shader())
+        self.card, self._bind = card, bind
         bind(card)  # the field's inputs: its volume's bind_shadow_inputs
         self.chart = PTA_LVecBase4f.empty_array(4)  # the receivers' too
         self.steps = PTA_int.empty_array(1)
         card.set_shader_inputs(uMapChart=self.chart, uMapSteps=self.steps)
         self.drawn: tuple | None = None  # (centre, sun, steps, layer) drawn
+
+    def rebind(self) -> None:
+        """Take the field's inputs again, from the clouds' volume now (a change
+        of renderer makes a new one), and be drawn again."""
+        self._bind(self.card)
+        self.drawn = None
 
     def draw(
         self, up: np.ndarray, sun: np.ndarray, steps: int, layer: int, base: float
@@ -181,6 +188,8 @@ class CloudShadowMaps:
         self._families = int(getattr(clouds, "shadow_families", 1))
         self._on = [PTA_int.empty_array(1) for _ in range(self._families)]
         self._nodes: list[NodePath] = []
+        #: The volume each family's maps were baked from (a new one: rebind)
+        self._casters_bound: list[Any] = []
         #: (near, far) per family; empty with no maps
         self.pairs: list[tuple[_Map, _Map]] = []
         self.size = 0
@@ -227,6 +236,7 @@ class CloudShadowMaps:
         if size == self.size:
             return
         self._destroy_maps()
+        self._casters_bound = [None] * self._families
         self.size = int(size)
         if self.size:
             far = max(self.size // 2, 256)
@@ -277,6 +287,12 @@ class CloudShadowMaps:
         sun = np.asarray(sun, dtype=np.float64)
         for family in range(self._families):
             caster = self._caster(family)
+            if self.pairs and caster is not self._casters_bound[family]:
+                # A new volume (a change of renderer): its inputs, not the
+                # removed one's, in the bake.
+                self._casters_bound[family] = caster
+                for shadow_map in self.pairs[family]:
+                    shadow_map.rebind()
             layer = -1 if caster is None else caster.shadow_layer
             if not self.pairs or layer < 0 or steps <= 0:
                 self._on[family][0] = 0

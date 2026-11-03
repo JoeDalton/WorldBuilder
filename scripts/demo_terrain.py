@@ -1069,6 +1069,7 @@ class TerrainDemo(ShowBase):
             self.win, self.clouds, self.world.shadows.cloud_map_size
         )
         self.cloud_maps.bind(self.terrain.root)
+        self.clouds.bind_maps(self.cloud_maps.bind)  # a raymarch's own light
         self.cloud_maps.bind(self.home.models.inputs)
         if self.ring is not None:
             # Its haze split at their tops: what is beyond them drawn first.

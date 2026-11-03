@@ -24,6 +24,7 @@ times a few frames, then saves a screenshot::
                      (degrees), 400 m above the ground
     --radius         overrides the level's planet radius
     --pose           the poses to shoot (default: all, in the order below)
+    --sun            the "at" pose's sun: AZIMUTH ELEVATION, degrees
     --at             one more pose, "at": LAT LON ALT HEADING PITCH, as the
                      demo prints its camera
     --timeout        seconds to wait for a pose to settle (default 90)
@@ -607,6 +608,14 @@ def main() -> None:
     add_planet_arguments(parser)
     parser.add_argument("--pose", nargs="*", default=None, help="default: all")
     parser.add_argument(
+        "--sun",
+        nargs=2,
+        type=float,
+        metavar=("AZIMUTH", "ELEVATION"),
+        default=None,
+        help='the sun of the "at" pose, degrees (default 210 35)',
+    )
+    parser.add_argument(
         "--at",
         nargs=5,
         type=float,
@@ -680,6 +689,8 @@ def main() -> None:
             nodes = [ball for ball, _ in balls]
             demo._test_balls = list(zip(nodes, demo._test_ball_points()))
         sun = SUNS.get(name, (210.0, 35.0))
+        if name == "at" and args.sun is not None:
+            sun = tuple(args.sun)
         if isinstance(sun, AimedSun):
             _aim_sun(demo, sun)
         else:

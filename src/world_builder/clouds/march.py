@@ -171,6 +171,11 @@ DETAIL_SCALE = 24.0
 #: ...moving the threshold by up to this share of its window about its mean
 #: (the coverage holds). 1 breaks the edges into rags.
 DETAIL_EROSION = 0.5
+#: How far along a ray the weather is read once, metres (cloud_march.frag's
+#: ``uWeatherStretch``): the fair-weather shift varies over kilometres; with
+#: genera, a tower's depth over tens of metres, so every sample reads it.
+WEATHER_STRETCH = 1000.0
+WEATHER_STRETCH_GENERA = 1.0
 #: The march's buffers' sorts: before the view they are laid over (the
 #: half-resolution pass's are -50 and -49).
 _FIRST_SORT = -60
@@ -961,6 +966,9 @@ class CloudMarch:
             "uLayerFar": self._layer_far,
             "uLayerCount": self._layer_count,
             "uFamilies": len(self._families),
+            "uWeatherStretch": WEATHER_STRETCH_GENERA
+            if genera is not None
+            else WEATHER_STRETCH,
             "uDetailScale": DETAIL_SCALE,
             "uDetailErosion": DETAIL_EROSION,
             "uBillowMean": float(np.mean(1.0 - np.abs(2.0 * volume - 1.0))),

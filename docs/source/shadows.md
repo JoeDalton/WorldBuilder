@@ -339,12 +339,20 @@ texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
   its first two steps through the field itself plus, from the map at the
   point where the sun's line left the base, the chord's total less the depth
   up to where those two steps ended (`cloudMapSunDepth`, linearly between the
-  levels; `noise.sun_depth_from_map` on the CPU). It counts the whole chord,
-  where the sun march stops after its few steps. It falls back to the sun
-  march beyond the maps and for a sun too low for the line to have left the
-  base. It costs what the sun march did (a cumulus's has three steps) and
+  levels; `noise.sun_depth_from_map` on the CPU), out to where the sun march
+  would have stopped (its steps): counting a tower's whole 10 km chord left
+  every tower black. It blends into the sun march over the far map's last
+  eighth, and is the sun march for a sun too low for the line to have left the
+  base (`--cloud-debug 64` takes the lighting from the sun march alone). It costs what the sun march did (a cumulus's has three steps) and
   changes the image by under half a level (8-bit) on average; it pays for
   taller marches.
+- **A convective field's chord ends at its clouds' own top** where the ray
+  enters the slab (`cloudChordToTop`: the column's depth, the slab's top where an
+  anvil's shelf spreads): the maps' and the ground's steps are spread over a
+  fair-weather cumulus, not over the 10 km slab it fills a tenth of. Before,
+  with genera the chord was so long that its steps were longer than the clouds
+  and the ground took the shadow's mean (`cloudShadowIn`'s far rule): no cloud
+  shadows at all, for either renderer.
 - **Two maps**: near, 60 m texels (1024: 61 km wide), and far, 500 m
   (512: 256 km), each faded into the next over the last eighth of its
   half-width; beyond them (and for ground inside the slab, whose ray does

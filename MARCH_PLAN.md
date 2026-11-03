@@ -144,6 +144,17 @@ sphere; near 60 m, far 500 m texels).
   towers (8.8 vs 21.4 ms, 7.6 vs 16.6), dearer over a distant sky (3.8 vs 1.4).
 - Tests: `family_segments` (up to four sorted stretches), the march with genera in `test_clouds_genera.py` (two
   families, layer budget, both shadows, renderer change).
+- After the user's check: horizontal bands across a cumulonimbus were the weather read once a kilometre (now every
+  sample with genera, same cost); the ground lost its cloud shadow after a change of renderer because the maps' bake
+  cards kept the removed volume's inputs (`CloudShadowMaps` rebinds when the caster changes; test in
+  `test_cloud_shadows.py`); the hand-built demo now binds the maps to the march (`bind_maps`).
+- After the second check: with genera the ground took the *mean* shadow everywhere (the convective slab's 10 km
+  chord made the shadow's steps longer than the clouds: `cloudShadowIn`'s far rule), so no cloud shadows for either
+  renderer: a convective field's chord is now cut at its clouds' own top (`cloudChordToTop`, `noise._chord_to_top`),
+  in the bake, the receivers and the ground. The march's light from the maps made towers black (the whole 10 km chord
+  counted; levels too coarse for anvils): it counts out to the sun march's reach only, and blends into the sun march at
+  the far map's edge; `--cloud-debug 64` = the sun march alone. The tail is a difference of the levels' accumulated
+  depth, linear (a transmittance line blew up near a level).
 - Not done: the stratus in the sea's reflection (the deck is the convective family's), a cheaper far march (Phase 4).
 
 - A field object both renderers share: move the renderer-independent state out of `CloudVolume` (`sphere.py`):

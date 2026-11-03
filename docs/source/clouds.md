@@ -206,6 +206,10 @@ each: `march._configure`); a stratus cloud takes the convective clouds' shadow
 from their maps (`cloudSunDepthOther`). Both families cast their shadows on the
 ground, sea and models (`PlanetClouds.shadow_caster(family)`, the maps' pairs
 as for the billboards). The reflection's deck is the convective family's alone.
+The convective weather is read at every sample (`WEATHER_STRETCH_GENERA`): a
+tower's depth, which sets its top, changes over tens of metres, and read once
+a kilometre it showed as horizontal bands across every tower. The fair-weather
+march keeps the kilometre.
 
 **Two families, one sort.** Billboards mix cloud types by superposition: each
 samples its own type's field, and the blender adds them. So the genera are two
