@@ -370,6 +370,32 @@ float cloudDensity(Field f, vec3 p) {
 // once (weatherAt at start) for every step, and the cell octave (eight
 // kilometres, cellShift at start) too. noise._march_density on the CPU
 // (sun_optical_depth_on_sphere, cloud_shadow_on_sphere).
+// The density (a sum of the column's and the shelf's, before the step's
+// length) at one sample of the march through the calibrated two octaves:
+// shift and mean as slabOpticalDepthCell's.
+float slabSampleDensity(Field f, vec3 position, vec3 weather, float shift, float mean) {
+    float h = slabHeight(f, heightOf(position));
+    if (h <= 0.0 || h >= 1.0) {
+        return 0.0;
+    }
+    vec3 bias = fieldBias(f, h, weather);
+    if (max(bias.x, bias.z) <= -NO_CLOUD_LIFT) {
+        return 0.0;
+    }
+    vec3 coord = position * f.noiseScale + f.noiseOrigin;
+    float first = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x;
+    // The same exact early-out as cloudDensity's (shadowGain > 0).
+    float most = first + f.octaveWeights.y;
+    if (max(most * f.shadowGain + shift + bias.x, most + mean + bias.z)
+            <= f.threshLo) {
+        return 0.0;
+    }
+    float pair = first + sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET)
+                       * f.octaveWeights.y;
+    float column = smoothstep(f.threshLo, f.threshHi, pair * f.shadowGain + shift + bias.x);
+    return max(column * bias.y, shelfDensity(f, h, pair + mean, bias.z));
+}
+
 float slabOpticalDepthCell(Field f, vec3 start, vec3 dir, float stepLength,
                            int steps, vec3 weather, float cell) {
     vec3 increment = dir * stepLength;
@@ -380,28 +406,36 @@ float slabOpticalDepthCell(Field f, vec3 start, vec3 dir, float stepLength,
     float shift = f.shadowBias + cell;
     float mean = f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w) + cell;
     for (int i = 0; i < steps; i++, position += increment) {
-        float h = slabHeight(f, heightOf(position));
-        if (h <= 0.0 || h >= 1.0) {
-            continue;
-        }
-        vec3 bias = fieldBias(f, h, weather);
-        if (max(bias.x, bias.z) <= -NO_CLOUD_LIFT) {
-            continue;
-        }
-        vec3 coord = position * f.noiseScale + f.noiseOrigin;
-        float first = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x;
-        // The same exact early-out as cloudDensity's (shadowGain > 0).
-        float most = first + f.octaveWeights.y;
-        if (max(most * f.shadowGain + shift + bias.x, most + mean + bias.z)
-                <= f.threshLo) {
-            continue;
-        }
-        float pair = first + sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET)
-                           * f.octaveWeights.y;
-        float column = smoothstep(f.threshLo, f.threshHi, pair * f.shadowGain + shift + bias.x);
-        density += max(column * bias.y, shelfDensity(f, h, pair + mean, bias.z));
+        density += slabSampleDensity(f, position, weather, shift, mean);
     }
     return density * stepLength * f.fieldExtinction * f.shadowStrength;
+}
+
+// slabOpticalDepthCell, and the depth accumulated a quarter, a half and
+// three quarters of the way along the chord (the steps' densities spread
+// evenly over their lengths, so a boundary inside a step takes its share):
+// what the cloud shadow map stores per texel (CLOUD_MAP_LEVELS).
+float slabOpticalDepthLevels(Field f, vec3 start, vec3 dir, float stepLength,
+                             int steps, vec3 weather, float cell, out vec3 levels) {
+    vec3 increment = dir * stepLength;
+    vec3 position = start + increment * 0.5;
+    float shift = f.shadowBias + cell;
+    float mean = f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w) + cell;
+    float scale = stepLength * f.fieldExtinction * f.shadowStrength;
+    float total = 0.0;
+    levels = vec3(0.0);
+    for (int i = 0; i < steps; i++, position += increment) {
+        float density = slabSampleDensity(f, position, weather, shift, mean) * scale;
+        for (int k = 0; k < 3; k++) {
+            // The boundary k + 1 quarters along, in steps.
+            float boundary = 0.25 * float(k + 1) * float(steps);
+            if (float(i) < boundary && boundary <= float(i + 1)) {
+                levels[k] = total + density * (boundary - float(i));
+            }
+        }
+        total += density;
+    }
+    return total;
 }
 
 float slabOpticalDepthAt(Field f, vec3 start, vec3 dir, float stepLength, int steps,
@@ -466,18 +500,21 @@ int cloudShadowSteps(Field f, float chord, int maxSteps) {
 // enters the slab. 0 above the slab, or where the weather leaves no cloud.
 // What a cloud's shadow on the ground is: exp2(-depth).
 // noise.cloud_shadow_on_sphere on the CPU.
-float cloudShadowDepthIn(Field f, samplerCube weatherCube, vec3 p, vec3 dir,
-                         int maxSteps) {
-    vec3 start;
-    float chord;
+// The chord and the weather of a cloud shadow's march from p: false above the
+// slab, or where the weather leaves no cloud (exact: where the two octaves at
+// their most stay under the threshold at its lowest, an anvil's lowering it,
+// its shelf's rest at their mean, the march would find nothing: clear
+// weather, most of a fair sky).
+bool cloudShadowMarch(Field f, samplerCube weatherCube, vec3 p, vec3 dir, int maxSteps,
+                      out vec3 start, out float chord, out vec3 weather,
+                      out float cell) {
+    weather = vec3(0.0);
+    cell = 0.0;
     if (maxSteps <= 0 || !cloudShadowChord(f, p, dir, start, chord)) {
-        return 0.0;
+        return false;
     }
-    vec3 weather = texture(weatherCube, start).gba;
-    float cell = cellShift(f, start * f.noiseScale + f.noiseOrigin, weather.y);
-    // Exact: where the two octaves at their most stay under the threshold
-    // at its lowest (an anvil's lowers it; its shelf's rest at their mean),
-    // the march would find nothing (clear weather: most of a fair sky).
+    weather = texture(weatherCube, start).gba;
+    cell = cellShift(f, start * f.noiseScale + f.noiseOrigin, weather.y);
     float most = f.octaveWeights.x + f.octaveWeights.y;
     float column = most * f.shadowGain + f.shadowBias + cell + weather.x
                  + f.anvil * smoothstep(0.6, 1.0, weather.y);
@@ -485,12 +522,37 @@ float cloudShadowDepthIn(Field f, samplerCube weatherCube, vec3 p, vec3 dir,
         ? most + f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w) + cell
               + f.shelfShift + f.anvil
         : -NO_CLOUD_LIFT;
-    if (max(column, shelf) <= f.threshLo) {
+    return max(column, shelf) > f.threshLo;
+}
+
+float cloudShadowDepthIn(Field f, samplerCube weatherCube, vec3 p, vec3 dir,
+                         int maxSteps) {
+    vec3 start, weather;
+    float chord, cell;
+    if (!cloudShadowMarch(f, weatherCube, p, dir, maxSteps, start, chord, weather, cell)) {
         return 0.0;
     }
     int steps = cloudShadowSteps(f, chord, maxSteps);
     return slabOpticalDepthCell(f, start, dir, chord / float(steps), steps, weather,
                                 cell);
+}
+
+// cloudShadowDepthIn with the depth a quarter, a half and three quarters of the
+// way along the chord too: (total, quarter, half, three quarters), what a
+// cloud shadow map's texel holds (cloud_shadow_map.frag). p on the slab's
+// base reads the chord of a ray entering there.
+vec4 cloudShadowLevelsIn(Field f, samplerCube weatherCube, vec3 p, vec3 dir,
+                         int maxSteps) {
+    vec3 start, weather;
+    float chord, cell;
+    if (!cloudShadowMarch(f, weatherCube, p, dir, maxSteps, start, chord, weather, cell)) {
+        return vec4(0.0);
+    }
+    int steps = cloudShadowSteps(f, chord, maxSteps);
+    vec3 levels;
+    float total = slabOpticalDepthLevels(f, start, dir, chord / float(steps), steps,
+                                         weather, cell, levels);
+    return vec4(total, levels);
 }
 
 float cloudShadowDepth(Field f, vec3 p, vec3 dir, int maxSteps) {
@@ -528,9 +590,9 @@ float cloudFarDepth(Field f, vec3 p, vec3 dir, float reach) {
 }
 
 // One cloud shadow map at a point of the base's sphere (unit dir): its
-// depth, and how much of it to keep (1 inside, 0 outside, faded over the
+// texel (the depth toward the sun, then its levels: cloudShadowLevelsIn), and how much of it to keep (1 inside, 0 outside, faded over the
 // last eighth of its half-width).
-float cloudMapDepth(sampler2D map, vec4 chart[4], vec3 dir, out float keep) {
+vec4 cloudMapTexel(sampler2D map, vec4 chart[4], vec3 dir, out float keep) {
     vec2 across = vec2(dot(dir, chart[1].xyz), dot(dir, chart[2].xyz));
     float sine = length(across);
     float angle = atan(sine, dot(dir, chart[0].xyz));
@@ -538,7 +600,26 @@ float cloudMapDepth(sampler2D map, vec4 chart[4], vec3 dir, out float keep) {
     float size = chart[2].w;
     float reach = 0.5 * (size - 1.0) * chart[1].w;
     keep = 1.0 - smoothstep(0.75 * reach, 0.875 * reach, max(abs(xy.x), abs(xy.y)));
-    return texture(map, (xy / chart[1].w + 0.5 * size) / size).r;
+    return texture(map, (xy / chart[1].w + 0.5 * size) / size);
+}
+
+// The texel of a field's maps at a point of the base's sphere (unit dir), the
+// near map's where it holds it, the far one's beyond, blended between; false
+// where neither does.
+bool cloudMapsTexelIn(int on, sampler2D nearMap, vec4 nearChart[4], sampler2D farMap,
+                      vec4 farChart[4], vec3 dir, out vec4 texel) {
+    if (on == 0) {
+        return false;
+    }
+    float keepFar;
+    vec4 far = cloudMapTexel(farMap, farChart, dir, keepFar);
+    float keepNear;
+    vec4 near = cloudMapTexel(nearMap, nearChart, dir, keepNear);
+    if (keepNear <= 0.0 && keepFar <= 0.0) {
+        return false;
+    }
+    texel = keepNear >= 1.0 ? near : mix(far, near, keepNear);
+    return keepNear > 0.0 || keepFar >= 1.0;
 }
 
 // cloudShadowDepth from a field's maps where they hold it (the ray enters
@@ -549,17 +630,83 @@ bool cloudMapsDepthIn(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
     if (on == 0 || length(p) >= planetRadius + f.slabBase) {
         return false;
     }
-    vec3 dir = normalize(start);
-    float keepFar;
-    float far = cloudMapDepth(farMap, farChart, dir, keepFar);
-    float keepNear;
-    float near = cloudMapDepth(nearMap, nearChart, dir, keepNear);
-    if (keepNear <= 0.0 && keepFar <= 0.0) {
+    vec4 texel;
+    bool held = cloudMapsTexelIn(on, nearMap, nearChart, farMap, farChart,
+                                 normalize(start), texel);
+    depth = texel.r;
+    return held;
+}
+
+// How many steps of the sun march a cloud keeps when it takes the clouds
+// beyond them from the shadow map (cloudMapSunDepth).
+const int MAP_LOCAL_STEPS = 2;
+
+// The optical depth toward the sun (unit dir) from a point p in the slab,
+// from the field's shadow maps: the sun march's first localSteps steps through
+// the field itself (the nearby clouds' shape), then the rest of the chord from
+// the map's levels at the point where the sun's line left the slab's base: its
+// total less the depth up to where the local march ended, linearly between
+// the levels (cloudShadowLevelsIn). False where the maps do not hold that
+// line (beyond them, or a sun too low for the line to have left the base):
+// the sun march then. noise.sun_depth_from_map on the CPU.
+bool cloudMapSunDepth(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
+                      sampler2D farMap, vec4 farChart[4], vec3 p, vec3 dir,
+                      vec3 weather, int localSteps, out float depth) {
+    float inner = planetRadius + f.slabBase;
+    float outer = inner + f.slabThickness;
+    float r = length(p);
+    float b = dot(p, dir);
+    // Back along the line to where it left the base's sphere: a negative
+    // distance for a point in the slab under a sun above the horizon.
+    float root = (inner - r) * (inner + r) + b * b;
+    if (on == 0 || root <= 0.0 || r <= inner || r >= outer) {
         return false;
     }
-    depth = keepNear >= 1.0 ? near : mix(far, near, keepNear);
-    return keepNear > 0.0 || keepFar >= 1.0;
+    float back = -b + sqrt(root);
+    if (back >= 0.0) {
+        return false;
+    }
+    vec3 entry = p + dir * back;
+    vec4 levels;
+    if (!cloudMapsTexelIn(on, nearMap, nearChart, farMap, farChart, normalize(entry),
+                          levels)) {
+        return false;
+    }
+    float rEntry = length(entry);
+    float bEntry = dot(entry, dir);
+    float chord = -bEntry + sqrt(max((outer - rEntry) * (outer + rEntry) + bEntry * bEntry,
+                                     0.0));
+    float reach = float(localSteps) * f.sunStepLength;
+    float x = 4.0 * clamp((reach - back) / max(chord, 1.0), 0.0, 1.0);
+    int k = int(min(floor(x), 3.0));
+    float t = x - float(k);
+    float lower = k == 0 ? 0.0 : (k == 1 ? levels.g : (k == 2 ? levels.b : levels.a));
+    float upper = k == 0 ? levels.g : (k == 1 ? levels.b : (k == 2 ? levels.a : levels.r));
+    depth = slabOpticalDepthAt(f, p, dir, f.sunStepLength, localSteps, weather)
+          + levels.r - mix(lower, upper, t);
+    return true;
 }
+
+// The optical depth toward the sun from a cloud at p: from the shadow maps
+// where the shader takes its light from them (CLOUD_MAP_LIGHTING: the
+// raymarch's, whose nodes the maps are bound to) and they hold it, else the
+// sun march's own.
+#ifdef CLOUD_MAP_LIGHTING
+float cloudSunDepth(Field f, vec3 p, vec3 weather) {
+    float depth;
+    if (f.sunSteps > 0
+        && cloudMapSunDepth(f, cloudShadowMapOn, cloudShadowNear, cloudNearChart,
+                            cloudShadowFar, cloudFarChart, p, sunDir, weather,
+                            min(f.sunSteps, MAP_LOCAL_STEPS), depth)) {
+        return depth;
+    }
+    return sunOpticalDepthAt(f, p, weather);
+}
+#else
+float cloudSunDepth(Field f, vec3 p, vec3 weather) {
+    return sunOpticalDepthAt(f, p, weather);
+}
+#endif
 
 bool cloudMapsDepth(Field f, vec3 p, vec3 start, out float depth) {
     return cloudMapsDepthIn(f, cloudShadowMapOn, cloudShadowNear, cloudNearChart,

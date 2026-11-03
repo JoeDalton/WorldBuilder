@@ -37,7 +37,6 @@ from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
 from world_builder.clouds.march import CloudMarch
 from world_builder.clouds.noise import DensityField
-from world_builder.clouds.shadow_defaults import cloud_shadow_defaults
 from world_builder.clouds.sphere import CLOUD_BIN, CLOUD_TOP_MARGIN, CloudVolume
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS
@@ -238,6 +237,7 @@ class PlanetClouds:
         # What every layer's shader also takes (bind_inputs), again for a
         # new volume.
         self._binders: list[Callable[[NodePath], None]] = []
+        self._map_binders: list[Callable[[NodePath], None]] = []
         # The nodes the clouds shade (bind_shadow_inputs), again for a new
         # volume.
         self._shadow_nodes: list[NodePath] = []
@@ -326,6 +326,9 @@ class PlanetClouds:
             self.volume.set_debug(self._debug)
             self._bind_layer(self.volume)
             self._shade(self._shadow_nodes)
+            if isinstance(self.volume, CloudMarch):
+                for bind in self._map_binders:
+                    self.volume.bind_maps(bind)
             if self._half_res is not None and isinstance(self.volume, CloudVolume):
                 self._half_res.add(self.volume.root)
             if self.sheet is not None:
@@ -347,6 +350,18 @@ class PlanetClouds:
         for layer in self._layers():
             self._bind_layer(layer, (bind,))
 
+    def bind_maps(self, bind: Callable[[NodePath], None]) -> None:
+        """Have a raymarched volume read a body's cloud shadow maps for its own
+        light (:meth:`march.CloudMarch.bind_maps`), kept across a change of
+        renderer; the billboards' light does not use them.
+
+        :param bind: sets the maps' inputs on a node
+            (:meth:`shadow_map.CloudShadowMaps.bind`)
+        """
+        self._map_binders.append(bind)
+        if isinstance(self.volume, CloudMarch):
+            self.volume.bind_maps(bind)
+
     def _bind_layer(self, layer, binders=None) -> None:
         if isinstance(layer, CloudMarch):
             return  # its passes' nodes: not yet
@@ -359,18 +374,16 @@ class PlanetClouds:
         one, then the stratus), else one."""
         return 2 if self.stratus is not None else 1
 
-    def shadow_caster(self, family: int = 0) -> CloudVolume | None:
+    def shadow_caster(self, family: int = 0) -> CloudVolume | CloudMarch | None:
         """The volume whose shadow is *family*'s (0: :attr:`volume`, 1: the
-        stratus); None for a raymarch, which casts none yet."""
-        caster = self.volume if family == 0 else self.stratus
-        return caster if isinstance(caster, CloudVolume) else None
+        stratus)."""
+        return self.volume if family == 0 else self.stratus
 
     def bind_shadow_inputs(self, node: NodePath, family: int = 0) -> None:
         """Let the shaders on a node (the planet's terrain) darken the sun
         under the clouds: the volume's shadow, and with genera the stratus's
         too (:meth:`sphere.CloudVolume.bind_shadow_inputs`,
-        ``uCloudShadowOther``), kept across a change of renderer. A
-        raymarched volume casts none yet.
+        ``uCloudShadowOther``), kept across a change of renderer.
 
         :param node: the node whose shaders include cloud_field.glsl's
             ``planetCloudShadow``
@@ -384,12 +397,8 @@ class PlanetClouds:
         self._shade([node])
 
     def _shade(self, nodes: list[NodePath]) -> None:
-        if isinstance(self.volume, CloudVolume):
-            for node in nodes:
-                self.volume.bind_shadow_inputs(node)
-        else:
-            for node in nodes:
-                cloud_shadow_defaults(node)
+        for node in nodes:
+            self.volume.bind_shadow_inputs(node)
 
     @property
     def top_radius(self) -> float:
@@ -410,19 +419,13 @@ class PlanetClouds:
     @property
     def shadow_layer(self) -> int:
         """The volume's layer its shadow is marched in
-        (:attr:`sphere.CloudVolume.shadow_layer`); -1 = none (not ready, or
-        a raymarch)."""
-        if isinstance(self.volume, CloudVolume):
-            return self.volume.shadow_layer
-        return -1
+        (:attr:`sphere.CloudVolume.shadow_layer`); -1 = none (not ready)."""
+        return self.volume.shadow_layer
 
     @property
-    def shadow_field(self) -> DensityField | None:
-        """The field the volume's shadow is marched in; None with a
-        raymarch."""
-        if isinstance(self.volume, CloudVolume):
-            return self.volume.shadow_field
-        return None
+    def shadow_field(self) -> DensityField:
+        """The field the volume's shadow is marched in."""
+        return self.volume.shadow_field
 
     def sun_visibility(
         self, points_world: ArrayLike, sun_direction: ArrayLike, max_steps: int

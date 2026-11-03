@@ -322,6 +322,43 @@ def test_the_march_packs_a_layer_per_shell_and_the_far_one(showbase, executor):
         clouds.remove()
 
 
+def test_the_march_casts_a_shadow_and_reads_the_maps_for_its_own_light(
+    showbase, executor
+):
+    """A raymarched volume is a shadow caster as the billboards' is (its far
+    layer's field, the layer bound once the set-up is done) and takes the
+    shadow maps' inputs on its passes' nodes, kept across a change of
+    renderer; the shader's maps path is compiled in for the march alone."""
+    clouds = _clouds(showbase, executor, "march")
+    try:
+        march = clouds.volume
+        assert clouds.shadow_caster(0) is march
+        assert march.shadow_field.slab == march.field.slab
+        node = showbase.render.attach_new_node("receiver")
+        clouds.bind_shadow_inputs(node)
+        clouds.update((0.0, 0.0, 2000.0 + 600e3))
+        for _ in range(200):  # the set-up, in the pool
+            if clouds.volume.weather is not None:
+                break
+            clouds.update((0.0, 0.0, 2000.0 + 600e3))
+        assert march.shadow_layer == march._layers_used - 1
+        assert clouds.shadow_layer == march.shadow_layer
+        bound = []
+        clouds.bind_maps(lambda n: bound.append(n))
+        assert bound == march._nodes
+        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
+        assert clouds.shadow_caster(0) is clouds.volume
+        assert not isinstance(clouds.volume, CloudMarch)
+    finally:
+        clouds.remove()
+    shaders = Path(__file__).parents[1] / "src/world_builder/clouds/shaders"
+    assert "#define CLOUD_MAP_LIGHTING" in (shaders / "cloud_march.frag").read_text()
+    for name in ("cloud.frag", "cloud_deck.frag"):
+        path = shaders / name
+        if path.exists():
+            assert "CLOUD_MAP_LIGHTING" not in path.read_text()
+
+
 # ── Gathering over the frames ────────────────────────────────────────────────
 
 

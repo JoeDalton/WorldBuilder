@@ -119,7 +119,8 @@ only, so it lines up with the clouds drawn, and it moves with the sun.
   `clouds.shadow_defaults.cloud_shadow_defaults` (the terrain binds it) is
   "no clouds overhead". `PlanetClouds.bind_shadow_inputs` binds its volume's
   (and binds a new volume again on a change of renderer; a raymarched one
-  casts none yet). `World` binds each body's clouds to its terrain; the
+  ([`CloudMarch`](clouds.md#the-raymarch)) casts a shadow too, through its
+  far layer's field). `World` binds each body's clouds to its terrain; the
   hand-built demo does the same.
 - **The weather** is fetched where the chord enters the slab, as the
   clouds' own march fetches it where it starts: the coverage's shift, and
@@ -328,6 +329,22 @@ texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
   and `cloud_shadow_map.frag` runs `cloudShadowDepth` from there. A pixel
   of ground below the slab finds its ray's entry point (analytic,
   `cloudShadowChord`) and fetches it (`cloudMapsDepth`).
+- **The levels.** A texel holds the total (r) and the depth a quarter, a half
+  and three quarters of the way along the chord (g, b, a:
+  `cloudShadowLevelsIn`); the ground reads r. They are what lets the
+  raymarched clouds take their own light from the map (below).
+- **Lighting the raymarch.** The raymarch's pass nodes are bound to the
+  maps (`PlanetClouds.bind_maps`, `World` does it), and a sample's sun march
+  (`cloudSunDepth`, `CLOUD_MAP_LIGHTING` in `cloud_march.frag` only) is
+  its first two steps through the field itself plus, from the map at the
+  point where the sun's line left the base, the chord's total less the depth
+  up to where those two steps ended (`cloudMapSunDepth`, linearly between the
+  levels; `noise.sun_depth_from_map` on the CPU). It counts the whole chord,
+  where the sun march stops after its few steps. It falls back to the sun
+  march beyond the maps and for a sun too low for the line to have left the
+  base. It costs what the sun march did (a cumulus's has three steps) and
+  changes the image by under half a level (8-bit) on average; it pays for
+  taller marches.
 - **Two maps**: near, 60 m texels (1024: 61 km wide), and far, 500 m
   (512: 256 km), each faded into the next over the last eighth of its
   half-width; beyond them (and for ground inside the slab, whose ray does

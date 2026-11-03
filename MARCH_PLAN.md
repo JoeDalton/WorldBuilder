@@ -91,6 +91,26 @@ frames and in `cloud_bench.py --interactive`, at ¼, at no frame-time increase. 
 
 ## Phase 2: one sun-transmittance map (lighting, shadows, both families)
 
+**Done, with these changes to the plan** (shadows.md "The cloud shadow maps"; uncommitted):
+- **4 levels in one RGBA16F target, not 8 in two**: a texel is (total, ¼, ½, ¾ of the chord). The ground still
+  reads r. `LEVELS` could go to 8 with a second target (Panda MRT) if a thick convective slab needs it: only
+  cumulus is marched until Phase 3.
+- **The march casts a shadow** (`CloudMarch.shadow_layer/shadow_field/bind_shadow_inputs/sun_visibility`;
+  `PlanetClouds.shadow_caster` returns it): the maps and the terrain shadow work for it. That part of Phase 3's
+  field-object extraction was needed here; the rest (genera, shared object) stays in Phase 3.
+- **The march reads the maps** (`PlanetClouds.bind_maps`, `CLOUD_MAP_LIGHTING` in `cloud_march.frag`): 2 local steps +
+  the chord's total less the level at the local reach, whole chord (the old sun march stopped after its 3 steps).
+- Measured on the RTX 3070, 2560×1440, `terrain_shots` (ground_up / in_clouds / clouds_noon), ms: the march's light
+  from the maps 9.08 / 11.45 / 8.49 vs the sun march 8.99 / 11.40 / 8.57 (equal: a cumulus's sun march has 3 steps);
+  the image differs by 0.4 of 255 on average. The shadows the march now casts cost 0.3-0.4 ms (the terrain's
+  lookup): 9.15 / 11.84 / 8.61 vs 8.80 / 11.43 / 8.17 before. A swinging sun costs +1.2-1.3 ms a frame in all
+  (the maps' re-bake and the other shadow maps; not split).
+- Not done: the stratus adding the convective map's total (needs genera in the march, Phase 3); billboards'
+  `cloudFarDepth` from the map (optional).
+- Tests: the GPU levels against the CPU twin (`test_cloud_shadows.py`), map + local march against a fine march of the
+  whole chord at 50° and 25° (median shade error 0, p90 0.03-0.05), the march as a caster
+  (`test_clouds_march.py`).
+
 Extend `CloudShadowMaps` / `cloud_shadow_map.frag`, keeping the charts (azimuthal equidistant on each family's base
 sphere; near 60 m, far 500 m texels).
 

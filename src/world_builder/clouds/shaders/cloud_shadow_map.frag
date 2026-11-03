@@ -2,7 +2,10 @@
 // The cloud shadow map's bake (clouds.shadow_map): per texel, the clouds'
 // optical depth toward the sun along the ray that enters the slab's base
 // there (cloud_field.glsl's cloudShadowDepth from that point), the march
-// once per texel instead of once per pixel of ground. Each texel is a node
+// once per texel instead of once per pixel of ground. A texel holds the
+// total (r) and the depth a quarter, a half and three quarters of the way
+// along the chord (g, b, a: cloudShadowLevelsIn), for the clouds' own
+// lighting (cloudMapSunDepth); the ground reads r. Each texel is a node
 // of an azimuthal equidistant chart on the base's sphere (uMapChart: its
 // centre's up and the base's radius, east and the spacing, north and the
 // nodes per side).
@@ -25,5 +28,5 @@ void main() {
     Field f = getField(uCloudShadowLayer);
     // On the base's sphere: the march starts there (enter 0).
     vec3 start = dir * (planetRadius + f.slabBase);
-    fragColor = vec4(cloudShadowDepth(f, start, sunDir, uMapSteps), 0.0, 0.0, 1.0);
+    fragColor = cloudShadowLevelsIn(f, weatherMap, start, sunDir, uMapSteps);
 }

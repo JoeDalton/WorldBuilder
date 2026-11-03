@@ -52,7 +52,7 @@ vec3 cloudRadianceAt(Field f, vec3 p, float density, vec3 V, float shading,
                      float farCoverage, vec3 sunlight, vec3 skylight,
                      vec3 twilight, vec3 weather) {
     if ((uCloudDebug & 1) != 0) shading = 0.0;
-    float sunVisibility = shading > 0.0 ? exp2(-sunOpticalDepthAt(f, p, weather)) : 1.0;
+    float sunVisibility = shading > 0.0 ? exp2(-cloudSunDepth(f, p, weather)) : 1.0;
     // What the sun term sees: the shadowing and the powder.
     float sunShadowing = sunVisibility * mix(1.0, powder(f, density), f.powderStrength);
     if (shading < 1.0) {

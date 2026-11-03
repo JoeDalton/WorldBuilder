@@ -12,6 +12,8 @@
 // (transmittance-weighted) distance in kilometres (a half float keeps it to
 // a part in two thousand), 0 where there is none. Its geometry
 // (march.slab_segments, march.step_scale) has a NumPy mirror the tests run.
+// The clouds' own light from the shadow maps (cloud_field.glsl's cloudSunDepth).
+#define CLOUD_MAP_LIGHTING
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "cloud_field.glsl"

@@ -104,9 +104,15 @@ from world_builder.clouds.noise import (
     build_noise_texture,
     pack_layer_params,
 )
+from world_builder.clouds.shadow_defaults import (
+    _no_deck_light,
+    _no_weather,
+    cloud_shadow_defaults,
+)
 from world_builder.clouds.sphere import (
     CLOUD_BIN,
     DECK_MAX_OPTICAL_DEPTH,
+    CloudVolume,
     ShellSpec,
     _deck_light,
     _ensure_bin,
@@ -756,6 +762,12 @@ class CloudMarch:
         self._weather_job = executor.submit_once(_weather, weather, self._table)
         self.weather: np.ndarray | None = None
         self._settings = settings
+        self._shadow_layer = PTA_int.empty_array(1)
+        self._shadow_layer[0] = -1
+        self._shadow_nodes: list[NodePath] = []
+        self._map_binders: list[Any] = []
+        self._shade_key: tuple | None = None
+        self._shades: dict[tuple, float] = {}
         self._layer_far = PTA_float.empty_array(MAX_LAYERS)
         self._layer_params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
         params, self._deck_job = self._configure(settings)
@@ -845,12 +857,27 @@ class CloudMarch:
         by :meth:`_set_inputs`)."""
         bind_defaults(node)
         bind_shadow_defaults(node)
+        cloud_shadow_defaults(node)  # the maps' inputs, off, until bind_maps
         if self._atmospheres is not None:
             self._atmospheres.bind(node)
         node.set_shader_inputs(**self._inputs)
         if self.weather is not None:
             node.set_shader_inputs(**self._textures)
+        for bind in self._map_binders:
+            bind(node)
         self._nodes.append(node)
+
+    def bind_maps(self, bind: Any) -> None:
+        """Have the march's passes read a body's cloud shadow maps for their
+        own light (cloud_field.glsl's ``cloudSunDepth``): *bind* is called
+        with each pass's node now and with the next ones'
+        (:meth:`shadow_map.CloudShadowMaps.bind`).
+
+        :param bind: sets the maps' inputs on a node
+        """
+        self._map_binders.append(bind)
+        for node in self._nodes:
+            bind(node)
 
     def _set_inputs(self, **inputs: Any) -> None:
         self._inputs.update(inputs)
@@ -931,7 +958,11 @@ class CloudMarch:
         self._write_params(params)
         self._set_inputs(uDeckLayer=self._layers_used - 1)
         if old.shell_octaves[-1:] != settings.shell_octaves[-1:]:
-            self._set_inputs(deckLight=build_deck_light_texture(deck_job.result()))
+            light = build_deck_light_texture(deck_job.result())
+            self._set_inputs(deckLight=light)
+            if self.weather is not None:
+                self._textures["deckLight"] = light
+        self._update_shadow_nodes()
         if old.march_resolution != settings.march_resolution:
             self.set_pixel_angle(self._pixel_angle)
             if self._layers:
@@ -987,6 +1018,9 @@ class CloudMarch:
         self._layers_used = shells + 1
         self._far_values = far
         deck = layer.field_of(field)
+        # The deck's field and optics: the one its shadow is marched in.
+        self._deck_field = deck
+        self._deck_optics = layer_optics
         deck_job = self.executor.submit_once(
             _deck_light,
             seed,
@@ -1005,6 +1039,53 @@ class CloudMarch:
             self._layer_far[i] = float(value)
         if hasattr(self, "_layer_count"):
             self._layer_count[0] = self._layers_used
+
+    # ── the clouds' shadow (as sphere.CloudVolume's) ──────────────────────
+
+    @property
+    def shadow_layer(self) -> int:
+        """The layer of ``layerParams`` the clouds' shadow is marched in (the
+        far one, the deck's), -1 until the set-up is done or after
+        :meth:`remove`."""
+        return int(self._shadow_layer[0])
+
+    @property
+    def shadow_field(self) -> DensityField:
+        """The field the clouds' shadow is marched in (the deck's)."""
+        return self._deck_field
+
+    def bind_shadow_inputs(self, node: NodePath) -> None:
+        """As :meth:`sphere.CloudVolume.bind_shadow_inputs`: let the shaders
+        on a node (the planet's terrain, the maps' bake) darken the sun under
+        these clouds, through the deck's layer."""
+        node.set_shader_inputs(
+            cloudNoise=self._inputs["cloudNoise"],
+            layerParams=self._layer_params,
+            planetRadius=self.radius,
+            sunDir=self._sun,
+            noiseSize=float(NOISE_SIZE),
+            noiseOffset=Vec3(0, 0, 0),
+            deckLightCosMin=DECK_LIGHT_COS_MIN,
+            uCloudDebug=0,
+            uCloudShadowLayer=self._shadow_layer,
+            uCloudShadowOther=-1,
+            otherWeather=_no_weather(),
+            otherDeckLight=_no_deck_light(),
+        )
+        self._shadow_nodes.append(node)
+        self._update_shadow_nodes()
+
+    def _update_shadow_nodes(self) -> None:
+        """The shaded nodes' weather and layer: none until the set-up."""
+        ready = self.weather is not None
+        self._shadow_layer[0] = self._layers_used - 1 if ready else -1
+        self._shadow_nodes = [n for n in self._shadow_nodes if not n.is_empty()]
+        if ready:
+            for node in self._shadow_nodes:
+                node.set_shader_inputs(**self._textures)
+
+    #: The share of the sun the clouds leave a point (the CPU's lighting).
+    sun_visibility = CloudVolume.sun_visibility
 
     # ── public ────────────────────────────────────────────────────────────
 
@@ -1098,7 +1179,10 @@ class CloudMarch:
         return max(base - altitude, altitude - base - thickness, 0.0)
 
     def remove(self) -> None:
-        """Take the clouds off the scene."""
+        """Take the clouds off the scene (and their shadow off the nodes it
+        shaded)."""
+        self._shadow_layer[0] = -1
+        self._shadow_nodes = []
         self.detach()
         self.root.remove_node()
 
@@ -1116,6 +1200,7 @@ class CloudMarch:
             node.set_shader_inputs(**self._textures)
         self._inputs.update(self._textures)
         self.stats["pending"] = 0
+        self._update_shadow_nodes()
         self.root.unstash()
         for layer in self._layers:
             layer.set_active(self._visible)

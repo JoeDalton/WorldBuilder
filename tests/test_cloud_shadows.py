@@ -549,7 +549,8 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
         texture = maps.near.texture
         dtype = np.float32 if texture.get_component_width() == 4 else np.float16
         ram = np.frombuffer(texture.get_ram_image_as("RGBA"), dtype)
-        got = ram.reshape(size, size, 4)[..., 0].astype(np.float64)
+        texels = ram.reshape(size, size, 4).astype(np.float64)
+        got = texels[..., 0]
 
         nodes = (np.arange(size) - 0.5 * size + 0.5) * NEAR_SPACING
         x, y = np.meshgrid(nodes, nodes)
@@ -570,6 +571,28 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
             shift_at=lambda p: sample_cube(clouds.weather[..., 1], p),
         ).reshape(size, size)
         assert expected.max() > 1.0  # some cloud in it
+        # The levels (g, b, a): the depth a quarter, a half and three
+        # quarters of the way along the chord, as the CPU twin accumulates it.
+        expected_levels = cloud_shadow_on_sphere(
+            _noise(7),
+            clouds._deck_field,
+            clouds._deck_optics,
+            dirs.reshape(-1, 3) * base,
+            sun / np.linalg.norm(sun),
+            R,
+            steps,
+            shift_at=lambda p: sample_cube(clouds.weather[..., 1], p),
+            levels=True,
+        ).reshape(size, size, 4)
+        np.testing.assert_allclose(expected_levels[..., 0], expected, atol=1e-9)
+        # A level is a share of the total, and never past it
+        assert np.all(np.diff(expected_levels, axis=-1)[..., 1:] >= -1e-9)
+        for k in (1, 2, 3):
+            level_error = np.abs(
+                np.exp2(-texels[..., k]) - np.exp2(-expected_levels[..., k])
+            )
+            assert np.median(level_error) < 2e-3
+            assert np.percentile(level_error, 99) < 0.05
         shade_error = np.abs(np.exp2(-got) - np.exp2(-expected))
         assert np.median(shade_error) < 2e-3
         assert np.percentile(shade_error, 99) < 0.05
@@ -776,3 +799,61 @@ void main() {
     finally:
         window.graphicsEngine.remove_window(buffer)
         root.remove_node()
+
+
+# ── a cloud's lighting from the shadow map's levels (phase 2 of MARCH_PLAN) ─────
+
+
+def _slab_points(field, n=300, seed=3):
+    """Random points inside the slab (above the base ramp's first metres)."""
+    rng = np.random.default_rng(seed)
+    up = rng.normal(size=(n, 3))
+    up /= np.linalg.norm(up, axis=1, keepdims=True)
+    height = rng.uniform(0.15, 0.95, n) * field.slab[1] + field.slab[0]
+    return up * (R + height)[:, None], up
+
+
+@pytest.mark.parametrize("elevation", [50.0, 25.0])
+def test_the_map_with_a_local_march_is_the_sun_march(field, table, elevation):
+    """A cloud's depth toward the sun taken from a cloud shadow map's levels
+    (the local march's two steps, then the total less the depth up to there,
+    :func:`sun_depth_from_map`) matches a fine march through the whole chord
+    (the reference the levels summarise): the shade within a few per cent,
+    the depth's mean close."""
+    from world_builder.clouds.noise import (
+        sun_depth_from_map,
+        sun_optical_depth_on_sphere,
+    )
+
+    points, up = _slab_points(field)
+    frame_east = np.cross(up, [0.0, 0.0, 1.0])
+    frame_east /= np.linalg.norm(frame_east, axis=1, keepdims=True)
+    e = math.radians(elevation)
+    sun = math.sin(e) * up + math.cos(e) * frame_east
+    sun /= np.linalg.norm(sun, axis=1, keepdims=True)
+    shift = coverage_to_shift(0.7, table)
+    full = sun_optical_depth_on_sphere(
+        _noise(7),
+        field,
+        replace(OPTICS, sun_steps=400, sun_step_length=6.0),
+        points,
+        sun,
+        R,
+        shift=shift,
+    )
+    mapped = sun_depth_from_map(
+        _noise(7),
+        field,
+        OPTICS,
+        points,
+        sun,
+        R,
+        16,
+        2,
+        shift_at=lambda p: np.full(len(p), shift),
+    )
+    assert full.max() > 1.0  # clouds in it
+    error = np.abs(np.exp2(-mapped) - np.exp2(-full))
+    assert np.median(error) < 0.03
+    assert np.percentile(error, 90) < 0.12
+    assert abs(np.mean(mapped) - np.mean(full)) < 0.1 * np.mean(full)

@@ -506,6 +506,7 @@ class World:
                         output, body.clouds, self.settings.shadows.cloud_map_size
                     )
                     body.cloud_maps.bind(terrain.root)
+                    body.clouds.bind_maps(body.cloud_maps.bind)  # their own light
             body.models = self._model_lighting(
                 look.exposure, index, terrain, len(self.bodies), light_scale
             )

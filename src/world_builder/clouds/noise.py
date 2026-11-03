@@ -985,6 +985,7 @@ def cloud_shadow_on_sphere(
     octave_mean: float | None = None,
     depth_at: Callable[[np.ndarray], np.ndarray] | None = None,
     spread_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    levels: bool = False,
 ) -> np.ndarray:
     """The shader's ``cloudShadowDepth``: the planet's clouds between points
     (below or in the slab) and the sun, along the chord the ray cuts through
@@ -1007,11 +1008,15 @@ def cloud_shadow_on_sphere(
     :param depth_at: the convective depth there, the same way; None = 0
     :param spread_at: the anvil shelf's spread there, the same way; None =
         no shelf
-    :returns: (...) optical depth, 0 above the slab
+    :param levels: also the depth a quarter, a half and three quarters of
+        the way along each chord (``cloudShadowLevelsIn``: what a cloud shadow
+        map's texel holds)
+    :returns: (...) optical depth, 0 above the slab; with *levels*, (..., 4):
+        that, then the three levels
     """
     _require_resolved(spec)
     points = np.asarray(points, dtype=np.float64)
-    depth = np.zeros(points.shape[:-1])
+    depth = np.zeros(points.shape[:-1] + ((4,) if levels else ()))
     if max_steps <= 0:
         return depth
     if octave_mean is None:
@@ -1038,9 +1043,15 @@ def cloud_shadow_on_sphere(
     shelf = None
     if spec.anvil and spread_at is not None:
         shelf = (at(spread_at), cell)
-    depth[under] = _cloud_shadow_depth(
-        spec, optics, march, at(shift_at) + cell, octave_mean, convective, shelf
-    )
+    shift = at(shift_at) + cell
+    if levels:
+        depth[under] = _cloud_shadow_levels(
+            spec, optics, march, shift, octave_mean, convective, shelf
+        )
+    else:
+        depth[under] = _cloud_shadow_depth(
+            spec, optics, march, shift, octave_mean, convective, shelf
+        )
     return depth
 
 
@@ -1103,6 +1114,106 @@ def _cloud_shadow_depth(
     density = np.where(counted, density, 0.0).sum(axis=-1)
     depth = density * step_length * spec.density * optics.shadow_strength
     return np.where(alive, depth, 0.0)
+
+
+def _cloud_shadow_levels(
+    spec: DensityField,
+    optics: CloudOptics,
+    march: tuple[np.ndarray, ...],
+    shift: ArrayLike,
+    octave_mean: float,
+    depth: ArrayLike = 0.0,
+    shelf: tuple | None = None,
+) -> np.ndarray:
+    """:func:`_cloud_shadow_depth`, and the depth a quarter, a half and three
+    quarters of the way along each chord (``slabOpticalDepthLevels``: the
+    steps' densities spread evenly over their lengths): (..., 4)."""
+    h, pair, counted, step_length, alive, _ = march
+    density = _march_density(spec, h, pair, shift, octave_mean, depth, shelf)
+    scale = np.where(alive, step_length, 0.0) * spec.density * optics.shadow_strength
+    per_step = np.where(counted, density, 0.0) * scale[..., None]
+    after = np.cumsum(per_step, axis=-1)
+    before = after - per_step
+    steps = counted.sum(axis=-1)
+    out = np.zeros(per_step.shape[:-1] + (4,))
+    out[..., 0] = after[..., -1]
+    for k in range(3):
+        boundary = 0.25 * (k + 1) * steps
+        i = np.minimum(np.floor(boundary).astype(np.int64), per_step.shape[-1] - 1)
+        at = lambda a: np.take_along_axis(a, i[..., None], axis=-1)[..., 0]  # noqa: E731
+        out[..., k + 1] = at(before) + at(per_step) * (boundary - i)
+    return np.where(alive[..., None], out, 0.0)
+
+
+def sun_depth_from_map(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    max_steps: int,
+    local_steps: int,
+    shift_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    octave_mean: float | None = None,
+) -> np.ndarray:
+    """The shader's ``cloudMapSunDepth``: the optical depth toward the sun from
+    points in the slab, as a cloud's lighting takes it from a cloud shadow
+    map: the sun march's first *local_steps* steps through the field itself
+    (the nearby clouds' shape), then the rest of the chord from the map's
+    levels (:func:`cloud_shadow_on_sphere` with ``levels``, at the point where
+    the sun's line enters the slab's base): the total less the depth up to
+    where the local march ended, linearly between the levels. 0 where that
+    line does not enter the base (a low sun), which the shader leaves to the
+    full sun march.
+
+    :param points: (m, 3) planet-frame positions inside the slab
+    :param sun_dirs: (m, 3) unit directions toward the sun (broadcast)
+    :param max_steps: the map's most steps a chord takes
+    :param local_steps: the local march's steps of ``optics.sun_step_length``
+    :returns: (m,) optical depth
+    """
+    points = np.asarray(points, dtype=np.float64)
+    dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
+    inner = radius + spec.slab[0]
+    outer = inner + spec.slab[1]
+    r = np.linalg.norm(points, axis=-1)
+    b = np.sum(points * dirs, axis=-1)
+    # Back along the line to where it left the base's sphere (a negative
+    # distance for a point in the slab under a sun above the horizon).
+    root = (inner - r) * (inner + r) + b * b
+    back = -b + np.sqrt(np.maximum(root, 0.0))
+    valid = (root > 0.0) & (back < 0.0) & (r > inner) & (r < outer)
+    entry = points + dirs * back[..., None]
+    levels = cloud_shadow_on_sphere(
+        volume, spec, optics, entry, dirs, radius, max_steps,
+        shift_at=shift_at, octave_mean=octave_mean, levels=True,
+    )  # fmt: skip
+    # The chord from the entry to the slab's top
+    r_e = np.linalg.norm(entry, axis=-1)
+    b_e = np.sum(entry * dirs, axis=-1)
+    chord = -b_e + np.sqrt(np.maximum((outer - r_e) * (outer + r_e) + b_e * b_e, 0.0))
+    reach = local_steps * optics.sun_step_length
+    fraction = np.clip((-back + reach) / np.maximum(chord, 1e-9), 0.0, 1.0)
+    xs = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+    ys = np.stack(
+        [np.zeros_like(levels[..., 0]), *(levels[..., k] for k in (1, 2, 3, 0))], -1
+    )
+    up_to = np.array(
+        [np.interp(f, xs, y) for f, y in zip(fraction.ravel(), ys.reshape(-1, 5))]
+    )
+    tail = levels[..., 0] - up_to.reshape(fraction.shape)
+    local = sun_optical_depth_on_sphere(
+        volume,
+        spec,
+        replace(optics, sun_steps=local_steps),
+        points,
+        dirs,
+        radius,
+        shift=0.0 if shift_at is None else shift_at(entry),
+        octave_mean=octave_mean,
+    )
+    return np.where(valid, local + tail, 0.0)
 
 
 #: cloud_field.glsl's CLOUD_FAR_STEP and CLOUD_FAR_STEPS: the far segment's

@@ -56,6 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 1.3-2 times the billboards' cost over open sky on a weak GPU, the same
     inside the slab, two-fifths in a dense cloud
     (docs/source/performance.md §20).
+  - The raymarch casts a cloud shadow on the ground, sea and models, as the
+    billboards do (`CloudMarch.shadow_layer`, `shadow_field`,
+    `bind_shadow_inputs`, `sun_visibility`), and reads the cloud shadow maps'
+    levels for its own lighting (`PlanetClouds.bind_maps`; the maps' texels
+    hold the depth a quarter, a half and three quarters of the way along the
+    chord, `noise.cloud_shadow_on_sphere(levels=True)`).
 - `Knob.kept`: a settings knob that is a choice rather than a level of
   quality. Moving to a preset (`WorldSettings.with_level`,
   `with_section_level`, `QualitySettings.at_level`) keeps it, and it makes
