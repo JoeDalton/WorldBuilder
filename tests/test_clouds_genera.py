@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from panda3d.core import ShaderAttrib
 
 from world_builder.clouds.cloud import PRESETS, CloudType
 from world_builder.clouds.genera import (
@@ -546,11 +547,10 @@ def test_the_genera_make_two_volumes_driven_as_one(showbase, executor, genera):
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2, renderer="march"),
+        settings=CloudSettings(shells=2, renderer="billboards"),
         genera=genera,
     )
     try:
-        # Billboards whatever the renderer: the raymarch has no depth
         assert isinstance(clouds.volume, CloudVolume)
         assert isinstance(clouds.stratus, CloudVolume)
         assert clouds.volume.field.min_top < 1.0
@@ -563,6 +563,74 @@ def test_the_genera_make_two_volumes_driven_as_one(showbase, executor, genera):
         assert clouds._deck_order == (clouds.volume, clouds.stratus)
         clouds._order_decks(up * (3.0 * R))  # outside both
         assert clouds._deck_order == (clouds.stratus, clouds.volume)
+    finally:
+        clouds.remove()
+
+
+def test_the_raymarch_marches_both_families_and_casts_both_shadows(
+    showbase, executor, genera
+):
+    """With genera a raymarch is one volume of two families (no stratus
+    volume): each family its own field, weather and shadow; the layers of
+    the two fit the uniform array; a change of renderer builds the other's
+    volumes."""
+    from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.march import CloudMarch
+    from world_builder.clouds.noise import MAX_LAYERS
+    from world_builder.clouds.planet import PlanetClouds
+    from world_builder.clouds.sphere import CloudVolume
+
+    clouds = PlanetClouds(
+        showbase.render,
+        R,
+        executor,
+        altitude=2200.0,
+        settings=CloudSettings(shells=6, renderer="march"),
+        genera=genera,
+    )
+    try:
+        march = clouds.volume
+        assert isinstance(march, CloudMarch)
+        assert clouds.stratus is None
+        assert march.families == clouds.shadow_families == 2
+        convective, stratiform = (f.field for f in march._families)
+        assert convective.min_top < 1.0
+        assert stratiform.slab[0] == genera.stratus_altitude
+        # Both families' layers fit: fewer bands each than the 6 asked for
+        assert march._layers_used * 2 <= MAX_LAYERS
+        assert march._layer_count[0] == march._layers_used
+        assert march._inputs["uFamilies"] == 2
+        for _ in range(400):  # the set-up, in the pool
+            clouds.update((0.0, 0.0, R + 1000.0))
+            if march.weather is not None:
+                break
+        stride = march._layers_used
+        assert [march.shadow_caster(i).shadow_layer for i in (0, 1)] == [
+            stride - 1,
+            2 * stride - 1,
+        ]
+        # Both families shade a point under them, and bind as their own maps'
+        # bake does (the stratus's alone as the first)
+        points = np.array([[0.0, 0.0, R + 10.0], [0.0, 40e3, R + 10.0]])
+        sun = np.array([0.0, 0.3, 1.0])
+        shade = clouds.sun_visibility(points, sun, 8)
+        both = np.ones(2)
+        for family in (0, 1):
+            both *= clouds.shadow_caster(family).sun_visibility(points, sun, 8)
+        np.testing.assert_allclose(shade, both)
+        assert np.all((shade >= 0.0) & (shade <= 1.0))
+        node = showbase.render.attach_new_node("bake")
+        clouds.bind_shadow_inputs(node, family=1)
+        assert node.get_attrib(ShaderAttrib).has_shader_input("uCloudShadowLayer")
+        # The stratus's weather has no depth channel; the convective one has
+        assert march._families[0].weather.shape[-1] == 4
+        assert march._families[1].weather.shape[-1] == 3
+        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
+        assert isinstance(clouds.volume, CloudVolume)
+        assert isinstance(clouds.stratus, CloudVolume)
+        assert clouds.shadow_families == 2
+        clouds.set_settings(replace(clouds.settings, renderer="march"))
+        assert isinstance(clouds.volume, CloudMarch) and clouds.stratus is None
     finally:
         clouds.remove()
 

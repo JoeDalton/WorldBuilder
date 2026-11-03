@@ -692,15 +692,38 @@ bool cloudMapSunDepth(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
 // raymarch's, whose nodes the maps are bound to) and they hold it, else the
 // sun march's own.
 #ifdef CLOUD_MAP_LIGHTING
-float cloudSunDepth(Field f, vec3 p, vec3 weather) {
+float cloudSunDepthIn(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
+                      sampler2D farMap, vec4 farChart[4], vec3 p, vec3 weather) {
     float depth;
     if (f.sunSteps > 0
-        && cloudMapSunDepth(f, cloudShadowMapOn, cloudShadowNear, cloudNearChart,
-                            cloudShadowFar, cloudFarChart, p, sunDir, weather,
-                            min(f.sunSteps, MAP_LOCAL_STEPS), depth)) {
+        && cloudMapSunDepth(f, on, nearMap, nearChart, farMap, farChart, p, sunDir,
+                            weather, min(f.sunSteps, MAP_LOCAL_STEPS), depth)) {
         return depth;
     }
     return sunOpticalDepthAt(f, p, weather);
+}
+
+float cloudSunDepth(Field f, vec3 p, vec3 weather) {
+    return cloudSunDepthIn(f, cloudShadowMapOn, cloudShadowNear, cloudNearChart,
+                           cloudShadowFar, cloudFarChart, p, weather);
+}
+
+// The same for a cloud of the second family (the stratus, under the first's
+// convective clouds: *above* is their field): its own maps' (otherShadowNear...),
+// and the convective clouds' optical depth along the sun's ray from p, from
+// theirs where the ray enters their base, which shades it.
+float cloudSunDepthOther(Field f, Field above, vec3 p, vec3 weather) {
+    float depth = cloudSunDepthIn(f, otherShadowMapOn, otherShadowNear, otherNearChart,
+                                  otherShadowFar, otherFarChart, p, weather);
+    vec3 start;
+    float chord;
+    float total;
+    if (cloudShadowChord(above, p, sunDir, start, chord)
+        && cloudMapsDepthIn(above, cloudShadowMapOn, cloudShadowNear, cloudNearChart,
+                            cloudShadowFar, cloudFarChart, p, start, total)) {
+        depth += total;
+    }
+    return depth;
 }
 #else
 float cloudSunDepth(Field f, vec3 p, vec3 weather) {

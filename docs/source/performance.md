@@ -1265,6 +1265,27 @@ them); they are fainter, being larger and blobbier, and not changed here.
 reprojection under rotation; `terrain_shots.py --pose ground_up` is the demo's
 start looking up, where the streaks were seen.
 
+### The raymarch with genera (Phase 3)
+
+RTX 3070, 2560 × 1440, HIGH, `cloud_bench.py --genera`, cloud cost in ms
+(march ¼ / billboards):
+
+| Pose | March | Billboards |
+|---|---|---|
+| cb_far | 3.76 | 1.35 |
+| cb_high | 3.25 | 1.55 |
+| anvil_top | 3.65 | 5.87 |
+| between_towers | 7.56 | 16.64 |
+| under_anvil | 8.79 | 21.42 |
+| in_congestus | 7.22 | 5.65 |
+| stratus_above | 8.01 | 9.17 |
+| stratus_below | 5.07 | 10.48 |
+
+The march wins where the genera fill the view (2-2.4 times cheaper under and
+between the towers) and loses over a distant sky, as without genera (§23). It
+draws both families in one pass: the tower's anvil, which billboards render as
+patches, is smooth.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

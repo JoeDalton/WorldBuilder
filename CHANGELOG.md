@@ -56,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 1.3-2 times the billboards' cost over open sky on a weak GPU, the same
     inside the slab, two-fifths in a dense cloud
     (docs/source/performance.md §20).
+  - The raymarch draws the genera (`CloudMarch(genera=...)`, one pass of two
+    families, `march.family_segments`), and `PlanetClouds` no longer forces
+    billboards with them; both families cast their shadows.
   - The raymarch casts a cloud shadow on the ground, sea and models, as the
     billboards do (`CloudMarch.shadow_layer`, `shadow_field`,
     `bind_shadow_inputs`, `sun_visibility`), and reads the cloud shadow maps'

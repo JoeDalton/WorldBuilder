@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import functools
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -92,6 +92,7 @@ from world_builder.clouds.cloud import (
     load_cloud_atlas,
     scale_march,
 )
+from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
 from world_builder.clouds.half_res import composite_card, pass_camera, pass_states
 from world_builder.clouds.noise import (
     DECK_LIGHT_COS_MIN,
@@ -115,7 +116,9 @@ from world_builder.clouds.sphere import (
     CloudVolume,
     ShellSpec,
     _deck_light,
+    _depth_tables,
     _ensure_bin,
+    _genus_weather,
     _noise,
     _peaks,
     _shaders,
@@ -227,6 +230,29 @@ def slab_segments(
     segments[:, 0] = np.maximum(segments[:, 0], t_start)
     segments[:, 1] = np.minimum(segments[:, 1], t_end)
     return segments
+
+
+def family_segments(
+    origin: ArrayLike,
+    direction: ArrayLike,
+    radius: float,
+    slabs: list[tuple[float, float]],
+    t_start: float = 0.0,
+    t_end: float = math.inf,
+) -> list[tuple[float, float, int]]:
+    """The stretches of a ray in several families' slabs (the genera's
+    convective clouds, then the stratus under them), sorted along the ray (the
+    shader's four segments): the slabs do not overlap.
+
+    :param slabs: each family's (base, thickness) above sea level, metres
+    :returns: (t0, t1, family) of each non-empty stretch
+    """
+    out = []
+    for family, slab in enumerate(slabs):
+        for t0, t1 in slab_segments(origin, direction, radius, slab, t_start, t_end):
+            if t1 > t0:
+                out.append((float(t0), float(t1), family))
+    return sorted(out)
 
 
 def steps_over(segment: ArrayLike, min_step: float, growth: float) -> float:
@@ -694,6 +720,80 @@ class _MarchLayer:
             app.graphicsEngine.remove_window(buffer)
 
 
+@dataclass
+class _Family:
+    """One family of the march's clouds: a density field and its weather. A
+    planet has one; with genera, two (the convective clouds, then the stratus
+    under them), whose slabs do not overlap."""
+
+    name: str | None
+    preset: Any
+    field: DensityField
+    peaks: np.ndarray
+    table: tuple
+    weather_job: Any
+    weather: np.ndarray | None = None
+    deck_job: Any = None
+    deck_field: DensityField | None = None
+    deck_optics: Any = None
+
+
+class _FamilyCaster:
+    """A family's shadow, as :class:`sphere.CloudVolume`'s (what
+    :class:`shadow_map.CloudShadowMaps` and :class:`planet.PlanetClouds` ask
+    of a caster)."""
+
+    def __init__(self, march: CloudMarch, index: int) -> None:
+        self._march, self._index = march, index
+        self._shade_key: tuple | None = None
+        self._shades: dict[tuple, float] = {}
+
+    @property
+    def _family(self) -> _Family:
+        return self._march._families[self._index]
+
+    @property
+    def weather(self):
+        return self._family.weather
+
+    @property
+    def position(self):
+        return self._march.position
+
+    @property
+    def radius(self):
+        return self._march.radius
+
+    @property
+    def _seed(self):
+        return self._march._seed
+
+    @property
+    def _octave_mean(self):
+        return self._march._octave_mean
+
+    @property
+    def _deck_field(self):
+        return self._family.deck_field
+
+    @property
+    def _deck_optics(self):
+        return self._family.deck_optics
+
+    @property
+    def shadow_layer(self) -> int:
+        return int(self._march._shadow_layers[self._index][0])
+
+    @property
+    def shadow_field(self) -> DensityField:
+        return self._family.deck_field
+
+    def bind_shadow_inputs(self, node: NodePath) -> None:
+        self._march.bind_shadow_inputs(node, family=self._index)
+
+    sun_visibility = CloudVolume.sun_visibility
+
+
 class CloudMarch:
     """A planet's low clouds, raymarched (see the module): the
     ``CloudSettings.renderer == "march"`` volume layer of
@@ -737,10 +837,13 @@ class CloudMarch:
         near_fade_radii: float = 2.5,
         channel: str | None = None,
         game: Any = None,
+        genera: GeneraSpec | None = None,
+        family: str | None = None,
     ):
         """As :class:`sphere.CloudVolume`'s (*near_fade_radii* and
         *channel* are unused: nothing fades near the camera, nothing is
-        generated per tile)."""
+        generated per tile). With *genera* it marches both families, the
+        convective clouds and the stratus under them (*family* is unused)."""
         settings = settings or CloudSettings()
         _ensure_bin()
         self.radius = float(radius)
@@ -750,27 +853,54 @@ class CloudMarch:
         self.stats = {"tiles": 0, "billboards": 0, "pending": 1, "gen_ms": 0.0}
         self._atmospheres = atmospheres
 
-        preset, field, peaks = planet_field(cloud_type, altitude, seed, self.radius)
         volume = _noise(seed)
-        self.field = field
-        self._preset = preset
         self._seed = seed
-        self._peaks = peaks
         self._octave_mean = float(volume.mean())
-        weather = planet_weather(weather, planet, self.radius, weather_seed)
-        self._table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
-        self._weather_job = executor.submit_once(_weather, weather, self._table)
+        self._genera = genera
+        if genera is not None:
+            specs = [
+                (CONVECTIVE, CloudType.CONVECTIVE, altitude),
+                (STRATIFORM, CloudType.STRATUS, genera.stratus_altitude),
+            ]
+        else:
+            specs = [(None, cloud_type, altitude)]
+            weather = planet_weather(weather, planet, self.radius, weather_seed)
+        self._families: list[_Family] = []
+        for name, kind, base in specs:
+            preset, field, peaks = planet_field(kind, base, seed, self.radius)
+            table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
+            if genera is not None:
+                # The family's maps; a convective field's shift by depth too.
+                tables = table
+                if field.min_top < 1.0:
+                    tables = tuple(
+                        tuple(float(v) for v in row)
+                        for row in _depth_tables(seed, field, self.radius)
+                    )
+                job = executor.submit_once(_genus_weather, genera, name, tables)
+            else:
+                job = executor.submit_once(_weather, weather, table)
+            self._families.append(_Family(name, preset, field, peaks, table, job))
+        first = self._families[0]
+        self.field = first.field
+        self._preset = first.preset
+        self._peaks = first.peaks
+        self._table = first.table
+        self._weather_job = first.weather_job
         self.weather: np.ndarray | None = None
         self._settings = settings
-        self._shadow_layer = PTA_int.empty_array(1)
-        self._shadow_layer[0] = -1
-        self._shadow_nodes: list[NodePath] = []
+        #: Each family's shadow's layer (uCloudShadowLayer), -1 until ready
+        self._shadow_layers = [PTA_int.empty_array(1) for _ in self._families]
+        for layer in self._shadow_layers:
+            layer[0] = -1
+        #: (node, its first family, its second or None) the shadow is bound to
+        self._shadow_nodes: list[tuple[NodePath, int, int | None]] = []
         self._map_binders: list[Any] = []
-        self._shade_key: tuple | None = None
-        self._shades: dict[tuple, float] = {}
+        self._casters = [_FamilyCaster(self, i) for i in range(len(self._families))]
+        self._family_textures: list[tuple[Any, Any]] = []
         self._layer_far = PTA_float.empty_array(MAX_LAYERS)
         self._layer_params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
-        params, self._deck_job = self._configure(settings)
+        params, self._deck_jobs = self._configure(settings)
         self._write_params(params)
 
         # The sea's reflection: the deck alone.
@@ -778,7 +908,7 @@ class CloudMarch:
         self.root.stash()  # out of every camera until the set-up is done
         self.root.hide(HIDE_FROM_NEAR | HIDE_FROM_FAR | HIDE_FROM_CLOUD_PASS)
         self.deck = self.root.attach_new_node(
-            deck_mesh(self.radius + field.slab[0] + 0.5 * field.slab[1])
+            deck_mesh(self.radius + self.field.slab[0] + 0.5 * self.field.slab[1])
         )
         self.deck.set_shader(_shaders()[1])
         self.deck.set_two_sided(True)
@@ -826,10 +956,11 @@ class CloudMarch:
             "uPixelAngle": 0.001,
             "uCloudDebug": 0,
             "uMarchSteps": self._steps,
-            "uMinStep": min_step(field),
+            "uMinStep": min(min_step(f.field) for f in self._families),
             "uStepGrowth": STEP_GROWTH,
             "uLayerFar": self._layer_far,
             "uLayerCount": self._layer_count,
+            "uFamilies": len(self._families),
             "uDetailScale": DETAIL_SCALE,
             "uDetailErosion": DETAIL_EROSION,
             "uBillowMean": float(np.mean(1.0 - np.abs(2.0 * volume - 1.0))),
@@ -954,14 +1085,18 @@ class CloudMarch:
         self._finish()
         old = self._settings
         self._settings = settings
-        params, deck_job = self._configure(settings)
+        params, deck_jobs = self._configure(settings)
         self._write_params(params)
         self._set_inputs(uDeckLayer=self._layers_used - 1)
         if old.shell_octaves[-1:] != settings.shell_octaves[-1:]:
-            light = build_deck_light_texture(deck_job.result())
-            self._set_inputs(deckLight=light)
-            if self.weather is not None:
-                self._textures["deckLight"] = light
+            names = ("deckLight", "otherDeckLight")
+            for index, job in enumerate(deck_jobs):
+                light = build_deck_light_texture(job.result())
+                self._set_inputs(**{names[index]: light})
+                if self.weather is not None:
+                    self._textures[names[index]] = light
+                    weather = self._family_textures[index][0]
+                    self._family_textures[index] = (weather, light)
         self._update_shadow_nodes()
         if old.march_resolution != settings.march_resolution:
             self.set_pixel_angle(self._pixel_angle)
@@ -976,61 +1111,71 @@ class CloudMarch:
         else:
             self.root.hide(REFLECTION_CAMERA_MASK)
 
-    def _configure(self, settings: CloudSettings) -> tuple[np.ndarray, Any]:
-        """Pack the march's layers: one per billboard shell's distance band
-        (its octaves), then the far one, which the reflection's deck shares.
+    def _configure(self, settings: CloudSettings) -> tuple[np.ndarray, list[Any]]:
+        """Pack the march's layers: for each family, one per billboard
+        shell's distance band (its octaves), then its far one, which the
+        reflection's deck shares (the first family's). The families share the
+        bands' distances; with two, the layers (at most :data:`MAX_LAYERS`
+        between them) are fewer bands each.
 
-        :returns: the packed layer parameters, and the far layer's light
-            table being made in the pool (a future)
+        :returns: the packed layer parameters, and each family's far layer's
+            light table being made in the pool (futures)
         """
-        preset, field, peaks, seed = self._preset, self.field, self._peaks, self._seed
-        shells = min(settings.shells, MAX_LAYERS - 1)
+        seed = self._seed
+        families = len(self._families)
+        shells = max(min(settings.shells, MAX_LAYERS // families - 1), 1)
         schedule = settings.shell_octaves
         _, bands = shell_bands(self.grid, shells)
-        optics = scale_march(preset, settings.march_scale).optics
         params = np.zeros((MAX_LAYERS, LAYER_VEC4S, 4), dtype=np.float32)
         far = np.zeros(MAX_LAYERS, dtype=np.float32)
-        for k in range(shells + 1):
-            octaves = schedule[min(k, len(schedule) - 1)]
-            layer = ShellSpec(
-                0,
-                (0.0, 0.0),
-                1.0,
-                octaves,
-                octave_offset(peaks, _peaks(seed, field, self.radius, octaves)),
+        stride = shells + 1
+        jobs = []
+        for index, family in enumerate(self._families):
+            field, peaks = family.field, family.peaks
+            optics = scale_march(family.preset, settings.march_scale).optics
+            for k in range(stride):
+                octaves = schedule[min(k, len(schedule) - 1)]
+                layer = ShellSpec(
+                    0,
+                    (0.0, 0.0),
+                    1.0,
+                    octaves,
+                    octave_offset(peaks, _peaks(seed, field, self.radius, octaves)),
+                )
+                # The far layer is the reflection's deck too: its cap, no fade.
+                layer_optics = (
+                    replace(optics, max_optical_depth=DECK_MAX_OPTICAL_DEPTH)
+                    if k == shells
+                    else optics
+                )
+                params[index * stride + k] = pack_layer_params(
+                    layer.field_of(field),
+                    # Per metre of the view's path
+                    extinction=field.density * VIEW_EXTINCTION_SCALE,
+                    octave_mean=self._octave_mean,
+                    optics=layer_optics,
+                    octaves=octaves,
+                )
+                if k < shells and index == 0:
+                    far[k] = 0.5 * sum(bands[k])  # mid-band: where the shells cross
+            deck = layer.field_of(field)
+            # The deck's field and optics: the one its shadow is marched in.
+            family.deck_field = deck
+            family.deck_optics = layer_optics
+            jobs.append(
+                self.executor.submit_once(
+                    _deck_light,
+                    seed,
+                    deck,
+                    layer_optics,
+                    self.radius,
+                    family.table,
+                    schedule[-1],
+                )
             )
-            # The far layer is the reflection's deck too: its cap and no fade.
-            layer_optics = (
-                replace(optics, max_optical_depth=DECK_MAX_OPTICAL_DEPTH)
-                if k == shells
-                else optics
-            )
-            params[k] = pack_layer_params(
-                layer.field_of(field),
-                # Per metre of the view's path
-                extinction=field.density * VIEW_EXTINCTION_SCALE,
-                octave_mean=self._octave_mean,
-                optics=layer_optics,
-                octaves=octaves,
-            )
-            if k < shells:
-                far[k] = 0.5 * sum(bands[k])  # mid-band: where the shells cross
-        self._layers_used = shells + 1
+        self._layers_used = stride
         self._far_values = far
-        deck = layer.field_of(field)
-        # The deck's field and optics: the one its shadow is marched in.
-        self._deck_field = deck
-        self._deck_optics = layer_optics
-        deck_job = self.executor.submit_once(
-            _deck_light,
-            seed,
-            deck,
-            layer_optics,
-            self.radius,
-            self._table,
-            schedule[-1],
-        )
-        return params, deck_job
+        return params, jobs
 
     def _write_params(self, params: np.ndarray) -> None:
         for i, row in enumerate(params.reshape(-1, 4)):
@@ -1043,21 +1188,38 @@ class CloudMarch:
     # ── the clouds' shadow (as sphere.CloudVolume's) ──────────────────────
 
     @property
+    def families(self) -> int:
+        """How many families of clouds it marches: 2 with genera."""
+        return len(self._families)
+
+    def shadow_caster(self, family: int = 0) -> _FamilyCaster:
+        """The shadow of a family of the clouds (0: the convective clouds, or
+        the only ones; 1: the stratus), as a volume's."""
+        return self._casters[family]
+
+    @property
     def shadow_layer(self) -> int:
-        """The layer of ``layerParams`` the clouds' shadow is marched in (the
-        far one, the deck's), -1 until the set-up is done or after
+        """The layer of ``layerParams`` the (first) family's shadow is marched
+        in (its far one, the deck's), -1 until the set-up is done or after
         :meth:`remove`."""
-        return int(self._shadow_layer[0])
+        return self._casters[0].shadow_layer
 
     @property
     def shadow_field(self) -> DensityField:
-        """The field the clouds' shadow is marched in (the deck's)."""
-        return self._deck_field
+        """The field the (first) family's shadow is marched in (the deck's)."""
+        return self._families[0].deck_field
 
-    def bind_shadow_inputs(self, node: NodePath) -> None:
+    def bind_shadow_inputs(self, node: NodePath, family: int | None = None) -> None:
         """As :meth:`sphere.CloudVolume.bind_shadow_inputs`: let the shaders
         on a node (the planet's terrain, the maps' bake) darken the sun under
-        these clouds, through the deck's layer."""
+        these clouds, through the deck's layers.
+
+        :param family: bind this family's alone, as the first (the maps'
+            bake); None = the first's, and the second's too as the other
+            (``uCloudShadowOther``)
+        """
+        first = 0 if family is None else family
+        other = 1 if family is None and len(self._families) > 1 else None
         node.set_shader_inputs(
             cloudNoise=self._inputs["cloudNoise"],
             layerParams=self._layer_params,
@@ -1067,25 +1229,42 @@ class CloudMarch:
             noiseOffset=Vec3(0, 0, 0),
             deckLightCosMin=DECK_LIGHT_COS_MIN,
             uCloudDebug=0,
-            uCloudShadowLayer=self._shadow_layer,
-            uCloudShadowOther=-1,
+            uCloudShadowLayer=self._shadow_layers[first],
+            uCloudShadowOther=-1 if other is None else self._shadow_layers[other],
             otherWeather=_no_weather(),
             otherDeckLight=_no_deck_light(),
         )
-        self._shadow_nodes.append(node)
+        self._shadow_nodes.append((node, first, other))
         self._update_shadow_nodes()
 
-    def _update_shadow_nodes(self) -> None:
-        """The shaded nodes' weather and layer: none until the set-up."""
-        ready = self.weather is not None
-        self._shadow_layer[0] = self._layers_used - 1 if ready else -1
-        self._shadow_nodes = [n for n in self._shadow_nodes if not n.is_empty()]
-        if ready:
-            for node in self._shadow_nodes:
-                node.set_shader_inputs(**self._textures)
+    def _textures_of(self, index: int) -> dict[str, Any]:
+        """A family's weather and light table, as the names the first
+        family's shaders read them by."""
+        return {
+            "weatherMap": self._family_textures[index][0],
+            "deckLight": self._family_textures[index][1],
+        }
 
-    #: The share of the sun the clouds leave a point (the CPU's lighting).
-    sun_visibility = CloudVolume.sun_visibility
+    def _update_shadow_nodes(self) -> None:
+        """The shaded nodes' weather and layers: none until the set-up."""
+        ready = self.weather is not None
+        stride = self._layers_used
+        for index, layer in enumerate(self._shadow_layers):
+            layer[0] = index * stride + stride - 1 if ready else -1
+        self._shadow_nodes = [n for n in self._shadow_nodes if not n[0].is_empty()]
+        if ready:
+            for node, first, other in self._shadow_nodes:
+                node.set_shader_inputs(**self._textures_of(first))
+                if other is not None:
+                    node.set_shader_inputs(
+                        otherWeather=self._family_textures[other][0],
+                        otherDeckLight=self._family_textures[other][1],
+                    )
+
+    def sun_visibility(self, *args: Any, **kwargs: Any) -> np.ndarray:
+        """The share of the sun the first family's clouds leave points
+        (:meth:`sphere.CloudVolume.sun_visibility`)."""
+        return self._casters[0].sun_visibility(*args, **kwargs)
 
     # ── public ────────────────────────────────────────────────────────────
 
@@ -1145,7 +1324,10 @@ class CloudMarch:
         :param camera_render: camera in the render frame
         """
         if self._weather_job is not None:
-            if not (self._weather_job.done() and self._deck_job.done()):
+            if not all(
+                job.done()
+                for job in [f.weather_job for f in self._families] + self._deck_jobs
+            ):
                 self.stats["pending"] = 1
                 return
             self._finish()
@@ -1175,13 +1357,19 @@ class CloudMarch:
         """:returns: how far the slab's nearest point is from *camera*
         (planet frame), metres"""
         altitude = float(np.linalg.norm(camera)) - self.radius
-        base, thickness = self.field.slab
-        return max(base - altitude, altitude - base - thickness, 0.0)
+        nearest = math.inf
+        for family in self._families:
+            base, thickness = family.field.slab
+            nearest = min(
+                nearest, max(base - altitude, altitude - base - thickness, 0.0)
+            )
+        return nearest
 
     def remove(self) -> None:
         """Take the clouds off the scene (and their shadow off the nodes it
         shaded)."""
-        self._shadow_layer[0] = -1
+        for layer in self._shadow_layers:
+            layer[0] = -1
         self._shadow_nodes = []
         self.detach()
         self.root.remove_node()
@@ -1190,12 +1378,19 @@ class CloudMarch:
         """Finish the set-up begun in the pool (waiting for it if need be)."""
         if self._weather_job is None:
             return
-        self.weather = self._weather_job.result()
-        self._textures = {
-            "weatherMap": build_weather_texture(self.weather),
-            "deckLight": build_deck_light_texture(self._deck_job.result()),
-        }
-        self._weather_job = self._deck_job = None
+        self._family_textures = []
+        self._textures = {}
+        names = (("weatherMap", "deckLight"), ("otherWeather", "otherDeckLight"))
+        for index, family in enumerate(self._families):
+            family.weather = family.weather_job.result()
+            weather = build_weather_texture(family.weather)
+            light = build_deck_light_texture(self._deck_jobs[index].result())
+            self._family_textures.append((weather, light))
+            self._textures[names[index][0]] = weather
+            self._textures[names[index][1]] = light
+            family.weather_job = None
+        self.weather = self._families[0].weather
+        self._weather_job = self._deck_jobs = None
         for node in self._nodes:
             node.set_shader_inputs(**self._textures)
         self._inputs.update(self._textures)

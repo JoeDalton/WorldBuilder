@@ -191,7 +191,21 @@ convective continuum from fair-weather cumulus through congestus to
 cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
 `--genera` in the demo, `terrain_shots.py` and `cloud_bench.py`). Its maps are
 a **placeholder** for the weather (issue #8): features laid out around one
-point. Billboards draw them; the raymarch has no depth.
+point. Either renderer draws them: billboards (two `CloudVolume`s), or the
+raymarch (one `CloudMarch` of two families, below).
+
+**The raymarch with genera.** `CloudMarch(genera=...)` marches both families
+in one pass, so a stratus cloud in front of a tower and one behind it composite
+correctly: each family's slab gives up to two stretches of a ray
+(`march.family_segments`), the four sorted along it, and every sample takes the
+field, the weather (the shift, the convective depth, the anvil's spread:
+`texture(weatherMap | otherWeather, p).gba`), the light table and the shadow
+maps of the stretch's family. The families' layers share `layerParams` (at
+most `MAX_LAYERS` between them, so with two the shells' bands are at most 3
+each: `march._configure`); a stratus cloud takes the convective clouds' shadow
+from their maps (`cloudSunDepthOther`). Both families cast their shadows on the
+ground, sea and models (`PlanetClouds.shadow_caster(family)`, the maps' pairs
+as for the billboards). The reflection's deck is the convective family's alone.
 
 **Two families, one sort.** Billboards mix cloud types by superposition: each
 samples its own type's field, and the blender adds them. So the genera are two

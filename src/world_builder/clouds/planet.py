@@ -241,26 +241,11 @@ class PlanetClouds:
         # The nodes the clouds shade (bind_shadow_inputs), again for a new
         # volume.
         self._shadow_nodes: list[NodePath] = []
+        self._channel = channel
         self.volume = self._make_volume(settings)
-        #: The genera's stratus, under the convective volume; None = none
-        self.stratus: CloudVolume | None = None
-        if genera is not None:
-            self.stratus = CloudVolume(
-                self.root,
-                settings=settings,
-                **{
-                    **self._volume_args,
-                    "cloud_type": CloudType.STRATUS,
-                    "altitude": genera.stratus_altitude,
-                    "family": STRATIFORM,
-                    "channel": None if channel is None else f"{channel}:stratus",
-                },
-            )
-        if self.stratus is not None:
-            # Each family takes the other's shadow (the convective clouds'
-            # on the stratus under them), and so does what they shade.
-            self.volume.take_shadow_of(self.stratus)
-            self.stratus.take_shadow_of(self.volume)
+        #: The genera's stratus, under the convective volume, when billboards
+        #: draw them (a raymarch marches both families); None = none
+        self.stratus: CloudVolume | None = self._make_stratus(settings)
         self._deck_order: tuple | None = None
         self.sheet: CloudSheet | None = None
         if cirrus is not None:
@@ -292,12 +277,35 @@ class PlanetClouds:
         return [v for v in (self.volume, self.stratus) if v is not None]
 
     def _make_volume(self, settings: CloudSettings) -> CloudVolume | CloudMarch:
-        # The genera are drawn by billboards (the raymarch has no depth).
-        kind = CloudVolume if self.genera is not None else RENDERERS[settings.renderer]
-        volume = kind(self.root, settings=settings, **self._volume_args)
+        volume = RENDERERS[settings.renderer](
+            self.root, settings=settings, **self._volume_args
+        )
         if isinstance(volume, CloudMarch) and self._split is not None:
             volume.attach(*self._split)
         return volume
+
+    def _make_stratus(self, settings: CloudSettings) -> CloudVolume | None:
+        """The genera's stratus volume under the convective one (each takes
+        the other's shadow: the convective clouds' on the stratus under
+        them, and on what they shade); None without genera, or when a raymarch
+        draws both families."""
+        if self.genera is None or isinstance(self.volume, CloudMarch):
+            return None
+        channel = self._channel
+        stratus = CloudVolume(
+            self.root,
+            settings=settings,
+            **{
+                **self._volume_args,
+                "cloud_type": CloudType.STRATUS,
+                "altitude": self.genera.stratus_altitude,
+                "family": STRATIFORM,
+                "channel": None if channel is None else f"{channel}:stratus",
+            },
+        )
+        self.volume.take_shadow_of(stratus)
+        stratus.take_shadow_of(self.volume)
+        return stratus
 
     # ── settings ──────────────────────────────────────────────────────────────
 
@@ -313,13 +321,19 @@ class PlanetClouds:
 
         :param settings: the new settings
         """
-        renderer = settings.renderer != self._settings.renderer and self.genera is None
+        renderer = settings.renderer != self._settings.renderer
         self._settings = settings
         if renderer:
             if self._half_res is not None and isinstance(self.volume, CloudVolume):
                 self._half_res.remove(self.volume.root)
+            if self.stratus is not None:
+                if self._half_res is not None:
+                    self._half_res.remove(self.stratus.root)
+                self.stratus.remove()
+                self.stratus = None
             self.volume.remove()
             self.volume = self._make_volume(settings)
+            self.stratus = self._make_stratus(settings)
             self.volume.set_sun(*self._sun)
             if self._sky_light is not None:
                 self.volume.set_sky_light(self._sky_light)
@@ -329,8 +343,11 @@ class PlanetClouds:
             if isinstance(self.volume, CloudMarch):
                 for bind in self._map_binders:
                     self.volume.bind_maps(bind)
-            if self._half_res is not None and isinstance(self.volume, CloudVolume):
-                self._half_res.add(self.volume.root)
+            if self._half_res is not None:
+                for volume in self._volumes():
+                    if isinstance(volume, CloudVolume):
+                        self._half_res.add(volume.root)
+            self._deck_order = None
             if self.sheet is not None:
                 self.sheet.set_settings(settings)
             return
@@ -372,11 +389,15 @@ class PlanetClouds:
     def shadow_families(self) -> int:
         """How many volumes cast a shadow: two with genera (the convective
         one, then the stratus), else one."""
+        if isinstance(self.volume, CloudMarch):
+            return self.volume.families
         return 2 if self.stratus is not None else 1
 
     def shadow_caster(self, family: int = 0) -> CloudVolume | CloudMarch | None:
         """The volume whose shadow is *family*'s (0: :attr:`volume`, 1: the
         stratus)."""
+        if isinstance(self.volume, CloudMarch):
+            return self.volume.shadow_caster(family)
         return self.volume if family == 0 else self.stratus
 
     def bind_shadow_inputs(self, node: NodePath, family: int = 0) -> None:
@@ -391,7 +412,7 @@ class PlanetClouds:
             maps' bake: :class:`shadow_map.CloudShadowMaps`)
         """
         if family == 1:
-            self.stratus.bind_shadow_inputs(node)
+            self.shadow_caster(1).bind_shadow_inputs(node)
             return
         self._shadow_nodes.append(node)
         self._shade([node])

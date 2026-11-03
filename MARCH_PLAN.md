@@ -129,6 +129,23 @@ sphere; near 60 m, far 500 m texels).
 
 ## Phase 3: the march with genera, and the march's shadows
 
+**Done, with these changes to the plan** (clouds.md "Genera"; uncommitted):
+- **No shared field object extracted.** `CloudMarch` holds a list of `_Family` (field, preset, weather, deck field) and
+  a `_FamilyCaster` per family; `CloudVolume` is unchanged. Phase 2 already made the march a caster; the rest of the
+  extraction would have moved `CloudVolume`'s state for no gain here.
+- **Layers: `MAX_LAYERS` kept**, not an octave table: two families take `MAX_LAYERS // 2 - 1` = 3 bands each (HIGH asks
+  for more), one layer per band and family and a far layer per family. Octaves per band stay per layer.
+- **Segments** from both slabs sorted by start (`family_segments`, 4 at most); the family is the stretch's, not picked
+  by height. The weather is read per family (`weatherMap`, `otherWeather`), the light table too; the stratus takes the
+  convective maps' total as its shade from above (`cloudSunDepthOther`).
+- **`PlanetClouds`**: renderer is free with genera (`stratus` is None with a march; `shadow_families` 2);
+  `bind_maps` binds both families' maps.
+- Measured (performance.md "The raymarch with genera"): 2-2.4 times cheaper than billboards under and between the
+  towers (8.8 vs 21.4 ms, 7.6 vs 16.6), dearer over a distant sky (3.8 vs 1.4).
+- Tests: `family_segments` (up to four sorted stretches), the march with genera in `test_clouds_genera.py` (two
+  families, layer budget, both shadows, renderer change).
+- Not done: the stratus in the sea's reflection (the deck is the convective family's), a cheaper far march (Phase 4).
+
 - A field object both renderers share: move the renderer-independent state out of `CloudVolume` (`sphere.py`):
   field, packed layer params, weather and far-table textures, shadow inputs, `take_shadow_of`,
   `bind_shadow_inputs`, `sun_visibility`, `shadow_layer` / `shadow_field`. One per family; `CloudVolume` and

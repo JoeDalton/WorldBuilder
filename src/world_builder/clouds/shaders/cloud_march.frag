@@ -36,7 +36,8 @@ uniform float uStepGrowth;       // a step's length per metre of distance, farth
 // Layer i (its octaves) is sampled up to uLayerFar[i] metres from the camera;
 // the last one beyond.
 uniform float uLayerFar[MAX_MARCH_LAYERS];
-uniform int   uLayerCount;
+uniform int   uLayerCount;       // the layers of one family (its bands, then its far one)
+uniform int   uFamilies;         // 1, or 2 with genera: the convective clouds, the stratus under them
 uniform int   uFrame;            // this pixel's visits: moves its steps' jitter (march.visit_of)
 // The edges' billows (what the billboards' sprites carry): a fine billowy
 // noise, uDetailScale times the field's first octave, moving the threshold
@@ -84,16 +85,17 @@ const float BILLOW_FINER_WEIGHT = 0.5;
 // octaves and the billows fade to their means where a view pixel (footprint
 // metres) cannot resolve them: the coverage holds (as an octave left out
 // does), the sparkle goes.
-float marchDensity(Field f, vec3 p, float shift, float footprint) {
+float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
     float unit = NOISE_FEATURE_UNITS / f.noiseScale.x;
     vec2 kept = vec2(resolved(unit / f.octaveScales.z, footprint),
                      resolved(unit / f.octaveScales.w, footprint));
-    shift += dot((1.0 - kept) * f.octaveWeights.zw, vec2(f.octaveMean));
+    float shift = weather.x
+               + dot((1.0 - kept) * f.octaveWeights.zw, vec2(f.octaveMean));
     f.octaveWeights.zw *= kept;
     float billows = resolved(unit / (f.octaveScales.x * uDetailScale), footprint);
     float window = (uCloudDebug & 32) != 0 ? 0.0  // no billows (profiling)
                  : (f.threshHi - f.threshLo) * uDetailErosion * billows;
-    float most = cloudDensityShifted(f, p, shift + window * uBillowMean);
+    float most = cloudDensityAt(f, p, vec3(shift + window * uBillowMean, weather.yz));
     if (most <= 0.0 || window <= 0.0) {
         return most;
     }
@@ -109,7 +111,7 @@ float marchDensity(Field f, vec3 p, float shift, float footprint) {
                          footprint));
     float billow = uBillowMean + uBillowGain * (sampleNoise(coord) - uBillowRawMean
                                                 + BILLOW_FINER_WEIGHT * (finer - uBillowRawMean));
-    return cloudDensityShifted(f, p, shift + window * (uBillowMean - billow));
+    return cloudDensityAt(f, p, vec3(shift + window * (uBillowMean - billow), weather.yz));
 }
 
 // The fewest samples a stretch of the slab takes (march.SEGMENT_SAMPLES).
@@ -184,33 +186,72 @@ void main() {
     vec3 end = depth < 1.0 ? unproject(vec3(ndc, depth * 2.0 - 1.0)) : farPoint;
     float tEnd = length(end - uCamRender);
 
-    // The slab between two spheres, less the planet: up to two segments (a
-    // ray from above, or skimming the slab's underside, leaves and re-enters).
-    Field f = getField(0);  // every layer shares the slab
-    float rBase = planetRadius + f.slabBase;
-    vec2 top = sphereInterval(camPos, dir, rBase + f.slabThickness);
-    vec2 base = sphereInterval(camPos, dir, rBase);
+    // Each family's slab between two spheres, less the planet: up to two
+    // segments (a ray from above, or skimming the slab's underside, leaves and
+    // re-enters), the families' together sorted along the ray (the slabs do not
+    // overlap).
+    Field f = getField(0);  // the first family's: every layer of it shares the slab
     vec2 ground = sphereInterval(camPos, dir, planetRadius);
     if (ground.x < ground.y && ground.y > 0.0) {
         tEnd = min(tEnd, max(ground.x, 0.0));
     }
-    vec2 seg0 = top;
-    vec2 seg1 = vec2(1.0, -1.0);
-    if (base.x < base.y) {
-        seg0 = vec2(top.x, base.x);
-        seg1 = vec2(base.y, top.y);
+    vec2 segments[4];
+    int family[4];
+    int count = 0;
+    for (int i = 0; i < 2; ++i) {
+        if (i >= uFamilies) {
+            break;
+        }
+        Field slabField = getField(i * uLayerCount);
+        float rBase = planetRadius + slabField.slabBase;
+        vec2 top = sphereInterval(camPos, dir, rBase + slabField.slabThickness);
+        vec2 base = sphereInterval(camPos, dir, rBase);
+        vec2 first = top;
+        vec2 second = vec2(1.0, -1.0);
+        if (base.x < base.y) {
+            first = vec2(top.x, base.x);
+            second = vec2(base.y, top.y);
+        }
+        first = vec2(max(first.x, tStart), min(first.y, tEnd));
+        second = vec2(max(second.x, tStart), min(second.y, tEnd));
+        if (first.y > first.x) {
+            segments[count] = first;
+            family[count] = i;
+            ++count;
+        }
+        if (second.y > second.x) {
+            segments[count] = second;
+            family[count] = i;
+            ++count;
+        }
     }
-    seg0 = vec2(max(seg0.x, tStart), min(seg0.y, tEnd));
-    seg1 = vec2(max(seg1.x, tStart), min(seg1.y, tEnd));
-    if (seg0.y <= seg0.x && seg1.y <= seg1.x) {
+    if (count == 0) {
         discard;
+    }
+    // Sorted by where they start (at most four).
+    for (int i = 1; i < 4; ++i) {
+        for (int k = i; k > 0 && k < count; --k) {
+            if (segments[k].x < segments[k - 1].x) {
+                vec2 swapSegment = segments[k];
+                segments[k] = segments[k - 1];
+                segments[k - 1] = swapSegment;
+                int swapFamily = family[k];
+                family[k] = family[k - 1];
+                family[k - 1] = swapFamily;
+            }
+        }
     }
 
     // Steps uMinStep long near the camera, a share of the distance farther,
     // all lengthened alike when the ray would need more than the budget.
     float dtMin = uMinStep;
     float growth = uStepGrowth;
-    float needed = stepsOver(seg0, dtMin, growth) + stepsOver(seg1, dtMin, growth);
+    float needed = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        if (i < count) {
+            needed += stepsOver(segments[i], dtMin, growth);
+        }
+    }
     if (needed > float(uMarchSteps)) {
         float k = needed / float(uMarchSteps);
         dtMin *= k;
@@ -222,7 +263,6 @@ void main() {
     // its visits stratify the step and the resolve averages them away.
     float jitter = fract(interleavedGradient(vec2(pixel)) + float(uFrame) * 0.618034);
 
-    float feature = NOISE_FEATURE_UNITS / (f.noiseScale.x * f.octaveScales.x);
     float transmittance = 1.0;
     vec3 light = vec3(0.0);
     float weightedDistance = 0.0;
@@ -233,41 +273,49 @@ void main() {
     int current = -1;
     Field lf = f;
     int steps = 0;
-    // The weather's shift, read once a WEATHER_STRETCH of ray: it varies
-    // over kilometres.
-    float shift = 0.0;
-    float shiftUntil = -1.0;
-    for (int s = 0; s < 2; ++s) {
-        vec2 seg = s == 0 ? seg0 : seg1;
+    // The weather (the shift, the convective depth, the anvil's spread), read
+    // once a WEATHER_STRETCH of ray: it varies over kilometres.
+    vec3 weather = vec3(0.0);
+    float weatherUntil = -1.0;
+    for (int s = 0; s < 4; ++s) {
+        if (s >= count) {
+            break;
+        }
+        vec2 seg = segments[s];
+        int fam = family[s];
+        weatherUntil = -1.0;
         float a = seg.x;
         float least = (seg.y - seg.x) / SEGMENT_SAMPLES;  // the fewest a segment takes
         while (a < seg.y && steps < uMarchSteps + 8 && transmittance > OPAQUE) {
             float dt = min(min(max(dtMin, a * growth), least), seg.y - a);
             float t = a + dt * jitter;
             steps++;
-            int layer = layerAt(t);
+            int layer = fam * uLayerCount + layerAt(t);
             if (layer != current) {
                 lf = getField(layer);
                 current = layer;
             }
             vec3 p = camPos + dir * t;
-            if (t > shiftUntil) {
-                shift = weatherShift(p);
-                shiftUntil = t + WEATHER_STRETCH;
+            if (t > weatherUntil) {
+                weather = fam == 0 ? texture(weatherMap, p).gba
+                                   : texture(otherWeather, p).gba;
+                weatherUntil = t + WEATHER_STRETCH;
             }
             // Far away a pixel spans more than the clouds' features: their
             // expected coverage (the deck's), as a homogeneous slab whose
             // vertical crossing takes the deck's alpha; the self-shadowing
             // goes to its averages first (cloudRadiance).
+            float feature = NOISE_FEATURE_UNITS / (lf.noiseScale.x * lf.octaveScales.x);
             float footprint = t * uPixelAngle / feature;
             float detail = 1.0 - smoothstep(0.15, 0.6, footprint);
             float shading = 1.0 - smoothstep(0.04, 0.2, footprint);
             float density = detail > 0.0
-                          ? marchDensity(lf, p, shift, t * uPixelAngle / float(uBlock))
+                          ? marchDensity(lf, p, weather, t * uPixelAngle / float(uBlock))
                           : 0.0;
             float farCoverage = 0.0;
             if (shading < 1.0) {
-                farCoverage = texture(weatherMap, p).r;
+                farCoverage = fam == 0 ? texture(weatherMap, p).r
+                                       : texture(otherWeather, p).r;
                 float mean = -log2(1.0 - FAR_ALPHA * farCoverage)
                            / (lf.extinction * lf.slabThickness);
                 density = mix(mean, density, detail);
@@ -282,9 +330,12 @@ void main() {
                 planetCloudLight(uOwnAtmosphere, p, sunlight, skylight, twilight);
                 lit = true;
             }
-            vec3 radiance = cloudRadianceShifted(lf, p, density, -dir, shading,
-                                                 farCoverage, sunlight, skylight,
-                                                 twilight, shift);
+            vec3 radiance = fam == 0
+                ? cloudRadianceAt(lf, p, density, -dir, shading, farCoverage, sunlight,
+                                  skylight, twilight, weather)
+                : cloudRadianceOther(lf, getField(uLayerCount - 1), p, density, -dir,
+                                     shading, farCoverage, sunlight, skylight,
+                                     twilight, weather);
             float weight = transmittance * alpha;
             light += weight * radiance;
             weightedDistance += weight * t;
