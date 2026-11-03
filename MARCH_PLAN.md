@@ -82,8 +82,9 @@ per-pixel weight was a lattice (removed); the clamp floor (0.04 + 15 % of the me
 (`uStill`), since in motion it left clouds thin as the camera approached (measured: last moving frame vs converged);
 count kept ≥ 4 after a clamp; `MIN_WEIGHT` 0.03. A bicubic history read was tried and dropped (biased to transparent).
 RTX 3070, 2560×1440, ¼: still spread p99 −25–40 %, the 20 km grid 0.184 → 0.045, same cost; in flight the lag equals
-the old pipeline's. Not solved: in flight, sparkle in thin lit cloud at ¼ (the lighting's noise: flat colour, bit 8,
-is clean) shows as 4×4 blocks until it averages; sun march / powder per sample are the suspects.
+the old pipeline's. Billows then reworked (demo pose lat 20.80828 lon 28.37786 alt 3267, `terrain_shots --at`): the ridged noise carved
+sheets, so they are now two layers of the raw noise (`BILLOW_FINER_*`, `billow_gain`). The user confirmed the
+transparency and the sparkle are fine; the remaining jitter is in BACKLOG.md.
 
 Gate to close Phase 1: stability and grid clearly low on far cloud crops, still and moving, in `terrain_shots`
 frames and in `cloud_bench.py --interactive`, at ¼, at no frame-time increase. Then the user flies it.

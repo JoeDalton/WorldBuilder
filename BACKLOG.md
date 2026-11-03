@@ -68,3 +68,35 @@ out:
   show their rectangular edges; the long shadows (`cloudFarDepth`, one value
   per billboard) darken some of them, which makes them stand out a little
   more at dusk (`dusk_in_clouds`).
+
+## The raymarch's steadiness (MARCH_PLAN, Phase 1)
+
+- **A little jitter is left**, at `march_resolution` 0.25 and in far clouds
+  most (still 20 km pose: spread 1.6 mean / 9 at p99 in 8-bit steps; the
+  other poses 0.3-0.8 / 2-3). It sits on thin edges and holes in the
+  cloud, where a ray's jittered steps land on or miss the cloud, and in the
+  lighting's noise (the flat colour, `--cloud-debug 8`, is clean; the sun
+  march and the powder term, which follows the billowy density, are the
+  suspects). Ideas, none tried: the powder term from the density without
+  billows; the lighting evaluated at the segment's mean position per
+  pixel; a per-pixel blue-noise offset instead of the interleaved gradient
+  noise; a lower `MIN_WEIGHT` for far pixels; more samples per segment far
+  off (`SEGMENT_SAMPLES`, +0.4-0.9 ms). Measure with `cloud_bench.py
+  --stability 30` (still) and the `--turn` / `--move` runs; the
+  performance.md §23 "Steadier" tables are the baseline.
+- **The field's own octaves carry the value noise's lattice planes** too
+  (fainter than the billows' were, and shared with the billboards): a
+  rotation of their coordinates would need the CPU twin (`noise.py`),
+  `cloud_field.glsl` and the billboards' placement changed together.
+
+- **The clouds lag behind the camera against terrain, when it flies fast.**
+  Seen at the demo's camera `{lat: 20.18986, lon: 29.12635, alt: 2769,
+  heading: 157.2, pitch: -5.4}`, roll 5.1 (`terrain_shots.py --pose at --at
+  20.18986 29.12635 2769 157.2 -5.4`), advancing toward a mountain: the
+  cloud's update lag is very visible against it. The same when descending
+  fast from orbit. Not looked at yet. Suspects: the history's reprojection by
+  the cloud's own distance (`cloud_resolve.frag`) against a near, hard
+  edge (the terrain's depth is not part of it), the composite's depth test
+  at the view's resolution, and `uStill` (clamp floor in motion). Measure
+  with a `cloud_bench.py --move` flight over a terrain pose, the last moving
+  frame against the converged one.

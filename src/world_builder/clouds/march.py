@@ -332,6 +332,20 @@ STILL_METRES = 2.0
 TURN_METRES = 400.0
 
 
+#: The finer billow layer's weight over the first's (cloud_march.frag).
+BILLOW_FINER_WEIGHT = 0.5
+
+
+def billow_gain(volume: np.ndarray) -> float:
+    """:returns: what scales two layers of the noise itself (the second
+    :data:`BILLOW_FINER_WEIGHT` of the first, independent) to the spread of the
+    ridged noise ``1 - |2n - 1|`` the billows once were: the same depth of
+    erosion, in lumps"""
+    ridged = float(np.std(1.0 - np.abs(2.0 * volume - 1.0)))
+    layers = float(np.std(volume)) * math.sqrt(1.0 + BILLOW_FINER_WEIGHT**2)
+    return ridged / max(layers, 1e-6)
+
+
 def block_of(resolution: float) -> int:
     """:returns: the view's pixels per march pixel, per axis, for
     ``CloudSettings.march_resolution``"""
@@ -807,6 +821,8 @@ class CloudMarch:
             "uDetailScale": DETAIL_SCALE,
             "uDetailErosion": DETAIL_EROSION,
             "uBillowMean": float(np.mean(1.0 - np.abs(2.0 * volume - 1.0))),
+            "uBillowGain": billow_gain(volume),
+            "uBillowRawMean": float(np.mean(volume)),
             # The deck's (cloud_deck.vert, cloud.frag)
             "uDeck": 1,
             "uDeckLayer": self._layers_used - 1,

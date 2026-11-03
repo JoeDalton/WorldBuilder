@@ -42,6 +42,8 @@ uniform int   uFrame;            // this pixel's visits: moves its steps' jitter
 uniform float uDetailScale;
 uniform float uDetailErosion;
 uniform float uBillowMean;
+uniform float uBillowGain;       // march.billow_stats: the blobs' spread, as the ridged noise's
+uniform float uBillowRawMean;    // the noise volume's own mean
 uniform int   uBlock;            // view pixels per march pixel, per axis
 uniform ivec2 uOffset;           // the pixel traced in each block this frame
 uniform vec2  uViewSize;         // the view, pixels
@@ -66,6 +68,12 @@ float resolved(float feature, float footprint) {
 // (orthonormal, columns listed), so no scale changes.
 const mat3 BILLOW_TURN = mat3(0.36, 0.48, -0.8, -0.8, 0.6, 0.0, 0.48, 0.64, 0.6);
 
+// The finer billow layer: its scale over the first's (turned about), its
+// offset and its weight.
+const float BILLOW_FINER_SCALE = 2.3;
+const vec3 BILLOW_FINER_OFFSET = vec3(0.37, 0.81, 0.23);
+const float BILLOW_FINER_WEIGHT = 0.5;
+
 // The density, its edges carved by billows (march.DETAIL_SCALE): the
 // threshold moves by the billowy noise about its mean, in units of its
 // window, so a cloud's edge breaks into rounded lumps, its core stays, and
@@ -89,7 +97,16 @@ float marchDensity(Field f, vec3 p, float shift, float footprint) {
     }
     vec3 coord = BILLOW_TURN * ((p * f.noiseScale + f.noiseOrigin)
                                 * (f.octaveScales.x * uDetailScale));
-    float billow = 1.0 - abs(2.0 * sampleNoise(coord) - 1.0);
+    // Round lumps: two scales of the noise itself, carving where it is high.
+    // (The ridged noise, 1 - |2n - 1|, carved along sheets, which show as
+    // streaks across a cloud seen edge-on.) Its mean and spread are the ridged
+    // noise's, so the coverage and the erosion's depth stay.
+    float finer = sampleNoise(coord.yzx * BILLOW_FINER_SCALE + BILLOW_FINER_OFFSET);
+    finer = mix(uBillowRawMean, finer,
+                resolved(unit / (f.octaveScales.x * uDetailScale * BILLOW_FINER_SCALE),
+                         footprint));
+    float billow = uBillowMean + uBillowGain * (sampleNoise(coord) - uBillowRawMean
+                                                + BILLOW_FINER_WEIGHT * (finer - uBillowRawMean));
     return cloudDensityShifted(f, p, shift + window * (uBillowMean - billow));
 }
 
@@ -207,7 +224,9 @@ void main() {
     float transmittance = 1.0;
     vec3 light = vec3(0.0);
     float weightedDistance = 0.0;
-    vec3 sunlight, skylight, twilight;
+    vec3 sunlight = vec3(0.0);
+    vec3 skylight = vec3(0.0);
+    vec3 twilight = vec3(0.0);
     bool lit = false;
     int current = -1;
     Field lf = f;

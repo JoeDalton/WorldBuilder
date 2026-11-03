@@ -1257,8 +1257,9 @@ raymarch"): value noise has its lattice's planes in it, and the ridged billows
 (`1 - |2n - 1|`) showed them as parallel streaks across every cloud, all one
 way, which no resolve could remove: with the billows off (`--cloud-debug 32`)
 or the flat colour (8) the cloud was smooth or the streaks stayed in its
-alpha; with the billow noise sampled through a rotation off the axes they are
-gone. The same planes are in the field's own octaves (the billboards share
+alpha; with the billow noise sampled through a rotation off the axes most
+were gone, and the last ones were the ridge itself: `1 - |2n - 1|` carves
+sheets, not lumps, so the billows are now two layers of the raw noise (clouds.md). The same planes are in the field's own octaves (the billboards share
 them); they are fainter, being larger and blobbier, and not changed here.
 `cloud_bench.py --turn D` yaws the view D degrees a frame, for the
 reprojection under rotation; `terrain_shots.py --pose ground_up` is the demo's
