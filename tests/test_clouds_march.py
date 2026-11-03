@@ -18,6 +18,7 @@ import pytest
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.march import (
     MIN_STEP_FEATURE,
+    SEGMENT_SAMPLES,
     STEP_GROWTH,
     VIEW_EXTINCTION_SCALE,
     CloudMarch,
@@ -29,6 +30,7 @@ from world_builder.clouds.march import (
     slab_segments,
     sphere_interval,
     step_scale,
+    visit_of,
 )
 from world_builder.clouds.noise import (
     MAX_LAYERS,
@@ -165,12 +167,13 @@ def test_a_ray_that_fits_is_not_stretched():
     assert step_scale(segments, 50.0, 0.01, 10) > 1.0
 
 
-def test_a_short_segment_still_takes_two_samples():
+def test_a_short_segment_still_takes_its_fewest_samples():
     # From orbit, the slab is a sliver of a ray thousands of km long
     origin, d = _ray(2 * R, -90.0)
     segments = slab_segments(origin, d, R, SLAB)
-    t, _ = march_steps(segments, 50.0, 0.5, 64)
-    assert len(t) >= 2
+    t, dt = march_steps(segments, 50.0, 0.5, 64)
+    assert len(t) >= SEGMENT_SAMPLES
+    assert dt.max() <= (segments[0, 1] - segments[0, 0]) / SEGMENT_SAMPLES + 1e-6
 
 
 # ── Compositing ──────────────────────────────────────────────────────────────
@@ -241,6 +244,8 @@ def test_the_shader_shares_the_layer_count_and_the_feature_size():
     assert int(re.search(r"MAX_MARCH_LAYERS = (\d+);", text).group(1)) == MAX_LAYERS
     units = float(re.search(r"NOISE_FEATURE_UNITS = ([\d.]+);", text).group(1))
     assert units == NOISE_FEATURE
+    fewest = float(re.search(r"SEGMENT_SAMPLES = ([\d.]+);", text).group(1))
+    assert fewest == SEGMENT_SAMPLES
 
 
 # ── Settings and the renderer choice ─────────────────────────────────────────
@@ -327,6 +332,20 @@ def test_each_frame_traces_one_pixel_of_a_block_and_a_cycle_all(resolution, bloc
     assert sorted(cycle) == [(x, y) for x in range(block) for y in range(block)]
     # And then again, in the same order
     assert bayer_offset(block, block * block) == cycle[0]
+
+
+@pytest.mark.parametrize("block", [1, 2, 4])
+def test_each_visit_moves_the_jitter_on_once(block):
+    """A pixel traced once a cycle of block x block frames runs through the
+    jitter's sequence one step a visit, not one a frame (it would skip
+    through it, its visits half a step apart and never stratified)."""
+    cycle = block * block
+    traced = [f for f in range(8 * cycle) if bayer_offset(block, f) == (0, 0)]
+    assert [visit_of(block, f) for f in traced] == list(range(8))
+    golden = 0.618034
+    seen = sorted((visit * golden) % 1.0 for visit in range(8))
+    assert max(np.diff(seen)) < 0.25  # eight visits spread over the step
+    assert visit_of(block, 7, gather=False) == 7
 
 
 def test_neighbours_come_far_apart_in_time():

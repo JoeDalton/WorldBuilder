@@ -35,7 +35,7 @@ uniform float uStepGrowth;       // a step's length per metre of distance, farth
 // the last one beyond.
 uniform float uLayerFar[MAX_MARCH_LAYERS];
 uniform int   uLayerCount;
-uniform int   uFrame;            // moves the steps' jitter (0: fixed)
+uniform int   uFrame;            // this pixel's visits: moves its steps' jitter (march.visit_of)
 // The edges' billows (what the billboards' sprites carry): a fine billowy
 // noise, uDetailScale times the field's first octave, moving the threshold
 // by up to uDetailErosion of its window, about its mean uBillowMean.
@@ -49,14 +49,34 @@ uniform vec2  uViewSize;         // the view, pixels
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragDistance;
 
+// What a pixel of the view resolves: a feature spanning fewer view pixels
+// than this fades to its mean (it would alias, a different value every
+// frame's jitter and every move), over to twice as many.
+const vec2 RESOLVED = vec2(2.0, 4.0);
+
+// How much of a feature of this many metres a view pixel of footprint
+// metres resolves: 1 wholly, 0 not at all.
+float resolved(float feature, float footprint) {
+    return smoothstep(RESOLVED.x, RESOLVED.y, feature / max(footprint, 1e-3));
+}
+
 // The density, its edges carved by billows (march.DETAIL_SCALE): the
 // threshold moves by the billowy noise about its mean, in units of its
 // window, so a cloud's edge breaks into rounded lumps, its core stays, and
 // the coverage holds on average. Clear air is found first with the most the
-// billows could add: cloud alone costs the noise twice over.
-float marchDensity(Field f, vec3 p, float shift) {
+// billows could add: cloud alone costs the noise twice over. The two fine
+// octaves and the billows fade to their means where a view pixel (footprint
+// metres) cannot resolve them: the coverage holds (as an octave left out
+// does), the sparkle goes.
+float marchDensity(Field f, vec3 p, float shift, float footprint) {
+    float unit = NOISE_FEATURE_UNITS / f.noiseScale.x;
+    vec2 kept = vec2(resolved(unit / f.octaveScales.z, footprint),
+                     resolved(unit / f.octaveScales.w, footprint));
+    shift += dot((1.0 - kept) * f.octaveWeights.zw, vec2(f.octaveMean));
+    f.octaveWeights.zw *= kept;
+    float billows = resolved(unit / (f.octaveScales.x * uDetailScale), footprint);
     float window = (uCloudDebug & 32) != 0 ? 0.0  // no billows (profiling)
-                                           : (f.threshHi - f.threshLo) * uDetailErosion;
+                 : (f.threshHi - f.threshLo) * uDetailErosion * billows;
     float most = cloudDensityShifted(f, p, shift + window * uBillowMean);
     if (most <= 0.0 || window <= 0.0) {
         return most;
@@ -66,6 +86,8 @@ float marchDensity(Field f, vec3 p, float shift) {
     return cloudDensityShifted(f, p, shift + window * (uBillowMean - billow));
 }
 
+// The fewest samples a stretch of the slab takes (march.SEGMENT_SAMPLES).
+const float SEGMENT_SAMPLES = 8.0;
 // The march stops at this transmittance, and counts the cloud opaque.
 const float OPAQUE = 0.01;
 // A cloudy column's alpha seen from afar: the deck's.
@@ -169,7 +191,9 @@ void main() {
         growth *= k;
     }
     // Where in its step each sample lies: no banding, a fine noise instead,
-    // moved on by the golden ratio each frame so the frames average it away.
+    // moved on by the golden ratio each visit of this pixel (not each frame:
+    // traced once a block's cycle, it would skip through the sequence), so
+    // its visits stratify the step and the resolve averages them away.
     float jitter = fract(interleavedGradient(vec2(pixel)) + float(uFrame) * 0.618034);
 
     float feature = NOISE_FEATURE_UNITS / (f.noiseScale.x * f.octaveScales.x);
@@ -188,7 +212,7 @@ void main() {
     for (int s = 0; s < 2; ++s) {
         vec2 seg = s == 0 ? seg0 : seg1;
         float a = seg.x;
-        float least = 0.5 * (seg.y - seg.x);  // two samples a segment at least
+        float least = (seg.y - seg.x) / SEGMENT_SAMPLES;  // the fewest a segment takes
         while (a < seg.y && steps < uMarchSteps + 8 && transmittance > OPAQUE) {
             float dt = min(min(max(dtMin, a * growth), least), seg.y - a);
             float t = a + dt * jitter;
@@ -210,7 +234,9 @@ void main() {
             float footprint = t * uPixelAngle / feature;
             float detail = 1.0 - smoothstep(0.15, 0.6, footprint);
             float shading = 1.0 - smoothstep(0.04, 0.2, footprint);
-            float density = detail > 0.0 ? marchDensity(lf, p, shift) : 0.0;
+            float density = detail > 0.0
+                          ? marchDensity(lf, p, shift, t * uPixelAngle / float(uBlock))
+                          : 0.0;
             float farCoverage = 0.0;
             if (shading < 1.0) {
                 farCoverage = texture(weatherMap, p).r;

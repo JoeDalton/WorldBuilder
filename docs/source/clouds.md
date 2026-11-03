@@ -324,9 +324,14 @@ cloud). Here each pixel steps along its own ray:
   near the camera, which leaves a clear bubble).
 - **In steps** of `MIN_STEP_FEATURE` of the finest feature near the camera
   (50 m for cumulus), `STEP_GROWTH` of the distance farther, all lengthened
-  alike when a ray needs more than `CloudSettings.march_steps`. Each sample
-  is jittered within its step, the jitter moving on by the golden ratio
-  each frame. The march stops once the cloud is opaque. The steps' geometry
+  alike when a ray needs more than `CloudSettings.march_steps`, and at
+  least `SEGMENT_SAMPLES` (8) a stretch of the slab: a far ray crossing it
+  steeply in a few steps longer than its clouds' edges are thick hits or
+  misses thin cloud by chance (the sparkle seen from 20 km up). Each sample
+  is jittered within its step, the jitter moving on by the golden ratio at
+  each **visit** of the pixel (`visit_of`), not each frame: traced once a
+  block's cycle, a per-frame jitter skipped half a step a visit and never
+  stratified it. The march stops once the cloud is opaque. The steps' geometry
   has a NumPy mirror that the tests run (`slab_segments`, `march_steps`,
   `march_transmittance`).
 - **No longer steps in clear air.** A step longer than the finest features
@@ -339,7 +344,11 @@ cloud). Here each pixel steps along its own ray:
   threshold (the exact bound, from the texels each octave's filter
   touches, did in 0.004 % of the cells).
 - **The field** with the octaves the billboard shells would have there
-  (`shell_octaves` over their distance bands). The weather's shift is read
+  (`shell_octaves` over their distance bands), and where a view pixel spans
+  more than half a fine octave's feature (the 3rd and 4th, 285 m and 125 m
+  for cumulus) or the billows', that one fades to its mean (as an octave
+  left out does: the coverage holds): it would alias, a different value at
+  every jitter and every move. The weather's shift is read
   once per kilometre of ray (`cloudDensityShifted`), not at every sample.
   Two departures, march-only, give back the billboards' look:
   - the view ray takes **twice the field's extinction**
@@ -370,22 +379,27 @@ from `use_split_depth`):
 2. a fullscreen card **marches** one pixel of every 2 × 2 block
    (`march_resolution` ½; 4 × 4 at ¼), a different one each frame in a
    Bayer order. It writes the premultiplied cloud and its distance;
-3. a **resolve** gathers them into the view's resolution over the frames:
-   the other pixels come from the last frame's result, reprojected along the
-   view ray to the cloud's distance (float64 for the camera's move, float32
-   only near the camera) and held within the range of this frame's
-   neighbouring samples. A traced pixel blends into its history, which
-   averages the jitter away. Two results alternate, each frame's reading
-   the other's;
+3. a **resolve** gathers them into the view's resolution over the frames.
+   Every pixel blends this frame's samples around it (the four nearest,
+   bilinearly) into the last frame's result, by the nearest sample's
+   Gaussian weight (its reach 0.3 of a block), so no pixel of a block is
+   treated apart and no grid shows. The history is reprojected along the
+   view ray to the pixel's own cloud distance (this frame's first, then the
+   history's there; float64 for the camera's move, float32 only near the
+   camera) and held within 1.25 standard deviations of the 3 × 3 samples
+   around. Each pixel counts the samples it has gathered (the distance
+   target's second channel): this frame's share falls as 1 / (count + 1)
+   down to `MIN_WEIGHT` (0.05), and what the clamp takes away starts the
+   count over. Two results alternate, each frame's reading the other's;
 4. a card lays the result over the range's own pass, premultiplied "over",
    at the **cloud's own depth**. The scene's depth test hides it pixel by
    pixel at the view's resolution, behind anything nearer, which also
    drops any stale history a moving model would leave behind it.
 
-The near range's clouds are close, large and soft on screen. It traces the
-middle of each block every frame, averages only its jitter, at the march's
-resolution, and the composite upsamples it: a full-resolution pass less. It
-runs only when the slab reaches into the near range.
+The near range gathers as the far one does (it once traced the middle of
+each block every frame at the march's resolution, upsampled by the
+composite: at a quarter of the resolution, 4 × 4 squares). It runs only
+when the slab reaches into the near range.
 
 The sea's reflection sees the deck alone (the far layer is packed for it).
 The textures may be padded to powers of two, so the shaders address them

@@ -145,6 +145,11 @@ _SHADERS = Path(__file__).parent / "shaders"
 MIN_STEP_FEATURE = 0.4
 #: Farther, a step's length per metre of distance from the camera.
 STEP_GROWTH = 0.01
+#: The fewest samples a stretch of the slab takes (cloud_march.frag's
+#: SEGMENT_SAMPLES): a far ray crossing it steeply, in a few steps longer
+#: than its clouds' edges are thick, would hit or miss thin cloud by the
+#: jitter's chance, frame after frame (sparkle seen from 20 km up).
+SEGMENT_SAMPLES = 8
 #: The view ray's extinction over the field's (the sun march keeps the
 #: field's own). The billboards' look: each of their quads carries its
 #: sample's density over a whole chord, which keeps a cloud's edge crisp;
@@ -264,7 +269,7 @@ def march_steps(
     for t0, t1 in segments:
         if t1 <= t0:
             continue
-        least = 0.5 * (t1 - t0)
+        least = (t1 - t0) / SEGMENT_SAMPLES
         a = t0
         while a < t1 and len(ts) < budget + 8:
             dt = min(max(min_step, a * growth), least, t1 - a)
@@ -312,9 +317,10 @@ _BAYER = {
         )
     ),
 }
-#: A traced pixel's share over its history, by block size: at full
-#: resolution every pixel is traced every frame, so it averages longer.
-_FRESH_WEIGHT = {1: 0.2, 2: 1.0 / 3.0, 4: 0.5}
+#: This frame's least share in a pixel that has gathered its full count of
+#: samples (cloud_resolve.frag): it averages the steps' jitter over about
+#: this many of its visits' inverse.
+MIN_WEIGHT = 0.05
 #: The camera may move this far between frames and keep its history, metres
 #: (more is a jump: a new pose, a teleport).
 HISTORY_JUMP = 2000.0
@@ -324,6 +330,14 @@ def block_of(resolution: float) -> int:
     """:returns: the view's pixels per march pixel, per axis, for
     ``CloudSettings.march_resolution``"""
     return max(1, round(1.0 / resolution))
+
+
+def visit_of(block: int, frame: int, gather: bool = True) -> int:
+    """:returns: how many times the pixel traced on *frame* has been traced
+    before (once a cycle of *block* x *block* frames when gathering, every
+    frame otherwise): what moves its steps' jitter on, so that each pixel's
+    visits, not the frames, run through the jitter's sequence"""
+    return frame // (block * block) if gather else frame
 
 
 def bayer_offset(block: int, frame: int) -> tuple[int, int]:
@@ -435,12 +449,11 @@ class _MarchLayer:
     """One depth range's march: its depth pass, its march, its two
     alternating results and the card that lays them over the range's pass.
 
-    A *gathering* layer traces a different pixel of each block every frame
-    and gathers them into the view's resolution; the other traces the same
-    one and only averages its jitter over the frames, at the march's own
-    resolution, upsampled by the composite (the near range: its clouds are
-    close, large and soft on screen, and it costs a full-resolution pass
-    less).
+    A *gathering* layer (both ranges') traces a different pixel of each
+    block every frame and gathers them into the view's resolution; the
+    other traces the same one and only averages its jitter over the frames,
+    at the march's own resolution, upsampled by the composite (a
+    full-resolution pass less, but 4 x 4 squares at a quarter resolution).
     """
 
     def __init__(
@@ -499,6 +512,9 @@ class _MarchLayer:
             self.buffer, name, _shader("cloud_march.vert", "cloud_march.frag")
         )
         self.card.set_shader_input("uSceneDepth", self.depth)
+        # The jitter's index: this layer's visits (visit_of).
+        self.visit = PTA_int.empty_array(1)
+        self.card.set_shader_input("uFrame", self.visit)
 
         # The result, gathered over the frames.
         self.resolves = [
@@ -513,7 +529,7 @@ class _MarchLayer:
                 uMarchDistance=self.distance,
                 uHistory=history.colour,
                 uHistoryDistance=history.distance,
-                uFreshWeight=_FRESH_WEIGHT[block if gather else 1],
+                uMinWeight=MIN_WEIGHT,
             )
 
         # Laid over the range's pass at the cloud's depth.
@@ -595,6 +611,7 @@ class _MarchLayer:
         :param camera: the camera in the planet frame, float64
         """
         offset = self._offset(frame)
+        self.visit[0] = visit_of(self.block, frame, self.gather)
         projection = self.lens.get_projection_mat()
         unproject = self.lens.get_projection_mat_inv()
         placed = self.camera.get_mat(app.render)
@@ -771,7 +788,6 @@ class CloudMarch:
             "uStepGrowth": STEP_GROWTH,
             "uLayerFar": self._layer_far,
             "uLayerCount": self._layer_count,
-            "uFrame": self._frame,
             "uDetailScale": DETAIL_SCALE,
             "uDetailErosion": DETAIL_EROSION,
             "uBillowMean": float(np.mean(1.0 - np.abs(2.0 * volume - 1.0))),
@@ -849,7 +865,7 @@ class CloudMarch:
                 block,
                 sort,
                 states,
-                gather=bit == CLOUD_FAR_BIT,
+                gather=True,
             )
             self._bind(layer.card)
             # Nothing to march until the weather is in (_finish).

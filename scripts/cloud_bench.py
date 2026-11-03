@@ -82,8 +82,8 @@ clouds are hidden), from N frames read back after the timing:
 * **grid**: how much one pixel of each march block (block x block pixels,
   CloudSettings.march_resolution) stands out from the others: each frame's
   brightness less its 3 x 3 mean, its RMS by the pixel's place in its block;
-  the largest over the smallest, less 1, averaged over the frames (0: no
-  pattern; the billboards measure it at the march's block too).
+  the largest less the smallest, 8-bit steps, averaged over the frames (0:
+  no pattern; the billboards measure it at the march's block too).
 
 Interactive (``--interactive``): the probe flies, the camera follows it.
 
@@ -221,7 +221,7 @@ def spread(frames: list[np.ndarray], mask: np.ndarray) -> tuple[float, float]:
 def grid_score(frame: np.ndarray, mask: np.ndarray, block: int) -> float:
     """How much one place in each *block* x *block* block stands out: the
     brightness less its 3 x 3 mean, its RMS per place in the block over the
-    masked pixels, the largest over the smallest, less 1 (0: none)."""
+    masked pixels, the largest less the smallest, 8-bit steps (0: none)."""
     if block <= 1:
         return 0.0
     lum = luminance(frame)
@@ -244,7 +244,7 @@ def grid_score(frame: np.ndarray, mask: np.ndarray, block: int) -> float:
         if chosen.sum() < 64:
             return 0.0
         rms.append(np.sqrt(np.mean(residual[chosen] ** 2)))
-    return float(max(rms) / max(min(rms), 1e-9) - 1.0)
+    return float(max(rms) - min(rms))
 
 
 def local_orientation(position: np.ndarray, heading: float, pitch: float):

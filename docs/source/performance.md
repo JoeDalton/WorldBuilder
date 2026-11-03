@@ -1184,6 +1184,50 @@ HIGH) and the main thread; over fair-weather cumulus it costs 1.3–1.8 times
 the billboards, a third of it fixed. Its unsteadiness (still frames that
 flicker, a block grid in motion) is the first thing to fix.
 
+### Steadier: the reconstruction (Phase 1)
+
+What made the march unsteady, and what changed (clouds.md, "The
+raymarch"): the jitter moved on every frame while a pixel was traced once
+every 4 (it skipped through the sequence: its visits never stratified the
+step), so it moves on per visit; the resolve copied a block's one sample
+into the pixels with no history, reprojected the others by the block's
+distance, and gave the traced pixel a fixed third over its history, so
+1 pixel in 4 stood apart every frame: now every pixel blends the four
+nearest samples by the nearest's Gaussian weight, reprojects by its own
+distance, clamps its history to ±1.25 σ of the 3 × 3 samples, and counts
+its samples (this frame's share 1 / (count + 1), down to 0.05); far off,
+the fine octaves and the billows fade to their means where a pixel cannot
+resolve them, and a stretch of the slab takes 8 samples at least. The near
+range gathers too.
+
+The **grid** below is absolute now (the largest class RMS less the
+smallest, in 8-bit steps: the ratio of the first table rose as the noise
+fell). Same session, HIGH, cloud cost ms; spread (mean / p99) still; grid
+still and moving 10 m a frame:
+
+| Pose | Cost, old | Cost, new ½ | Cost, new ¼ | Spread old | Spread new ½ | Spread new ¼ | Grid moving old / ½ / ¼ |
+|---|---|---|---|---|---|---|---|
+| Below | 3.98 | 3.81 | 2.45 | 2.8 / 18 | 0.9 / 8 | 0.8 / 4 | 0.32 / 0.33 / 0.51 (the sea's glints) |
+| Start | 5.35 | 5.49 | 3.08 | 2.0 / 14 | 0.7 / 7 | 0.6 / 3 | 0.19 / 0.06 / 0.06 |
+| Inside | 6.43 | 7.26 | 3.48 | 1.3 / 15 | 0.5 / 5 | 0.4 / 3 | 0.09 / 0.05 / 0.06 |
+| Above | 5.14 | 5.36 | 2.86 | 2.8 / 15 | 0.9 / 6 | 0.8 / 4 | 0.35 / 0.09 / 0.07 |
+| 20 km up | 2.50 | 2.84 | 1.55 | 8.6 / 57 | 1.6 / 20 | 1.4 / 11 | 1.06 / 0.29 / 0.22 |
+| Model in cloud | 6.93 | 7.62 | 3.78 | 0.7 / 8 | 0.2 / 1 | 0.2 / 1 | 0.01 / 0.07 / 0.08 |
+
+(½ and ¼: `march_resolution`, a quarter and a sixteenth of the pixels
+traced a frame.) The cost moved within this machine's drift (the old
+pipeline measured again in one session with the new: 7.19 / 7.15 ms
+inside, 2.04 / 1.98 at orbit). Tried and dropped: the clamp's statistics
+from the 4 bilinear samples instead of the 3 × 3 (twice the spread, no
+faster); steps half as long far off (`STEP_GROWTH` 0.005: the 20 km sparkle
+gone too, but 0.4–0.9 ms dearer and longer rays stretched to the budget).
+
+At **a sixteenth** the march is steadier than it was at a quarter, and
+costs 1.5–3.8 ms: what the billboards cost at HIGH (1.6–4.9; 10.9 in a
+dense cloud). Moving, its detail is coarser (each pixel's samples come at
+a quarter of the resolution until the history fills in): to judge in
+flight before any preset changes.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

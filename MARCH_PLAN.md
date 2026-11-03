@@ -46,6 +46,8 @@ Measured on the GTX 1070. They change the plan's priorities:
 
 ## Phase 1: Temporal pipeline (the jitter and the grid)
 
+**Done** (performance §23, "Steadier"): flicker 2–5 times lower, the grid in motion 2–4 times lower, at the same cost. Beyond the items below, two more causes turned up far off: the fine octaves and the billows alias (now faded to their means by the pixel's footprint), and steep rays crossed the slab in 2 long steps (now at least 8, `SEGMENT_SAMPLES`). The near range gathers too. At `march_resolution` ¼ (1/16 of the pixels a frame) the march is steadier than it was at ½ and costs 1.5–3.8 ms, about the billboards' HIGH cost. Whether HIGH moves to ¼ is decided after you look at it in flight.
+
 In `cloud_march.frag`, `cloud_resolve.frag` and `march.py` (`_MarchLayer`, `bayer_offset`, `_FRESH_WEIGHT`):
 
 1. **Jitter per visit, not per frame.** Index the sequence by `frame / block²`, with a per-pixel R2 or blue-noise offset, so each pixel's visits stratify its step.
