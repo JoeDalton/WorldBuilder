@@ -1113,6 +1113,77 @@ before and after it (MID with half resolution, its preset's):
 Under the anvil the sheet fills the view: 1.6 times the frame at MID, 2.4
 at HIGH. Elsewhere it is a few milliseconds at most.
 
+## 23. The raymarch on a strong GPU: the baseline (#45)
+
+Before reworking the raymarch ([the raymarch](clouds.md#the-raymarch)), the
+same comparison as §20–22 on a **GTX 1070** (Linux, 1600×900, offscreen, one
+session), with `scripts/cloud_bench.py`'s new columns: the frame's 95th
+percentile, and with `--stability 16` the clouds' **spread** (each cloud
+pixel's brightness range over 16 frames, 8-bit steps: mean / 99th
+percentile) and **grid** (how much one pixel of each march block stands out
+from the others, 0 = none; the billboards measure their own texture's
+0.003–0.05 at the same block). Cloud cost = the frame less the frame with
+the clouds hidden (0.7–1.6 ms).
+
+**Cumulus, HIGH, still** (cloud cost ms; spread mean / p99; grid):
+
+| Pose | Billboards | March | March spread | March grid |
+|---|---|---|---|---|
+| Below | 1.92 | 3.08 | 2.8 / 18 | 0.066 |
+| Start | 2.67 | 4.84 | 2.0 / 14 | 0.042 |
+| Inside the slab | 4.95 | 6.50 | 1.3 / 15 | 0.035 |
+| Above | 3.23 | 4.77 | 2.8 / 16 | 0.057 |
+| 20 km up | 1.64 | 2.45 | 8.6 / 57 | 0.135 |
+| Orbit | 2.21 | 1.62 | 0.4 / 3 | 0.006 |
+| Sunset | 2.88 | 3.57 | 1.2 / 8 | 0.054 |
+| A model in a dense cloud | 10.92 | 6.95 | 0.7 / 8 | 0.009 |
+
+The billboards' still frames do not change (spread 0). At MID the
+billboards (half resolution, a quarter of the billboards) cost 0.7–2.3 ms;
+the march, whose resolution MID does not lower, 3.1–5.5 ms, as unsteady as
+at HIGH (grid 0.07 everywhere).
+
+**Moving** (10 m a frame, HIGH): the view's own change dominates the
+spread for both (billboards 6–12 mean, march 5–13), but the march's
+**grid** rises to 0.13–0.29 (billboards 0.01–0.02, the sea's glints
+0.21 at `below`): the dot grid seen in flight.
+
+**Genera, billboards** (the march cannot draw them yet): HIGH 2.0–2.7 ms
+far off, 7.8 ms over the anvil and in the congestus, 12.3 / 14.0 ms above /
+under the stratus, 21.5 ms between the towers, 27.3 ms under the anvil. MID
+(half resolution) 0.9–4.3 ms everywhere.
+
+**Where the march's time goes** (HIGH, cloud cost ms):
+
+| Pose | Resolution ¼ (1/16 traced) | ½ (1/4, HIGH's) | 1 (all) | No sun march | No billows | Steps a ray |
+|---|---|---|---|---|---|---|
+| Below | 2.19 | 3.08 | 7.84 | 3.03 | 2.68 | 38 |
+| Start | 2.53 | 4.84 | 12.91 | 4.30 | 4.09 | 45 |
+| Inside | 3.13 | 6.50 | 18.90 | 5.65 | 5.45 | 39 |
+| 20 km up | 1.51 | 2.45 | 5.86 | 2.16 | 2.16 | 9 |
+| Orbit | 1.54 | 1.62 | 3.06 | 1.64 | 1.66 | 5 |
+| Model in cloud | 3.39 | 6.95 | 20.49 | 5.55 | 5.57 | 26 |
+
+- **A fixed ~2.2 ms a frame** (the cost's intercept against the traced
+  share; orbit's 1.5 ms with 5 steps): the depth pass per range, the
+  resolve at full resolution, the composite, the near range's own set.
+  At HIGH that is 35–45 % of the march.
+- **The traced pixels**: ~11–17 ms a frame's worth of them inside the slab.
+- **The lighting is not where the time goes on this GPU**: the per-sample
+  sun march is 0.4–1.4 ms of it, the billows 0.4–1.4 ms, the air nothing
+  measurable.
+
+**In the world** (`flight_bench.py --flight low`, HIGH, frame ms mean /
+p95): billboards 12.2 / 21.4, march 11.2 / 19.1. Low flight is CPU-bound on
+this machine: the march spares the main thread the billboards' tiles, sorts
+and uploads (the demo's update 6.7 → 5.4 ms mean).
+
+So on a strong GPU the march's case is the big clouds (two-thirds of the
+billboards' cost in a dense cloud, and the genera's 12–27 ms close up at
+HIGH) and the main thread; over fair-weather cumulus it costs 1.3–1.8 times
+the billboards, a third of it fixed. Its unsteadiness (still frames that
+flicker, a block grid in motion) is the first thing to fix.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

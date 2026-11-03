@@ -8,7 +8,7 @@ sky and the clouds, so the clouds are most of the frame.
         [--half-res | --no-half-res]
         [--uniform-coverage C] [--no-cirrus] [--cloud-debug BITS]
         [--move M] [--genera] [--interior-growth | --no-interior-growth]
-        [--interactive]
+        [--march-resolution R] [--stability N] [--interactive]
 
     --out              where the PNGs go (default ./cloud_bench)
     --pose             the poses to time (default: all, in the order below)
@@ -20,6 +20,8 @@ sky and the clouds, so the clouds are most of the frame.
     --renderer         billboards (the default) or march (the raymarch)
     --half-res         the clouds at half resolution (CloudSettings
                        .half_resolution), over the preset's choice
+    --march-resolution the raymarch's resolution over the view's (1, 0.5,
+                       0.25: CloudSettings.march_resolution), over the preset's
     --uniform-coverage the same coverage everywhere (no weather systems,
                        climate or terrain): comparisons that do not depend
                        on where the pose is
@@ -32,6 +34,9 @@ sky and the clouds, so the clouds are most of the frame.
                        (CloudSettings.interior_growth), over the preset's
     --move             fly the camera (and the probe) along the view at M
                        metres a frame while timing: reprojection under motion
+    --stability        also read N frames back (moving with --move) and score
+                       the clouds' steadiness and the raymarch's block grid
+                       (below)
     --interactive      fly the probe in and out of the clouds in a window
                        (keys below); no timing
 
@@ -62,6 +67,23 @@ up, 25 km north, in the congestus around the cumulonimbus), under_anvil
 in_congestus (4 km up, inside the congestus to the west), stratus_above
 (2 km up over the stratus deck, looking down), stratus_below (300 m up under
 it), genera_orbit (3 radii up).
+
+Each pose prints the frame's median and 95th percentile (ms), the frame
+with the clouds hidden, and the clouds' cost (the medians' difference). With
+debug bit 16 (the raymarch's steps per pixel, red) it also prints the mean
+steps over the clouds' pixels.
+
+With --stability N, over the clouds' pixels (those that change when the
+clouds are hidden), from N frames read back after the timing:
+
+* **spread**: each pixel's brightness range over the frames, 8-bit steps:
+  its mean and 99th percentile (the billboards' still frames: 0). Moving,
+  the view changes too: compare renderers at the same --move;
+* **grid**: how much one pixel of each march block (block x block pixels,
+  CloudSettings.march_resolution) stands out from the others: each frame's
+  brightness less its 3 x 3 mean, its RMS by the pixel's place in its block;
+  the largest over the smallest, less 1, averaged over the frames (0: no
+  pattern; the billboards measure it at the march's block too).
 
 Interactive (``--interactive``): the probe flies, the camera follows it.
 
@@ -106,6 +128,7 @@ from world_builder.clouds.cirrus import CirrusSpec  # noqa: E402
 from world_builder.clouds.cloud import CloudSettings  # noqa: E402
 from world_builder.clouds.genera import GeneraSpec  # noqa: E402
 from world_builder.clouds.half_res import HalfResClouds  # noqa: E402
+from world_builder.clouds.march import block_of  # noqa: E402
 from world_builder.clouds.noise import density_on_sphere  # noqa: E402
 from world_builder.clouds.planet import PlanetClouds  # noqa: E402
 from world_builder.clouds.sphere import _noise  # noqa: E402
@@ -171,6 +194,57 @@ def uniform_weather(planet, coverage: float) -> WeatherSpec:
         maritime=0.0,
         orographic=0.0,
     )
+
+
+def luminance(rgb: np.ndarray) -> np.ndarray:
+    """(h, w, 3) uint8 to (h, w) float brightness, 8-bit steps."""
+    return rgb.astype(np.float64) @ np.array([0.2126, 0.7152, 0.0722])
+
+
+def cloud_mask(with_clouds: np.ndarray, without: np.ndarray) -> np.ndarray:
+    """:returns: the pixels the clouds change (by more than 2 steps of 8
+    bits in any channel), from frames with and without them"""
+    change = np.abs(with_clouds.astype(np.int16) - without.astype(np.int16))
+    return change.max(axis=-1) > 2
+
+
+def spread(frames: list[np.ndarray], mask: np.ndarray) -> tuple[float, float]:
+    """:returns: the mean and 99th percentile of each masked pixel's
+    brightness range over *frames* ((h, w, 3) uint8 each), 8-bit steps"""
+    lum = np.stack([luminance(frame) for frame in frames])
+    ranges = (lum.max(axis=0) - lum.min(axis=0))[mask]
+    if not ranges.size:
+        return 0.0, 0.0
+    return float(ranges.mean()), float(np.percentile(ranges, 99))
+
+
+def grid_score(frame: np.ndarray, mask: np.ndarray, block: int) -> float:
+    """How much one place in each *block* x *block* block stands out: the
+    brightness less its 3 x 3 mean, its RMS per place in the block over the
+    masked pixels, the largest over the smallest, less 1 (0: none)."""
+    if block <= 1:
+        return 0.0
+    lum = luminance(frame)
+    padded = np.pad(lum, 1, mode="edge")
+    h, w = lum.shape
+    box = (
+        sum(
+            padded[1 + dy : 1 + dy + h, 1 + dx : 1 + dx + w]
+            for dy in (-1, 0, 1)
+            for dx in (-1, 0, 1)
+        )
+        / 9.0
+    )
+    residual = lum - box
+    y, x = np.mgrid[0:h, 0:w]
+    place = (y % block) * block + (x % block)
+    rms = []
+    for k in range(block * block):
+        chosen = mask & (place == k)
+        if chosen.sum() < 64:
+            return 0.0
+        rms.append(np.sqrt(np.mean(residual[chosen] ** 2)))
+    return float(max(rms) / max(min(rms), 1e-9) - 1.0)
 
 
 def local_orientation(position: np.ndarray, heading: float, pitch: float):
@@ -386,8 +460,24 @@ class CloudBench(ShowBase):
                 return True
         return False
 
-    def time_frames(self, frames: int) -> float:
-        """:returns: the median of *frames* GPU-synced frames, milliseconds"""
+    def read_frame(self) -> np.ndarray:
+        """:returns: the window's last frame, (h, w, 3) uint8, top row first"""
+        texture = self.win.get_screenshot()
+        ram = np.frombuffer(texture.get_ram_image_as("RGB").get_data(), np.uint8)
+        size = (texture.get_y_size(), texture.get_x_size(), 3)
+        return ram.reshape(size)[::-1]
+
+    def read_frames(self, frames: int) -> list[np.ndarray]:
+        """:returns: the next *frames* frames, read back"""
+        read = []
+        for _ in range(frames):
+            self.taskMgr.step()
+            read.append(self.read_frame())
+        return read
+
+    def time_frames(self, frames: int) -> tuple[float, float]:
+        """:returns: the median and the 95th percentile of *frames*
+        GPU-synced frames, milliseconds"""
         win = self.win
         probe = win.make_display_region(
             0, 1 / win.get_x_size(), 0, 1 / win.get_y_size()
@@ -399,7 +489,7 @@ class CloudBench(ShowBase):
             probe.get_screenshot()  # waits for the GPU
             times.append(time.perf_counter() - start)
         win.remove_display_region(probe)
-        return float(np.median(times)) * 1e3
+        return float(np.median(times)) * 1e3, float(np.percentile(times, 95)) * 1e3
 
 
 class Flight:
@@ -608,6 +698,18 @@ def main() -> None:
         help="larger billboards inside clouds, over the preset's choice",
     )
     parser.add_argument(
+        "--march-resolution",
+        type=float,
+        default=None,
+        help="the raymarch's resolution over the view's, over the preset's",
+    )
+    parser.add_argument(
+        "--stability",
+        type=int,
+        default=0,
+        help="frames read back to score the clouds' steadiness and grid",
+    )
+    parser.add_argument(
         "--interactive", action="store_true", help="fly the probe, no timing"
     )
     args = parser.parse_args()
@@ -619,6 +721,8 @@ def main() -> None:
         settings = replace(settings, interior_growth=args.interior_growth)
     if args.half_res is not None:
         settings = replace(settings, half_resolution=args.half_res)
+    if args.march_resolution is not None:
+        settings = replace(settings, march_resolution=args.march_resolution)
     bench = CloudBench(
         settings,
         cirrus=not args.no_cirrus,
@@ -637,22 +741,35 @@ def main() -> None:
     )
     if "llvmpipe" in renderer:
         print("warning: CPU rasteriser; on WSL set GALLIUM_DRIVER=d3d12 for the GPU")
-    if args.interactive:
-        poses = args.pose or (
-            list(GENERA_POSES)
-            if args.genera
-            else ["model_in_cloud", *[p for p in POSES if p != "model_in_cloud"]]
-        )
-        flight = Flight(bench, poses)
-        flight.next_pose()
-        print(__doc__.split("Interactive")[1])
-        bench.run()
-        return
-    args.out.mkdir(parents=True, exist_ok=True)
+    try:
+        if args.interactive:
+            poses = args.pose or (
+                list(GENERA_POSES)
+                if args.genera
+                else ["model_in_cloud", *[p for p in POSES if p != "model_in_cloud"]]
+            )
+            flight = Flight(bench, poses)
+            flight.next_pose()
+            print(__doc__.split("Interactive")[1])
+            bench.run()
+            return
+        bench_poses(bench, args)
+    finally:
+        bench.executor.shutdown()
 
-    print(
-        f"{'pose':<14} {'frame':>9} {'no clouds':>10} {'clouds':>9} {'billboards':>11}"
-    )
+
+def bench_poses(bench: CloudBench, args: argparse.Namespace) -> None:
+    """Time (and with --stability, score) each pose; see the module."""
+    args.out.mkdir(parents=True, exist_ok=True)
+    block = block_of(bench.settings.march_resolution)
+    steps = (args.cloud_debug & 16) != 0
+    header = f"{'pose':<14} {'frame':>9} {'p95':>9} {'no clouds':>10} {'clouds':>9}"
+    header += f" {'billboards':>11}"
+    if args.stability:
+        header += f" {'spread':>7} {'p99':>6} {'grid':>6}"
+    if steps:
+        header += f" {'steps':>6}"
+    print(header)
     for name in args.pose or list(GENERA_POSES if args.genera else POSES):
         bench.place_pose(name)
         bench.probe_world = None
@@ -662,22 +779,45 @@ def main() -> None:
             continue
         for _ in range(3):  # let the last uploads reach the screen
             bench.taskMgr.step()
+        start = (bench.cam_world.copy(), bench.probe_world)
         bench.move = args.move
-        with_clouds = bench.time_frames(args.frames)
+        with_clouds, p95 = bench.time_frames(args.frames)
         path = args.out / f"{name}.png"
         bench.win.save_screenshot(Filename.from_os_specific(str(path)))
+        frames = []
+        if args.stability:
+            # From the timing's start again: the same view as the frames
+            # without clouds below (still) or the same flight (moving).
+            bench.move = 0.0
+            bench.cam_world, bench.probe_world = start[0].copy(), start[1]
+            for _ in range(8):  # the history settles back
+                bench.taskMgr.step()
+            bench.move = args.move
+            frames = bench.read_frames(args.stability)
+        lit = bench.read_frame()
         bench.move = 0.0
+        bench.cam_world, bench.probe_world = start[0].copy(), start[1]
         billboards = bench.clouds.stats["billboards"]
         bench.clouds.set_visible(False)
         bench.taskMgr.step()
-        without = bench.time_frames(args.frames)
+        without, _ = bench.time_frames(args.frames)
+        bench.taskMgr.step()
+        bare = bench.read_frame()
         bench.clouds.set_visible(True)
-        print(
-            f"{name:<14} {with_clouds:>7.2f}ms {without:>8.2f}ms "
+        line = (
+            f"{name:<14} {with_clouds:>7.2f}ms {p95:>7.2f}ms {without:>8.2f}ms "
             f"{with_clouds - without:>7.2f}ms {billboards / 1e3:>9.0f}k"
-            f"{'' if settled else '  TIMEOUT'}"
         )
-    bench.executor.shutdown()
+        mask = cloud_mask(frames[0] if frames else lit, bare)
+        if args.stability:
+            mean, worst = spread(frames, mask)
+            grid = float(np.mean([grid_score(frame, mask, block) for frame in frames]))
+            line += f" {mean:>7.2f} {worst:>6.1f} {grid:>6.3f}"
+        if steps:
+            red = lit[..., 0].astype(np.float64)[mask] / 255.0
+            mean_steps = red.mean() * bench.settings.march_steps if red.size else 0.0
+            line += f" {mean_steps:>6.1f}"
+        print(line + ("" if settled else "  TIMEOUT"))
 
 
 if __name__ == "__main__":

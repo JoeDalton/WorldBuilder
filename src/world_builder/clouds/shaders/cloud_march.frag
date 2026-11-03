@@ -55,7 +55,8 @@ layout(location = 1) out vec4 fragDistance;
 // the coverage holds on average. Clear air is found first with the most the
 // billows could add: cloud alone costs the noise twice over.
 float marchDensity(Field f, vec3 p, float shift) {
-    float window = (f.threshHi - f.threshLo) * uDetailErosion;
+    float window = (uCloudDebug & 32) != 0 ? 0.0  // no billows (profiling)
+                                           : (f.threshHi - f.threshLo) * uDetailErosion;
     float most = cloudDensityShifted(f, p, shift + window * uBillowMean);
     if (most <= 0.0 || window <= 0.0) {
         return most;

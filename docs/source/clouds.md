@@ -408,4 +408,7 @@ the clouds alone (the air, the sky, no terrain) from fixed poses, with
 either renderer, still or moving (`--move`). Its `model_in_cloud` pose puts
 a black ball, standing in for a game's model, half into a cloud, and
 `--interactive` flies it in and out of the clouds, switching renderers with
-M. On WSL, run it with `GALLIUM_DRIVER=d3d12`, or Mesa draws on the CPU.
+M. `--stability N` scores the clouds' steadiness over N frames read back
+(each pixel's brightness spread, and the raymarch's block grid: see the
+script), and each pose's frame comes with its 95th percentile
+([performance §23](performance.md)). On WSL, run it with `GALLIUM_DRIVER=d3d12`, or Mesa draws on the CPU.

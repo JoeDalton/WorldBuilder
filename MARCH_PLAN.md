@@ -25,6 +25,16 @@ Your insight is right: the cloud shadow maps and the march's lighting are one pr
 
 Phases stop for your demo check after each one (memory: stop-after-each-phase, visual-confirmation).
 
+## Phase 0 findings (done: `docs/source/performance.md` §23)
+
+Measured on the GTX 1070. They change the plan's priorities:
+
+- **Over fair-weather cumulus the billboards are cheaper** (HIGH cloud cost 1.6–4.9 ms vs the march's 2.5–6.5). The march wins in a dense cloud (6.9 vs 10.9 ms) and near the genera, where the billboards cost 12–27 ms at HIGH. In the world it already wins on the main thread: low flight 11.2 / 19.1 vs 12.2 / 21.4 ms mean / p95, the billboards' tiles and sorts spared.
+- **The march's cost is a fixed ~2.2 ms a frame** (depth passes, full-resolution resolve, composite, near range) **plus its traced pixels.** At `inside`: 3.1 / 6.5 / 18.9 ms tracing 1/16, ¼ and all of them per frame.
+- **Lighting is not the lever here.** The per-sample sun march is 0.4–1.4 ms, the billows 0.4–1.4 ms, the air nothing measurable. So Phase 2's sun-transmittance map stays for its other reasons (shadows, both families, the far segment). It moves after Phase 3, and is kept only if the genera's tall sun marches make lighting matter.
+- **Instability, quantified.** Still frames flicker (spread 1.2–3 mean, p99 8–20 levels; 8.6 / 57 at 20 km). The block grid is 0.04–0.13 still and **0.13–0.29 in motion**, against the billboards' 0.01–0.02.
+- **The levers, in order:** Phase 1's reconstruction, good enough to trace 1/16 of the pixels a frame at HIGH (≈2.5–3.4 ms, the billboards' cost); then the fixed cost; then the genera (Phase 3).
+
 ## Phase 0: Baseline and measuring tools
 
 - `scripts/cloud_bench.py` gains:

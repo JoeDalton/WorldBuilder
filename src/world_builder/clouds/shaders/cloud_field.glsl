@@ -23,8 +23,8 @@ uniform float planetRadius;      // sea-level radius
 // two-channel map).
 uniform samplerCube weatherMap;
 // A/B switches for profiling (bits, 0 = normal): 1 no sun march, 2 no
-// atmosphere, 4 two octaves only, 8 flat colour after the density, 16 (the
-// raymarch) its steps per pixel, red over the budget.
+// atmosphere, 4 two octaves only, 8 flat colour after the density; the
+// raymarch's: 16 its steps per pixel, red over the budget, 32 no billows.
 uniform int   uCloudDebug;
 // The far clouds' averages, by the sun's cosine (x, from deckLightCosMin to
 // 1) and the weather's coverage (y): the deck's lighting
