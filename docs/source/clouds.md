@@ -359,6 +359,9 @@ cloud). Here each pixel steps along its own ray:
     billowy noise 24 times finer than the first octave moves the threshold
     by up to half its window about its mean (`DETAIL_EROSION`), so the core
     stays and the coverage holds.
+    That noise is sampled through a rotation off the field's axes
+    (`BILLOW_TURN`): value noise carries its lattice's planes, which the
+    ridged billows showed as parallel streaks across every cloud, all one way.
 - **Lit** per sample exactly as the billboards are (`cloud_shading.glsl`,
   which both renderers include). The air is applied once per pixel, at the
   cloud's transmittance-weighted distance, with the billboards' per-vertex
@@ -381,16 +384,21 @@ from `use_split_depth`):
    Bayer order. It writes the premultiplied cloud and its distance;
 3. a **resolve** gathers them into the view's resolution over the frames.
    Every pixel blends this frame's samples around it (the four nearest,
-   bilinearly) into the last frame's result, by the nearest sample's
-   Gaussian weight (its reach 0.3 of a block), so no pixel of a block is
-   treated apart and no grid shows. The history is reprojected along the
+   bilinearly) into the last frame's result, by the same share whatever
+   its distance to a traced pixel (a weight that fell with it put a grid of
+   the traced pixels on the cloud). The history is reprojected along the
    view ray to the pixel's own cloud distance (this frame's first, then the
    history's there; float64 for the camera's move, float32 only near the
    camera) and held within 1.25 standard deviations of the 3 × 3 samples
-   around. Each pixel counts the samples it has gathered (the distance
+   around. While the view is still (`uStill`, from the camera's move and
+   turn), that range is widened by a floor and a share of the mean, or the
+   steps' own noise would clamp the history and start its count over; in
+   motion the floor is gone, or a cloud coming closer would keep the thin
+   look it had. Each pixel counts the samples it has gathered (the distance
    target's second channel): this frame's share falls as 1 / (count + 1)
-   down to `MIN_WEIGHT` (0.05), and what the clamp takes away starts the
-   count over. Two results alternate, each frame's reading the other's;
+   down to `MIN_WEIGHT` (0.03), and what the clamp takes away takes the
+   count down (to 4 at least, so a noisy sample is not taken
+   whole). Two results alternate, each frame's reading the other's;
 4. a card lays the result over the range's own pass, premultiplied "over",
    at the **cloud's own depth**. The scene's depth test hides it pixel by
    pixel at the view's resolution, behind anything nearer, which also

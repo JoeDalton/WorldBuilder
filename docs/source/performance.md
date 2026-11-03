@@ -1228,6 +1228,42 @@ dense cloud). Moving, its detail is coarser (each pixel's samples come at
 a quarter of the resolution until the history fills in): to judge in
 flight before any preset changes.
 
+**Steadier, second pass.** The first pass left a light jitter at ¼, a faint
+grid in flight, and clouds that came in thin when the camera moved fast.
+Causes found in the resolve: the Gaussian weight by the nearest sample's
+distance was itself block-periodic (a traced pixel took a whole sample, its
+neighbours a few per cent, so the samples' noise sat on the lattice); and the
+clamp's width, from 9 samples that often agree, clamped the history by the
+steps' own noise and started its count over, feeding the noise. Now the share
+is the same for every pixel, the clamp has a floor (0.04 + 15 % of the mean)
+**while the view is still** (`uStill`: with the floor on in motion, a cloud
+coming closer kept its thin look: the error against the converged frame was
+twice the old pipeline's, with a bias towards transparent), a clamp takes a
+count down to 4 at least, and `MIN_WEIGHT` is 0.03. RTX 3070, 2560 × 1440, ¼,
+still, 30 frames (spread mean / p99, grid), before → after: start 0.73 / 4.1,
+0.020 → 0.56 / 3.0, 0.012; inside 0.48 / 3.1, 0.026 → 0.30 / 2.1, 0.025; above
+0.99 / 4.8, 0.056 → 0.78 / 3.4, 0.054; 20 km up 2.10 / 15.9, 0.184 → 1.61 /
+9.4, 0.045. The cost is unchanged (start 1.9–2.2 ms, 20 km 1.1–1.2 ms). In
+flight at 80 m a frame (`lag.py`-style: the last moving frame against the
+converged one, RMS in 8-bit steps) the new pipeline equals the old (start
+1.85 vs 1.86, above 3.41 vs 3.35).
+Tried and dropped: a bicubic history read (sharper in motion, but its error
+against the converged frame rose by a quarter and it biased towards
+transparent); no distance weight with a wider Gaussian (in between); a
+Gaussian-smoothed reconstruction for pixels taking a whole frame (no change).
+
+**The streaks in the clouds were the billows' noise** (clouds.md, "The
+raymarch"): value noise has its lattice's planes in it, and the ridged billows
+(`1 - |2n - 1|`) showed them as parallel streaks across every cloud, all one
+way, which no resolve could remove: with the billows off (`--cloud-debug 32`)
+or the flat colour (8) the cloud was smooth or the streaks stayed in its
+alpha; with the billow noise sampled through a rotation off the axes they are
+gone. The same planes are in the field's own octaves (the billboards share
+them); they are fainter, being larger and blobbier, and not changed here.
+`cloud_bench.py --turn D` yaws the view D degrees a frame, for the
+reprojection under rotation; `terrain_shots.py --pose ground_up` is the demo's
+start looking up, where the streaks were seen.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

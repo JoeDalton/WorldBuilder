@@ -320,10 +320,16 @@ _BAYER = {
 #: This frame's least share in a pixel that has gathered its full count of
 #: samples (cloud_resolve.frag): it averages the steps' jitter over about
 #: this many of its visits' inverse.
-MIN_WEIGHT = 0.05
+MIN_WEIGHT = 0.03
 #: The camera may move this far between frames and keep its history, metres
 #: (more is a jump: a new pose, a teleport).
 HISTORY_JUMP = 2000.0
+#: The camera's motion (metres, plus :data:`TURN_METRES` per unit of its
+#: rotation matrix's change) that takes the clamp's noise floor to nothing
+#: (cloud_resolve.frag's uStill): a floor holds a still view steady, but in
+#: motion it would keep what a cloud was as it comes closer.
+STILL_METRES = 2.0
+TURN_METRES = 400.0
 
 
 def block_of(resolution: float) -> int:
@@ -547,11 +553,12 @@ class _MarchLayer:
                 uPrevRelToClip=identity,
                 uOffset=LVecBase2i(0, 0),
                 uHistoryValid=0,
+                uStill=0.0,
             )
         self.composite.set_shader_input("uDistance", self.distance)
         self._view = view
         self.active = True
-        self._previous: tuple[Any, np.ndarray] | None = None
+        self._previous: tuple[Any, np.ndarray, Any] | None = None
         self._set_sizes(view)
 
     def _march_size(self, view: tuple[int, int]) -> tuple[int, int]:
@@ -626,14 +633,22 @@ class _MarchLayer:
 
         valid = self._previous is not None
         previous = rel_to_clip
+        still = 0.0
         if valid:
-            last_rel_to_clip, last_camera = self._previous
+            last_rel_to_clip, last_camera, last_turned = self._previous
             moved = camera - last_camera
+            turn = sum(
+                abs(turned.get_cell(i, j) - last_turned.get_cell(i, j))
+                for i in range(3)
+                for j in range(3)
+            )
+            motion = (float(np.linalg.norm(moved)) + turn * TURN_METRES) / STILL_METRES
+            still = 1.0 - min(motion, 1.0)
             valid = float(np.linalg.norm(moved)) <= HISTORY_JUMP
             # A point relative to the camera now, as it was relative to the
             # camera then (float64 for the move, float32 only near the camera).
             previous = LMatrix4f.translate_mat(LVecBase3f(*moved)) * last_rel_to_clip
-        self._previous = (rel_to_clip, camera.copy())
+        self._previous = (rel_to_clip, camera.copy(), LMatrix4f(turned))
 
         write = self.resolves[frame % 2]
         read = self.resolves[1 - frame % 2]
@@ -644,6 +659,7 @@ class _MarchLayer:
             uPrevRelToClip=previous,
             uOffset=LVecBase2i(*offset) if self.gather else LVecBase2i(0, 0),
             uHistoryValid=int(valid),
+            uStill=still,
         )
         self.composite.set_shader_inputs(uClouds=write.colour, uDistance=write.distance)
 

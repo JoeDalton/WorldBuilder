@@ -50,8 +50,9 @@ Without the wait, an offscreen frame is not held back by the GPU at all. Each
 pose prints whether it settled, the body's chunk count and finest level, the
 cloud billboards, the LOD pass and the median frame time.
 
-Poses: ground (the level's start), coast (2 km up over the reference point),
-high (20 km up), swell / sea_surface (13 and 17 km up, inside the sea's 12-18 km
+Poses: ground (the level's start), ground_up (the same, 11 degrees up),
+coast (2 km up over the reference point), high (20 km up),
+swell / sea_surface (13 and 17 km up, inside the sea's 12-18 km
 fade from its near look to its flat far one), stratosphere (200 km up),
 orbit (3 radii up, looking down), corner (over a cube corner, where three faces
 meet), lod (the LOD debug view from 20 km), in_clouds (inside the cloud deck,
@@ -264,6 +265,16 @@ def _poses(demo: TerrainDemo) -> dict:
     # The cirrus (8-9 km) against the cumulus (2.2-3.2 km): under both, between,
     # above both, and at dusk (looking west, toward the set sun).
     poses["cirrus_up"] = (lat0, lon0, start.get("alt", 800.0), 0.0, 35.0, 0, 0)
+    # The start looking a little up, at the cumulus above the horizon.
+    poses["ground_up"] = (
+        lat0,
+        lon0,
+        start.get("alt", 800.0),
+        start.get("heading", 0.0),
+        11.0,
+        0,
+        0,
+    )
     poses["cirrus_between"] = (ref_lat, ref_lon, 5000.0, 0.0, 3.0, 0, 0)
     poses["cirrus_above"] = (ref_lat, ref_lon, 15000.0, 0.0, -8.0, 0, 0)
     poses["cirrus_dusk"] = (ref_lat, ref_lon, 600.0, 90.0, 15.0, 0, 0)

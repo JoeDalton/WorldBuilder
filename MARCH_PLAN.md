@@ -2,119 +2,153 @@
 
 ## Context
 
-The raymarch (`CloudSettings.renderer = "march"`, `clouds/march.py`, `shaders/cloud_march.frag`,
-`cloud_resolve.frag`, `cloud_composite.frag`) was meant to cut frame time when big or many clouds
-fill the view. Billboards pay for the clouds' volume on screen as overdraw (§21–22 of
-`docs/source/performance.md`: 60–150 ms near cumulonimbus at HIGH). Today the march has these problems:
+The raymarch (`CloudSettings.renderer = "march"`; `clouds/march.py`, shaders `cloud_march.frag`,
+`cloud_resolve.frag`, `cloud_composite.frag`) should cut frame time when big or many clouds fill the view:
+billboards pay for the volume on screen as overdraw (`docs/source/performance.md` §21–22: 60–150 ms near
+cumulonimbus at HIGH). Open problems of the march:
 
-- **Jitter and a dot grid.** Read from the code, there are three causes:
-  1. Each pixel is traced every block²-th frame, but the golden-ratio jitter advances every frame. At a 2×2 block each visit jumps the jitter by 4·0.618 ≈ 0.47 of a step, so the samples never stratify.
-  2. Untraced pixels are reprojected with their block's fresh distance, not their own, which smears edges.
-  3. Pixels with no history copy their block's sample as is (2×2 blocks). Fresh pixels get a fixed ⅓ weight and no spatial filtering, so every frame 1 pixel in 4 differs from the history around it: the grid.
-- **No genera.** It samples `cloudDensityShifted` (no convective depth, no shelf) through one slab, so `PlanetClouds` forces billboards whenever genera are on.
-- **No shadows either way.** It casts no shadow on the ground, sea or models (`PlanetClouds._shade` falls back to defaults). It also takes no eclipse, mountain or ring shadow, because `PlanetClouds._bind_layer` skips `CloudMarch`.
-- **Its cost is per-sample lighting.** Each cloudy sample runs the full sun march (`sunOpticalDepthAt`, 6–12 steps × 2 fetches), on top of 2–4 density fetches and the billows.
+- **Unstable** (jitter, dot grid): Phase 1, partly fixed, see "Open issues".
+- **No genera**: it samples `cloudDensityShifted` through one slab, so `PlanetClouds` forces billboards when genera are on.
+- **No shadows**: it casts none on ground, sea or models, and takes no eclipse, mountain or ring shadow (`PlanetClouds._bind_layer` skips `CloudMarch`).
+- **Per-sample lighting cost**: each cloudy sample runs the full sun march (`sunOpticalDepthAt`).
 
-Your insight is right: the cloud shadow maps and the march's lighting are one problem, transmittance toward the sun at a point. Extending the existing maps (`clouds/shadow_map.py`) from "optical depth of the whole chord" to "cumulative optical depth at several heights" gives one GPU-baked map that lights the march's samples (a fetch instead of a sun march), shades the ground, sea and models, and covers both families.
+Insight: cloud shadow maps and the march's lighting are one problem, transmittance toward the sun at a point.
+Extending `clouds/shadow_map.py` from "optical depth of the whole chord" to "cumulative depth at several heights"
+gives one GPU-baked map that lights the march, shades ground/sea/models, and covers both families.
 
-**Decisions:**
-- The march becomes the default renderer, with billboards as fallback. It is tuned for its own look, not billboard parity.
-- One march covers both genera families: the bands never overlap, so the family is picked by height.
-- No godrays.
-- Target: GTX 1070 at 1600×900. p95 first, and the mean must not rise.
+**Decisions:** the march becomes the default renderer (billboards as fallback), tuned for its own look, not
+billboard parity · one march for both genera families (bands never overlap; family picked by height) · no godrays ·
+target GTX 1070 at 1600×900, p95 first, mean must not rise · stop for the user's demo check after each phase.
 
-Phases stop for your demo check after each one (memory: stop-after-each-phase, visual-confirmation).
+## Phase 0: baseline and tools (done, performance.md §23)
 
-## Phase 0 findings (done: `docs/source/performance.md` §23)
+`scripts/cloud_bench.py` has `--stability N` (per-pixel spread over still frames), a grid score (absolute, in
+8-bit steps, still and `--move`), `--cloud-debug` bits (no sun march, 16 steps/pixel, no billows).
+Findings on the 1070 that set the priorities:
 
-Measured on the GTX 1070. They change the plan's priorities:
+- Over fair-weather cumulus billboards are cheaper (1.6–4.9 ms vs 2.5–6.5 at HIGH); the march wins in dense cloud
+  (6.9 vs 10.9) and near genera (billboards 12–27 ms). Low flight: march 11.2 / 19.1 ms mean / p95 vs 12.2 / 21.4.
+- The march costs a fixed ~2.2 ms (depth passes, full-res resolve, composite, near range) plus traced pixels
+  (`inside`: 3.1 / 6.5 / 18.9 ms tracing 1/16, ¼, all).
+- Lighting is not the lever (sun march 0.4–1.4 ms, billows 0.4–1.4, air ~0). Phase 2 stays for shadows, both
+  families and the far segment; it moves after Phase 3, kept for lighting only if the genera's tall sun marches need it.
+- Levers in order: reconstruction good enough to trace 1/16 of pixels a frame at HIGH (≈ billboards' cost); the fixed
+  cost; the genera.
 
-- **Over fair-weather cumulus the billboards are cheaper** (HIGH cloud cost 1.6–4.9 ms vs the march's 2.5–6.5). The march wins in a dense cloud (6.9 vs 10.9 ms) and near the genera, where the billboards cost 12–27 ms at HIGH. In the world it already wins on the main thread: low flight 11.2 / 19.1 vs 12.2 / 21.4 ms mean / p95, the billboards' tiles and sorts spared.
-- **The march's cost is a fixed ~2.2 ms a frame** (depth passes, full-resolution resolve, composite, near range) **plus its traced pixels.** At `inside`: 3.1 / 6.5 / 18.9 ms tracing 1/16, ¼ and all of them per frame.
-- **Lighting is not the lever here.** The per-sample sun march is 0.4–1.4 ms, the billows 0.4–1.4 ms, the air nothing measurable. So Phase 2's sun-transmittance map stays for its other reasons (shadows, both families, the far segment). It moves after Phase 3, and is kept only if the genera's tall sun marches make lighting matter.
-- **Instability, quantified.** Still frames flicker (spread 1.2–3 mean, p99 8–20 levels; 8.6 / 57 at 20 km). The block grid is 0.04–0.13 still and **0.13–0.29 in motion**, against the billboards' 0.01–0.02.
-- **The levers, in order:** Phase 1's reconstruction, good enough to trace 1/16 of the pixels a frame at HIGH (≈2.5–3.4 ms, the billboards' cost); then the fixed cost; then the genera (Phase 3).
+## Phase 1: temporal pipeline (committed 38364b9; **not closed**, see "Open issues")
 
-## Phase 0: Baseline and measuring tools
+Implemented in `cloud_march.frag`, `cloud_resolve.frag`, `march.py`:
 
-- `scripts/cloud_bench.py` gains:
-  - `--stability N`: per-pixel brightness spread over N still frames, mean / p99 over cloud pixels. This is the §20 metric, now in the script.
-  - A **grid** score: the image's spectral energy at the block period (FFT at ½ and ¼ of Nyquist), still and with `--move`.
-  - The existing `--cloud-debug` bits for breakdowns: 1 no sun march, 16 steps per pixel, plus a new bit for no billows.
-- Shut the worker pool down in every bench path (memory: bench-scripts-pool-shutdown).
-- Baseline on the 1070, one session, mean and p95: billboards vs march at MID/HIGH, the cumulus poses and the genera poses (billboards only today). Also `flight_bench.py --flight low` with each renderer. Written up as `docs/source/performance.md` §23.
+- Jitter indexed per pixel visit (`frame / block²`, own `uFrame` per layer), not per frame.
+- Resolve: every pixel blends the 4 nearest fresh samples (bilinear, times a Gaussian weight of the nearest sample,
+  `REACH` 0.3 block) into its history; history reprojected in two steps by the pixel's own distance; clamped to
+  ±1.25 σ of the 3×3 fresh samples; per-pixel sample count in the distance target's `g`; fresh share
+  `near · max(1/(count+1), uMinWeight 0.05)`; the clamp's removal resets the count.
+- Far off, the two finest octaves and the billows fade to their means by pixel footprint (`uPixelAngle / uBlock`).
+- Slab segments take ≥ 8 samples (`SEGMENT_SAMPLES`); the near range gathers over frames too.
+- Tried and dropped: clamp from 4 bilinear samples instead of 3×3 (2× the spread, no faster); halving `STEP_GROWTH`
+  (+0.4–0.9 ms, long rays hit the budget).
 
-## Phase 1: Temporal pipeline (the jitter and the grid)
+Result (HIGH, same session): spread 2–5× lower, grid in motion 2–4× lower, same cost. At `march_resolution` ¼
+(1/16 of pixels a frame): 1.5–3.8 ms, steadier than the old ½. Presets untouched pending a flight check.
+Tests 819 green. Detail in performance.md §23 "Steadier" and clouds.md "The raymarch".
 
-**Done** (performance §23, "Steadier"): flicker 2–5 times lower, the grid in motion 2–4 times lower, at the same cost. Beyond the items below, two more causes turned up far off: the fine octaves and the billows alias (now faded to their means by the pixel's footprint), and steep rays crossed the slab in 2 long steps (now at least 8, `SEGMENT_SAMPLES`). The near range gathers too. At `march_resolution` ¼ (1/16 of the pixels a frame) the march is steadier than it was at ½ and costs 1.5–3.8 ms, about the billboards' HIGH cost. Whether HIGH moves to ¼ is decided after you look at it in flight.
+### Open issues (reported after viewing; second pass done, see below)
 
-In `cloud_march.frag`, `cloud_resolve.frag` and `march.py` (`_MarchLayer`, `bayer_offset`, `_FRESH_WEIGHT`):
+1. **A light jitter remains, even at `march_resolution` 0.25** (worst in far clouds, per the commit message).
+2. **A grid pattern is still visible in the clouds** in a screenshot (`terrain_shots`-style still: far cumulus
+   deck and the big cumulus at upper right; blocky/dotted texture at the block period).
 
-1. **Jitter per visit, not per frame.** Index the sequence by `frame / block²`, with a per-pixel R2 or blue-noise offset, so each pixel's visits stratify its step.
-2. **Reproject each pixel by its own last distance.** Reproject with the history distance texture (two steps: guess with the nearest fresh distance, then refine with the history's own). Fresh pixels use their own.
-3. **Spatial reconstruction.** Untraced pixels with no history get a bilateral blend of the 4 nearest fresh samples, weighted by distance similarity, instead of a nearest copy.
-4. **Variance clamp and a sample count.** Clamp the history to mean ± γσ of the 3×3 fresh samples (YCoCg). A per-pixel accumulated count (a spare channel of the distance target) makes the fresh weight `max(1/n, floor)` instead of a fixed ⅓. The average converges, and fresh pixels stop standing out.
-5. Keep the composite's depth logic. Check the edge flicker it causes with `--move`.
+Suspects to check, none verified yet:
 
-**Gate:** the stability and grid scores clearly better than the baseline, still and moving, with no frame-time increase. Then you look at it in `cloud_bench.py --interactive` (M toggles the renderer).
+- The Gaussian `near` weight is itself block-periodic: pixels on a sample take a fresh share ≈1/(count+1), pixels
+  2–3 px away take ~0.25–0.06. Counts and converged noise then differ by position in the block, so a grid is baked
+  into the history. The gather scores measured a bench pose, not a few-frames-old screenshot.
+- A screenshot taken after few frames has low counts: the 1/16 reconstruction (4×4 bilinear) shows its raw block
+  structure before the history fills in. Check how many frames `terrain_shots` renders and whether the history is
+  warm (or settle N frames first).
+- The grid score is absolute RMS over a pose; it may not capture a faint high-frequency pattern on the far deck.
+  Add a metric on far-cloud crops (spectral peak at the block period, still and moving) before tuning.
+- Jitter residual: far clouds trace 5–9 coarse steps per slab segment, so each ray lands on or misses thin cloud;
+  the count cap (1/`uMinWeight` = 20 visits, i.e. 320 frames at 1/16) may be too low or the min weight too high for
+  noise that averages slowly. Candidates: per-pixel R2/blue-noise offset on the jitter, lower `uMinWeight` for far
+  pixels, density filtering by footprint before the step.
 
-## Phase 2: One sun-transmittance map (lighting, shadows, both families)
+**Second pass (done, uncommitted; performance §23 "Steadier, second pass").** (1) The grid/streaks the user saw in the
+demo's start view (`terrain_shots --pose ground_up`) were the **billows' value noise** (lattice planes shown by the
+ridged billows): fixed by sampling it through a rotation (`BILLOW_TURN`, `cloud_march.frag`). The field's own octaves
+share the lattice planes (fainter; also in the billboards): not touched. (2) In `cloud_resolve.frag`: the Gaussian
+per-pixel weight was a lattice (removed); the clamp floor (0.04 + 15 % of the mean) only while the view is still
+(`uStill`), since in motion it left clouds thin as the camera approached (measured: last moving frame vs converged);
+count kept ≥ 4 after a clamp; `MIN_WEIGHT` 0.03. A bicubic history read was tried and dropped (biased to transparent).
+RTX 3070, 2560×1440, ¼: still spread p99 −25–40 %, the 20 km grid 0.184 → 0.045, same cost; in flight the lag equals
+the old pipeline's. Not solved: in flight, sparkle in thin lit cloud at ¼ (the lighting's noise: flat colour, bit 8,
+is clean) shows as 4×4 blocks until it averages; sun march / powder per sample are the suspects.
 
-Extend `CloudShadowMaps` and `cloud_shadow_map.frag`. Keep the charts: an azimuthal equidistant chart on each family's base sphere, near 60 m and far 500 m texels.
+Gate to close Phase 1: stability and grid clearly low on far cloud crops, still and moving, in `terrain_shots`
+frames and in `cloud_bench.py --interactive`, at ¼, at no frame-time increase. Then the user flies it.
 
-- **What a texel holds.** Today it is the optical depth of the whole chord, from where the sun ray enters the base. Now it holds the **cumulative** optical depth from the base up to K heights along that ray (K = 8 in two RGBA16F targets, the total in the last). It is the same march, run once per texel with more steps, writing at the levels.
-  - Ground and models below the base read the total, as today (`cloudMapsDepthIn`).
-  - A sample at height h reads total − C(h), interpolated between levels, at its ray's base entry (`cloudShadowChord`, analytic).
-- **Near detail stays local.** The levels are coarse: 125 m in a cumulus slab, about 1.3 km in a 10.5 km convective one. A short local sun march (≈2 steps of `sunStepLength`, the full field) gives the self-shadowing close to the sample, and the map gives everything sunward of it.
-  - This mirrors the billboards' split into a near march plus the far segment.
-  - Per sample: ~4 fetches plus 2 map fetches, instead of 12–24.
-  - Beyond the far map, or with the maps off, the march falls back to today's `sunOpticalDepthAt`.
-- **Both families.** One map per family, as the ground maps already are. A stratus sample adds the convective map's total at its ray's entry on the convective base, so a cumulonimbus shades the stratus under it.
-- **Cost control.** Bake only when the sun turns, the camera moves a quarter of a map, or the settings change, as today. Measure the cost of a re-bake with a moving sun; if it is too high, re-bake slices over several frames.
-- **CPU twin.** `noise.cloud_shadow_on_sphere`'s samples already give cumulative depth, so add the levels (`_cloud_shadow_samples`). `sun_visibility` keeps using the total.
-- **Billboards (optional, measured).** `cloudFarDepth` per vertex could become a map lookup.
+## Phase 2: one sun-transmittance map (lighting, shadows, both families)
 
-**Tests:** a GPU readback of the map's levels against the CPU twin (pattern: `tests/test_cloud_shadows.py::test_a_cloud_shadow_map_is_the_march_from_the_base`). A NumPy check that the map plus the local march matches the full sun march within a tolerance (`tests/test_clouds_march.py`).
+Extend `CloudShadowMaps` / `cloud_shadow_map.frag`, keeping the charts (azimuthal equidistant on each family's base
+sphere; near 60 m, far 500 m texels).
 
-## Phase 3: The march with genera, and the march's shadows
+- A texel holds the **cumulative** optical depth from the base up to K = 8 heights along the sun ray (two RGBA16F
+  targets, total last), from the same march with more steps. Ground and models read the total (`cloudMapsDepthIn`);
+  a sample at height h reads total − C(h) at its ray's base entry (`cloudShadowChord`, analytic).
+- Near detail stays local: the levels are coarse (125 m in cumulus, ~1.3 km in a 10.5 km convective slab), so ≈2
+  steps of `sunStepLength` with the full field give close self-shadowing, the map everything sunward. ~4 fetches +
+  2 map fetches per sample instead of 12–24. Beyond the far map or with maps off, fall back to `sunOpticalDepthAt`.
+- One map per family; a stratus sample adds the convective map's total at its entry on the convective base.
+- Bake only when the sun turns, the camera moves ¼ map, or settings change; measure a re-bake with a moving sun,
+  slice over frames if too dear.
+- CPU twin: `noise.cloud_shadow_on_sphere` samples give cumulative depth (`_cloud_shadow_samples`); `sun_visibility`
+  keeps the total. Optional, measured: billboards' `cloudFarDepth` as a map lookup.
+- Tests: GPU readback of the levels vs the CPU twin (pattern `tests/test_cloud_shadows.py::test_a_cloud_shadow_map_is_the_march_from_the_base`); NumPy check that map + local march ≈ full sun march (`tests/test_clouds_march.py`).
 
-- **A field object both renderers share.** Move a volume's renderer-independent state out of `CloudVolume` (`sphere.py`):
-  - the field, the packed layer params, the weather and far-table textures, the shadow inputs;
-  - `take_shadow_of`, `bind_shadow_inputs`, `sun_visibility`, `shadow_layer` / `shadow_field`.
+## Phase 3: the march with genera, and the march's shadows
 
-  Each family is one such object; `CloudVolume` and `CloudMarch` draw from it. That removes "a raymarched volume casts none yet" and the `isinstance(CloudMarch)` special cases in `clouds/planet.py`.
-- **`CloudMarch` with genera.**
-  - Segments come from both slabs' sphere intervals, merged and sorted (up to 4), so the clear gap between the bands is skipped analytically.
-  - Per sample, the family is picked by height. The field comes from `cloudDensityAt` with the weather's full `gba` (depth, shelf), still fetched once per `WEATHER_STRETCH`.
-  - The weather is two samplers: the convective 4-channel cube and the stratus one.
-  - Far coverage and the averaged far lighting are taken per family.
-- **Layer budget.** The march packs a layer per shell octave band (`MAX_LAYERS` = 8, `layerParams[104]`). Both families' bands must fit without raising the uniform array, which weak GPUs' fragment uniform limits would not take. So octaves per distance band move to a small uniform table, leaving one layer per family plus the far one.
-- `PlanetClouds._make_volume` stops forcing billboards with genera.
-- `_bind_layer` binds the march's card nodes, so the march takes the eclipse, mountain and ring shadows (`bind_inputs`).
+- A field object both renderers share: move the renderer-independent state out of `CloudVolume` (`sphere.py`):
+  field, packed layer params, weather and far-table textures, shadow inputs, `take_shadow_of`,
+  `bind_shadow_inputs`, `sun_visibility`, `shadow_layer` / `shadow_field`. One per family; `CloudVolume` and
+  `CloudMarch` draw from it (removes `isinstance(CloudMarch)` cases in `clouds/planet.py`).
+- `CloudMarch` with genera: segments from both slabs' sphere intervals, merged and sorted (up to 4), clear gap
+  skipped; family picked by height; field from `cloudDensityAt` with the weather's full `gba`, fetched once per
+  `WEATHER_STRETCH`; two weather samplers; far coverage and far lighting per family.
+- Layer budget: `MAX_LAYERS` = 8, `layerParams[104]` must hold both families without a bigger uniform array (weak
+  GPUs). Move octaves-per-distance-band into a small uniform table: one layer per family plus the far one.
+- `PlanetClouds._make_volume` stops forcing billboards with genera; `_bind_layer` binds the march's card nodes so it
+  takes eclipse, mountain and ring shadows (`bind_inputs`).
+- Tests: extend `tests/test_clouds_march.py` NumPy mirrors (`slab_segments` with two slabs, family by height); a
+  march-with-genera case in `tests/test_clouds_genera.py` (both families shade the ground, rebind on renderer change).
 
-**Tests:** extend `tests/test_clouds_march.py`'s NumPy mirrors (`slab_segments` with two slabs, family by height). Add a march-with-genera case to `tests/test_clouds_genera.py` (both families shade the ground, rebinding on a renderer change).
+## Phase 4: speed, then the march as default
 
-## Phase 4: Speed, then the march as the default
+Measure each lever against Phase 0, keep what pays, record in §23: march resolution/block per preset (¼ at HIGH if
+flight confirms), billows as a cost toggle, near-range pass (merge or keep), and an **occupancy grid** experiment
+(low-res conservative max of the field baked on the GPU; dropped if < ~20 % of steps are skipped, or it flickers).
 
-Measure each lever against Phase 0, keep what pays, and record it in §23:
-
-- the march's resolution and block at each preset, now that reconstruction holds;
-- billows as a cost toggle;
-- the near-range pass (merge it or keep it);
-- an **occupancy grid** around the camera, as an experiment with a gate: a low-resolution conservative max of the field, baked on the GPU, for empty-space skipping. §20's analytic ceiling never proved a cell clear; a sampled max with a slope margin at a finer cell might. It is dropped if it proves under ~20 % of the steps clear, or flickers.
-
-**Default switch:**
-- `CloudSettings.renderer` defaults to `"march"` at every preset (a `kept` knob), with billboards selectable.
-- **Risk, to measure and show you:** the sea's reflection with the march shows only the deck. The proposal is a cheap mirror march (¼ resolution, no history; ripples hide the rest), unless its cost says otherwise.
-- Docs: `clouds.md` "The raymarch" and "Genera", `shadows.md` "The cloud shadow maps", `quality.md`, `CHANGELOG.md`.
+Default switch: `CloudSettings.renderer = "march"` at every preset (a `kept` knob), billboards selectable.
+Risk to show the user: the sea's reflection with the march shows only the deck; proposal is a cheap mirror march
+(¼ res, no history) unless cost says otherwise. Docs: `clouds.md` "The raymarch" and "Genera", `shadows.md` "The
+cloud shadow maps", `quality.md`, `CHANGELOG.md`.
 
 ## Critical files
 
-`src/world_builder/clouds/march.py` · `clouds/shaders/cloud_march.frag`, `cloud_resolve.frag`, `cloud_composite.frag` · `clouds/shadow_map.py`, `shaders/cloud_shadow_map.frag` · `clouds/shaders/cloud_field.glsl` (`cloudShadowChord`, `cloudMapsDepthIn`, `cloudShadowIn`, `slabOpticalDepthCell`), `cloud_shading.glsl` (`cloudRadianceAt`) · `clouds/sphere.py` (field state to extract) · `clouds/planet.py` · `clouds/noise.py` (CPU twins) · `clouds/cloud.py` (`CloudSettings`) · `scripts/cloud_bench.py` · tests `test_clouds_march.py`, `test_cloud_shadows.py`, `test_clouds_genera.py`.
+`src/world_builder/clouds/march.py` · `clouds/shaders/cloud_march.frag`, `cloud_resolve.frag`,
+`cloud_composite.frag` · `clouds/shadow_map.py`, `shaders/cloud_shadow_map.frag` · `clouds/shaders/cloud_field.glsl`
+(`cloudShadowChord`, `cloudMapsDepthIn`, `cloudShadowIn`, `slabOpticalDepthCell`), `cloud_shading.glsl`
+(`cloudRadianceAt`) · `clouds/sphere.py` · `clouds/planet.py` · `clouds/noise.py` (CPU twins) · `clouds/cloud.py`
+(`CloudSettings`) · `scripts/cloud_bench.py` · tests `test_clouds_march.py`, `test_cloud_shadows.py`,
+`test_clouds_genera.py`.
 
 ## Verification (each phase)
 
-- `python -m pytest tests/ -n auto` stays green. The GPU readback tests cover the shaders, since `Shader.load` succeeds without a context and does not check the GLSL.
-- `cloud_bench.py` on the 1070 at 1600×900: frame mean and p95, stability and grid scores, still and `--move`, cumulus and `--genera` poses, both renderers. `flight_bench.py --flight low` for the full world.
-- Shots: `terrain_shots.py --cloud-renderer march` (`in_clouds`, `clouds_noon`, `clouds_low`, `sunset`, `cirrus_*`), with and without `--genera`. I check them first, then you confirm in `cloud_bench.py --interactive` and `demo_terrain.py --cloud-renderer march [--genera]`.
-- Nothing is committed (memory: never-commit).
+- `python -m pytest tests/ -n auto` green (GPU readback tests cover the shaders; `Shader.load` does not check GLSL).
+- `cloud_bench.py` on the 1070 at 1600×900: frame mean / p95, stability and grid, still and `--move`, cumulus and
+  `--genera` poses, both renderers; `flight_bench.py --flight low` for the world.
+- Shots: `terrain_shots.py --cloud-renderer march` (`in_clouds`, `clouds_noon`, `clouds_low`, `sunset`, `cirrus_*`),
+  with and without `--genera`; checked by Claude first, then confirmed by the user in
+  `cloud_bench.py --interactive` and `demo_terrain.py --cloud-renderer march [--genera]`.
+- Memory rules: never commit unless asked; stop after each phase for the user's visual check; shut the worker pool
+  down in every bench path.

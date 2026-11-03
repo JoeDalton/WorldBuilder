@@ -34,6 +34,8 @@ sky and the clouds, so the clouds are most of the frame.
                        (CloudSettings.interior_growth), over the preset's
     --move             fly the camera (and the probe) along the view at M
                        metres a frame while timing: reprojection under motion
+    --turn             yaw the view T degrees a frame while timing: the
+                       history's reprojection under rotation
     --stability        also read N frames back (moving with --move) and score
                        the clouds' steadiness and the raymarch's block grid
                        (below)
@@ -109,7 +111,7 @@ from pathlib import Path
 import numpy as np
 from direct.gui.OnscreenText import OnscreenText
 from direct.showbase.ShowBase import ShowBase
-from panda3d.core import ClockObject, Filename, LQuaternionf, TextNode
+from panda3d.core import ClockObject, Filename, LQuaternionf, LVector3f, TextNode
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -334,6 +336,8 @@ class CloudBench(ShowBase):
         self.probe_world: np.ndarray | None = None
         #: Metres the camera and the probe move along the view each frame
         self.move = 0.0
+        #: Degrees the camera yaws each frame
+        self.turn = 0.0
         self.taskMgr.add(self._update, "cloud_bench_update")
 
     def place(
@@ -413,6 +417,10 @@ class CloudBench(ShowBase):
         return False
 
     def _update(self, task) -> int:
+        if self.turn:
+            yaw = LQuaternionf()
+            yaw.set_from_axis_angle(self.turn, LVector3f(0.0, 0.0, 1.0))
+            self._orientation = yaw * self._orientation
         if self.move:
             step = np.array(self._orientation.get_forward()) * self.move
             self.cam_world = self.cam_world + step
@@ -689,6 +697,9 @@ def main() -> None:
         "--move", type=float, default=0.0, help="metres a frame along the view"
     )
     parser.add_argument(
+        "--turn", type=float, default=0.0, help="degrees a frame the view yaws"
+    )
+    parser.add_argument(
         "--genera", action="store_true", help="the low clouds by genus, their poses"
     )
     parser.add_argument(
@@ -780,7 +791,7 @@ def bench_poses(bench: CloudBench, args: argparse.Namespace) -> None:
         for _ in range(3):  # let the last uploads reach the screen
             bench.taskMgr.step()
         start = (bench.cam_world.copy(), bench.probe_world)
-        bench.move = args.move
+        bench.move, bench.turn = args.move, args.turn
         with_clouds, p95 = bench.time_frames(args.frames)
         path = args.out / f"{name}.png"
         bench.win.save_screenshot(Filename.from_os_specific(str(path)))
@@ -788,14 +799,14 @@ def bench_poses(bench: CloudBench, args: argparse.Namespace) -> None:
         if args.stability:
             # From the timing's start again: the same view as the frames
             # without clouds below (still) or the same flight (moving).
-            bench.move = 0.0
+            bench.move, bench.turn = 0.0, 0.0
             bench.cam_world, bench.probe_world = start[0].copy(), start[1]
             for _ in range(8):  # the history settles back
                 bench.taskMgr.step()
-            bench.move = args.move
+            bench.move, bench.turn = args.move, args.turn
             frames = bench.read_frames(args.stability)
         lit = bench.read_frame()
-        bench.move = 0.0
+        bench.move, bench.turn = 0.0, 0.0
         bench.cam_world, bench.probe_world = start[0].copy(), start[1]
         billboards = bench.clouds.stats["billboards"]
         bench.clouds.set_visible(False)

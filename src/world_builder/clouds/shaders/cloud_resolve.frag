@@ -2,14 +2,16 @@
 // The raymarch's full resolution (clouds.march), gathered over the frames:
 // cloud_march.frag traces one pixel of every uBlock x uBlock block a frame;
 // every pixel here blends this frame's samples around it (reconstructed
-// bilinearly from the four nearest, weighted by how near the nearest is)
-// into the last frame's result, moved to where the camera now sees it
-// (reprojected along the view ray to the pixel's own cloud distance) and
-// held within the spread of this frame's samples around it, so a change
-// shows at once rather than trailing behind. How much a pixel takes from
-// this frame falls with how many samples it has gathered (its count), down
-// to uMinWeight: still, the steps' jitter averages away over many visits;
-// no pixel of a block is treated apart from the others, so no grid shows.
+// bilinearly from the four nearest) into the last frame's result, moved to
+// where the camera now sees it (reprojected along the view ray to the pixel's
+// own cloud distance) and held within the spread of this frame's samples
+// around it (widened by a floor while the view is still, or the steps' own
+// noise would clamp it), so a change shows at once rather than trailing
+// behind. How much a pixel takes from this frame falls
+// with how many samples it has gathered (its count), down to uMinWeight:
+// still, the steps' jitter averages away over many visits. Every pixel of a
+// block takes the same share, whatever its distance to a traced one, or the
+// traced pixels would show as a grid.
 //
 // The cloud is premultiplied; its distance (kilometres, 0: none) and its
 // count go on with it (r and g), for the next frame and for the composite's
@@ -26,6 +28,7 @@ uniform int   uBlock;
 uniform ivec2 uOffset;
 uniform vec2  uViewSize;
 uniform int   uHistoryValid;         // 0: no usable last frame (first, resized, jumped)
+uniform float uStill;               // 1: the camera still, 0: moving (the clamp's floor)
 uniform float uMinWeight;            // this frame's least share, with a full count
 
 layout(location = 0) out vec4 fragColor;
@@ -36,9 +39,15 @@ const float NO_CLOUD = 1.0e7;
 // The history is held within this many standard deviations of this frame's
 // samples around the pixel.
 const float CLAMP_SIGMA = 1.25;
-// A sample's reach, in its spacing (uBlock pixels): the Gaussian weight a
-// pixel gives the nearest one.
-const float REACH = 0.3;
+// The clamp's width, over the samples' spread: a floor and a share of their
+// mean, so a pixel whose neighbours happen to agree is not clamped by noise, while
+// the view is still (uStill): a floor in motion keeps a cloud as it was, thin,
+// as it comes closer.
+const float CLAMP_FLOOR = 0.04;
+const float CLAMP_SHARE = 0.15;
+// The count a clamp may take a pixel's history down to, at most: a change
+// still starts it over, but a pixel does not take a whole noisy sample.
+const float COUNT_KEPT = 4.0;
 
 vec3 rayDir(vec2 ndc) {
     vec4 near = uClipToRel * vec4(ndc, -1.0, 1.0);
@@ -70,7 +79,6 @@ void main() {
     vec4 reconstructed = vec4(0.0);
     float reconstructedKm = 0.0;
     float kmWeight = 0.0;
-    float nearest = 1e9;
     for (int i = 0; i < 4; ++i) {
         ivec2 corner = ivec2(i & 1, i >> 1);
         ivec2 at = clamp(base + corner, ivec2(0), last);
@@ -83,8 +91,6 @@ void main() {
             reconstructedKm += weight * v.a * km;
             kmWeight += weight * v.a;
         }
-        nearest = min(nearest, length(vec2(base + corner) * block + vec2(uOffset)
-                                      - vec2(pixel)));
     }
     reconstructedKm = kmWeight > 0.0 ? reconstructedKm / kmWeight : 0.0;
     ivec2 centre = clamp(ivec2(floor(f + 0.5)), ivec2(0), last);
@@ -98,20 +104,16 @@ void main() {
         }
     }
     mean /= 9.0;
-    vec4 sigma = sqrt(max(square / 9.0 - mean * mean, vec4(0.0)));
+    vec4 sigma = sqrt(max(square / 9.0 - mean * mean, vec4(0.0)))
+               + uStill * (CLAMP_FLOOR + CLAMP_SHARE * mean);
     vec4 lo = mean - CLAMP_SIGMA * sigma;
     vec4 hi = mean + CLAMP_SIGMA * sigma;
-
-    // How much this pixel takes from this frame: its nearest sample's
-    // Gaussian weight (1 on a traced pixel, and at block 1 everywhere).
-    float reach = REACH * block;
-    float near = block <= 1.0 ? 1.0 : exp(-0.5 * nearest * nearest / (reach * reach));
 
     vec2 ndc = (vec2(pixel) + 0.5) / uViewSize * 2.0 - 1.0;
     vec3 dir = rayDir(ndc);
     // Reprojected by this frame's distance first, then by the history's own
     // there (the pixel's cloud as it was): an edge keeps its place.
-    vec2 at;
+    vec2 at = vec2(0.0);
     bool valid = uHistoryValid != 0 && reproject(dir, reconstructedKm, at);
     vec2 historyKm = vec2(0.0);
     if (valid) {
@@ -129,21 +131,21 @@ void main() {
         // Nothing to go on: this frame's samples, a sample's worth.
         colour = reconstructed;
         km = reconstructedKm;
-        count = near;
+        count = 1.0;
     } else {
-        vec2 uv = at / vec2(textureSize(uHistory, 0));
-        vec4 history = texture(uHistory, uv);
+        vec4 history = texture(uHistory, at / vec2(textureSize(uHistory, 0)));
         vec4 held = clamp(history, lo, hi);
         // What the clamp took away counts as samples lost: a change starts
         // the count over, where the scene moved or appeared.
         float moved = length(held - history) / max(length(history), 0.05);
         count = historyKm.g * clamp(1.0 - 2.0 * moved, 0.0, 1.0);
-        float weight = near * max(1.0 / (count + 1.0), uMinWeight);
+        count = max(count, min(historyKm.g, COUNT_KEPT));
+        float weight = max(1.0 / (count + 1.0), uMinWeight);
         colour = mix(held, reconstructed, weight);
         km = historyKm.r > 0.0 && reconstructedKm > 0.0
            ? mix(historyKm.r, reconstructedKm, weight)
            : (weight >= 0.5 || historyKm.r <= 0.0 ? reconstructedKm : historyKm.r);
-        count = min(count + near, 1.0 / uMinWeight);
+        count = min(count + 1.0, 1.0 / uMinWeight);
     }
     if (colour.a <= 0.0) {
         km = 0.0;

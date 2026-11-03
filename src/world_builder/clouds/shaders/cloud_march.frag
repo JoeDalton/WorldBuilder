@@ -60,6 +60,12 @@ float resolved(float feature, float footprint) {
     return smoothstep(RESOLVED.x, RESOLVED.y, feature / max(footprint, 1e-3));
 }
 
+// The billows' noise is turned off the field's axes: value noise has its
+// lattice's planes in it (flat spots and creases), which the ridged billows
+// show as parallel streaks across every cloud, all one way. A rotation
+// (orthonormal, columns listed), so no scale changes.
+const mat3 BILLOW_TURN = mat3(0.36, 0.48, -0.8, -0.8, 0.6, 0.0, 0.48, 0.64, 0.6);
+
 // The density, its edges carved by billows (march.DETAIL_SCALE): the
 // threshold moves by the billowy noise about its mean, in units of its
 // window, so a cloud's edge breaks into rounded lumps, its core stays, and
@@ -81,7 +87,8 @@ float marchDensity(Field f, vec3 p, float shift, float footprint) {
     if (most <= 0.0 || window <= 0.0) {
         return most;
     }
-    vec3 coord = (p * f.noiseScale + f.noiseOrigin) * (f.octaveScales.x * uDetailScale);
+    vec3 coord = BILLOW_TURN * ((p * f.noiseScale + f.noiseOrigin)
+                                * (f.octaveScales.x * uDetailScale));
     float billow = 1.0 - abs(2.0 * sampleNoise(coord) - 1.0);
     return cloudDensityShifted(f, p, shift + window * (uBillowMean - billow));
 }
