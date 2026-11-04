@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] 2026-11-04
+
 ### Added
 
 - Clouds by genus (`world_builder.clouds.genera`,
@@ -46,7 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at 4 % transmittance and its steps grow in dense cloud (about 0.4-1.2 ms at
   1440p, half resolution). A quarter resolution meets the cost target
   (2.1-2.3 ms plain, 2.5-3.1 ms genera); HIGH and ULTRA keep a half.
-
 - `CirrusSpec.base` defaults to 11 km (was 8 km): over the cumulonimbus's
   cap, 10.5 km.
 - The LOW and MID cloud presets draw the clouds at half resolution
@@ -335,8 +336,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loading. `scripts/demo_asteroids.py` is built on it (split depth, the sky,
   render's origin at the camera) and gains `--preset ring` and a far view
   (Home). (#14)
-
-### Changed
 
 - A planet's clouds are one part, `world_builder.clouds.planet.PlanetClouds`,
   with two layers named by how they are drawn:

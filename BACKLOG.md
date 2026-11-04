@@ -141,6 +141,26 @@ then the default) is measured, not built. What is left:
   cheap mirror march (clouds.md "The raymarch": a third march layer from the
   reflection camera, a quarter of its resolution, about 24 steps, no history,
   about 0.3-0.6 ms while the sea is in view; not built).
+- **Artifacts in the sea's reflection of the deck** (seen with the march as
+  the default, HIGH, `terrain_shots.py --pose at --at 24.49453 35.64275 2029
+  19.4 -32.1`, 2 km up over the sea; not reproduced exactly: the weather
+  differs). Not investigated, only read from the code:
+  - *Stone-like contour lines* inside the light patches: the deck's density
+    is the mean of two field samples (at 30 % and 70 % of the slab,
+    `cloud.frag` `uDeck == 1`), so a column holding cloud at one height only
+    gets half the density and its outline shows. Fix idea: a smoother
+    density (one sample, or a smoothed mean) for the deck.
+  - *A straight diagonal step in brightness* with a darker triangle behind
+    it: probably the terrain shadow on the deck's sunlight (`terrainShadow`
+    in `cloud.frag`: the local shadow map is a square around the camera, and
+    the reflection views the deck from below). Alternatives: a cube-face seam
+    of the weather map, the reflection camera's culling margin. To confirm:
+    the same pose with `--shadows-quality low`, then with
+    `--cloud-renderer billboards`. Fix idea: the deck takes the global
+    terrain shadow only.
+  - *Fine diagonal hatching* at the bottom: the ripples undersampled by the
+    half-resolution reflection buffer (`reflection_scale`, 0.5 at HIGH); the
+    billboards' reflection has it too.
 - **With genera the march keeps at most 3 distance bands per family**
   (`MAX_LAYERS` is shared by the two); HIGH asks for more. An octaves-per-band
   table in a small uniform would free layers.
