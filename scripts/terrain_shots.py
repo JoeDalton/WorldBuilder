@@ -13,6 +13,7 @@ times a few frames, then saves a screenshot::
         [--size "1600 900"] [--offscreen]
         [--quality low|mid|high|ultra] [--<part>-quality LEVEL] [--no-clouds]
         [--workers N] [--cloud-debug BITS] [--frames N] [--ocean-debug MODE]
+        [--ring] [--panda-lights]
 
     --out            where the PNGs go (default ./terrain_shots)
     --level          the planet's level file (default: the demo level)
@@ -23,6 +24,9 @@ times a few frames, then saves a screenshot::
                      (degrees), 400 m above the ground
     --radius         overrides the level's planet radius
     --pose           the poses to shoot (default: all, in the order below)
+    --sun            the "at" pose's sun: AZIMUTH ELEVATION, degrees
+    --at             one more pose, "at": LAT LON ALT HEADING PITCH, as the
+                     demo prints its camera
     --timeout        seconds to wait for a pose to settle (default 90)
     --size           window or buffer size (default "1600 900")
     --offscreen      render to an offscreen buffer, not a window
@@ -30,6 +34,7 @@ times a few frames, then saves a screenshot::
     --<part>-quality one part's preset over it: terrain, atmosphere, sky,
                      clouds, ocean
     --no-clouds      no clouds at all
+    --ring           a small ring around the planet (and its poses)
     --workers        generation processes (the terrain's setting)
     --cloud-debug    PlanetClouds.set_debug bits (cloud.frag's
                      uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
@@ -38,6 +43,8 @@ times a few frames, then saves a screenshot::
     --ocean-debug    Sea.set_debug_mode view (sea.glsl's uSeaDebug, on water
                      in its near look: 9 octaves resolved, 10 unresolved
                      slope spread, 12 depth, ...; default 0)
+    --panda-lights   the test balls lit by Panda3D's lighting, not the
+                     world's model shader (to compare)
 
 No multisampling, vsync off. Once a pose has settled, N frames are timed,
 each waiting for the GPU to finish (a one-pixel read back): CPU and GPU time
@@ -46,8 +53,9 @@ Without the wait, an offscreen frame is not held back by the GPU at all. Each
 pose prints whether it settled, the body's chunk count and finest level, the
 cloud billboards, the LOD pass and the median frame time.
 
-Poses: ground (the level's start), coast (2 km up over the reference point),
-high (20 km up), swell / sea_surface (13 and 17 km up, inside the sea's 12-18 km
+Poses: ground (the level's start), ground_up (the same, 11 degrees up),
+coast (2 km up over the reference point), high (20 km up),
+swell / sea_surface (13 and 17 km up, inside the sea's 12-18 km
 fade from its near look to its flat far one), stratosphere (200 km up),
 orbit (3 radii up, looking down), corner (over a cube corner, where three faces
 meet), lod (the LOD debug view from 20 km), in_clouds (inside the cloud deck,
@@ -64,8 +72,54 @@ night_sea (3 m over the sea, the sun 8 degrees down: the sky's reflection must
 be as dark as the sky), beach (40 m up, 300 m off the coast nearest the
 reference point, looking at it: the sea's foam, colour by depth and swell),
 open_sea (150 m over open water, looking along it: the swell and how it
-flattens with distance). Every other pose has the sun at azimuth 210, elevation
-35, as seen there.
+flattens with distance).
+
+Eclipses, the sun aimed at a body from the point under the camera (plus an
+offset): eclipse_ground (the moonrise view, looking at the moon, the sun
+0.6 degrees off its centre: a partial eclipse), eclipse_total (the same, the
+sun behind the moon's centre: the camera in the umbra's tip),
+eclipse_orbit (3 radii over the point under the moon, looking down: the
+moon's shadow on the planet, noon there), lunar_eclipse (the moon_orbit view,
+the sun behind the planet, 0.8 degrees off: the planet's umbra edge across
+the moon). Cloud shadows: clouds_noon and clouds_low (6 km up, over the
+clouds, looking across the sun's azimuth: the sun 80 and 20 degrees up, the
+shadows under the clouds and offset from them), clouds_grazing (mountains
+under the cloud base, the sun 4 degrees up: no bands). Mountain shadows:
+mountains_low (clouds_grazing's view, the sun 6 degrees up in the
+south-east),
+mountains_orbit (1
+radius up, the sun 8 degrees up), moon_terminator (1 moon radius up over
+its craters, the sun 4 degrees up), mesas_low (the ground view, the sun 8
+degrees up in the west: the mesas' shadows, near and far), mesa_above
+(straight down on the level's mesa from 6 km, the same sun). The clouds'
+long shadows: dusk_in_clouds and dusk_above_clouds (2.7 km, in the deck,
+and 4.5 km, over it, looking north, the sun 4 degrees up in the west).
+The test balls (the white one and the textured smiley, as the model shader
+lights them): ball_noon (the ground view, the sun 75 degrees up),
+ball_sunset and ball_eclipse (3.7 km up, over the cloud deck, the balls
+150 m ahead: the sun 3 degrees up in the west, and 0.4 degrees off the
+moon's centre, to the right of the view), ball_cloud_edge and
+ball_mountain_edge (the balls moved onto the nearest edge of a cloud's or
+a mesa's shadow on the ground around the start, seen from 150 m across the
+sun: half in it). The objects' shadows (the balls moved around the
+ground 150 m ahead of the start pose, seen across the sun): caster_pad (the
+white ball resting on the ground, the textured one 60 m up beside it),
+caster_ship_on_ship (the textured ball 26 m sunward of the white one, 30 m
+up: its shadow on it), caster_self (a teapot on the ground, the balls
+hidden: its spout's, handle's and lid's shadows on itself), caster_altitude
+(the textured ball 300 m up, its shadow on the ground, seen from near
+it). The ring (with
+--ring): ring_ground (the start area, 1.5 km up, looking south at its arc),
+ring_shadow_ground and ring_shadow_orbit (its shadow band on the planet,
+the sun 20 degrees north of its plane at noon: from 20 km over the band's
+northern edge, latitude -10.6, looking west along it, and from 3 radii
+over latitude 5, just north of its plane: the ring a thin line, the band
+south of it), ring_planet_shadow (ring_orbit's view, the sun low in the
+east: the planet's shadow across the ring), ring_behind_clouds (from the
+ground over a peak in the clouds: the clouds cover the ring),
+ring_orbit (6 radii over latitude 35, looking down: the planet and its
+whole ring). Every other pose has the sun at azimuth 210, elevation 35, as
+seen there.
 """
 
 from __future__ import annotations
@@ -74,6 +128,7 @@ import argparse
 import math
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -82,7 +137,9 @@ from panda3d.core import Filename
 sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import (  # noqa: E402
+    TEST_BALL_DIAMETER,
     TerrainDemo,
+    _quat_from_axes,
     add_planet_arguments,
     add_world_arguments,
     describe_window,
@@ -90,17 +147,71 @@ from demo_terrain import (  # noqa: E402
     window_config,
 )
 
-from world_builder.terrain.chart import AzimuthalEquidistantChart, latlon  # noqa: E402
+from world_builder.terrain.chart import (  # noqa: E402
+    AzimuthalEquidistantChart,
+    TangentFrame,
+    latlon,
+)
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 
 CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
-#: Sun (azimuth, elevation) per pose, as seen there; default (210, 35).
+
+
+@dataclass(frozen=True)
+class AimedSun:
+    """A sun aimed at a body: the direction from the point under the camera
+    (at sea level) to the body's centre, turned *offset* degrees toward that
+    point's north (an eclipse's depth).
+
+    :ivar body: the body's index in ``demo.bodies``
+    :ivar offset: degrees
+    """
+
+    body: int
+    offset: float = 0.0
+
+
+#: Sun per pose: (azimuth, elevation) as seen there, or an :class:`AimedSun`;
+#: default (210, 35).
 SUNS = {
     "sunset": (270.0, 3.0),
     "night_orbit": (90.0, -60.0),
     "night_sea": (90.0, -8.0),
     "cirrus_dusk": (270.0, -2.0),
+    "eclipse_ground": AimedSun(1, 0.6),
+    "eclipse_total": AimedSun(1),
+    "eclipse_orbit": AimedSun(1),
+    "lunar_eclipse": AimedSun(0, 0.8),
+    "clouds_noon": (210.0, 80.0),
+    "clouds_low": (210.0, 20.0),
+    "clouds_grazing": (240.0, 4.0),
+    "mountains_low": (140.0, 6.0),
+    "mountains_orbit": (210.0, 8.0),
+    "moon_terminator": (90.0, 4.0),
+    "mesas_low": (270.0, 8.0),
+    "mesa_above": (270.0, 8.0),
+    "dusk_in_clouds": (270.0, 4.0),
+    "dusk_above_clouds": (270.0, 4.0),
+    "ball_noon": (210.0, 75.0),
+    "ball_sunset": (270.0, 3.0),
+    "ball_eclipse": AimedSun(1, 0.4),
+    "ball_mountain_edge": (270.0, 8.0),
+    "caster_self": (210.0, 25.0),
+    # The sun 20 degrees north of the ring's (the equator's) plane, at noon.
+    "ring_shadow_ground": (0.0, 59.4),
+    "ring_shadow_orbit": (0.0, 75.0),
+    "ring_planet_shadow": (90.0, 10.0),
+    "caster_altitude": (210.0, 50.0),
 }
+#: Poses whose balls are moved onto a shadow's edge once settled: the
+#: shadow's kind (:func:`_balls_on_edge`).
+BALL_EDGES = {"ball_cloud_edge": "clouds", "ball_mountain_edge": "mountains"}
+#: Poses whose balls hang ahead of their camera, not of the start pose.
+BALLS_AHEAD = ("ball_sunset", "ball_eclipse")
+#: Poses of the objects' shadows: the balls (or a teapot) set out around
+#: the ground ahead of the start pose once the sun is set
+#: (:func:`_casters_scene`).
+CASTER_POSES = ("caster_pad", "caster_ship_on_ship", "caster_self", "caster_altitude")
 
 
 def _poses(demo: TerrainDemo) -> dict:
@@ -143,12 +254,80 @@ def _poses(demo: TerrainDemo) -> dict:
         lat, lon = (float(v[0]) for v in latlon(facing[None, :]))
         poses["moon_orbit"] = (lat, lon, 3.0 * moon.radius, 0.0, -89.9, 0, 1)
         poses["moon_ground"] = (lat + 1.0, lon, 2000.0, 0.0, -15.0, 0, 1)
+        # Eclipses (SUNS): looking at the moon (a little above the middle
+        # of the view, the horizon in it), and their shadows from orbit.
+        heading, pitch = _look_at(demo, ref_lat, ref_lon, 1500.0, moon.position)
+        eclipse = (ref_lat, ref_lon, 1500.0, heading, pitch - 8.0, 0, 0)
+        poses["eclipse_ground"] = poses["eclipse_total"] = eclipse
+        under = moon.position / np.linalg.norm(moon.position)
+        lat, lon = (float(v[0]) for v in latlon(under[None, :]))
+        poses["eclipse_orbit"] = (lat, lon, 3.0 * radius, 0.0, -89.9, 0, 0)
+        poses["lunar_eclipse"] = poses["moon_orbit"]
+        # The moon's craters at its terminator: their rims' shadows.
+        poses["moon_terminator"] = (lat, lon, 1.0 * moon.radius, 0.0, -89.9, 0, 1)
     # The cirrus (8-9 km) against the cumulus (2.2-3.2 km): under both, between,
     # above both, and at dusk (looking west, toward the set sun).
     poses["cirrus_up"] = (lat0, lon0, start.get("alt", 800.0), 0.0, 35.0, 0, 0)
+    # The start looking a little up, at the cumulus above the horizon.
+    poses["ground_up"] = (
+        lat0,
+        lon0,
+        start.get("alt", 800.0),
+        start.get("heading", 0.0),
+        11.0,
+        0,
+        0,
+    )
     poses["cirrus_between"] = (ref_lat, ref_lon, 5000.0, 0.0, 3.0, 0, 0)
     poses["cirrus_above"] = (ref_lat, ref_lon, 15000.0, 0.0, -8.0, 0, 0)
     poses["cirrus_dusk"] = (ref_lat, ref_lon, 600.0, 90.0, 15.0, 0, 0)
+    if demo.ring is not None:
+        poses["ring_ground"] = (ref_lat, ref_lon, 1500.0, 180.0, 12.0, 0, 0)
+        poses["ring_orbit"] = (35.0, lon0, 6.0 * radius, 0.0, -89.9, 0, 0)
+        # The ring's shadow band (the sun's rays from about 10.6-25.5
+        # degrees south cross it at noon): 20 km over its northern edge,
+        # looking west along it (lit ground on the right), and from orbit;
+        # and the planet's shadow across the ring, the sun low in the east
+        # of the whole view.
+        poses["ring_shadow_ground"] = (-10.6, lon0, 20000.0, 90.0, -30.0, 0, 0)
+        poses["ring_shadow_orbit"] = (5.0, lon0, 3.0 * radius, 0.0, -89.9, 0, 0)
+        poses["ring_planet_shadow"] = poses["ring_orbit"]
+        # The ring behind the clouds, over a snowy peak in the clouds: they
+        # must cover it, the peak too.
+        poses["ring_behind_clouds"] = (38.0022, -124.9942, 1130.0, 131.0, 7.0, 0, 0)
+    # The clouds' shadows from above them, looking across the sun's azimuth
+    # (210): under the clouds at noon, offset from them by altitude / tan
+    # (elevation) at a low sun.
+    poses["clouds_noon"] = (ref_lat, ref_lon, 6000.0, -120.0, -35.0, 0, 0)
+    poses["clouds_low"] = poses["clouds_noon"]
+    # Mountains under the clouds' base at a grazing sun: their shadow must
+    # not band with the ground's height.
+    poses["clouds_grazing"] = (36.7391, -126.6355, 1897.0, -50.0, -7.0, 0, 0)
+    # The mountains' shadows (their map): clouds_grazing's peaks with the
+    # sun low in the south-east (their shadows to the left, across the
+    # view), and from orbit, long shadows across the land under an 8 degree
+    # sun.
+    poses["mountains_low"] = poses["clouds_grazing"]
+    poses["mountains_orbit"] = (lat0, lon0, 1.0 * radius, 0.0, -89.9, 0, 0)
+    # The start view's mesas (750 m) in a low western sun: their shadows
+    # nearer than the global map's reach are the local map's.
+    poses["mesas_low"] = poses["ground"]
+    # And straight down on the level's mesa (its stamp), 6 km up.
+    poses["mesa_above"] = (39.0879, -125.2894, 6000.0, 0.0, -89.9, 0, 0)
+    # Dusk in and over the cloud deck, the sun low in the west across the
+    # view: the clouds' long shadows on each other (Shadows, part F).
+    poses["dusk_in_clouds"] = (ref_lat, ref_lon, 2700.0, 0.0, 0.0, 0, 0)
+    poses["dusk_above_clouds"] = (ref_lat, ref_lon, 4500.0, 0.0, -10.0, 0, 0)
+    # The test balls, from the start view (they hang 150 m ahead of it),
+    # or moved onto a shadow's edge around it (BALL_EDGES), or over the
+    # cloud deck, out of its shadow at a low sun (BALLS_AHEAD).
+    for name in ("ball_noon", *BALL_EDGES, *CASTER_POSES):
+        poses[name] = poses["ground"]
+    poses["ball_sunset"] = (lat0, lon0, 3700.0, start.get("heading", 0.0), -2.0, 0, 0)
+    if len(demo.bodies) > 1:
+        # The sun behind the moon, to the right of the view.
+        heading, _ = _look_at(demo, lat0, lon0, 3700.0, demo.bodies[1].position)
+        poses["ball_eclipse"] = (lat0, lon0, 3700.0, heading + 90.0, -2.0, 0, 0)
     # The terminator from orbit: the sun 60 degrees below the nadir's horizon.
     poses["night_orbit"] = (lat0, lon0, 1.5 * radius, 0.0, -89.9, 0, 0)
     # At sea level by night: the sky's reflection must be as dark as the sky.
@@ -160,6 +339,34 @@ def _poses(demo: TerrainDemo) -> dict:
     if beach is not None:
         poses["beach"] = beach
     return poses
+
+
+def _look_at(
+    demo: TerrainDemo, lat: float, lon: float, altitude: float, target: np.ndarray
+) -> tuple[float, float]:
+    """:returns: (heading, pitch) from altitude over (lat, lon) of the planet
+    toward a point of the world frame (degrees, as :func:`_poses`')"""
+    frame = TangentFrame.at(lat, lon)
+    eye = demo.home.position + frame.up * (demo.radius + altitude)
+    forward = (target - eye) / np.linalg.norm(target - eye)
+    heading = math.degrees(math.atan2(-(forward @ frame.east), forward @ frame.north))
+    return heading, math.degrees(math.asin(float(forward @ frame.up)))
+
+
+def _aim_sun(demo: TerrainDemo, sun: AimedSun) -> None:
+    """Point the demo's sun as *sun* says, from the point under the camera
+    (once it is placed)."""
+    relative = demo.cam_world - demo.body.position
+    up = relative / np.linalg.norm(relative)
+    ground = demo.body.position + up * demo.body.radius
+    toward = demo.bodies[sun.body].position - ground
+    toward /= np.linalg.norm(toward)
+    lat, lon = latlon(up[None, :])
+    side = TangentFrame.at(float(lat[0]), float(lon[0])).north
+    side = side - toward * float(side @ toward)
+    side /= np.linalg.norm(side)
+    angle = math.radians(sun.offset)
+    demo._sun = math.cos(angle) * toward + math.sin(angle) * side
 
 
 def _beach_pose(demo: TerrainDemo) -> tuple | None:
@@ -199,6 +406,175 @@ def _beach_pose(demo: TerrainDemo) -> tuple | None:
     return (lat, lon, 40.0, heading, -8.0, 0, 0)
 
 
+def _balls_on_edge(demo: TerrainDemo, kind: str) -> bool:
+    """Move the test balls onto the edge of a shadow on the ground nearest
+    the camera's nadir (where the CPU's twin of it leaves half the sun),
+    the white one there and the textured one 25 m along the edge, and look
+    at them from 150 m across the sun, a little above.
+
+    :param kind: "clouds" (the clouds' shadow) or "mountains" (the shadow
+        maps')
+    :returns: whether an edge was found within 3 km (else they stay)
+    """
+    planet = demo.home.terrain.planet
+    relative = demo.cam_world - demo.home.position
+    up = relative / np.linalg.norm(relative)
+    lat, lon = latlon(up[None, :])
+    chart = AzimuthalEquidistantChart(float(lat[0]), float(lon[0]), demo.radius)
+    step = 50.0
+    axis = np.arange(-3000.0, 3000.0 + step, step)
+    x, y = np.meshgrid(axis, axis)
+    dirs = chart.to_dirs(x, y).reshape(-1, 3)
+    heights = planet.sample_dirs(dirs, apply_stamps=True)[0]
+    radius = TEST_BALL_DIAMETER / 2.0
+    centres = demo.home.position + dirs * (demo.radius + heights + radius)[:, None]
+
+    def visible(points: np.ndarray) -> np.ndarray:
+        if kind == "clouds":
+            steps = demo.shadows.settings.cloud_shadow_steps
+            return demo.clouds.sun_visibility(points, demo._sun, steps)
+        angular = demo.shadows.sun_angular_radius
+        return demo.home.shadow_map.visibility(points, angular)
+
+    lit = visible(centres).reshape(x.shape) > 0.5
+    dry = (heights > 2.0).reshape(x.shape)
+    # Neighbours across the edge, on land, nearest the nadir first.
+    edges = []
+    rows, cols = lit.shape
+    for di, dj in ((0, 1), (1, 0)):
+        across = (lit[: rows - di, : cols - dj] != lit[di:, dj:]) & (
+            dry[: rows - di, : cols - dj] & dry[di:, dj:]
+        )
+        for i, j in zip(*np.nonzero(across)):
+            edges.append((float(np.hypot(x[i, j], y[i, j])), (i, j), (i + di, j + dj)))
+    if not edges:
+        return False
+    edges.sort()
+
+    def bisect(index_a, index_b) -> np.ndarray:
+        """Where half the sun is left, between two grid nodes: a ball centre."""
+        t = np.linspace(0.0, 1.0, 21)
+        xs = x[index_a] + t * (x[index_b] - x[index_a])
+        ys = y[index_a] + t * (y[index_b] - y[index_a])
+        d = chart.to_dirs(xs, ys).reshape(-1, 3)
+        h = planet.sample_dirs(d, apply_stamps=True)[0]
+        points = demo.home.position + d * (demo.radius + h + radius)[:, None]
+        shade = visible(points)
+        return points[int(np.argmin(np.abs(shade - 0.5)))]
+
+    white = bisect(*edges[0][1:])
+    # The textured ball: the next edge crossing 25 m or more away.
+    textured = white
+    for _, index_a, index_b in edges[1:]:
+        point = bisect(index_a, index_b)
+        if np.linalg.norm(point - white) >= 25.0:
+            textured = point
+            break
+    for k, point in enumerate((white, textured)):
+        ball, _ = demo._test_balls[k]
+        demo._test_balls[k] = (ball, point - demo.home.position)
+    # The camera: 150 m from the white ball across the sun's azimuth, 25 m
+    # above it, looking at it.
+    ball_up = (white - demo.home.position) / np.linalg.norm(white - demo.home.position)
+    flat_sun = demo._sun - ball_up * float(demo._sun @ ball_up)
+    side = np.cross(ball_up, flat_sun / np.linalg.norm(flat_sun))
+    eye = white + side * 150.0 + ball_up * 25.0
+    eye_up = (eye - demo.home.position) / np.linalg.norm(eye - demo.home.position)
+    eye_lat, eye_lon = (float(v[0]) for v in latlon(eye_up[None, :]))
+    altitude = float(np.linalg.norm(eye - demo.home.position)) - demo.radius
+    target = (white + textured) / 2.0
+    heading, pitch = _look_at(demo, eye_lat, eye_lon, altitude, target)
+    demo._place_camera(eye_lat, eye_lon, altitude, heading, pitch)
+    return True
+
+
+def _look_across_sun(
+    demo: TerrainDemo,
+    target: np.ndarray,
+    distance: float,
+    height: float,
+    toward_sun: float = 0.0,
+) -> None:
+    """Put the camera *distance* metres from a point (world frame) across
+    the sun's azimuth (turned *toward_sun* degrees toward it), *height*
+    above it, looking at it."""
+    up = (target - demo.home.position) / np.linalg.norm(target - demo.home.position)
+    flat_sun = demo._sun - up * float(demo._sun @ up)
+    flat_sun /= np.linalg.norm(flat_sun)
+    side = np.cross(up, flat_sun)
+    angle = math.radians(toward_sun)
+    across = math.cos(angle) * side + math.sin(angle) * flat_sun
+    eye = target + across * distance + up * height
+    eye_up = (eye - demo.home.position) / np.linalg.norm(eye - demo.home.position)
+    lat, lon = (float(v[0]) for v in latlon(eye_up[None, :]))
+    altitude = float(np.linalg.norm(eye - demo.home.position)) - demo.radius
+    heading, pitch = _look_at(demo, lat, lon, altitude, target)
+    demo._place_camera(lat, lon, altitude, heading, pitch)
+
+
+def _casters_scene(demo: TerrainDemo, name: str, extra: list) -> None:
+    """Set out the casters of an objects' shadow pose (see the module) on
+    the ground where the white ball hangs over, and look at them.
+
+    :param extra: models added for the pose, to remove after it (appended)
+    """
+    planet = demo.home.terrain.planet
+    white_node, white_point = demo._test_balls[0]
+    textured_node, _ = demo._test_balls[1]
+    up = white_point / np.linalg.norm(white_point)
+    ground = float(planet.sample_dirs(up[None, :], apply_stamps=True)[0][0])
+    foot = up * (demo.radius + max(ground, 0.0))  # planet frame
+    sun = demo._sun
+    flat_sun = sun - up * float(sun @ up)
+    flat_sun /= np.linalg.norm(flat_sun)
+    side = np.cross(up, flat_sun)
+    radius = TEST_BALL_DIAMETER / 2.0
+    world = demo.home.position
+    if name == "caster_pad":
+        white = foot + up * (radius + 0.5)
+        textured = foot + side * 30.0 + up * 60.0
+        target = foot - flat_sun * 30.0 + side * 15.0
+        view = (110.0, 35.0)
+    elif name == "caster_ship_on_ship":
+        white = foot + up * 30.0
+        textured = white + sun * 26.0 + up * 9.0  # its upper part shaded
+        target = white
+        view = (80.0, 10.0, 30.0)
+    elif name == "caster_self":
+        white = foot - up * 1000.0  # out of the way, hidden
+        textured = white
+        teapot = demo.loader.load_model("models/teapot")
+        teapot.set_scale(4.0)
+        teapot.reparent_to(demo.render)
+        # Its handle (-x) toward the sun, turned 40 degrees: the loop's
+        # shadow on the pot's side the camera sees.
+        turn = math.radians(40.0)
+        handle = math.cos(turn) * flat_sun + math.sin(turn) * side
+        teapot.set_quat(
+            demo.render, _quat_from_axes(-handle, -np.cross(up, handle), up)
+        )
+        extra.append(teapot)
+        demo._test_balls.append((teapot, foot))
+        demo.tracked.track(teapot, cast=True, shader=demo._model_shader)
+        for node in (white_node, textured_node):
+            node.hide()
+        target = foot + up * 6.0
+        view = (45.0, 12.0, 45.0)
+    else:  # caster_altitude
+        white = foot + up * (radius + 0.5)
+        textured = foot + up * 300.0
+        # Down its ray toward the ground, in 5 m steps.
+        steps = textured - np.outer(np.arange(0.0, 3000.0, 5.0), sun)
+        dirs = steps / np.linalg.norm(steps, axis=1, keepdims=True)
+        heights = planet.sample_dirs(dirs, apply_stamps=True)[0]
+        below = np.linalg.norm(steps, axis=1) - demo.radius <= np.maximum(heights, 0.0)
+        target = steps[int(np.argmax(below))]
+        view = (150.0, 80.0)
+    demo._test_balls[0] = (white_node, white)
+    demo._test_balls[1] = (textured_node, textured)
+    _look_across_sun(demo, world + target, *view)
+
+
 def _settle(demo: TerrainDemo, timeout: float) -> bool:
     """Step frames until nothing is wanted or generating for 10 frames.
 
@@ -208,8 +584,11 @@ def _settle(demo: TerrainDemo, timeout: float) -> bool:
     quiet = 0
     while time.perf_counter() - start < timeout:
         demo.taskMgr.step()
-        busy = demo.executor.pending or any(
-            body.terrain.stats["wanted"] for body in demo.bodies
+        busy = (
+            demo.executor.pending
+            or any(body.terrain.stats["wanted"] for body in demo.bodies)
+            or (demo.ring is not None and demo.ring.loading)
+            or not all(body.shadow_map.current for body in demo.bodies)
         )
         quiet = 0 if busy else quiet + 1
         if quiet >= 10:
@@ -229,6 +608,22 @@ def main() -> None:
     add_planet_arguments(parser)
     parser.add_argument("--pose", nargs="*", default=None, help="default: all")
     parser.add_argument(
+        "--sun",
+        nargs=2,
+        type=float,
+        metavar=("AZIMUTH", "ELEVATION"),
+        default=None,
+        help='the sun of the "at" pose, degrees (default 210 35)',
+    )
+    parser.add_argument(
+        "--at",
+        nargs=5,
+        type=float,
+        metavar=("LAT", "LON", "ALT", "HEADING", "PITCH"),
+        default=None,
+        help='one more pose, "at", from the demo\'s printed camera line',
+    )
+    parser.add_argument(
         "--timeout", type=float, default=90.0, help="seconds to settle a pose"
     )
     parser.add_argument("--size", default="1600 900", help='"width height"')
@@ -245,6 +640,11 @@ def main() -> None:
     parser.add_argument(
         "--ocean-debug", type=int, default=0, help="Sea.set_debug_mode view"
     )
+    parser.add_argument(
+        "--panda-lights",
+        action="store_true",
+        help="the test balls by Panda3D's lighting, not the model shader",
+    )
     args = parser.parse_args()
     window_config("Terrain shots", args.size, args.offscreen, vsync=False)
     args.out.mkdir(parents=True, exist_ok=True)
@@ -256,6 +656,7 @@ def main() -> None:
         settings=settings,
         clouds=not args.no_clouds,
         genera=args.genera,
+        ring=args.ring,
         cloud_debug=args.cloud_debug,
         ocean_debug=args.ocean_debug,
         preset=args.planet,
@@ -263,16 +664,44 @@ def main() -> None:
         start=args.start,
     )
     demo.setFrameRateMeter(False)
+    if args.panda_lights:
+        demo._toggle_model_shader()
     print(describe_window(demo), f"settings {settings.to_dict()}")
     win = demo.win
     probe = win.make_display_region(0, 1 / win.get_x_size(), 0, 1 / win.get_y_size())
     poses = _poses(demo)
+    if args.at is not None:
+        poses["at"] = (*args.at, 0, 0)
+    balls = list(demo._test_balls)  # where they hang (edge poses move them)
+    extra: list = []  # models a pose added
     for name in args.pose or list(poses):
         lat, lon, alt, heading, pitch, view, body = poses[name]
+        demo._test_balls = list(balls)
+        for node in extra:
+            demo.tracked.untrack(node)
+            node.remove_node()
+        extra = []
+        for node, _ in balls:
+            node.show()
         demo.set_debug_view(view)
         demo._place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])
-        demo.set_local_sun(*SUNS.get(name, (210.0, 35.0)))
+        if name in BALLS_AHEAD:
+            nodes = [ball for ball, _ in balls]
+            demo._test_balls = list(zip(nodes, demo._test_ball_points()))
+        sun = SUNS.get(name, (210.0, 35.0))
+        if name == "at" and args.sun is not None:
+            sun = tuple(args.sun)
+        if isinstance(sun, AimedSun):
+            _aim_sun(demo, sun)
+        else:
+            demo.set_local_sun(*sun)
+        if name in CASTER_POSES:
+            _casters_scene(demo, name, extra)
         settled = _settle(demo, args.timeout)
+        if name in BALL_EDGES:
+            if not _balls_on_edge(demo, BALL_EDGES[name]):
+                print(f"{name}: no shadow edge found, the balls stay")
+            settled = _settle(demo, args.timeout)
         for _ in range(3):  # let the last uploads reach the screen
             demo.taskMgr.step()
         times = []
@@ -287,9 +716,11 @@ def main() -> None:
         s = demo.bodies[body].terrain.stats
         clouds = demo.clouds.stats if demo.clouds is not None else None
         billboards = f"{clouds['billboards'] / 1e3:.0f}k bb, " if clouds else ""
+        bake = demo.bodies[body].shadow_map.bake_seconds
         print(
             f"{name:<13} {'settled' if settled else 'TIMEOUT'}  {s['shown']} chunks, "
             f"finest {s['finest']}, {billboards}LOD {s['select_ms']:.1f} ms, "
+            f"shadow map {bake:.1f} s, "
             f"{median:.2f} ms ({1e3 / median:.0f} fps) -> {path}"
         )
     demo.destroy_terrain()

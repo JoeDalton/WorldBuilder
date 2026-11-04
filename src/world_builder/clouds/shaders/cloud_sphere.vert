@@ -26,8 +26,6 @@ flat out int vLayer;
 // The air in front of the billboard and its sunlight's tint, per vertex: they
 // change little across a billboard, and per fragment they would be paid for
 // every layer of overdraw.
-out vec3 vAtmoT;
-out vec3 vAtmoS;
 out vec3 vSunTint;
 out float vSkyTint;
 out vec3 vTwilight;
@@ -87,8 +85,6 @@ void main() {
         worldPos = vec3(0.0);
         vRadius = 0.0;
         vFade = 0.0;
-        vAtmoT = vec3(1.0);
-        vAtmoS = vec3(0.0);
         vSunTint = vec3(1.0);
         vSkyTint = 1.0;
         vTwilight = vec3(0.0);
@@ -104,13 +100,6 @@ void main() {
     worldPos = wp - uPlanetCentre;
     vUv = i_uv_st.xy + (corner * 0.5 + 0.5) * i_uv_st.zw;
     vRadius = i_radius;
-    vec3 rel = wp - uCamRender;
-    float dist = max(length(rel), 1e-3);
-    vAtmoT = vec3(1.0);
-    vAtmoS = vec3(0.0);
-    if ((uCloudDebug & 2) == 0) {
-        atmosphereAlong(rel / dist, dist, sunDir, uAtmoVertexSteps, vAtmoT, vAtmoS);
-    }
     vSunTint = vec3(1.0);
     vSkyTint = 1.0;
     vTwilight = vec3(0.0);
@@ -121,4 +110,25 @@ void main() {
         vTwilight = cloudTwilight(uOwnAtmosphere, p, sunDir, vSunTint);
         vSkyTint = smoothstep(-0.3, 0.1, dot(normalize(p), sunDir));
     }
+    // Other bodies eclipsing the sun, at the billboard's centre: the sun,
+    // the lit air above (twilight) and the sky dim together.
+    float eclipse = eclipseVisibility(centre - uCamRender, sunDir, uShadowSelf);
+    // And the mountains between the cloud and a low sun (the body's map).
+    vec3 planet = centre - uPlanetCentre;
+    vSunTint *= eclipse * terrainShadow(normalize(planet), length(planet) - planetRadius)
+              * ringVisibility(centre - uCamRender, sunDir);
+    // And the clouds far along it, past the fragment's own march: the long
+    // shadows of a low sun across the deck (only their slow part, here).
+    if (uCloudFarReach > 0.0) {
+        vSunTint *= exp2(-cloudFarDepth(getField(vLayer), planet, sunDir, uCloudFarReach));
+    }
+    // And, with genera, the other family's clouds between it and the sun
+    // (the convective clouds over the stratus): their whole chord, as on
+    // the ground under them (none over the convective clouds' own).
+    if (uCloudShadowOther >= 0) {
+        vSunTint *= exp2(-cloudShadowDepthIn(getField(uCloudShadowOther), otherWeather,
+                                             planet, sunDir, uCloudShadowSteps));
+    }
+    vTwilight *= eclipse;
+    vSkyTint *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
 }

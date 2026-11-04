@@ -24,10 +24,13 @@ by two techniques:
 - a **volume** ([`sphere.py`](../../src/world_builder/clouds/sphere.py),
   `CloudVolume`): the low clouds, cumulus by default (any `CloudType`),
   billboard LOD shells generated per cube-sphere tile in the terrain's worker
-  pool, and a deck sphere beyond the last shell, up to orbit. Or, with
-  `CloudSettings.renderer = "march"`, the same field **raymarched**
+  pool, and a deck sphere beyond the last shell, up to orbit. By default
+  (`CloudSettings.renderer = "march"`, at every preset) the same field is
+  **raymarched** instead
   ([`march.py`](../../src/world_builder/clouds/march.py), `CloudMarch`, see
-  [the raymarch](#the-raymarch)), an experimental second code path;
+  [the raymarch](#the-raymarch)); `renderer = "billboards"` selects the
+  billboards (a rebuild; they stay the cheaper choice over a distant open
+  sky on a weak GPU);
 - optionally, a **sheet** above it
   ([`cirrus.py`](../../src/world_builder/clouds/cirrus.py), `CloudSheet`): high
   cirrus, baked patches stamped along the upper wind.
@@ -191,7 +194,25 @@ convective continuum from fair-weather cumulus through congestus to
 cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
 `--genera` in the demo, `terrain_shots.py` and `cloud_bench.py`). Its maps are
 a **placeholder** for the weather (issue #8): features laid out around one
-point. Billboards draw them; the raymarch has no depth.
+point. Either renderer draws them: billboards (two `CloudVolume`s), or the
+raymarch (one `CloudMarch` of two families, below).
+
+**The raymarch with genera.** `CloudMarch(genera=...)` marches both families
+in one pass, so a stratus cloud in front of a tower and one behind it composite
+correctly: each family's slab gives up to two stretches of a ray
+(`march.family_segments`), the four sorted along it, and every sample takes the
+field, the weather (the shift, the convective depth, the anvil's spread:
+`texture(weatherMap | otherWeather, p).gba`), the light table and the shadow
+maps of the stretch's family. The families' layers share `layerParams` (at
+most `MAX_LAYERS` between them, so with two the shells' bands are at most 3
+each: `march._configure`); a stratus cloud takes the convective clouds' shadow
+from their maps (`cloudSunDepthOther`). Both families cast their shadows on the
+ground, sea and models (`PlanetClouds.shadow_caster(family)`, the maps' pairs
+as for the billboards). The reflection's deck is the convective family's alone.
+The convective weather is read at every sample (`WEATHER_STRETCH_GENERA`): a
+tower's depth, which sets its top, changes over tens of metres, and read once
+a kilometre it showed as horizontal bands across every tower. The fair-weather
+march keeps the kilometre.
 
 **Two families, one sort.** Billboards mix cloud types by superposition: each
 samples its own type's field, and the blender adds them. So the genera are two
@@ -309,6 +330,18 @@ behind. And the cost near the big clouds (performance §21).
 
 ## The raymarch
 
+The raymarch is the default renderer at every quality preset
+(`CloudSettings.renderer`); the presets set its resolution and steps (LOW and
+MID a quarter of the view's resolution, HIGH and ULTRA a half).
+
+**The sea's reflection** sees only the deck (`sphere.deck_mesh`, the
+billboards' far field): no cloud shapes and, with genera, no stratus. It is
+good enough under the ripples, so it is left as is. If it is wanted: a cheap
+mirror march, a third march layer from the reflection camera into the
+reflection's buffer (a quarter of its resolution, about 24 steps, no history,
+no composite; the reflection's own depth as the scene's depth), active only
+while the sea is in view and `reflected` is on; about 0.3-0.6 ms (a guess).
+
 [`march.py`](../../src/world_builder/clouds/march.py) (`CloudMarch`) draws
 the same field, weather and lighting as the billboards and the deck, without
 their overdraw. Billboards are a raymarch whose steps are quads: every one
@@ -324,9 +357,18 @@ cloud). Here each pixel steps along its own ray:
   near the camera, which leaves a clear bubble).
 - **In steps** of `MIN_STEP_FEATURE` of the finest feature near the camera
   (50 m for cumulus), `STEP_GROWTH` of the distance farther, all lengthened
-  alike when a ray needs more than `CloudSettings.march_steps`. Each sample
-  is jittered within its step, the jitter moving on by the golden ratio
-  each frame. The march stops once the cloud is opaque. The steps' geometry
+  alike when a ray needs more than `CloudSettings.march_steps`, and at
+  least `SEGMENT_SAMPLES` (8) a stretch of the slab: a far ray crossing it
+  steeply in a few steps longer than its clouds' edges are thick hits or
+  misses thin cloud by chance (the sparkle seen from 20 km up). Each sample
+  is jittered within its step by a **blue noise** (`blue_noise`, a 64 x 64
+  tileable void-and-cluster texture) read at the *march's* pixel, shifted by
+  which pixel of its block this frame traces (R2) and moved on by the golden
+  ratio at each **visit** of the pixel (`visit_of`), not each frame: traced
+  once a block's cycle, a per-frame jitter skipped half a step a visit and
+  never stratified it. (The interleaved gradient noise at the view pixel, a
+  stride of `uBlock` apart, aliased its own diagonals into a lattice of
+  stripes that showed in motion, worst at a quarter resolution.) The march stops once the cloud is opaque. The steps' geometry
   has a NumPy mirror that the tests run (`slab_segments`, `march_steps`,
   `march_transmittance`).
 - **No longer steps in clear air.** A step longer than the finest features
@@ -339,7 +381,17 @@ cloud). Here each pixel steps along its own ray:
   threshold (the exact bound, from the texels each octave's filter
   touches, did in 0.004 % of the cells).
 - **The field** with the octaves the billboard shells would have there
-  (`shell_octaves` over their distance bands). The weather's shift is read
+  (`shell_octaves` over their distance bands), and where a view pixel spans
+  more than half a fine octave's feature (the 3rd and 4th, 285 m and 125 m
+  for cumulus) or the billows', that one fades to its mean (as an octave
+  left out does: the coverage holds): it would alias, a different value at
+  every jitter and every move. The same goes for features finer than the
+  **step** (`uStepFade`, a share of its length, over the same ramp: 0 at full
+  resolution, 0.1 at a half, 0.25 at a quarter, `march.STEP_FADES`: more is steadier
+  and softer): beyond a few
+  kilometres the steps grow with the distance (1 %), and an octave they cannot
+  sample aliases into the jitter however finely a pixel resolves it (the
+  shimmer of far clouds, which more steps did not remove). The weather's shift is read
   once per kilometre of ray (`cloudDensityShifted`), not at every sample.
   Two departures, march-only, give back the billboards' look:
   - the view ray takes **twice the field's extinction**
@@ -350,6 +402,14 @@ cloud). Here each pixel steps along its own ray:
     billowy noise 24 times finer than the first octave moves the threshold
     by up to half its window about its mean (`DETAIL_EROSION`), so the core
     stays and the coverage holds.
+    The billows are two layers of the noise itself (the second 2.3 times
+    finer, turned about, half the weight: `BILLOW_FINER_*`), carving where it
+    is high, with the ridged noise's mean and spread (`billow_gain`) so the
+    coverage and the erosion's depth hold. The first version used the ridged
+    noise `1 - |2n - 1|`, which carves along sheets: seen edge-on they showed
+    as parallel streaks across every cloud. The first layer is also sampled
+    through a rotation off the field's axes (`BILLOW_TURN`), which hides the
+    value noise's lattice planes.
 - **Lit** per sample exactly as the billboards are (`cloud_shading.glsl`,
   which both renderers include). The air is applied once per pixel, at the
   cloud's transmittance-weighted distance, with the billboards' per-vertex
@@ -367,25 +427,42 @@ from `use_split_depth`):
    view's resolution into a texture. Everything but the clouds and the sky
    is drawn, the terrain through its depth-only stage, as for the
    half-resolution pass;
-2. a fullscreen card **marches** one pixel of every 2 × 2 block
+2. a fullscreen card **marches** one pixel of every block (2 × 2 at a half resolution, 4 × 4 at a quarter)
    (`march_resolution` ½; 4 × 4 at ¼), a different one each frame in a
    Bayer order. It writes the premultiplied cloud and its distance;
-3. a **resolve** gathers them into the view's resolution over the frames:
-   the other pixels come from the last frame's result, reprojected along the
-   view ray to the cloud's distance (float64 for the camera's move, float32
-   only near the camera) and held within the range of this frame's
-   neighbouring samples. A traced pixel blends into its history, which
-   averages the jitter away. Two results alternate, each frame's reading
-   the other's;
+3. a **resolve** gathers them into the view's resolution over the frames.
+   Every pixel blends this frame's samples around it (the four nearest,
+   bilinearly) into the last frame's result, by the same share whatever
+   its distance to a traced pixel (a weight that fell with it put a grid of
+   the traced pixels on the cloud). The history is reprojected along the
+   view ray to the pixel's own cloud distance (this frame's first, then the
+   history's there; float64 for the camera's move, float32 only near the
+   camera) and held within 1.25 standard deviations of the 3 × 3 samples
+   around. While the view is still (`uStill`, from the camera's move and
+   turn), that range is widened by a floor and a share of the mean, or the
+   steps' own noise would clamp the history and start its count over; in
+   motion the floor is gone, or a cloud coming closer would keep the thin
+   look it had. The samples' mean and spread are Gaussian-weighted by their
+   distance to the pixel (`STATS_REACH`), not a box about the nearest sample
+   (whose centre moves every half block and puts the lattice into the clamp), and
+   so is the distance the history is moved by. A pixel that takes most of this
+   frame's samples (its history lost or short) takes their smooth mean instead
+   of the bilinear mix of four, by `uSmooth` (`march.SMOOTHING`: all of it at a
+   quarter resolution, half at a half, none at full): each sample's noise was a
+   dot of its own. Each pixel counts the samples it has gathered (the distance
+   target's second channel): this frame's share falls as 1 / (count + 1)
+   down to `MIN_WEIGHT` (0.03), and what the clamp takes away takes the
+   count down (to 4 at least, so a noisy sample is not taken
+   whole). Two results alternate, each frame's reading the other's;
 4. a card lays the result over the range's own pass, premultiplied "over",
    at the **cloud's own depth**. The scene's depth test hides it pixel by
    pixel at the view's resolution, behind anything nearer, which also
    drops any stale history a moving model would leave behind it.
 
-The near range's clouds are close, large and soft on screen. It traces the
-middle of each block every frame, averages only its jitter, at the march's
-resolution, and the composite upsamples it: a full-resolution pass less. It
-runs only when the slab reaches into the near range.
+The near range gathers as the far one does (it once traced the middle of
+each block every frame at the march's resolution, upsampled by the
+composite: at a quarter of the resolution, 4 × 4 squares). It runs only
+when the slab reaches into the near range.
 
 The sea's reflection sees the deck alone (the far layer is packed for it).
 The textures may be padded to powers of two, so the shaders address them
@@ -408,4 +485,7 @@ the clouds alone (the air, the sky, no terrain) from fixed poses, with
 either renderer, still or moving (`--move`). Its `model_in_cloud` pose puts
 a black ball, standing in for a game's model, half into a cloud, and
 `--interactive` flies it in and out of the clouds, switching renderers with
-M. On WSL, run it with `GALLIUM_DRIVER=d3d12`, or Mesa draws on the CPU.
+M. `--stability N` scores the clouds' steadiness over N frames read back
+(each pixel's brightness spread, and the raymarch's block grid: see the
+script), and each pose's frame comes with its 95th percentile
+([performance §23](performance.md)). On WSL, run it with `GALLIUM_DRIVER=d3d12`, or Mesa draws on the CPU.

@@ -32,8 +32,6 @@ in vec3 vPosition;
 flat in vec3 vEye;
 in vec2 vUv;
 in float vOpacity;
-in vec3 vAtmoT;
-in vec3 vAtmoS;
 in vec3 vSunTint;
 in float vSkyTint;
 in vec3 vTwilight;
@@ -81,8 +79,6 @@ void main() {
     vec3 colour = sunColor * vSunTint * (sunBrightness * sunVisibility * phase)
                 + skyColor * vSkyTint * ambient
                 + sunColor * vTwilight * (sunBrightness * TWILIGHT_GLOW);
-    // The air in front, weighted by the alpha like the cirrus itself.
-    colour = colour * vAtmoT + vAtmoS;
     colour = displayColour(colour * exposure);
     fragColor = vec4(colour * alpha, alpha);   // premultiplied "over"
 }

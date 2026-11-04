@@ -86,7 +86,9 @@ parts.
   `space_ambient`. Given as `World(fields=[...])`; it takes the world's pool,
   `asteroids` settings, sun, clock (the rocks turn with the game's time) and
   the bodies' textures. Its rocks are massless.
-- **`SunLook`**: the direction toward the sun and its colour above any air.
+- **`SunLook`**: the direction toward the sun, its colour above any air,
+  and its `angular_radius` (radians): the disc the sky draws and every
+  eclipse's penumbra ([Shadows](shadows.md)).
 - **`SkyLook`**: `Sky`'s arguments: stars, nebula, sun disc, exposure.
 
 Quality is not part of the look. It comes in as `settings=`, a
@@ -117,16 +119,23 @@ In order, it updates:
 1. each body's terrain, placed and detailed around the camera, its collision
    node following, then each asteroid field (its rocks in range, drawn and
    solid, its haze);
-2. the air (`Atmospheres.update`);
+2. the air (`Atmospheres.update`) and the bodies as sun occluders
+   (`World.shadows`, a `Shadows`: each body eclipses the sun for the others,
+   see [Shadows](shadows.md)); with the terrain, each body's mountain
+   shadow maps (`Body.shadow_map`, the global one and the local one
+   around the camera) collect what the pool baked; after the clouds, their
+   shadow maps (`Body.cloud_maps`) are drawn again if they must be;
 3. the sky;
 4. each body's clouds, with the angle one pixel spans, taken from the
    camera's own output (a window, or a game's offscreen buffer);
 5. Panda3D's sun and ambient lights, set to the light at the camera
-   (`World.light_at`): the air reddens the sun, and an airless body's
-   shadow hides it. Their colours are multiplied by `light_scale`. A game
+   (`World.light_at`), and each tracked model's at the model: the air reddens the sun, an airless body's shadow
+   hides it, and the other bodies eclipse it. Their colours are multiplied by `light_scale`. A game
    whose models use Panda3D's fixed-function lighting scales them down, since
    that lighting has no tone map and clips the physical noon sun (about 2.5)
    to white (see [Lighting on objects](object_lighting.md));
+   a model tracked with `shader=True` takes its nearest body's model shader
+   inputs instead (`Body.models`);
 6. each body's sea (`Sea.update`):
    - its swell, drifted to the game time and handed to the terrain, its
      query and its collision solid;
@@ -172,6 +181,22 @@ band (see `world_builder.depth`).
 - **`enable_collision(into_mask, bodies=None, **kw)`**: makes bodies' drawn
   terrain solid to the game's collision traverser.
 - **`set_sun(direction)`**: moves the sun; every part follows.
+- **`light_at(point)`, `lights_at(points)`**: the light (direct, ambient)
+  at one point or many, each by its nearest body, in the world's shadows;
+  **`sun_visibility(points)`** is those shadows' share alone (the
+  eclipses, the clouds', the mountains': see [Shadows](shadows.md)).
+  `lights_at(points, local=False)` leaves the clouds' and the mountains'
+  out, for what a shader shades per pixel (the near sea).
+- **`track_light(node, cast=False, shader=False)`, `untrack_light(node)`**:
+  a model lit by the light where it is, not at the camera: its own Panda3D
+  sun and ambient lights (the world's off on it), set at every `update` in
+  one vectorised call, times `light_scale`. Place the model before
+  `update`. With `cast=True` it casts shadows on the terrain, the sea and
+  the shaded models (`World.casters`, see [Shadows](shadows.md)). With
+  `shader=True` the world's model shader draws it: lit and tonemapped as
+  the terrain, every world shadow per pixel, the air in front (see
+  [Lighting on objects](object_lighting.md)); `Body.models` holds its
+  inputs near each body.
 - **`body(name)`**: a body's terrain, clouds and sea, for tools and debug
   views.
 - **`field(name)`**: an asteroid field, to make it solid

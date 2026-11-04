@@ -4,8 +4,10 @@ Standalone flythrough demo for the procedural planet terrain.
 Flies a free camera around a small planetary system: a Kerbin-sized planet
 (600 km) with hand-made stamps (world_builder/terrain/levels/demo.yaml), its
 atmosphere, its clouds (cumulus over the whole planet, following its weather,
-and high cirrus streaming along its jets) and its sea, an airless sand moon
-10,000 km away, and a procedural star field, from orbit down to the ground of
+and high cirrus streaming along its jets) and its sea (and, with --ring, a
+small ring of dust and rocks in its equator's plane, 1.5 to 2.1 radii out),
+an airless sand moon 21,000 km away (as wide in the sky as the sun: it can
+eclipse it), and a procedural star field, from orbit down to the ground of
 either. Run it from an environment where world_builder is importable::
 
     python scripts/demo_terrain.py [--level FILE] [--planet PRESET]
@@ -13,7 +15,8 @@ either. Run it from an environment where world_builder is importable::
         [--moon-distance METRES] [--no-moon] [--workers N]
         [--backend process|thread|inline] [--quality low|mid|high|ultra]
         [--terrain-quality L] [--atmosphere-quality L] [--sky-quality L]
-        [--clouds-quality L] [--ocean-quality L] [--no-clouds]
+        [--clouds-quality L] [--ocean-quality L] [--asteroids-quality L]
+        [--no-clouds] [--ring]
 
     --level          the planet's level file (default: the demo level)
     --planet         overrides the level's planet preset: earthlike, desert,
@@ -28,7 +31,7 @@ either. Run it from an environment where world_builder is importable::
                          mesas    --start -63.9922 79.9485
                          canyons  --start -25.3564 -90.5113
     --radius         overrides the level's planet radius
-    --moon-distance  centre to centre (default 10,000 km)
+    --moon-distance  centre to centre (default 21,000 km)
     --no-moon        the planet alone
     --workers        generation processes (the terrain's ``workers``
                      setting; default: physical cores - 1)
@@ -38,6 +41,8 @@ either. Run it from an environment where world_builder is importable::
                      world_builder.settings.WorldSettings)
     --<part>-quality one part's preset, over --quality
     --no-clouds      no clouds at all (neither cumulus nor cirrus)
+    --ring           a small ring around the planet (off by default, so
+                     runs compare with earlier ones)
 
 The default backend generates terrain in spawned worker processes, which
 re-import this script: keep the ``if __name__ == "__main__"`` guard. All
@@ -77,6 +82,10 @@ Controls (AZERTY):
                     settings; a cloud or ocean change may refill a moment)
     F6              cycle every part's preset at once
     C               show / hide the high cirrus
+    F7              cycle the shadows' preset (the clouds' shadow on the
+                    ground: off at low, more samples above)
+    M               the test balls: the world's model shader / Panda3D's
+                    lighting
     F               print the camera pose and terrain stats
     ESC             quit
 
@@ -88,13 +97,22 @@ and generation, upload and LOD timings; the depth split and far plane; the
 clouds' tiles and billboards; each part's quality preset ("custom" when it
 differs from every preset).
 
-Lighting: the sun is one direction for the whole system; the atmosphere
-reddens it and the planets' shadows hide it. Panda3D's own lights (a
+Lighting: the sun is one direction for the whole system, a disc as wide as
+the sky draws it; the atmosphere reddens it, the planets' shadows hide it,
+and each body eclipses it for the other, with a penumbra (swing the sun
+behind the moon with J / K and I / U). Panda3D's own lights (a
 DirectionalLight and an AmbientLight on render, for anything drawn without
 the world's shaders) follow the light at the camera, and the sea's near look
 is lit as the sea under the camera (Sea.set_light), so it darkens at night.
 A white ball (Panda3D's smiley, untextured, 20 m across) floats ahead of the
-start pose, at its height, to judge how they light an object.
+start pose, at its height, the textured smiley beside it, to judge how an
+object is lit: each has its own Panda3D lights, set to the light where it
+is, not at the camera (world_builder.lights.TrackedLights: it darkens in an
+eclipse or past the terminator whatever the camera's light), and is drawn
+by the world's model shader (world_builder.objects: lit and tonemapped as
+the terrain, every world shadow per pixel); M switches them to Panda3D's
+own lighting, to compare. They cast shadows on the ground, the sea and
+each other (world_builder.shadows.casters).
 
 Terrain is generated in background processes, coarse first: the world shows
 blurry for a second, then sharpens.
@@ -103,6 +121,7 @@ blurry for a second, then sharpens.
 from __future__ import annotations
 
 import argparse
+import functools
 import math
 import sys
 from dataclasses import dataclass, replace
@@ -122,16 +141,26 @@ from panda3d.core import (
     loadPrcFileData,
 )
 
+from world_builder.asteroids.distributions import Distribution
+from world_builder.asteroids.field import AsteroidField
+from world_builder.asteroids.haze import ring_depth
+from world_builder.asteroids.spec import PRESETS as FIELD_PRESETS
+from world_builder.asteroids.spec import Annulus, Clumping, Density, FieldSpec
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.planet import PlanetClouds
+from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS, HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.lights import TrackedLights
+from world_builder.objects import ModelLighting
 from world_builder.ocean import Sea
 from world_builder.quality import QualityLevel
 from world_builder.settings import SECTIONS, WorldSettings
+from world_builder.shadows import ECLIPSE_SKY_FLOOR, Shadows
+from world_builder.shadows.casters import CasterMap
 from world_builder.sky import Sky, Starfield
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import (
@@ -141,17 +170,20 @@ from world_builder.terrain.chart import (
 )
 from world_builder.terrain.cubesphere import FACE_NAMES, dirs_to_face
 from world_builder.terrain.level import DEMO_LEVEL, load_level
-from world_builder.terrain.planet import PRESETS
+from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
+from world_builder.terrain.shadow_map import ShadowMap
 
 INITIAL_FAR_M = 600000.0  # the lens the sea's reflection camera copies
 SPEED = 300.0  # metres/second at low altitude
 BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground
 ORBIT_RADII = 3.0  # HOME and TAB jump this high
-# The moon: centre-to-centre distance, and where it hangs in the start view
-# (this far from the start point's vertical, toward its north).
-MOON_DISTANCE_M = 10_000e3
+# The moon: centre-to-centre distance (as wide in the sky as the sun, seen
+# from the planet's ground: a total eclipse is possible), and where it hangs
+# in the start view (this far from the start point's vertical, toward its
+# north).
+MOON_DISTANCE_M = 21_000e3
 MOON_SEED = 7
 MOON_ZENITH_ANGLE = 75.0
 # The camera stays within this many moon distances of the planet.
@@ -172,10 +204,17 @@ CLOUD_SKY_LIGHT = 0.35
 # The sun's elevation the ocean's water colour was tuned in (the start pose).
 WATER_TUNED_ELEVATION = 35.0
 CLOUD_BASE = 2200.0  # metres above sea level: above the start pose
+# The planet's ring: from and to this many planet radii from its centre, in
+# its equator's plane (the field's xy plane is the world's: the poles are on
+# z), this thick, metres. Seen from the start area, 10-26 degrees over the
+# southern horizon.
+RING_RADII = (1.5, 2.1)
+RING_THICKNESS = 1000.0
 HUD_PERIOD = 0.2  # seconds between HUD refreshes
 # The white ball ahead of the start pose (judging the lights on objects).
 TEST_BALL_DIAMETER = 20.0
 TEST_BALL_DISTANCE = 150.0  # metres ahead of the start pose, level with it
+TEST_BALL_SPACING = 30.0  # the textured ball, this far right of the white one
 
 _ROTATIONS = (
     ("s", "z", "pitch", 40.0),
@@ -194,13 +233,15 @@ _CONTROLS = (
     "shift",
     *(key for row in (*_ROTATIONS, *_TRANSLATIONS, *_SUN_KEYS) for key in row[:2]),
 )
-#: F1 - F5 cycle these parts' presets (WorldSettings sections), F6 all.
+#: F1 - F5 and F7 cycle these parts' presets (WorldSettings sections), F6
+#: all.
 QUALITY_KEYS = (
     ("f1", "terrain"),
     ("f2", "atmosphere"),
     ("f3", "sky"),
     ("f4", "clouds"),
     ("f5", "ocean"),
+    ("f7", "shadows"),
 )
 QUALITY_ALL_KEY = "f6"
 _DEBUG_VIEWS = ("shaded", "LOD", "biomes", "slope", "normals", "skirts")
@@ -277,6 +318,30 @@ def sun_lighting(azimuth: float, elevation: float) -> tuple[np.ndarray, tuple, t
     return direction, tuple(sun), tuple(sky)
 
 
+def ring_spec(radius: float) -> FieldSpec:
+    """The planet's small ring: the ring preset's ringlets, spins and icy
+    rocks, scaled down around a planet of *radius*. Mostly dust (an optical
+    depth of ~0.2 across it), so it reads as a band from the ground, with
+    sparse rocks (20-400 m) to fly through."""
+    inner, outer = (radius * r for r in RING_RADII)
+    return replace(
+        FIELD_PRESETS["ring"],
+        shape=Annulus(
+            inner,
+            outer,
+            RING_THICKNESS,
+            edge=250.0,
+            radial_edge=0.02 * radius,
+            radial_profile=FIELD_PRESETS["ring"].shape.radial_profile,
+        ),
+        density=Density(
+            1.0, Clumping(scale=8000.0, coverage=0.7, softness=0.15), dust=0.3
+        ),
+        sizes=Distribution.power_law(3.0, 20.0, 400.0),
+        seed=5,
+    )
+
+
 def _smoothstep(edge0: float, edge1: float, x: float) -> float:
     t = min(max((x - edge0) / (edge1 - edge0), 0.0), 1.0)
     return t * t * (3.0 - 2.0 * t)
@@ -296,11 +361,15 @@ class Body:
     :ivar name: shown in the HUD
     :ivar terrain: its terrain (which carries its world position)
     :ivar atmosphere: whether it has air (sky, haze, coloured sunlight)
+    :ivar shadow_map: its mountains' shadow
+    :ivar models: the model shader's inputs near it
     """
 
     name: str
     terrain: object
     atmosphere: bool
+    shadow_map: ShadowMap | None = None
+    models: ModelLighting | None = None
 
     @property
     def position(self) -> np.ndarray:
@@ -342,6 +411,7 @@ class TerrainDemo(ShowBase):
         preset: str | None = None,
         seed: int | None = None,
         start: tuple[float, float] | None = None,
+        ring: bool = False,
     ) -> None:
         """
         :param level_path: the planet's level file
@@ -358,6 +428,7 @@ class TerrainDemo(ShowBase):
         :param seed: overrides the level's seed
         :param start: (lat, lon) in degrees to start over instead of the
             level's start (:func:`start_pose`)
+        :param ring: draw the planet's ring (:func:`ring_spec`)
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -396,6 +467,10 @@ class TerrainDemo(ShowBase):
         # The planet's air: everything is seen through it, the moon included.
         self.atmospheres = Atmospheres(world.atmosphere)
         self.atmospheres.add(spec.radius, AtmosphereParams())
+        # Each body eclipses the sun for the other (body 0 owns the air).
+        self.shadows = Shadows(settings=world.shadows)
+        self.shadows.add(spec.radius, reach=spec.radius + AtmosphereParams().height)
+        self.shadows.set_atmosphere(0, 0)
         self.terrain = Terrain(
             parent=self.render,
             spec=spec,
@@ -406,9 +481,11 @@ class TerrainDemo(ShowBase):
             ambient=SKY_AMBIENT,
             settings=world.terrain,
         )
+        self.shadows.bind(self.terrain.root, 0)
         self.home = Body("planet", self.terrain, atmosphere=True)
         self.bodies = [self.home]
         if moon_distance is not None:
+            moon_position = self._moon_position(spec, moon_distance)
             moon = Terrain(
                 parent=self.render,
                 spec=replace(PRESETS["moon"], seed=MOON_SEED),
@@ -416,18 +493,71 @@ class TerrainDemo(ShowBase):
                 atmospheres=self.atmospheres,  # seen through the planet's
                 sun_color=SUN_COLOR,
                 ambient=SPACE_AMBIENT,
-                position=self._moon_position(spec, moon_distance),
+                position=moon_position,
                 materials=self.terrain.materials,
                 settings=world.terrain,
             )
+            reach = moon.radius + PLANET_HEIGHT_BOUNDS[1]
+            index = self.shadows.add(moon.radius, moon_position, reach=reach)
+            self.shadows.bind(moon.root, index)
             self.bodies.append(Body("moon", moon, atmosphere=False))
         self.max_range = MAX_RANGE_FACTOR * (moon_distance or 10.0 * spec.radius)
         self.body = self.home  # the nearest body, updated every frame
 
         self._sun = np.array([0.0, 0.0, 1.0])  # world frame, toward the sun
+        # Each body's mountains' shadow, baked in the pool for each sun.
+        for body in self.bodies:
+            body.shadow_map = ShadowMap(
+                body.terrain,
+                self.executor,
+                world.shadows.terrain_map_size,
+                self._sun,
+                world.shadows.local_map_size,
+                world.shadows.local_map_spacing,
+                output=self.win,  # baked on the GPU
+            )
+            body.shadow_map.bind(body.terrain.root)
+        # The casting models' shadow map (the test balls'), and the models'
+        # shader's inputs near each body (the clouds' are bound with them).
+        self.casters = CasterMap(self.win, self.render, world.shadows.caster_size)
+        for index, body in enumerate(self.bodies):
+            body.models = ModelLighting(
+                atmosphere=0 if body.atmosphere else None, terrain=body.terrain
+            )
+            self.atmospheres.bind(body.models.inputs)
+            self.shadows.bind(body.models.inputs, index)
+            body.shadow_map.bind(body.models.inputs)
+            self.casters.bind(body.terrain.root)
+            self.casters.bind(body.models.inputs)
+        self.ring = None
+        if ring:
+            self.ring = AsteroidField(
+                self,
+                ring_spec(spec.radius),
+                clock=self._clock.get_frame_time,
+                settings=world.asteroids,
+                executor=self.executor,
+                sun_color=SUN_COLOR,
+                ambient=SPACE_AMBIENT,
+                materials=self.terrain.materials,
+                name="ring",
+            )
+            # The planet's shadow across it, and its own across the planet.
+            self.shadows.bind(self.ring.root)
+            shape = self.ring.spec.shape
+            self.shadows.add_ring(
+                self.ring.position,
+                self.ring.axis,
+                shape.inner,
+                shape.outer,
+                ring_depth(self.ring.spec, self.ring.haze.model.cover),
+                shape.thickness,
+            )
         self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
+        self.shadows.bind(self.sky.node)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.clouds = None
+        self.cloud_maps = None  # the clouds' shadow maps
         self._cloud_debug = cloud_debug
         self._rebuild_clouds()
         # Built before the depth split changes the lens: the sea's reflection
@@ -474,6 +604,7 @@ class TerrainDemo(ShowBase):
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
             ("c", self._toggle_cirrus, []),
+            ("m", self._toggle_model_shader, []),
             ("escape", self._quit, []),
             (QUALITY_ALL_KEY, self._cycle_all_quality, []),
         ]
@@ -495,7 +626,12 @@ class TerrainDemo(ShowBase):
         )
         self._hud_time = -1.0
         self._reset_camera()
-        self._test_ball, self._test_ball_point = self._make_test_ball()
+        self._test_balls = self._make_test_balls()
+        # Lit where they are, by their own lights (_update_lights), drawn by
+        # the model shader (_shade_models).
+        self.tracked = TrackedLights(self.render)
+        self._model_shader = True
+        self._track_test_balls()
         self.taskMgr.add(self._update, "terrain_demo_update")
         print(__doc__)
 
@@ -518,10 +654,13 @@ class TerrainDemo(ShowBase):
         """:returns: the camera in a body's planet frame (the nearest's by default)"""
         return self.cam_world - (body or self.body).position
 
-    def _nearest_body(self) -> Body:
+    def _nearest_body(self, point: np.ndarray | None = None) -> Body:
+        """:returns: the body whose sea level is nearest a point (the camera
+        by default)"""
+        point = self.cam_world if point is None else point
         return min(
             self.bodies,
-            key=lambda b: float(np.linalg.norm(self.cam_world - b.position)) - b.radius,
+            key=lambda b: float(np.linalg.norm(point - b.position)) - b.radius,
         )
 
     def _true_frame(
@@ -547,22 +686,52 @@ class TerrainDemo(ShowBase):
 
     # ── scene pieces ───────────────────────────────────────────────────────────
 
-    def _make_test_ball(self):
-        """A white ball ahead of the start pose, level with it, lit by Panda3D's
-        lights as any model is: for judging them.
+    def _make_test_balls(self) -> list:
+        """A white ball and the textured smiley, hung ahead of the camera
+        (the start pose: :meth:`_test_ball_points`), each lit where it is:
+        for judging how objects are lit.
 
-        :returns: (node, its position in the planet frame)
+        :returns: [(node, its position in the planet frame)]
         """
-        ball = self.loader.load_model("models/smiley")
-        ball.set_texture_off(1)
-        ball.set_color(1.0, 1.0, 1.0, 1.0)
-        ball.set_scale(TEST_BALL_DIAMETER / 2.0)  # the model is a unit sphere
-        ball.reparent_to(self.render)
+        nodes = []
+        for textured in (False, True):
+            ball = self.loader.load_model("models/smiley")
+            if not textured:
+                ball.set_texture_off(1)
+                ball.set_color(1.0, 1.0, 1.0, 1.0)
+            ball.set_scale(TEST_BALL_DIAMETER / 2.0)  # the model is a unit sphere
+            ball.reparent_to(self.render)
+            nodes.append(ball)
+        return list(zip(nodes, self._test_ball_points()))
+
+    def _test_ball_points(self) -> list[np.ndarray]:
+        """Where the balls hang for the camera as it is (planet frame): the
+        white one TEST_BALL_DISTANCE ahead, level with it, the textured one
+        TEST_BALL_SPACING to its right."""
         start = self._relative(self.home)
         up = start / np.linalg.norm(start)
         ahead = self._forward() - up * float(self._forward() @ up)
         ahead /= max(np.linalg.norm(ahead), 1e-9)
-        return ball, start + ahead * TEST_BALL_DISTANCE
+        white = start + ahead * TEST_BALL_DISTANCE
+        return [white, white + np.cross(ahead, up) * TEST_BALL_SPACING]
+
+    def _place_test_balls(self) -> None:
+        """The balls where they hang, this frame (before their light is set:
+        the camera is render's origin, and the planet does not turn)."""
+        for ball, point in self._test_balls:
+            ball.set_pos(*(self.home.position + point - self.cam_world))
+
+    def _track_test_balls(self) -> None:
+        """Light the balls where they are, by the model shader or not."""
+        for ball, _ in self._test_balls:
+            self.tracked.track(ball, cast=True, shader=self._model_shader)
+
+    def _toggle_model_shader(self) -> None:
+        """M: the test balls by the world's model shader, or by Panda3D's
+        lighting (as any model without it)."""
+        self._model_shader = not self._model_shader
+        self._track_test_balls()
+        print("test balls:", "model shader" if self._model_shader else "Panda3D lights")
 
     # ── per frame ──────────────────────────────────────────────────────────────
 
@@ -576,6 +745,8 @@ class TerrainDemo(ShowBase):
         forward = self._forward()
         for terrain in self._terrains():
             terrain.update(self.cam_world, camera_forward=forward)
+        if self.ring is not None:
+            self.ring.update(self.cam_world)
         ranges = []
         for body in self.bodies:
             spec = body.terrain.spec
@@ -593,6 +764,9 @@ class TerrainDemo(ShowBase):
             self.half_res.update()
 
         self.atmospheres.update(self.cam_world)
+        self.shadows.update(self.cam_world)
+        for body in self.bodies:
+            body.shadow_map.update(self.cam_world)  # the local map follows it
         self.sky.update((0.0, 0.0, 0.0), far)
         if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
@@ -601,9 +775,15 @@ class TerrainDemo(ShowBase):
                 fov / max(self.win.get_y_size(), 1), volume_scale=scale
             )
             self.clouds.update(self.cam_world)
+            if self.cloud_maps is not None:
+                steps = self.shadows.settings.cloud_shadow_steps
+                self.cloud_maps.update(self.cam_world, self._sun, steps)
+        self._place_test_balls()
         self._update_sun()
+        self._shade_models()
+        pixel = math.radians(self.camLens.get_fov()[1]) / max(self.win.get_y_size(), 1)
+        self.casters.update(self.tracked.casting, self._sun, (0.0, 0.0, 0.0), pixel)
         self.ocean.update(self.cam_world)
-        self._test_ball.set_pos(*self.home.terrain.to_render(self._test_ball_point))
         # Text geometry is rebuilt on every change: a few times a second is
         # plenty to read, and saves ~1 ms a frame.
         now = self._clock.get_frame_time()
@@ -653,6 +833,7 @@ class TerrainDemo(ShowBase):
 
     def _update_sun(self) -> None:
         # Sunlight above the air: the atmosphere reddens it where it must.
+        self.shadows.set_sun(self._sun)
         self.sky.set_sun(self._sun)
         if self.clouds is not None:
             self.clouds.set_sun(self._sun)
@@ -660,35 +841,88 @@ class TerrainDemo(ShowBase):
         for body in self.bodies:
             ambient = SKY_AMBIENT if body.atmosphere else SPACE_AMBIENT
             body.terrain.set_sun(tuple(self._sun), SUN_COLOR, ambient)
+            body.shadow_map.set_sun(self._sun)  # baked again if it moved
+            body.models.set_sun(self._sun, SUN_COLOR)
+        if self.ring is not None:
+            self.ring.set_sun(self._sun, SUN_COLOR, SPACE_AMBIENT)
         self._update_lights()
 
-    def _light_at(self, body: Body, point_world) -> tuple[np.ndarray, np.ndarray]:
-        """:returns: (direct, ambient) light at a point near a body"""
+    def _shade_models(self) -> None:
+        """The tracked nodes drawn by the model shader: each given the inputs
+        of the body nearest it, this frame's (the camera is render's
+        origin)."""
+        for body in self.bodies:
+            body.models.update((0.0, 0.0, 0.0))
+        points = self.cam_world + self.tracked.positions()
+        for node, shaded, point in zip(self.tracked.nodes, self.tracked.shaded, points):
+            if shaded:
+                self._nearest_body(point).models.apply(node)
+
+    def _light_at(
+        self, body: Body, point_world, shade: float = 1.0
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """:returns: (direct, ambient) light at a point near a body, eclipsed
+        by the other, its sunlight times *shade* (the planet's clouds' shadow
+        there: :meth:`_local_shades`)"""
         if body.atmosphere:
-            return self.atmospheres.light_at(
+            direct, ambient = self.atmospheres.light_at(
                 0,
                 point_world,
                 self._sun,
                 SUN_COLOR,
                 np.asarray(SKY_AMBIENT),
             )
-        hidden = in_shadow(point_world - body.position, self._sun, body.radius)
-        direct = np.zeros(3) if hidden else np.asarray(SUN_COLOR)
-        return direct, np.asarray(SPACE_AMBIENT)
+        else:
+            hidden = in_shadow(point_world - body.position, self._sun, body.radius)
+            direct = np.zeros(3) if hidden else np.asarray(SUN_COLOR)
+            ambient = np.asarray(SPACE_AMBIENT)
+        own = next(i for i, other in enumerate(self.bodies) if other is body)
+        eclipse = float(self.shadows.eclipse(point_world, self._sun, own))
+        return direct * (eclipse * shade), ambient * (
+            ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * eclipse
+        )
+
+    def _local_shades(self, points: np.ndarray) -> np.ndarray:
+        """:returns: (n,) the local shadows at points: the planet's clouds'
+        near it (one call for them all: each costs ~0.2 ms), and the nearest
+        body's mountains'"""
+        shades = np.ones(len(points))
+        steps = self.shadows.settings.cloud_shadow_steps
+        nearest = [self._nearest_body(point) for point in points]
+        near = np.array([body is self.home for body in nearest])
+        if self.clouds is not None and near.any():
+            shades[near] = self.clouds.sun_visibility(points[near], self._sun, steps)
+        radius = self.shadows.sun_angular_radius
+        for i, body in enumerate(nearest):
+            shades[i] *= float(body.shadow_map.visibility(points[i], radius))
+        return shades * self.shadows.ring_visibility(points, self._sun)
 
     def _update_lights(self) -> None:
-        """Panda3D's sun and ambient lights as they are at the camera, and
-        the sea's near look lit as the sea under it."""
-        direct, ambient = self._light_at(self.body, self.cam_world)
+        """Panda3D's sun and ambient lights as they are at the camera, the
+        tracked nodes' (the ball's) as they are at each, and the sea's near
+        look lit as the sea under the camera."""
+        points = np.concatenate(
+            [self.cam_world[None, :], self.cam_world + self.tracked.positions()]
+        )
+        shades = self._local_shades(points)
+        direct, ambient = self._light_at(self.body, self.cam_world, shades[0])
         self.sun_light.node().set_color((*direct, 1.0))
         self.sun_light.node().set_direction(Vec3(*(-self._sun)))
         self.ambient_light.node().set_color((*ambient, 1.0))
+        lights = [
+            self._light_at(self._nearest_body(point), point, shade)
+            for point, shade in zip(points[1:], shades[1:])
+        ]
+        if lights:
+            self.tracked.apply(*zip(*lights), self._sun)
         # The water's colour was tuned in daylight: scale it by the light on
         # the sea now (sun on a level surface plus sky) over that day's.
         up = self._relative(self.home) / np.linalg.norm(self._relative(self.home))
         sea = self.home.position + up * self.radius
+        # The clouds' shadow is the shader's, per pixel, on the sun's share.
         direct, ambient = self._light_at(self.home, sea)
-        light = direct * max(float(self._sun @ up), 0.0) + ambient
+        sun_light = direct * max(float(self._sun @ up), 0.0)
+        light = sun_light + ambient
         if self._water_reference is None:
             elevation = math.radians(WATER_TUNED_ELEVATION)
             east = np.cross([0.0, 0.0, 1.0], up)
@@ -698,7 +932,9 @@ class TerrainDemo(ShowBase):
             self._water_reference = np.asarray(SUN_COLOR) * t * math.sin(
                 elevation
             ) + np.asarray(SKY_AMBIENT)
-        self.ocean.set_light(np.clip(light / self._water_reference, 0.0, 1.5))
+        total = np.clip(light / self._water_reference, 0.0, 1.5)
+        sun_share = np.divide(sun_light, light, out=np.zeros(3), where=light > 0.0)
+        self.ocean.set_light(total * (1.0 - sun_share), sun=total * sun_share)
 
     def set_local_sun(self, azimuth: float, elevation: float) -> None:
         """Put the sun at an azimuth/elevation (degrees) as seen from the
@@ -778,7 +1014,8 @@ class TerrainDemo(ShowBase):
             f"upload {s['upload_ms']:.2f} ms/chunk   LOD pass {s['select_ms']:.1f} ms"
             f"   depth split {split_km:,.1f} km, far {far_km:,.0f} km",
             clouds,
-            f"quality: {quality}",
+            f"quality: {quality}   test balls: "
+            + ("model shader" if self._model_shader else "Panda3D lights"),
         ]
         self._hud.setText("\n".join(lines))
 
@@ -801,7 +1038,12 @@ class TerrainDemo(ShowBase):
         over the old ones' worker channel, which drops their tiles."""
         if self.clouds is not None:
             self.clouds.remove()
+            if self.cloud_maps is not None:
+                self.cloud_maps.destroy()
+                self.cloud_maps = None
             self.clouds = None
+        if self.ring is not None:
+            self.ring.haze.set_clouds_top(0.0)  # none: one pass, after them
         if not self._clouds_on:
             return
         self.clouds = PlanetClouds(
@@ -817,6 +1059,21 @@ class TerrainDemo(ShowBase):
             settings=self.world.clouds,
             channel="clouds",
         )
+        self.clouds.bind_inputs(functools.partial(self.shadows.bind, body=0))
+        self.clouds.bind_shadow_inputs(self.terrain.root)  # their shadow on it
+        self.clouds.bind_shadow_inputs(self.home.models.inputs)  # on the models
+        if self.home.shadow_map is not None:  # the peaks' on them
+            self.clouds.bind_inputs(self.home.shadow_map.bind)
+        # Their shadow marched once per texel of two maps (Shadows, part E).
+        self.cloud_maps = CloudShadowMaps(
+            self.win, self.clouds, self.world.shadows.cloud_map_size
+        )
+        self.cloud_maps.bind(self.terrain.root)
+        self.clouds.bind_maps(self.cloud_maps.bind)  # a raymarch's own light
+        self.cloud_maps.bind(self.home.models.inputs)
+        if self.ring is not None:
+            # Its haze split at their tops: what is beyond them drawn first.
+            self.ring.haze.set_clouds_top(self.clouds.top_radius)
         self.clouds.set_debug(self._cloud_debug)
         self.clouds.set_sun(self._sun)
         if getattr(self, "depth", None) is not None:
@@ -881,9 +1138,21 @@ class TerrainDemo(ShowBase):
         """Hand every part its section. What only a restart changes (the
         terrain's texture size and workers) is logged and left as it is."""
         self.world = world
-        world.apply(*self._terrains(), self.atmospheres, self.sky, self.ocean)
+        world.apply(
+            *self._terrains(), self.atmospheres, self.shadows, self.sky, self.ocean
+        )
+        if self.cloud_maps is not None:
+            self.cloud_maps.set_size(world.shadows.cloud_map_size)
+        self.casters.set_size(world.shadows.caster_size)
+        for body in self.bodies:
+            body.shadow_map.set_size(world.shadows.terrain_map_size)
+            body.shadow_map.set_local(
+                world.shadows.local_map_size, world.shadows.local_map_spacing
+            )
         if self.clouds is not None:
             world.apply(self.clouds)
+        if self.ring is not None:
+            world.apply(self.ring)
         self._sync_half_res()
 
     def set_debug_view(self, view: int) -> None:
@@ -990,7 +1259,16 @@ class TerrainDemo(ShowBase):
             print(f"{body.name} terrain: {body.terrain.stats}")
 
     def destroy_terrain(self) -> None:
-        """Remove every body's terrain and stop the shared workers."""
+        """Remove every body's terrain and the ring, and stop the shared
+        workers."""
+        if self.ring is not None:
+            self.ring.destroy()
+        self.tracked.clear()
+        self.casters.destroy()
+        for body in self.bodies:
+            body.shadow_map.destroy()
+        if self.cloud_maps is not None:
+            self.cloud_maps.destroy()
         for terrain in self._terrains():
             terrain.destroy()
         self.executor.shutdown()
@@ -1036,6 +1314,7 @@ def main() -> None:
         preset=args.planet,
         seed=args.seed,
         start=args.start,
+        ring=args.ring,
     ).run()
 
 
@@ -1102,7 +1381,8 @@ def add_planet_arguments(parser: argparse.ArgumentParser) -> None:
 def add_world_arguments(parser: argparse.ArgumentParser) -> None:
     """The quality arguments every script built on the demo takes:
     ``--quality``, a ``--<part>-quality`` per WorldSettings section,
-    ``--workers`` (the terrain's setting) and ``--no-clouds``."""
+    ``--workers`` (the terrain's setting), ``--no-clouds`` and
+    ``--ring``."""
     levels = [level.value for level in QualityLevel]
     parser.add_argument(
         "--quality", default="high", choices=levels, help="every part's preset"
@@ -1118,6 +1398,9 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         "--workers", type=int, default=None, help="generation processes"
     )
     parser.add_argument("--no-clouds", action="store_true", help="no clouds")
+    parser.add_argument(
+        "--ring", action="store_true", help="a small ring around the planet"
+    )
     parser.add_argument(
         "--half-res-clouds",
         action="store_true",

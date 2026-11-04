@@ -30,8 +30,6 @@ in  vec3  worldPos;
 in  float vRadius;
 in  float vFade;
 flat in int vLayer;
-in vec3 vAtmoT;      // planet-mode billboards: the air in front, per vertex
-in vec3 vAtmoS;
 in vec3 vSunTint;
 in float vSkyTint;
 in vec3 vTwilight;
@@ -141,19 +139,18 @@ void main() {
         twilight = sunColor * vTwilight;
     } else {
         planetCloudLight(uOwnAtmosphere, samplePos, sunlight, skylight, twilight);
+        // Other bodies eclipsing the sun (as cloud_sphere.vert).
+        float eclipse = eclipseVisibility(samplePos - camPos, sunDir, uShadowSelf);
+        sunlight *= eclipse
+                  * terrainShadow(normalize(samplePos), length(samplePos) - planetRadius)
+                  * ringVisibility(samplePos - camPos, sunDir);
+        twilight *= eclipse;
+        skylight *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
     }
     vec3 colour = cloudRadiance(f, samplePos, density, V, shading, farCoverage,
                                 sunlight, skylight, twilight);
-    // The air between the camera and the cloud, in linear light. Its
-    // in-scattered light is in front of the cloud, so it is weighted by the
-    // cloud's alpha like the cloud itself: the background behind carries the
-    // same air's light for the uncovered part.
-    vec3 transmittance = vAtmoT;
-    vec3 inscatter = vAtmoS;
-    if (uDeck == 1 && (uCloudDebug & 2) == 0) {  // one layer: per fragment is affordable
-        atmosphereAlong(-V, distance, sunDir, transmittance, inscatter);
-    }
-    colour = colour * transmittance + inscatter;
+    // No air in front of the cloud: it keeps its own colour at any distance
+    // (atmosphere.md, "Clouds at the horizon").
 
     // The sky's display transform, so cloud hazed by the air meets the sky
     // behind it. Per channel below white, which softens the warm cast a long

@@ -2,10 +2,11 @@
 The terrain demo built on :class:`world_builder.world.World`.
 
 Flies the same small planetary system as scripts/demo_terrain.py (the demo
-level's 600 km planet with its air, clouds and sea, an airless moon
-10,000 km away, the star field), with the same controls, keys, HUD and
-options. The difference is the assembly: here the world's look is a handful
-of looks (:class:`BodyLook`, :class:`CloudLook`, :class:`OceanLook`,
+level's 600 km planet with its air, clouds and sea, and its ring with
+--ring; an airless moon 21,000 km away that can eclipse the sun; the star
+field), with the same controls, keys, HUD and options. The difference is
+the assembly: here the world's look is a handful of looks
+(:class:`BodyLook`, :class:`CloudLook`, :class:`OceanLook`,
 :class:`SunLook`, :class:`SkyLook`), and each frame is::
 
     self.depth.update(*world.depth_ranges(cam_world))
@@ -61,6 +62,7 @@ from demo_terrain import (  # noqa: E402
     TerrainDemo,
     add_planet_arguments,
     add_world_arguments,
+    ring_spec,
     settings_from_args,
     start_pose,
     start_sun,
@@ -76,6 +78,7 @@ from world_builder.terrain.planet import PRESETS  # noqa: E402
 from world_builder.world import (  # noqa: E402
     BodyLook,
     CloudLook,
+    FieldLook,
     OceanLook,
     SkyLook,
     SunLook,
@@ -149,6 +152,7 @@ class WorldDemo(TerrainDemo):
         preset: str | None = None,
         seed: int | None = None,
         start: tuple[float, float] | None = None,
+        ring: bool = False,
     ) -> None:
         ShowBase.__init__(self)
         self.setFrameRateMeter(True)
@@ -181,8 +185,10 @@ class WorldDemo(TerrainDemo):
             sky=SkyLook(),
             settings=self.world,
             backend=backend,
+            fields=[FieldLook("ring", ring_spec(spec.radius))] if ring else [],
         )
         self._scene_sun = self._sun.copy()
+        self.ring = self.scene.field("ring") if ring else None
 
         planet = self.scene.body("planet")
         self.executor = self.scene.executor
@@ -192,7 +198,7 @@ class WorldDemo(TerrainDemo):
         self.clouds = planet.clouds
         self.ocean = planet.ocean
         self.bodies = [
-            Body(b.name, b.terrain, atmosphere=b.atmosphere is not None)
+            Body(b.name, b.terrain, b.atmosphere is not None, b.shadow_map)
             for b in self.scene.bodies
         ]
         self.home = self.bodies[0]
@@ -221,6 +227,7 @@ class WorldDemo(TerrainDemo):
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
             ("c", self._toggle_cirrus, []),
+            ("m", self._toggle_model_shader, []),
             ("escape", self._quit, []),
             (QUALITY_ALL_KEY, self._cycle_all_quality, []),
         ]
@@ -242,7 +249,9 @@ class WorldDemo(TerrainDemo):
         )
         self._hud_time = -1.0
         self._reset_camera()
-        self._test_ball, self._test_ball_point = self._make_test_ball()
+        self._test_balls = self._make_test_balls()
+        self._model_shader = True
+        self._track_test_balls()  # lit where they are
         self.taskMgr.add(self._update, "terrain_demo_update")
         print(__doc__)
 
@@ -257,15 +266,20 @@ class WorldDemo(TerrainDemo):
             self.scene.set_sun(self._sun)
             self._scene_sun = self._sun.copy()
 
+        # The ball first: the world lights it where it is.
+        self._place_test_balls()
         self.depth.update(*self.scene.depth_ranges(self.cam_world))
         self.scene.update(self.cam_world, far=self.depth.far)
-
-        self._test_ball.set_pos(*self.home.terrain.to_render(self._test_ball_point))
         now = self._clock.get_frame_time()
         if now - self._hud_time >= HUD_PERIOD:
             self._hud_time = now
             self._update_hud()
         return task.cont
+
+    def _track_test_balls(self) -> None:
+        """Light the balls where they are, by the model shader or not."""
+        for ball, _ in self._test_balls:
+            self.scene.track_light(ball, cast=True, shader=self._model_shader)
 
     def _set_world(self, world: WorldSettings) -> None:
         """Hand every part its section (F1 - F6)."""
@@ -312,6 +326,7 @@ def main() -> None:
         preset=args.planet,
         seed=args.seed,
         start=args.start,
+        ring=args.ring,
     ).run()
 
 

@@ -9,6 +9,7 @@
 uniform mat4 p3d_ModelViewProjectionMatrix;
 uniform mat4 p3d_ModelViewMatrixInverse;
 uniform int uOwnAtmosphere;
+uniform vec3 camPos;         // the main camera, planet frame (eclipses)
 
 in vec4 p3d_Vertex;           // on the sheet, planet frame
 in vec2 p3d_MultiTexCoord0;   // in the atlas
@@ -20,8 +21,6 @@ out vec3 vPosition;
 flat out vec3 vEye;
 out vec2 vUv;
 out float vOpacity;
-out vec3 vAtmoT;
-out vec3 vAtmoS;
 out vec3 vSunTint;
 out float vSkyTint;
 out vec3 vTwilight;
@@ -35,13 +34,6 @@ void main() {
     vUv = p3d_MultiTexCoord0;
     vOpacity = i_opacity;
 
-    vec3 rel = p - vEye;
-    float dist = max(length(rel), 1e-3);
-    vAtmoT = vec3(1.0);
-    vAtmoS = vec3(0.0);
-    if ((uCloudDebug & 2) == 0) {
-        atmosphereAlong(rel / dist, dist, sunDir, uAtmoVertexSteps, vAtmoT, vAtmoS);
-    }
     vSunTint = vec3(1.0);
     vSkyTint = 1.0;
     vTwilight = vec3(0.0);
@@ -52,4 +44,11 @@ void main() {
         vTwilight = cloudTwilight(uOwnAtmosphere, p, sunDir, vSunTint);
         vSkyTint = smoothstep(-0.3, 0.1, dot(normalize(p), sunDir));
     }
+    // Other bodies eclipsing the sun (as cloud_sphere.vert).
+    float eclipse = eclipseVisibility(p - camPos, sunDir, uShadowSelf);
+    // And the mountains between the cirrus and a low sun (the body's map).
+    vSunTint *= eclipse * terrainShadow(normalize(p), length(p) - planetRadius)
+              * ringVisibility(p - camPos, sunDir);
+    vTwilight *= eclipse;
+    vSkyTint *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
 }

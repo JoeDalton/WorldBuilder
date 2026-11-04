@@ -64,6 +64,7 @@ from world_builder.asteroids.scatter import Scatter
 from world_builder.asteroids.settings import AsteroidSettings
 from world_builder.asteroids.spec import FieldSpec, KeepOut
 from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.materials import (
     MaterialSet,
     load_materials,
@@ -256,6 +257,11 @@ class AsteroidField:
         self.sun = (tuple(d), tuple(color), tuple(ambient))
         if getattr(self, "terrain_rocks", None) is not None:
             self.terrain_rocks.set_sun(*self.sun)
+
+    @property
+    def axis(self) -> np.ndarray:
+        """The field frame's z axis in the world's: a ring's normal."""
+        return self._rotation_matrix[:, 2].copy()
 
     def set_frame(self, position: ArrayLike, orientation: ArrayLike) -> None:
         """Move the field: its centre (world) and orientation (world from
@@ -648,6 +654,9 @@ class AsteroidField:
         root.set_shader_input("uDetailFar", float(s.detail_far))
         root.set_shader_input("uExposure", float(exposure))
         root.set_shader_input("uTonemap", 1 if tonemap else 0)
+        # No body's shadow until a Shadows is bound (World: a planet's
+        # across its ring).
+        bind_shadow_defaults(root)
         root.set_shader_input("uRockUvPeriod", ROCK_UV_PERIOD)
         cells = PTA_float.empty_array(MAX_CLASSES)
         for k, c in enumerate(self.scatter.classes):

@@ -1,0 +1,660 @@
+# Shadows
+
+What hides the sun from a point. Every shader that lights something by the
+sun multiplies its sunlight by a product of independent visibility terms,
+and a CPU twin of each term lights what the CPU lights (Panda3D's lights,
+the sea's near look). Issues #11 and #13; the plan is `SHADOWS_PLAN.md`.
+
+| Term | Casters | Receivers | Status |
+|---|---|---|---|
+| Eclipse | spherical bodies (planets, moons) | terrain, far water, clouds, air, CPU light | done |
+| Cloud shadow | the planet's clouds | terrain, sea, objects | done |
+| Terrain shadow, global | mountains | terrain, sea, clouds, objects | done |
+| Terrain shadow, local | nearby ridges | terrain, sea, clouds, objects | done |
+| Ring shadow | rings | planet, clouds, air, objects | planned (I) |
+| Object shadow | tracked models | terrain, sea, models | planned (H) |
+
+The planet's own shadow is not one of them: it is the air's
+(`atmoSunlight`, `atmoShadow`, see [the atmosphere](atmosphere.md)) or an
+airless body's day/night line, as before.
+
+## The sun
+
+The sun is a direction plus an angular radius, so the disc the sky draws is
+its physical size: one value, `SunLook.angular_radius`
+(`shadows.SUN_ANGULAR_RADIUS`, 0.55°, about twice the real sun's so that the
+disc reads at any resolution). `Sky(sun_angular_radius=)` draws it and
+`Shadows(sun_angular_radius)` shapes every penumbra with it.
+
+## `Shadows` and `shadows.glsl`
+
+`world_builder.shadows.Shadows` holds the occluders as shader inputs shared
+by every node bound, as `Atmospheres` does: uniform arrays rewritten in
+place once a frame.
+
+- `add(radius, position, reach=None)`: a spherical body; its index is what
+  receivers name as their own body. `reach` is how far from its centre what
+  it holds goes (its air's top, its highest ground): see [Cost](#cost).
+- `set_sun(direction)`: the sun, for which body's shadow can reach which.
+- `set_atmosphere(atmosphere, body)`: which body owns an atmosphere
+  (`uAtmoBody`), so a planet's air is not eclipsed by the planet itself.
+- `bind(node, body=None)`: the arrays, plus `uShadowSelf`, the node's own
+  body (a body never eclipses itself; None for the sky).
+- `update(camera_world)`: each centre minus the camera, in float64, into
+  `uShadowBodies` (xyz, and the radius in w).
+- `eclipse(points_world, sun_direction, exclude=None)`: the CPU twin,
+  vectorised.
+
+`bind_defaults(node)` gives "nothing casts" inputs. `atmosphere.glsl`
+includes `shadows.glsl`, so every owner of a shader that sees through air
+(terrain, sky, each layer of a planet's clouds) calls it next to the
+atmosphere's `bind_defaults`, and every shader links without a `Shadows`.
+A planet's clouds take a `Shadows` through `PlanetClouds.bind_inputs(bind)`:
+each layer binds its defaults on its own node, which a binding on the
+part's root would not override, so the binding is applied to every layer's
+node (and to a volume rebuilt on a change of renderer).
+
+## Eclipses
+
+`eclipseVisibility(rel, L, self)` loops over the bodies, skipping `self`.
+For each, from the point at `rel` (relative to the camera, render frame):
+
+- the body's angular radius `asin(R / d)` and the angle between its centre
+  and the sun, `atan(across, along)` (precise near 0, where `acos` is not);
+- `discCoverage(sun, body, angle)`: the covered share of the sun's disc,
+  the overlap of two circles over the sun's area (angles taken as flat
+  lengths, a uniform disc: no limb darkening);
+- the visibility is the product of `1 - coverage`.
+
+A body clear of the sun is rejected before any inverse trigonometry,
+exactly: their angle is past the sum of the radii when
+`across · (1 - tan b · tan a) ≥ along · (tan b + tan a)`, from the two
+tangents. A point inside a body sees no sun.
+
+The penumbra is physical: it widens with the distance to the body, and there
+is an umbra only where the body looks wider than the sun (otherwise an
+annular eclipse).
+
+### Receivers
+
+- **Terrain** (`terrain_frag.glsl`): land and far water, per pixel, at
+  `vRelPos`. An airless moon inside the planet's shadow goes dark: a lunar
+  eclipse.
+- **Cloud billboards** (`cloud_sphere.vert`): per vertex, at the
+  billboard's centre, into `vSunTint` and `vTwilight`.
+- **Cloud deck** (`cloud.frag`): per fragment.
+- **Cirrus** (`cirrus.vert`): per vertex, as the billboards, from the main
+  camera (`camPos`; the sea's mirror draws it from its own).
+- **The air** (`atmoSegment`): each sample's direct sunlight, at the
+  sample. The sky darkens, and so does the aerial perspective over the
+  ground.
+- **Sky light**: the terrain's sky light, the clouds' sky term and the air's
+  multiply scattered fill are multiplied by
+  `mix(ECLIPSE_SKY_FLOOR, 1, visibility)` (0.15: the air outside the shadow
+  still glows).
+- **CPU light** (`World.light_at`, so Panda3D's lights and the sea's near
+  look): the same eclipse, at the camera or the sea under it.
+
+## Cloud shadows
+
+The planet's clouds shade the ground, the far water and the near sea, read
+straight from their density field: the shadow depends on the world position
+only, so it lines up with the clouds drawn, and it moves with the sun.
+
+- **The march** (`cloud_field.glsl`). The clouds' own sun march is now a call
+  to `slabOpticalDepth(f, start, dir, stepLength, steps)`: samples along a
+  straight stretch of the field, through the two lowest octaves calibrated
+  onto the full field, the weather fetched once at the start.
+  `cloudShadowDepth(f, p, dir, maxSteps)` intersects the sun ray from `p`
+  with the slab's two spheres (`planetRadius + base`, `+ thickness`) and
+  marches the chord between them in steps of about the layer's
+  `sunStepLength`, at most `maxSteps` (a long, low chord takes longer steps
+  rather than more of them). The shadow is `exp2(-depth)`.
+- **The field.** The deck layer's (`CloudVolume._deck_layer`, the full
+  field with per-metre extinction, and the cumulus's `shadow_strength`), so
+  the shadow matches the clouds as drawn.
+- **Inputs.** `CloudVolume.bind_shadow_inputs(node)` gives a node (the
+  planet's terrain root) the field's inputs and `uCloudShadowLayer`, its
+  layer: -1 until the weather is made, or after `remove`.
+  `clouds.shadow_defaults.cloud_shadow_defaults` (the terrain binds it) is
+  "no clouds overhead". `PlanetClouds.bind_shadow_inputs` binds its volume's
+  (and binds a new volume again on a change of renderer; a raymarched one
+  ([`CloudMarch`](clouds.md#the-raymarch)) casts a shadow too, through its
+  far layer's field). `World` binds each body's clouds to its terrain; the
+  hand-built demo does the same.
+- **The weather** is fetched where the chord enters the slab, as the
+  clouds' own march fetches it where it starts: the coverage's shift, and
+  with genera ([Clouds](clouds.md#genera)) the convective depth, the cell
+  octave and the anvil's shelf. The march's early-out (exact: the two
+  octaves at their most under the threshold at its lowest) allows for
+  the anvil's fall and the shelf. With genera, the convective volume casts
+  the shadow.
+- **Receivers.** The terrain's sunlight (`terrain_frag.glsl`, at the planet
+  frame position `uAtmoCam[own] + vRelPos`: clouds come with air), so land
+  and far water. The near sea takes a per-pixel `sunShade` in `seaShade`,
+  which dims the sun's share of its light (`Sea.set_light(sky, sun=...)`):
+  the CPU's light on the sea leaves the clouds out. The sky light is not
+  dimmed: under a cloud the air all round is still lit.
+- **CPU twin.** `noise.cloud_shadow_on_sphere`, and
+  `CloudVolume.sun_visibility(points, sun, steps)` (`PlanetClouds`'), which
+  `World.sun_visibility` and `lights_at` multiply in: Panda3D's lights and
+  the tracked models darken under a cloud.
+- **Knob.** `ShadowSettings.cloud_shadow_steps` (the `shadows` section of
+  `WorldSettings`, live): 0 (off) at LOW, 4, 8, 12 at ULTRA.
+- **Far away**, where a pixel spans several clouds, the march would
+  sparkle; **under a grazing sun**, the chord is kilometres long and its
+  steps longer than the clouds, so the march would band (each height of
+  ground on a slope stepping onto other clouds: stripes along the
+  contours). In both cases `cloudShadow` fades it, over the second octave's
+  cell, to the shadow's mean for the weather's coverage and the sun's
+  elevation (`noise.ground_shadow_table`, made with the deck's lighting, in
+  its texture's third channel), which costs one fetch. A long, low sun's
+  shadow is a smear anyway.
+- **Cost.** The ground's steps are twice the clouds' own
+  (`CLOUD_SHADOW_STEP_SCALE`: within 0.004 of a 10 m march on average), an
+  exact early-out skips clear weather, and pixels the sun cannot light skip
+  the march. The CPU side keeps each point's shade per 25 m cell
+  (`SHADE_CELL`), so a model at rest costs nothing. Still, marching per
+  pixel costs, on a GTX 1070 at 1600×900 (median frame ms, Part B then
+  HIGH, MID): ground 10.95, 12.70, 11.98; high 6.01, 7.37, 6.78; stratosphere
+  4.29, 5.15, 5.10; sea_surface 8.23, 9.27, 9.02; orbit 2.62, 2.84. A
+  shadow map (the march once per texel of a map around the camera, one
+  fetch per pixel) is the way to most of it back: see the
+  [performance backlog](performance_backlog.md).
+
+## Mountain shadows (the global map)
+
+`world_builder.terrain.shadow_map`: each body's mountains' shadow, at
+planetary scale, as a cube map over the body (its own frame) baked for one
+sun.
+
+- **The ceiling.** Per texel, the lowest altitude from which the sun clears
+  every occluder toward it, and the distance to the occluder that sets it.
+  Shadow on a heightfield only lessens with altitude, so that says it all:
+  a receiver at altitude `a` clears the occluder by `(a - ceiling) /
+  distance` radians, and `terrainShadow` (shadows.glsl, one fetch) is a
+  smoothstep of that over the sun's angular radius: the physical penumbra,
+  sharp near the occluder, soft far from it.
+- **The bake** (`ceiling_cube`). A point's ceiling only depends on the
+  point a step toward the sub-solar point: `ceiling(P) = max(height(P'),
+  ceiling(P')) - gain`, the gain the sun's ray climbs over the step
+  (closed form, curvature included). On a grid aligned with the sun
+  (columns along great circles through the sub-solar point, rows half a
+  texel apart in angle from it) `P'` is the node a row up, exactly: one
+  pass over the rows, every column at once, ~2.3 s at 1024 in numpy, no
+  native code. Interpolating at each step instead (a sweep over the cube's
+  own texels) rounded the ceiling's crest down every step: shadows ~20 %
+  short. Against a march toward the sun over the same ground: within ~40 m
+  at 1024.
+- **Heights** (`height_cube`): `Planet.sample_dirs` at the texel centres,
+  band-limited to two texels, stamps in, the sea flat at 0. Six jobs (a
+  face each, ~2.5 us a texel: ~16 s of CPU at 1024 in all), once per body
+  and size.
+- **The near gap.** The nearest occluder counted is two texels away (1.8 km
+  at 1024 on a 600 km planet): a texel's own slope never shadows it, and a
+  ridge nearer than that casts nothing here. Part E's local map covers
+  that; the demo's 750 m mesas show only the far ends of their shadows.
+- **`ShadowMap`** (one per body: `Body.shadow_map` in `World`). Samples
+  the heights once in the worker pool, then bakes the ceiling for each sun
+  on the GPU (see [Baked on the GPU](#baked-on-the-gpu)), or, with no
+  window, in the pool (`set_sun`; the last map stays until the new one is
+  in, so a swinging sun gets a new map every ~2-3 s there). One half-float
+  cube texture in km (the pool's mipmapped, the GPU's not: see below):
+  `bind(node)` once. `loading` until
+  the first map (`World.loading` counts it), `current` once the map is the
+  sun's (the shots wait for it).
+- **Receivers.** The terrain (land, far water) per pixel at its planet-frame
+  position (a varying from terrain.vert: an airless moon has its craters'
+  shadows too) and its drawn height; the near sea through `sunShade`; the
+  clouds (billboards and cirrus per vertex, the deck per fragment: peaks
+  between a low sun and the clouds; bound through
+  `PlanetClouds.bind_inputs(shadow_map.bind)`). The CPU twin, `ShadowMap.visibility` (kept per
+  25 m cell until the next bake), is in `World.sun_visibility` and
+  `lights_at`.
+- **Knob.** `ShadowSettings.terrain_map_size` (rebuild): 256 at LOW, 512,
+  1024, 2048 at ULTRA (16 s of heights and ~9 s a bake), off.
+- **Cost.** One cube fetch per pixel: 0.0-0.3 ms (orbit, where every pixel
+  is terrain, the most; stratosphere 5.39 → 5.62 ms, orbit 2.85 → 3.08,
+  moon_orbit 1.74 → 1.98, ground within noise).
+
+The clouds' `grazingLight` (the sun's path below a cloud's altitude dims it
+toward the terminator) is kept: it stands for the haze and the clouds on
+that path, which the map does not hold, and the map only darkens the
+clouds behind real peaks.
+
+## Baked on the GPU
+
+With a window (`ShadowMap(..., output=)`: `World` and the demo pass
+theirs), both maps are baked by the GPU (`terrain.shadow_bake`): a sun's
+change shows within a few frames, not 1-3 s (global, ~1 s local) later,
+and the worker pool is left to the terrain.
+
+- **The march.** The pool's sweep is sequential (a row from the last).
+  Marching each texel toward the sun over the ground instead stands alone
+  per texel: from the first counted step (two texels) on, a node `k` half
+  texels toward the sun along the great circle bounds the ceiling at its
+  ground less the ray's rise from here (`ray_gain`); it stops once no
+  ground can rise above the ceiling found (past the ray's lowest point),
+  or at the sub-solar point (`march_limits`: at most ~3 horizon arcs).
+  Against the straight ray cleared by bisection it is within the grid's
+  resolution, as the sweep (closer: 0-130 m where the sweep was up to 140
+  m high, `test_the_march_is_closer_to_the_ray_than_the_sweep`).
+  `shadow_bake_cube.frag`, a card per cube face; its CPU twin
+  `march_ceiling`. The local map's (`shadow_bake_local.frag`,
+  `march_local`) is `local_ceiling`'s own march, at each node directly.
+- **The ground** is still sampled in the pool (the planet's noise is on the
+  CPU), once per size (the global map) or per square (the local map), and
+  uploaded once as a float texture.
+- **Over frames.** A bake is drawn a band of rows a frame, at most
+  `BAKE_TEXELS` (512K) for the global map, `LOCAL_BAKE_TEXELS` (128K) for
+  the local one (dearer per node): 12 frames for the 1024 cube (48 for
+  2048), 8 for the 1024 local map; ~0.4 ms a frame of the global's in the
+  demo's views. A moving sun gets a new map as soon as the last is done:
+  every ~0.2 s at 1024.
+- **Stopping early.** The march stops once no ground can rise above the
+  ceiling found: on the highest ground near its texel (`local_tops`: per
+  64-texel block, within 128 texels, made once per size in the pool), not
+  the planet's, while that near. A lowland texel stops after a few steps
+  instead of climbing past the highest peak; the result is the same.
+- **Not mipmapped.** A render target with mipmaps had them made again after
+  every frame its buffer drew: +2.7 ms a frame during a bake, in the views'
+  own draws (the GPU makes them when they are first read). Without them
+  the views cost the same as the pool's mipmapped map (orbit 3.75 / 3.69,
+  stratosphere 6.98 / 6.90, ground 15.55 / 15.65 ms).
+- **The CPU twins** (`ShadowMap.visibility`) march the texels (nodes)
+  around a point on the CPU, once each per map, then filter them as the
+  GPU does (bilinear): a flying camera reaches a new global texel every
+  few seconds, a new local node every ~50 m. A march per 25 m cell cost
+  ~9 ms of the demo's update in flight.
+- **Cost.** `flight_bench.py --flight low` (mean / p95 ms), alternating
+  with the pool's bakes: 11.8 / 18.8 and 12.4 / 19.5 against 11.5 / 18.8
+  twice. Of the ~0.6 ms, ~0.3 ms is the maps' own work on the main thread
+  (their update, the twins); the rest is more terrain: the pool no longer
+  bakes, so it makes ~10 % more chunks a second (finest level 1.8 against
+  2.0), uploaded on the main thread. A sun swinging 0.5° a frame
+  (`mountains_low`'s view): 17.3 / 25.8 ms, the pool's 17.5 / 27.2 (a
+  still sun 13.3 / 17.5): the same cost, the maps redrawn every ~12
+  frames, not every ~2-3 s. The views' frame times are the pool's
+  (`mountains_low` 13.10 / 13.30, `mountains_orbit` 7.75 / 7.41,
+  `mesas_low` 15.51 / 15.58), and their shadows the same but for the
+  march's small differences (`compare_shots.py`: 0.7-5.7 % of pixels, at
+  shadows' edges).
+- **Without a window** (headless tools, the tests' stand-ins) the pool
+  bakes as before (`ceiling_cube`, `local_ceiling`).
+
+## Nearby ridges (the local map)
+
+`shadow_map.LocalShadowMap`, owned by each body's `ShadowMap` (`local`):
+the occluders nearer than the global map's reach (`global_reach`, two
+global texels: 2.3 km at 1024), at 50 m, over a square chart around the
+camera (1024 nodes: 51 km).
+
+- **The bake** (`local_ceiling`): the global map's pass over a grid aligned
+  with the sun, over the window that covers the square, counting only the
+  occluders between two local nodes (100 m) and the global reach. The two
+  maps never count one occluder twice, and they combine by the lesser
+  share (`min`, not the plan's product: the higher of two horizons hides
+  the sun, a product would darken their penumbrae twice). ~0.9 s at 1024;
+  within ~10 m of a march over the same ground. With the sun within the
+  window's reach of the zenith there is no room for the grid, and the
+  shadows are short: no local map.
+- **Its ground** is sampled (`_local_heights`, four jobs, ~2.6 s of CPU at
+  1024) once the camera has moved a quarter of the square from its centre,
+  and only below 20 km (`LOCAL_MAX_ALTITUDE`: higher, its detail is under
+  a pixel, and the last map stays). The ground does not depend on the sun:
+  a new sun only bakes again. The last map stays until the next is in, and
+  where they overlap their shadows are the same: no pop.
+- **The shaders** (`localShadow`): the chart's coordinates from the
+  planet-frame direction (the angle from its centre by `atan`, precise
+  near it), one fetch of a float texture (mipmapped), faded out over the
+  band within the global reach of its edges (the ground beyond is
+  unknown). `terrainShadow` is the lesser of the two maps.
+- **Cost.** ~0.3-0.5 ms near the ground (ground 13.06 → 13.84 ms, half of
+  it the fetch); its CPU twin is kept per 25 m cell with the global one's.
+- **Knobs.** `ShadowSettings.local_map_size` (off at LOW, 512, 1024, 2048)
+  and `local_map_spacing` (50 m).
+
+The water barely shows a mountain's shadow at a low sun: its light is
+mostly the sky's, and a level surface takes little direct sunlight then
+(`mesa_above`).
+
+## The cloud shadow maps
+
+`clouds.shadow_map.CloudShadowMaps`: the clouds' shadow marched once per
+texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
+
+- **What a texel holds.** The march depends on the sun's ray alone, so it
+  is stored by where the ray enters the slab's base: each texel is a node
+  of an azimuthal equidistant chart on the base's sphere around the camera,
+  and `cloud_shadow_map.frag` runs `cloudShadowDepth` from there. A pixel
+  of ground below the slab finds its ray's entry point (analytic,
+  `cloudShadowChord`) and fetches it (`cloudMapsDepth`).
+- **The levels.** A texel holds the total (r) and the depth a quarter, a half
+  and three quarters of the way along the chord (g, b, a:
+  `cloudShadowLevelsIn`); the ground reads r. They are what lets the
+  raymarched clouds take their own light from the map (below).
+- **Lighting the raymarch.** The raymarch's pass nodes are bound to the
+  maps (`PlanetClouds.bind_maps`, `World` does it), and a sample's sun march
+  (`cloudSunDepth`, `CLOUD_MAP_LIGHTING` in `cloud_march.frag` only) is
+  its first two steps through the field itself plus, from the map at the
+  point where the sun's line left the base, the chord's total less the depth
+  up to where those two steps ended (`cloudMapSunDepth`, linearly between the
+  levels; `noise.sun_depth_from_map` on the CPU), out to where the sun march
+  would have stopped (its steps): counting a tower's whole 10 km chord left
+  every tower black. It blends into the sun march over the far map's last
+  eighth, and is the sun march for a sun too low for the line to have left the
+  base (`--cloud-debug 64` takes the lighting from the sun march alone). It costs what the sun march did (a cumulus's has three steps) and
+  changes the image by under half a level (8-bit) on average; it pays for
+  taller marches.
+- **A convective field's chord ends at its clouds' own top** where the ray
+  enters the slab (`cloudChordToTop`: the column's depth, the slab's top where an
+  anvil's shelf spreads): the maps' and the ground's steps are spread over a
+  fair-weather cumulus, not over the 10 km slab it fills a tenth of. Before,
+  with genera the chord was so long that its steps were longer than the clouds
+  and the ground took the shadow's mean (`cloudShadowIn`'s far rule): no cloud
+  shadows at all, for either renderer.
+- **Two maps**: near, 60 m texels (1024: 61 km wide), and far, 500 m
+  (512: 256 km), each faded into the next over the last eighth of its
+  half-width; beyond them (and for ground inside the slab, whose ray does
+  not start on the base) the march per pixel, and the shadow's mean
+  farther still, as before.
+- **Drawn again** (one frame of its buffer, `one_shot`) when the camera
+  has moved a quarter of a map, the sun has turned, or the steps or the
+  clouds' layer changed. With the sun still, a fetch per pixel; with it
+  swinging, a march per texel each frame.
+- **Cost.** 0.3-1.1 ms less than the march per pixel near the ground
+  (sea_surface 11.65 → 10.57, ground 13.50 → 13.12, clouds_noon 10.63 →
+  10.08); what remains is the lookup (two fetches and the chart's maths).
+  The shadows match the march within a texel's blur.
+- **Knob.** `ShadowSettings.cloud_map_size` (off at LOW, 512, 1024, 2048):
+  the near map's size, the far one half of it (at least 256). `World`
+  makes them for a body with clouds and binds them to its terrain
+  (`Body.cloud_maps`); the hand-built demo the same.
+
+## Long cloud shadows across the deck
+
+A cloud's fragment marches toward the sun for its own few hundred metres
+(`sun_steps × sun_step_length`: 270 m for cumulus, 1.9 km for a storm
+tower), enough for its own form. With a low sun the clouds kilometres
+upwind shade it too, and that march misses them.
+
+- **The far segment.** `cloud_field.glsl`'s `cloudFarDepth`, per vertex
+  in `cloud_sphere.vert`, from the billboard's centre: from where the
+  fragment's march stops along the sun's ray to the slab's top (or the
+  reach), in steps of 600 m (`CLOUD_FAR_STEP`, at most 12), through
+  `slabOpticalDepth`. It multiplies `vSunTint`. The fragment's march does
+  not change; only the slowly varying far part sits in the vertex (the
+  march per vertex rejected before lit far billboards flat because it held
+  the near part too).
+- **When it does anything.** With a high sun the ray leaves the slab
+  within the fragment's march and the segment returns at once; it acts
+  only as the sun gets low. The far deck's averaged table
+  (`deck_light_table`) already holds a low sun's long path and is left as
+  it is. CPU twin: `noise.far_cloud_depth`.
+- **Look.** At dusk the banks' bases and the deck's sides away from the
+  sun go blue-grey, and the clouds' reflections in the sea darken with
+  them. A billboard takes one value, so where the deck's distant rim
+  already shows the billboards' edges, the darker ones stand out a little
+  more.
+- **Cost.** None measurable: median frame ms on / off, `dusk_in_clouds`
+  12.82 / 12.84, `dusk_above_clouds` 13.69 / 13.73; `flight_bench.py
+  --flight low` (mean / p95), alternating, on 9.1 / 15.2 and 9.5 / 15.9,
+  off 9.6 / 16.0 and 9.6 / 15.3.
+- **Knob.** `ShadowSettings.cloud_far_reach` (0 at LOW, 2 km, 4 km, 8 km),
+  live.
+
+## Objects
+
+Panda3D's lights on `render` are the light at the camera, wrong for a model
+elsewhere (a ship in an eclipse the camera is outside of). `World` lights a
+tracked model where it is:
+
+- `World.sun_visibility(points)`: the product of the CPU shadow terms at
+  each point, by its nearest body: the eclipses, the planet's clouds' and
+  its mountains' shadows (part E's local map will join them).
+- `World.lights_at(points)`: the light at many points in one vectorised call
+  (the air's `Atmospheres.light_at`, `in_shadow` and `twilight` take arrays
+  of points), times that visibility; `light_at(point)` is its single-point
+  form.
+- `World.track_light(node, cast=False)`: the node gets its own
+  `DirectionalLight` and `AmbientLight`
+  (`world_builder.lights.TrackedLights`), the world's off on it; `update`
+  sets them from `lights_at` at the nodes' positions, times `light_scale`.
+  `untrack_light` puts back the node's own lights. `cast` is kept for the
+  caster map (part H).
+
+The demos track the test balls. Their light only differs from the
+camera's over the scale of a shadow's edge: the moon's penumbra is ~400 km
+wide, so from 150 m away it looks the same. `tests/test_world.py` checks a
+ball in an umbra goes dark while the camera outside it keeps the sun.
+
+## Models drawn with every shadow (part G)
+
+`World.track_light(node, shader=True)`: the model is drawn by the world's
+model shader (`world_builder.objects`, see
+[Lighting on objects](object_lighting.md)), lit and tonemapped as the
+terrain is, and shadowed per pixel, not by one CPU value at its centre:
+
+- `model_light.glsl`'s `modelSunlight`: the eclipses, the body's air, its
+  clouds' shadow and its mountains' (the maps, in the body's own axes:
+  `uPlanetAxes`, from `Terrain.rotation`);
+- on an airless body, its own horizon: `ownShadow`, the sun's elevation
+  against the horizon's dip, the limb a straight edge across the sun's
+  disc (`discCoverage` cancels away in float32 for a disc half the sky
+  wide), none under the sea-level radius (a crater's floor is not inside
+  the body). CPU twin `Shadows.own_shadow`.
+
+Each body has a `ModelLighting` (`Body.models`) bound as its terrain is;
+shaded nodes take their nearest body's every `update`. The read-back
+tests (`tests/test_objects.py`) draw the sunlight over a turned planet
+with air, in a moon's penumbra, under a hand-made ceiling map, and over an
+airless moon's terminator, against the CPU; and the whole shader on a card
+against the CPU's tonemap.
+
+Poses: `ball_noon`, `ball_sunset`, `ball_eclipse`, `ball_cloud_edge`,
+`ball_mountain_edge` (see [Demo and shots](#demo-and-shots));
+`--panda-lights` draws the balls by Panda3D's lighting, to compare.
+
+## Objects' shadows (part H)
+
+`World.track_light(node, cast=True)`: the model shadows the terrain (land,
+far water, the near sea) and the models the model shader draws, itself
+too (`shadows.casters.CasterMap`, `World.casters`).
+
+- **The map.** An orthographic depth buffer looking down the sun's rays,
+  drawn every frame by a camera of its own on camera bit 20
+  (`depth.CASTER_BIT`). `render` is hidden from that bit and each caster
+  shows through it, so the pass culls and draws the casters alone (Panda
+  prunes the rest by its draw masks). The camera's initial state swaps in
+  a depth-only shader over the casters' own (priority 1000), turns colour
+  and textures off, and keeps the back faces: the faces turned to the sun
+  are clear of their own shadow, and the back faces, which keep the
+  comparison's error, are dark anyway.
+- **Fitted to the casters**, not to the view: their bounding spheres, in
+  the sun's frame, give the square and the depth range (a metre wider). A
+  ship's shadow lands wherever it falls, under it or a kilometre away; a
+  caster's texels stay put as it moves (no shimmer). Casters far apart
+  share one map: their square spans them all.
+- **The receivers** (`shadows.glsl`'s `casterShadow`): a position from the
+  camera goes through `uCasterMatrix` (built on the CPU in float64) to the
+  map's texture and depth. It is pushed 1.5 texels out along its normal as
+  it turns from the sun, its depth a texel toward the sun (no acne, no gap
+  at a caster's foot), and 3x3 of the hardware's bilinear comparisons
+  (`FT_shadow`) give a soft edge a few texels wide. Outside the map's
+  square, or nearer the sun than it, nothing. Past the casters' far side a
+  receiver counts as at it: the ground under a ship is behind it whatever
+  its distance.
+- **Out of sight, out of the map.** A caster's shadow lies in the cylinder
+  its sphere sweeps down the sun's rays, so nothing it shades is nearer
+  the camera than that cylinder. A caster whose shadow would be under two
+  pixels across wherever it falls is left out (`MIN_SHADOW_PIXELS`, from
+  the view's pixel angle), and with none left the pass is not drawn.
+- **Cost.** `flight_bench.py --flight low` (mean / p95 ms), the test
+  balls casting, alternating with the objects' shadows off: 10.0 / 15.9
+  and 10.0 / 16.4 against 9.9 / 16.0 and 9.9 / 15.6. Without the cull
+  above, the balls, left behind after the start, still cost the pass every
+  frame: 10.8 / 18.0 and 10.1 / 17.0 against 10.0 / 16.2 and 9.6 / 15.0.
+  In view, the pass costs about 0.5-1 ms (the `caster_*` shots against
+  the ball poses), of which `update` is ~0.1 ms.
+- **Not on the CPU.** `World.lights_at` (Panda3D's lights, a tracked node's
+  own light) leaves the objects' shadows out: they are per pixel only.
+- **Knobs.** `ShadowSettings.object_shadows` (off at LOW) and
+  `caster_map_size` (512, 1024, 2048, 4096; `ShadowSettings.caster_size`
+  is 0 when off). Without a window there is no map (`World.casters` is
+  None).
+
+`tests/test_casters.py` reads `casterShadow` back over a plane under a
+ball against its geometric shadow (the plane's points whose ray to the
+sun crosses the ball), with points over it, off the map and on its lit
+side; and that only the casters show to the map's camera.
+
+## Rings (part I)
+
+A ring dims the sun crossing it: on its planet, a band of shadow (its
+ringlets and gaps in it); and its planet's shadow falls across it.
+
+- **The term.** `Shadows.add_ring(centre, normal, inner, outer, depth,
+  thickness)` (up to `MAX_SHADOW_RINGS`, 4): its optical depth normal to
+  its plane across it, a row of 256 texels in `uRingDepth`.
+  `shadows.glsl`'s `ringVisibility`: where a point's ray toward the sun
+  crosses each ring's plane, `exp(-depth / |L.n|)` at that radius (the
+  slant held at its thickness over its width when the sun is near its
+  plane). CPU twin `Shadows.ring_visibility`, in `World.sun_visibility`
+  and `lights_at` with the local shadows.
+- **The depth** is the ring's own (`asteroids.haze.ring_depth`): every
+  rock's cross-section and the dust per metre at full profile
+  (`HazeModel.extinction` of the largest rock), times its profile across
+  (rims, ringlets), times its thickness less the faces' fade. The demo's
+  ring: 0.13-0.19 normal to it, about 0.6 of the sun through it with the
+  sun 20° off its plane. `World` adds every ring field's
+  (`FieldLook` with an `Annulus`); the hand-built demo its `--ring`.
+- **Receivers.** The terrain (land, far water, the near sea), the models,
+  the clouds (per billboard, the cirrus per vertex, and the deck per
+  fragment), and the air: the
+  direct sun of its samples (not the lit sky's fill, as the clouds'
+  shadow), taken at a quarter and three quarters of each segment, linear
+  between. Per sample it cost ~2.5 ms a frame with the ring in the sky;
+  the band's edges are kilometres wide and the air's light a smooth
+  integral.
+- **The planet's shadow on the ring.** The rocks (`asteroid.frag`) and the
+  haze (`haze.frag`) take `eclipseVisibility` (every body, `World` binds
+  its `Shadows` to every field). The haze weighs each sample's share of
+  its depth by it, taken at four points along the ray (`LIT_GROUPS`): per
+  sample it cost up to 14 ms with the ring in the planet's shadow, and a
+  shadow's edge there is tens of km wide (19 km at 1 Mm).
+- **Not done.** A ring does not shade itself (its rocks and haze in its
+  own shadow), nor is the sun reddened through the planet's air on its way
+  to the ring.
+
+`tests/test_shadows.py`: the term's geometry (the slanted depth at the
+radius crossed; clear through the hole, past the rim, toward the sun; the
+slant's floor edge-on), `ring_depth` against the haze model, and
+`ringVisibility` read back over a planet under a tilted ring against the
+CPU.
+
+Cost (median frame ms, `terrain_shots.py --ring`, Part H then Part I):
+ground 17.33 / 17.59, in_clouds 17.02 / 17.64, ring_ground 13.25 /
+13.11, ring_orbit 5.48 / 5.41: within run-to-run noise. Without `--ring`
+the terms cost nothing (no ring: `uRingCount` 0).
+
+## Demo and shots
+
+F7 in the terrain demos cycles the shadows' preset (`--shadows-quality` at
+start): LOW leaves the clouds' shadows out and makes a coarse mountain map.
+
+Mountain shadow poses: `mountains_low` (clouds_grazing's peaks, the sun 6°
+up in the south-east), `mountains_orbit` (1 radius up, the sun 8° up),
+`moon_terminator` (the moon's craters at its terminator). Each pose's line
+prints the last bake's time.
+
+Long cloud shadows: `dusk_in_clouds` (2.7 km, in the deck, looking north)
+and `dusk_above_clouds` (4.5 km, over it), the sun 4° up in the west.
+
+The test balls (part G): `ball_noon` (the ground view, the sun 75° up),
+`ball_sunset` and `ball_eclipse` (3.7 km up, over the cloud deck, out of
+its shadow: the sun 3° up in the west, and 0.4° off the moon's centre),
+`ball_cloud_edge` and `ball_mountain_edge` (the balls moved onto the
+nearest edge of a cloud's or a mesa's shadow around the start, where the
+CPU twin leaves half the sun, seen from 150 m across the sun). A cloud's
+shadow edge is hundreds of metres wide: a ball on it is dimmed evenly.
+
+The rings (part I, with `--ring`): `ring_shadow_ground` (20 km over the
+band's northern edge, latitude -10.6, looking west along it: the band on
+the left), `ring_shadow_orbit` (3 radii over latitude 5, just north of the
+ring's plane: the ring a thin line, the band south of it, its ringlets in
+it), both with the sun 20° north of the ring's plane at noon, and
+`ring_planet_shadow` (`ring_orbit`'s view, the sun low in the east: the
+planet's shadow across the ring).
+
+The objects' shadows (part H; the balls cast theirs): `caster_pad` (the
+white ball resting on the ground, the textured one 60 m up beside it, both
+shadows on the ground), `caster_ship_on_ship` (the textured ball 26 m
+sunward of the white one and 9 m above its line: the white one's upper
+part in its shadow), `caster_self` (a teapot on the ground, its handle
+toward the sun, turned 40°: the handle's shadow on the pot), and
+`caster_altitude` (the textured ball 300 m up: its shadow on the hillside
+where its ray meets the ground).
+
+`scripts/demo_terrain.py` puts the moon 21,000 km out: from the planet's
+ground it looks 0.56° wide, as wide as the sun, so a total eclipse has an
+umbra a few km across inside a penumbra some 400 km wide. Swing the sun
+behind the moon with J / K and I / U: the shadow slides.
+
+`scripts/terrain_shots.py` can aim a pose's sun at a body (`AimedSun`: the
+direction from the point under the camera to the body, turned some degrees
+north). Its eclipse poses:
+
+- `eclipse_ground`: the moonrise view, the sun 0.6° off the moon's centre:
+  a partial eclipse;
+- `eclipse_total`: the sun behind the moon's centre, the camera in the
+  umbra;
+- `eclipse_orbit`: 3 radii over the point under the moon: its shadow on the
+  planet at noon;
+- `lunar_eclipse`: the `moon_orbit` view, the sun behind the planet,
+  0.8° off: the planet's umbra edge across the moon.
+
+## Cost
+
+Most of the time no body's shadow is anywhere near another body, and the
+eclipse must cost nothing then. `Shadows.set_sun` works out, per body, which
+other bodies' penumbra cones can reach what it holds (its `reach`: its air's
+top, its highest ground; `World` sets it), as bits in `uShadowCasters`.
+`eclipseVisibility` returns at once for a body with none. In the air's march
+the eclipse is gathered in a loop of its own before the sample loop, only
+when `eclipseCanReach` says a shadow can reach that air: inside the sample
+loop, its code alone (never run) cost ~0.5 ms a frame at the ground poses.
+The CPU twin rejects bodies clear of the sun before any trigonometry (26 µs
+a call, from 73).
+
+Measured on a GTX 1070, 1600×900, HIGH, median frame ms (CPU and GPU in
+series), `terrain_shots.py`, before (two runs) and after:
+
+| Pose | Before | After |
+|---|---|---|
+| ground | 10.24 / 10.50 | 10.74 |
+| coast | 11.82 / 12.12 | 12.11 |
+| high | 5.70 / 5.76 | 6.08 |
+| stratosphere | 3.90 / 3.99 | 4.21 |
+| orbit | 2.27 / 2.29 | 2.46 |
+| in_clouds | 10.81 / 11.18 | 11.11 |
+| sunset | 12.14 / 12.65 | 12.42 |
+| beach | 14.79 / 15.45 | 15.60 |
+| eclipse_ground | | 13.31 |
+| eclipse_total | | 13.31 |
+| eclipse_orbit | | 3.83 |
+| lunar_eclipse | | 1.76 |
+
+The views without an eclipse cost at most ~0.2–0.3 ms more (high,
+stratosphere, orbit), most within run-to-run noise. With an eclipse in view
+the air's gather loop runs: roughly 2.5 ms more than the nearest view
+without one at the ground (`eclipse_ground` against `moonrise`, whose sun
+differs), 1.4 ms from orbit (`eclipse_orbit` against `orbit`).
+
+`flight_bench.py --flight low` (mean / p95 frame ms), alternating runs:
+before 8.4 / 11.8 and 8.5 / 11.9, after 8.7 / 12.1 and 8.5 / 11.8. The
+`World` demo (`--demo world`), all flights: low 8.4 / 11.6 before, 8.5 /
+11.9 after; cruise 1.6 / 5.2 and 1.7 / 5.3; descent 3.3 / 7.9 and 3.5 / 7.5.
+
+The views without an eclipse render as before (`compare_shots.py`), but
+for the moon's new distance (the moon in `moonrise` and `in_clouds`, a few
+star pixels from the farther far plane) and the HUD.

@@ -93,19 +93,22 @@ nodes and rewrites them in place once a frame, in float64 where it matters
 ### Lighting anything else
 
 `Atmospheres.light_at(index, point_world, sun_direction, sun_color,
-sky_light)` gives the light at a point as the terrain's shader lights its
-ground: the sunlight through the air (none in the planet's shadow), and the
+sky_light)` gives the light at a point (or at an array of points, at once)
+as the terrain's shader lights its ground: the sunlight through the air (none in the planet's shadow), and the
 sky light fading through twilight (`twilight`, the terrain's
 `smoothstep(-0.2, 0.2, cos)`). `transmittance_to_sun` is the shader's
 `atmoSunlight` on the CPU (the Chapman function, `depth_toward`, with the
-same `sunset_radius` scale); `in_shadow` covers airless bodies.
+same `sunset_radius` scale); `in_shadow` covers airless bodies. Other
+bodies' eclipses are `Shadows.eclipse`'s ([Shadows](shadows.md)), which
+`World.light_at` multiplies in.
 
 The demo uses them each frame for:
 
 - **Panda3D's lights**: a `DirectionalLight` (the sun) and an `AmbientLight`
   on `render`, as they are at the camera, for anything drawn without the
-  world's own shaders (models, ships). The white test ball ahead of the start
-  pose shows them; models skip the world's exposure and tonemap, see
+  world's own shaders (models, ships). Models drawn that way skip the
+  world's exposure and tonemap; the test balls ahead of the start pose are
+  drawn by the world's model shader instead (M switches), see
   [Lighting on objects](object_lighting.md);
 - **the sea's near look**: `Sea.set_light` scales its water colour (tuned
   in daylight) by the light on the sea under the camera over the daylight's,
@@ -376,6 +379,12 @@ in `cloud_field.glsl` (billboards per vertex, the deck per pixel) spread it:
   undersides as the sky's light does. It carries the clouds from lit to dark
   over about 4° past the line (about 40 km on this planet).
 
+Another body's eclipse multiplies both, and the clouds' sky light dims with
+it (`eclipseVisibility`, see [Shadows](shadows.md)).
+
+The clouds' own shadow falls on the terrain, the far water and the near sea
+(`cloudShadowDepth`, through the deck's field: see [Shadows](shadows.md)).
+
 The terrain and Panda3D's lights still use the plain shadow: on the ground
 the sun has set long before, so there is no line to see there.
 
@@ -405,8 +414,20 @@ Measured on the demo at 1.3 km with the sun 80° up, the brightest horizon
 tops went from (0.86, 0.84, 0.75) to (0.89, 0.87, 0.83) displayed; near
 clouds kept their contrast. Ruled out on the way: the sunlight's own tint
 (`sunset_radius`, `grazingLight`, `cloudTwilight`), since with only the air
-in front turned off (`uCloudDebug` bit 2) the clouds came out white; and too
+in front turned off the clouds came out white; and too
 few samples of that air per vertex (as orange with 8 as with 4).
+
+None of the clouds (the raymarch, the billboards and the deck, the cirrus)
+draws any air in front of them, since that haze still showed them yellow:
+seen at a grazing angle (from orbit, anywhere on the lit side, or at the
+horizon and in the sea's reflection) they turned yellow even at noon, and
+whitened as the camera closed in. The lit top is far brighter than the sky,
+and the extinction of a long path removes its blue, while the light the air
+adds is far too dim to restore it; desaturating either (keeping only the air's
+luminance) did not look natural either. A cloud keeps its own colour at any
+distance, and the sun's reddening (`cloudSunTint`) still turns a dusk cloud
+orange. The cost: no distance haze, so far clouds are as contrasty as near
+ones.
 
 ### Cirrus
 
@@ -553,8 +574,8 @@ translucent things: Panda's transparent bin sorts them all back to front.
 - the sunlight reddened by the air at the cirrus's own height
   (`cloudSunTint`), so it stays lit after the cumulus below has gone into
   the planet's shadow, then twilight (`cloudTwilight`);
-- the air in front of it per vertex (`atmosphereAlong`), and the sky's
-  display transform.
+- the sky's display transform (no air in front of it: see
+  [clouds at the horizon](#clouds-at-the-horizon)).
 
 From inside the slab it fades to nothing near the camera: a veil, not a
 volume to fly through.
@@ -562,8 +583,7 @@ volume to fly through.
 ### Not yet
 
 - **Wind:** the clouds are static.
-- **Shadows on the ground:** clouds do not shade the terrain; the cirrus does
-  not shade the cumulus either.
+- **The cirrus casts no shadow**, on the cumulus or on the ground.
 - **One cumulus-like type per planet** (cumulus in the demo), with the cirrus
   above it; the planet field could take one per slab (the weather map could
   then say which).

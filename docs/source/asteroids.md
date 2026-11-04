@@ -274,7 +274,9 @@ sits at `position` with `orientation` (world from field) in the world.
   (the full-detail shape) turned with the rock, the terrain's snow textures
   on the rock's ice patches and its rock textures elsewhere
   (`terrain_material.glsl`: rock projected from the sides on steep flanks), lit as the terrain lights its
-  ground (`object_light.glsl`), no shadows. Then either the world's exposure
+  ground (`object_light.glsl`), in the bodies' shadows (`shadows.glsl`'s
+  `eclipseVisibility`: a planet's across its ring, with `World`'s
+  `Shadows` bound). Then either the world's exposure
   and ACES tonemap, or, with `tonemap=False`, a plain display encoding to
   match models lit by Panda's fixed-function lights. Last, the haze between
   the camera and the rock veils it ([Haze](#haze)): a far rock takes the
@@ -458,7 +460,10 @@ approaching, rocks appear out of it while it thins by as much.
   the backlog.
 - **Light.** Lambert spheres of the rocks' mean far colour: full with the
   sun behind the camera, dark against it, plus the sky light; then the
-  field's exposure and tonemap. No shadows, not even a planet's on its ring.
+  field's exposure and tonemap. The bodies' shadows dim the sun on each
+  sample's share (a planet's across its ring), taken at four points along
+  the ray. A ring casts its own shadow on its planet: see
+  [Shadows](shadows.md), part I.
 - **Drawing.** A hull around the shape (1,024 segments for a ring), drawn on
   both sides with depth test and no depth write, after the sky and clouds:
   a planet in front hides it. Hull points beyond the far plane are pulled
@@ -466,6 +471,18 @@ approaching, rocks appear out of it while it thins by as much.
   plane out. Only the far camera of a split draws it, from its near plane
   (read from its projection): nearer than the split every rock is drawn, so
   nothing but a little dust is lost there.
+- **Behind the clouds.** The clouds write no depth: drawn after them, a ring
+  seen from the ground covered them (and dimmed the clouds round a peak
+  the ring passes behind). Around a planet with clouds
+  (`FieldHaze.set_clouds_top`, which `World` and the demo set for a ring
+  centred on it, `PlanetClouds.top_radius`: its highest layer's, the
+  cirrus's when there is one), the haze is drawn in two passes split where
+  each ray enters the sphere of the clouds' tops: what lies beyond it in
+  the sky's bin, after the stars, before the clouds (the cirrus's far side
+  included); what lies before it after them, as before. Along a ray a ring and the clouds
+  never overlap, so the split is exact. No cost seen (`ring_ground` 13.09
+  / 13.12 ms, `ring_orbit` 5.93 / 5.58); `terrain_shots.py --ring` gains
+  `ring_behind_clouds`.
 - `AsteroidField(haze=False)` leaves it out. In a 15 km field it costs
   nothing seen: nothing is missing nearer than about 57 km.
 

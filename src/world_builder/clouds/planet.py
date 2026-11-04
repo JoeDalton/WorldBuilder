@@ -24,6 +24,7 @@ Design notes: docs/source/atmosphere.md, "Planet clouds" and "Cirrus".
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
@@ -35,7 +36,8 @@ from world_builder.clouds.cirrus import CirrusSpec, CloudSheet
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
 from world_builder.clouds.march import CloudMarch
-from world_builder.clouds.sphere import CLOUD_BIN, CloudVolume
+from world_builder.clouds.noise import DensityField
+from world_builder.clouds.sphere import CLOUD_BIN, CLOUD_TOP_MARGIN, CloudVolume
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS
 from world_builder.terrain.planet import PlanetSpec
@@ -113,6 +115,8 @@ class PlanetClouds:
         :class:`march.CloudMarch`, by ``settings.renderer``)
     :ivar sheet: the cirrus (:class:`cirrus.CloudSheet`), or None
     :ivar weather: the weather both follow
+    :ivar radius: the planet's sea-level radius, metres
+    :ivar position: its centre, world frame
     """
 
     #: The settings it takes (``WorldSettings.apply``, ``settings_for``).
@@ -198,6 +202,8 @@ class PlanetClouds:
             planet = planet or PlanetSpec(name="clouds", radius=float(radius))
             weather = WeatherSpec(planet, seed=weather_seed)
         self.weather = weather
+        self.radius = float(radius)
+        self.position = np.asarray(position, dtype=np.float64)
         self._settings = settings
         self.root = parent.attach_new_node("planet_clouds")
         # What the volume is built from, again on a change of renderer.
@@ -228,21 +234,18 @@ class PlanetClouds:
         self._sky_light: float | None = None
         self._debug = 0
         self._half_res: HalfResClouds | None = None
+        # What every layer's shader also takes (bind_inputs), again for a
+        # new volume.
+        self._binders: list[Callable[[NodePath], None]] = []
+        self._map_binders: list[Callable[[NodePath], None]] = []
+        # The nodes the clouds shade (bind_shadow_inputs), again for a new
+        # volume.
+        self._shadow_nodes: list[NodePath] = []
+        self._channel = channel
         self.volume = self._make_volume(settings)
-        #: The genera's stratus, under the convective volume; None = none
-        self.stratus: CloudVolume | None = None
-        if genera is not None:
-            self.stratus = CloudVolume(
-                self.root,
-                settings=settings,
-                **{
-                    **self._volume_args,
-                    "cloud_type": CloudType.STRATUS,
-                    "altitude": genera.stratus_altitude,
-                    "family": STRATIFORM,
-                    "channel": None if channel is None else f"{channel}:stratus",
-                },
-            )
+        #: The genera's stratus, under the convective volume, when billboards
+        #: draw them (a raymarch marches both families); None = none
+        self.stratus: CloudVolume | None = self._make_stratus(settings)
         self._deck_order: tuple | None = None
         self.sheet: CloudSheet | None = None
         if cirrus is not None:
@@ -274,12 +277,35 @@ class PlanetClouds:
         return [v for v in (self.volume, self.stratus) if v is not None]
 
     def _make_volume(self, settings: CloudSettings) -> CloudVolume | CloudMarch:
-        # The genera are drawn by billboards (the raymarch has no depth).
-        kind = CloudVolume if self.genera is not None else RENDERERS[settings.renderer]
-        volume = kind(self.root, settings=settings, **self._volume_args)
+        volume = RENDERERS[settings.renderer](
+            self.root, settings=settings, **self._volume_args
+        )
         if isinstance(volume, CloudMarch) and self._split is not None:
             volume.attach(*self._split)
         return volume
+
+    def _make_stratus(self, settings: CloudSettings) -> CloudVolume | None:
+        """The genera's stratus volume under the convective one (each takes
+        the other's shadow: the convective clouds' on the stratus under
+        them, and on what they shade); None without genera, or when a raymarch
+        draws both families."""
+        if self.genera is None or isinstance(self.volume, CloudMarch):
+            return None
+        channel = self._channel
+        stratus = CloudVolume(
+            self.root,
+            settings=settings,
+            **{
+                **self._volume_args,
+                "cloud_type": CloudType.STRATUS,
+                "altitude": self.genera.stratus_altitude,
+                "family": STRATIFORM,
+                "channel": None if channel is None else f"{channel}:stratus",
+            },
+        )
+        self.volume.take_shadow_of(stratus)
+        stratus.take_shadow_of(self.volume)
+        return stratus
 
     # ── settings ──────────────────────────────────────────────────────────────
 
@@ -295,24 +321,155 @@ class PlanetClouds:
 
         :param settings: the new settings
         """
-        renderer = settings.renderer != self._settings.renderer and self.genera is None
+        renderer = settings.renderer != self._settings.renderer
         self._settings = settings
         if renderer:
             if self._half_res is not None and isinstance(self.volume, CloudVolume):
                 self._half_res.remove(self.volume.root)
+            if self.stratus is not None:
+                if self._half_res is not None:
+                    self._half_res.remove(self.stratus.root)
+                self.stratus.remove()
+                self.stratus = None
             self.volume.remove()
             self.volume = self._make_volume(settings)
+            self.stratus = self._make_stratus(settings)
             self.volume.set_sun(*self._sun)
             if self._sky_light is not None:
                 self.volume.set_sky_light(self._sky_light)
             self.volume.set_debug(self._debug)
-            if self._half_res is not None and isinstance(self.volume, CloudVolume):
-                self._half_res.add(self.volume.root)
+            self._bind_layer(self.volume)
+            self._shade(self._shadow_nodes)
+            if isinstance(self.volume, CloudMarch):
+                for bind in self._map_binders:
+                    self.volume.bind_maps(bind)
+            if self._half_res is not None:
+                for volume in self._volumes():
+                    if isinstance(volume, CloudVolume):
+                        self._half_res.add(volume.root)
+            self._deck_order = None
             if self.sheet is not None:
                 self.sheet.set_settings(settings)
             return
         for layer in self._layers():
             layer.set_settings(settings)
+
+    def bind_inputs(self, bind: Callable[[NodePath], None]) -> None:
+        """Have every layer's shader take more inputs (what shades the
+        clouds: the eclipses, a body's shadow maps): *bind* is called with
+        each layer's node now, and with a new volume's on a change of
+        renderer. Each layer binds its own defaults on its own node, which a
+        binding on :attr:`root` would not override.
+
+        :param bind: sets inputs on a node (e.g. ``Shadows.bind``)
+        """
+        self._binders.append(bind)
+        for layer in self._layers():
+            self._bind_layer(layer, (bind,))
+
+    def bind_maps(self, bind: Callable[[NodePath], None]) -> None:
+        """Have a raymarched volume read a body's cloud shadow maps for its own
+        light (:meth:`march.CloudMarch.bind_maps`), kept across a change of
+        renderer; the billboards' light does not use them.
+
+        :param bind: sets the maps' inputs on a node
+            (:meth:`shadow_map.CloudShadowMaps.bind`)
+        """
+        self._map_binders.append(bind)
+        if isinstance(self.volume, CloudMarch):
+            self.volume.bind_maps(bind)
+
+    def _bind_layer(self, layer, binders=None) -> None:
+        if isinstance(layer, CloudMarch):
+            return  # its passes' nodes: not yet
+        for bind in self._binders if binders is None else binders:
+            bind(layer.root)
+
+    @property
+    def shadow_families(self) -> int:
+        """How many volumes cast a shadow: two with genera (the convective
+        one, then the stratus), else one."""
+        if isinstance(self.volume, CloudMarch):
+            return self.volume.families
+        return 2 if self.stratus is not None else 1
+
+    def shadow_caster(self, family: int = 0) -> CloudVolume | CloudMarch | None:
+        """The volume whose shadow is *family*'s (0: :attr:`volume`, 1: the
+        stratus)."""
+        if isinstance(self.volume, CloudMarch):
+            return self.volume.shadow_caster(family)
+        return self.volume if family == 0 else self.stratus
+
+    def bind_shadow_inputs(self, node: NodePath, family: int = 0) -> None:
+        """Let the shaders on a node (the planet's terrain) darken the sun
+        under the clouds: the volume's shadow, and with genera the stratus's
+        too (:meth:`sphere.CloudVolume.bind_shadow_inputs`,
+        ``uCloudShadowOther``), kept across a change of renderer.
+
+        :param node: the node whose shaders include cloud_field.glsl's
+            ``planetCloudShadow``
+        :param family: 1 binds the stratus's alone, as the first (its shadow
+            maps' bake: :class:`shadow_map.CloudShadowMaps`)
+        """
+        if family == 1:
+            self.shadow_caster(1).bind_shadow_inputs(node)
+            return
+        self._shadow_nodes.append(node)
+        self._shade([node])
+
+    def _shade(self, nodes: list[NodePath]) -> None:
+        for node in nodes:
+            self.volume.bind_shadow_inputs(node)
+
+    @property
+    def top_radius(self) -> float:
+        """How far from the planet's centre the clouds reach, metres: the
+        highest layer's top (the cirrus's, when there is one). What a ray
+        meets past where it enters this sphere is behind them (a ring's
+        haze, :meth:`asteroids.haze.FieldHaze.set_clouds_top`)."""
+        tops = [
+            volume.top_radius
+            if isinstance(volume, CloudVolume)
+            else self.radius + sum(volume.field.slab) + CLOUD_TOP_MARGIN
+            for volume in self._volumes()
+        ]
+        if self.sheet is not None:
+            tops.append(self.radius + self.sheet.spec.top)
+        return max(tops)
+
+    @property
+    def shadow_layer(self) -> int:
+        """The volume's layer its shadow is marched in
+        (:attr:`sphere.CloudVolume.shadow_layer`); -1 = none (not ready)."""
+        return self.volume.shadow_layer
+
+    @property
+    def shadow_field(self) -> DensityField:
+        """The field the volume's shadow is marched in."""
+        return self.volume.shadow_field
+
+    def sun_visibility(
+        self, points_world: ArrayLike, sun_direction: ArrayLike, max_steps: int
+    ) -> np.ndarray:
+        """The share of the sun the clouds leave points under them (or in
+        them), as their shaders draw it on the ground: both families' with
+        genera (:meth:`sphere.CloudVolume.sun_visibility`; 1 with a
+        raymarch).
+
+        :param points_world: (..., 3) world frame, metres
+        :param sun_direction: toward the sun, world frame (any length)
+        :param max_steps: the most samples a chord takes
+            (``ShadowSettings.cloud_shadow_steps``; 0 = none)
+        :returns: (...) in [0, 1]
+        """
+        shade = np.ones(np.shape(points_world)[:-1])
+        for family in range(self.shadow_families):
+            caster = self.shadow_caster(family)
+            if caster is not None:
+                shade = shade * caster.sun_visibility(
+                    points_world, sun_direction, max_steps
+                )
+        return shade
 
     # ── live ──────────────────────────────────────────────────────────────────
 

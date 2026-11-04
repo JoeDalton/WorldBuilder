@@ -310,6 +310,9 @@ the sunlight *above any air* and the sky light, both linear.
   than lit by a blue sky.
 - **Aerial perspective** comes last, in linear light before the tonemap:
   the terrain is seen through every atmosphere the sight line crosses.
+- **Shadows.** Other bodies' eclipses, the planet's clouds' shadow and the
+  mountains' (a shadow map per body, `terrain.shadow_map.ShadowMap`) dim the
+  sunlight: see [Shadows](shadows.md).
 
 ## Several planets
 
@@ -348,7 +351,7 @@ atmospheres.update(camera_world)
   moon seen from the planet costs about 6–15 tiles.
 - **Depth.** `SplitDepthCameras.system_ranges` takes the split from the
   nearest ground and the far plane from the farthest visible body. Depth
-  steps up close only depend on the split, so reaching a moon 10,000 km
+  steps up close only depend on the split, so reaching a moon 21,000 km
   away costs nothing on the ground; on the moon itself steps are a few km,
   narrower than a pixel at that range.
 - **No atmosphere:** leave `atmosphere=` unset (no air of its own). Give

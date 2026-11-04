@@ -18,17 +18,22 @@ import pytest
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.march import (
     MIN_STEP_FEATURE,
+    OPAQUE,
+    SEGMENT_SAMPLES,
+    STEP_DEEPENING,
     STEP_GROWTH,
     VIEW_EXTINCTION_SCALE,
     CloudMarch,
     bayer_offset,
     block_of,
+    march_ray,
     march_steps,
     march_transmittance,
     min_step,
     slab_segments,
     sphere_interval,
     step_scale,
+    visit_of,
 )
 from world_builder.clouds.noise import (
     MAX_LAYERS,
@@ -165,12 +170,13 @@ def test_a_ray_that_fits_is_not_stretched():
     assert step_scale(segments, 50.0, 0.01, 10) > 1.0
 
 
-def test_a_short_segment_still_takes_two_samples():
+def test_a_short_segment_still_takes_its_fewest_samples():
     # From orbit, the slab is a sliver of a ray thousands of km long
     origin, d = _ray(2 * R, -90.0)
     segments = slab_segments(origin, d, R, SLAB)
-    t, _ = march_steps(segments, 50.0, 0.5, 64)
-    assert len(t) >= 2
+    t, dt = march_steps(segments, 50.0, 0.5, 64)
+    assert len(t) >= SEGMENT_SAMPLES
+    assert dt.max() <= (segments[0, 1] - segments[0, 0]) / SEGMENT_SAMPLES + 1e-6
 
 
 # ── Compositing ──────────────────────────────────────────────────────────────
@@ -195,6 +201,85 @@ def test_a_uniform_medium_is_exact_at_any_step():
     for n in (3, 17, 200):
         transmittance, _ = march_transmittance(np.full(n, 0.004), np.full(n, 600.0 / n))
         assert transmittance == pytest.approx(2.0**-2.4)
+
+
+def test_a_dense_cloud_stops_the_march_early_and_counts_opaque():
+    segments = np.array([[0.0, 6000.0]])
+    thin, thin_samples = march_ray(segments, 50.0, STEP_GROWTH, 64, lambda t: 0.0002)
+    dense, dense_samples = march_ray(segments, 50.0, STEP_GROWTH, 64, lambda t: 0.05)
+    assert dense == 0.0  # opaque: the pixel takes the cloud's alpha as 1
+    assert dense_samples < thin_samples / 3
+    assert 0.0 < thin < 1.0
+    # Clear air takes every step and lets everything through
+    clear, _ = march_ray(segments, 50.0, STEP_GROWTH, 64, lambda t: 0.0)
+    assert clear == 1.0
+
+
+def test_stopping_at_opaque_and_the_longer_steps_keep_the_integral():
+    # The shader's early stop and its deepening steps against the fine
+    # integral of media from thin to dense: the pixel's alpha within a few %
+    segments = np.array([[500.0, 3500.0]])
+    for sigma in (0.0002, 0.0006, 0.002, 0.01):
+        t, dt = march_steps(segments, 50.0, STEP_GROWTH, 4096)
+        reference = march_transmittance(np.full(len(t), sigma), dt)[0]
+        mean = np.mean(
+            [
+                march_ray(segments, 50.0, STEP_GROWTH, 64, lambda t: sigma, j)[0]
+                for j in (0.125, 0.375, 0.625, 0.875)
+            ]
+        )
+        assert abs((1.0 - mean) - (1.0 - reference)) < 0.06
+
+
+def test_the_shader_shares_the_opaque_cutoff_and_the_step_deepening():
+    text = SHADER.read_text()
+    assert float(re.search(r"OPAQUE = ([\d.]+);", text).group(1)) == OPAQUE
+    assert (
+        float(re.search(r"STEP_DEEPENING = ([\d.]+);", text).group(1)) == STEP_DEEPENING
+    )
+    assert "STEP_DEEPENING * (1.0 - transmittance)" in text
+    assert "transmittance > OPAQUE" in text
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "cloud_march.frag",
+        "cloud.frag",
+        "cloud_sphere.vert",
+        "cloud_deck.vert",
+        "cirrus.vert",
+        "cirrus.frag",
+    ],
+)
+def test_no_cloud_draws_air_in_front_of_itself(name):
+    # The air's extinction and in-scatter turned clouds yellow at grazing
+    # angles, at the horizon and in the reflection, even at noon (#50)
+    text = (SHADER.parent / name).read_text()
+    assert "atmosphereAlong(" not in text
+    assert "applyAtmospheres(" not in text
+    assert "vAtmo" not in text
+
+
+def test_the_billows_share_the_columns_noise_in_one_evaluation():
+    # marchDensity reads the field once (cloudColumnAt) and then only the
+    # billows' own noise, not the whole density again per threshold
+    text = SHADER.read_text()
+    start = text.index("float marchDensity(")
+    body = text[start : text.index("\n}\n", start)]
+    assert body.count("cloudColumnAt(") == 1
+    assert "cloudDensityAt(" not in body
+
+
+def test_the_resolve_leaves_clear_sky_alone():
+    # The resolve returns early where the march and the history hold no cloud
+    # (before the history's and the neighbourhood's reads)
+    text = (SHADER.parent / "cloud_resolve.frag").read_text()
+    main = text[text.index("void main") :]
+    clear = main.index("<= 0.0) {")  # the history's alpha, the early-out's test
+    assert "return;" in main[clear : clear + 400]
+    # ... before the 3 x 3's taps for the clamp
+    assert clear < main.index("tapKm")
 
 
 @pytest.fixture(scope="module")
@@ -241,6 +326,8 @@ def test_the_shader_shares_the_layer_count_and_the_feature_size():
     assert int(re.search(r"MAX_MARCH_LAYERS = (\d+);", text).group(1)) == MAX_LAYERS
     units = float(re.search(r"NOISE_FEATURE_UNITS = ([\d.]+);", text).group(1))
     assert units == NOISE_FEATURE
+    fewest = float(re.search(r"SEGMENT_SAMPLES = ([\d.]+);", text).group(1))
+    assert fewest == SEGMENT_SAMPLES
 
 
 # ── Settings and the renderer choice ─────────────────────────────────────────
@@ -250,7 +337,8 @@ def test_the_presets_trade_steps_and_resolution():
     levels = [CloudSettings.preset(level) for level in QualityLevel]
     steps = [s.march_steps for s in levels]
     assert steps == sorted(steps)
-    assert all(s.renderer == "billboards" for s in levels)
+    assert all(s.renderer == "march" for s in levels)
+    assert CloudSettings().renderer == "march"
     with pytest.raises(ValueError):
         CloudSettings(renderer="splats")
 
@@ -317,6 +405,109 @@ def test_the_march_packs_a_layer_per_shell_and_the_far_one(showbase, executor):
         clouds.remove()
 
 
+def test_the_march_casts_a_shadow_and_reads_the_maps_for_its_own_light(
+    showbase, executor
+):
+    """A raymarched volume is a shadow caster as the billboards' is (its far
+    layer's field, the layer bound once the set-up is done) and takes the
+    shadow maps' inputs on its passes' nodes, kept across a change of
+    renderer; the shader's maps path is compiled in for the march alone."""
+    clouds = _clouds(showbase, executor, "march")
+    try:
+        march = clouds.volume
+        assert clouds.shadow_caster(0) is march.shadow_caster(0)
+        assert clouds.shadow_families == march.families == 1
+        assert march.shadow_field.slab == march.field.slab
+        node = showbase.render.attach_new_node("receiver")
+        clouds.bind_shadow_inputs(node)
+        clouds.update((0.0, 0.0, 2000.0 + 600e3))
+        for _ in range(200):  # the set-up, in the pool
+            if clouds.volume.weather is not None:
+                break
+            clouds.update((0.0, 0.0, 2000.0 + 600e3))
+        assert march.shadow_layer == march._layers_used - 1
+        assert clouds.shadow_layer == march.shadow_layer
+        bound = []
+        clouds.bind_maps(lambda n: bound.append(n))
+        assert bound == march._nodes
+        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
+        assert clouds.shadow_caster(0) is clouds.volume
+        assert not isinstance(clouds.volume, CloudMarch)
+    finally:
+        clouds.remove()
+    shaders = Path(__file__).parents[1] / "src/world_builder/clouds/shaders"
+    assert "#define CLOUD_MAP_LIGHTING" in (shaders / "cloud_march.frag").read_text()
+    for name in ("cloud.frag", "cloud_deck.frag"):
+        path = shaders / name
+        if path.exists():
+            assert "CLOUD_MAP_LIGHTING" not in path.read_text()
+
+
+def test_two_families_slabs_make_up_to_four_sorted_stretches():
+    """The genera's stratus under the convective clouds: a ray from the ground
+    crosses the stratus then the convective slab; from above, the convective
+    one then the stratus, then (the planet not in the way) nothing; a ray
+    skimming under both leaves and re-enters each."""
+    from world_builder.clouds.march import family_segments
+
+    radius = 600e3
+    slabs = [(2200.0, 10500.0), (900.0, 1000.0)]  # convective, stratus
+    up = np.array([0.0, 0.0, 1.0])
+    below = family_segments(up * (radius + 100.0), up, radius, slabs)
+    assert [f for _, _, f in below] == [1, 0]
+    assert below[0][0] == pytest.approx(800.0) and below[0][1] == pytest.approx(1800.0)
+    assert below[1][0] == pytest.approx(2100.0)
+    assert below[1][1] == pytest.approx(12600.0)
+    above = family_segments(up * (radius + 20e3), -up, radius, slabs)
+    assert [f for _, _, f in above] == [0, 1]
+    assert above[0][1] <= above[1][0]
+    # A ray passing under the base of both (its closest approach 500 m up):
+    # each slab twice, four stretches in order along it, the stratus's
+    # outside the convective ones' (it is lower)
+    side = np.array([1.0, 0.0, 0.0])
+    skimming = family_segments(
+        np.array([-200e3, 0.0, radius + 500.0]), side, radius, slabs
+    )
+    assert [f for _, _, f in skimming] == [0, 1, 1, 0]
+    starts = [t0 for t0, _, _ in skimming]
+    assert starts == sorted(starts)
+    # The planet cuts the far side, and the view's range the near
+    clipped = family_segments(
+        up * (radius + 20e3), -up, radius, slabs, t_start=9e3, t_end=15e3
+    )
+    assert all(9e3 <= t0 < t1 <= 15e3 for t0, t1, _ in clipped)
+
+
+def test_the_jitters_blue_noise_has_every_rank_once_and_no_low_frequencies():
+    """The steps' jitter reads a tileable blue noise (void and cluster): each
+    value once, almost no power at low frequencies (white noise has a few
+    per cent of it in the lowest tenth of the band), the same pattern wrapped."""
+    from world_builder.clouds.march import BLUE_NOISE_SIZE, blue_noise
+
+    noise = blue_noise()
+    assert noise.shape == (BLUE_NOISE_SIZE, BLUE_NOISE_SIZE)
+    assert len(np.unique(noise)) == BLUE_NOISE_SIZE**2
+    assert 0.0 <= noise.min() and noise.max() < 1.0
+    power = np.abs(np.fft.fft2(noise - noise.mean())) ** 2
+    freq = np.fft.fftfreq(BLUE_NOISE_SIZE)
+    low = (freq[:, None] ** 2 + freq[None, :] ** 2) < 0.01
+    assert power[low].sum() / power.sum() < 1e-3
+
+
+def test_the_far_detail_fades_more_the_fewer_pixels_a_frame_is_traced():
+    from world_builder.clouds.march import step_fade_of
+
+    assert step_fade_of(1) == 0.0
+    assert 0.0 <= step_fade_of(2) < step_fade_of(4) < 0.4
+
+
+def test_the_resolve_smooths_more_the_fewer_pixels_a_frame_is_traced():
+    from world_builder.clouds.march import smoothing_of
+
+    assert smoothing_of(1) == 0.0
+    assert 0.0 < smoothing_of(2) < smoothing_of(4) == 1.0
+
+
 # ── Gathering over the frames ────────────────────────────────────────────────
 
 
@@ -327,6 +518,20 @@ def test_each_frame_traces_one_pixel_of_a_block_and_a_cycle_all(resolution, bloc
     assert sorted(cycle) == [(x, y) for x in range(block) for y in range(block)]
     # And then again, in the same order
     assert bayer_offset(block, block * block) == cycle[0]
+
+
+@pytest.mark.parametrize("block", [1, 2, 4])
+def test_each_visit_moves_the_jitter_on_once(block):
+    """A pixel traced once a cycle of block x block frames runs through the
+    jitter's sequence one step a visit, not one a frame (it would skip
+    through it, its visits half a step apart and never stratified)."""
+    cycle = block * block
+    traced = [f for f in range(8 * cycle) if bayer_offset(block, f) == (0, 0)]
+    assert [visit_of(block, f) for f in traced] == list(range(8))
+    golden = 0.618034
+    seen = sorted((visit * golden) % 1.0 for visit in range(8))
+    assert max(np.diff(seen)) < 0.25  # eight visits spread over the step
+    assert visit_of(block, 7, gather=False) == 7
 
 
 def test_neighbours_come_far_apart_in_time():

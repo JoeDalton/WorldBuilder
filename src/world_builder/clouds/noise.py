@@ -19,6 +19,7 @@ docs/source/clouds.md.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -876,6 +877,33 @@ def _sun_march_samples(
     return h, fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
 
 
+def _march_density(
+    spec: DensityField,
+    h: np.ndarray,
+    pair: np.ndarray,
+    shift: ArrayLike,
+    octave_mean: float,
+    depth: ArrayLike = 0.0,
+    shelf: tuple | None = None,
+) -> np.ndarray:
+    """The density at a march's samples (..., steps), from their slab
+    heights and two-octave sums: the column's calibrated onto the full
+    field, the shelf's its own (cloud_field.glsl's
+    ``slabOpticalDepthCell``). *shift*, *depth* and *shelf* are the
+    march's, one per march (...)."""
+    gain, bias = shadow_calibration(spec, octave_mean)
+    shift = np.asarray(shift, dtype=np.float64)[..., None]
+    depth = np.asarray(depth, dtype=np.float64)[..., None]
+    if shelf is not None:
+        # The shelf's two octaves are its own, the rest their mean.
+        spread, cell = (np.asarray(v, dtype=np.float64)[..., None] for v in shelf)
+        w = spec.octave_weights
+        value = pair + octave_mean * (w[2] + w[3]) + cell + spec.shelf_shift
+        shelf = (spread, value)
+    raw = pair * gain + shift + bias
+    return _slab_density(spec, h, raw, depth, shelf)
+
+
 def _sun_depth(
     spec: DensityField,
     optics: CloudOptics,
@@ -887,18 +915,13 @@ def _sun_depth(
     shelf: tuple | None = None,
 ) -> np.ndarray:
     """:func:`sun_optical_depth_on_sphere` from :func:`_sun_march_samples`."""
-    gain, bias = shadow_calibration(spec, octave_mean)
-    shift = np.asarray(shift, dtype=np.float64)[..., None]
-    depth = np.asarray(depth, dtype=np.float64)[..., None]
-    if shelf is not None:
-        # The shelf's two octaves are its own, the rest their mean.
-        spread, cell = (np.asarray(v, dtype=np.float64)[..., None] for v in shelf)
-        w = spec.octave_weights
-        value = pair + octave_mean * (w[2] + w[3]) + cell + spec.shelf_shift
-        shelf = (spread, value)
-    raw = pair * gain + shift + bias
-    density = _slab_density(spec, h, raw, depth, shelf).sum(axis=-1)
-    return density * optics.sun_step_length * spec.density * optics.shadow_strength
+    density = _march_density(spec, h, pair, shift, octave_mean, depth, shelf)
+    return (
+        density.sum(axis=-1)
+        * optics.sun_step_length
+        * spec.density
+        * optics.shadow_strength
+    )
 
 
 def sun_optical_depth_on_sphere(
@@ -942,6 +965,458 @@ def sun_optical_depth_on_sphere(
     sun_dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
     h, pair = _sun_march_samples(volume, spec, optics, points, sun_dirs, radius)
     return _sun_depth(spec, optics, h, pair, shift, octave_mean, depth, shelf)
+
+
+#: The ground shadow's march steps, in the layer's ``sun_step_length``
+#: (cloud_field.glsl's CLOUD_SHADOW_STEP_SCALE): twice the clouds' own, within
+#: 0.004 of the sun's share of a 10 m march on average.
+CLOUD_SHADOW_STEP_SCALE = 2.0
+
+
+def cloud_shadow_on_sphere(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    max_steps: int,
+    shift_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    octave_mean: float | None = None,
+    depth_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    spread_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    levels: bool = False,
+) -> np.ndarray:
+    """The shader's ``cloudShadowDepth``: the planet's clouds between points
+    (below or in the slab) and the sun, along the chord the ray cuts through
+    the slab's shell, in steps of about ``sun_step_length`` (at most
+    *max_steps*; :data:`CLOUD_SHADOW_STEP_SCALE`), through the sun march's
+    calibrated two octaves. Its shadow is ``exp2(-depth)``. The weather is
+    taken where each chord enters the slab, as the sun march takes it where
+    it starts (and the cell octave with it).
+
+    :param volume: the noise octave (quantised, to match the GPU)
+    :param spec: a resolved field (the deck layer's)
+    :param optics: its optics (step length and shadow strength)
+    :param points: (..., 3) planet-frame positions
+    :param sun_dirs: (..., 3) unit directions toward the sun (broadcast)
+    :param radius: sea-level radius, metres
+    :param max_steps: the most steps a chord takes (0: no shadow)
+    :param shift_at: the weather's fbm shift at planet-frame positions
+        ((m, 3) -> (m,)), taken where each chord enters the slab; None = none
+    :param octave_mean: the noise's mean; None = *volume*'s
+    :param depth_at: the convective depth there, the same way; None = 0
+    :param spread_at: the anvil shelf's spread there, the same way; None =
+        no shelf
+    :param levels: also the depth a quarter, a half and three quarters of
+        the way along each chord (``cloudShadowLevelsIn``: what a cloud shadow
+        map's texel holds)
+    :returns: (...) optical depth, 0 above the slab; with *levels*, (..., 4):
+        that, then the three levels
+    """
+    _require_resolved(spec)
+    points = np.asarray(points, dtype=np.float64)
+    depth = np.zeros(points.shape[:-1] + ((4,) if levels else ()))
+    if max_steps <= 0:
+        return depth
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
+    dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
+    # Only what lies under the slab's top (the rest is never shaded): a
+    # camera or a ship above the clouds costs nothing.
+    under = np.linalg.norm(points, axis=-1) < radius + sum(spec.slab)
+    if not under.any():
+        return depth
+    march = _cloud_shadow_samples(
+        volume,
+        spec,
+        optics,
+        points[under],
+        dirs[under],
+        radius,
+        max_steps,
+        depth_at,
+        spread_at,
+    )
+    start = march[-1]
+
+    def at(sample):
+        if sample is None:
+            return np.zeros(start.shape[:-1])
+        return np.reshape(sample(start.reshape(-1, 3)), start.shape[:-1])
+
+    convective = at(depth_at)
+    coords = start * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    cell = cell_shift(volume, spec, coords, convective, octave_mean)
+    shelf = None
+    if spec.anvil and spread_at is not None:
+        shelf = (at(spread_at), cell)
+    shift = at(shift_at) + cell
+    if levels:
+        depth[under] = _cloud_shadow_levels(
+            spec, optics, march, shift, octave_mean, convective, shelf
+        )
+    else:
+        depth[under] = _cloud_shadow_depth(
+            spec, optics, march, shift, octave_mean, convective, shelf
+        )
+    return depth
+
+
+def _chord_to_top(
+    spec: DensityField,
+    radius: float,
+    start: np.ndarray,
+    dirs: np.ndarray,
+    chord: np.ndarray,
+    depth_at: Callable[[np.ndarray], np.ndarray],
+    spread_at: Callable[[np.ndarray], np.ndarray] | None,
+) -> np.ndarray:
+    """The shader's ``cloudChordToTop``: a chord from *start* cut at the
+    clouds' own top there (the slab's top where an anvil's shelf spreads)."""
+    depth = np.reshape(depth_at(start.reshape(-1, 3)), start.shape[:-1])
+    fraction = top_fraction(spec, depth)
+    if spec.anvil and spread_at is not None:
+        spread = np.reshape(spread_at(start.reshape(-1, 3)), start.shape[:-1])
+        fraction = np.where(spread > 0.0, 1.0, fraction)
+    base, thickness = spec.slab
+    outer = radius + base + thickness * fraction
+    r = np.linalg.norm(start, axis=-1)
+    b = np.sum(start * dirs, axis=-1)
+    leave = -b + np.sqrt(np.maximum((outer - r) * (outer + r) + b * b, 0.0))
+    return np.minimum(chord, leave)
+
+
+def _cloud_shadow_samples(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    max_steps: int,
+    depth_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    spread_at: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> tuple[np.ndarray, ...]:
+    """:func:`cloud_shadow_on_sphere`'s samples before the weather and the
+    calibration: their slab heights and two-octave sums (..., max_steps),
+    which steps count, each chord's step length and whether it crosses the
+    slab, and where it enters it (..., 3). A convective field's chord is cut
+    at the clouds' own top where it enters (*depth_at*, *spread_at*: the
+    weather's convective depth and anvil spread there; the shader's
+    ``cloudChordToTop``)."""
+    dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
+    base, thickness = spec.slab
+    inner, outer = radius + base, radius + base + thickness
+    r = np.linalg.norm(points, axis=-1)
+    b = np.sum(points * dirs, axis=-1)
+    leave = -b + np.sqrt(np.maximum((outer - r) * (outer + r) + b * b, 0.0))
+    enter = np.where(
+        r < inner,
+        -b + np.sqrt(np.maximum((inner - r) * (inner + r) + b * b, 0.0)),
+        0.0,
+    )
+    chord = leave - enter
+    if spec.min_top < 1.0 and depth_at is not None:
+        chord = _chord_to_top(
+            spec, radius, points + dirs * enter[..., None], dirs, chord, depth_at,
+            spread_at,
+        )  # fmt: skip
+    alive = (r < outer) & (chord > 0.0)
+    target = max(optics.sun_step_length * CLOUD_SHADOW_STEP_SCALE, 1.0)
+    steps = np.clip(np.ceil(chord / target), 1, max_steps).astype(np.int64)
+    step_length = np.where(alive, chord, 0.0) / steps
+    start = points + dirs * enter[..., None]
+    k = np.arange(max_steps)
+    positions = (
+        start[..., None, :]
+        + dirs[..., None, :] * ((k + 0.5) * step_length[..., None])[..., None]
+    )
+    h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
+    coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    pair = fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
+    counted = k < steps[..., None]
+    return h, pair, counted, step_length, alive, start
+
+
+def _cloud_shadow_depth(
+    spec: DensityField,
+    optics: CloudOptics,
+    march: tuple[np.ndarray, ...],
+    shift: ArrayLike,
+    octave_mean: float,
+    depth: ArrayLike = 0.0,
+    shelf: tuple | None = None,
+) -> np.ndarray:
+    """:func:`cloud_shadow_on_sphere` from :func:`_cloud_shadow_samples`
+    (*shift* with the cell octave's in it, *shelf* as
+    :func:`_sun_depth`'s)."""
+    h, pair, counted, step_length, alive, _ = march
+    density = _march_density(spec, h, pair, shift, octave_mean, depth, shelf)
+    density = np.where(counted, density, 0.0).sum(axis=-1)
+    depth = density * step_length * spec.density * optics.shadow_strength
+    return np.where(alive, depth, 0.0)
+
+
+def _cloud_shadow_levels(
+    spec: DensityField,
+    optics: CloudOptics,
+    march: tuple[np.ndarray, ...],
+    shift: ArrayLike,
+    octave_mean: float,
+    depth: ArrayLike = 0.0,
+    shelf: tuple | None = None,
+) -> np.ndarray:
+    """:func:`_cloud_shadow_depth`, and the depth a quarter, a half and three
+    quarters of the way along each chord (``slabOpticalDepthLevels``: the
+    steps' densities spread evenly over their lengths): (..., 4)."""
+    h, pair, counted, step_length, alive, _ = march
+    density = _march_density(spec, h, pair, shift, octave_mean, depth, shelf)
+    scale = np.where(alive, step_length, 0.0) * spec.density * optics.shadow_strength
+    per_step = np.where(counted, density, 0.0) * scale[..., None]
+    after = np.cumsum(per_step, axis=-1)
+    before = after - per_step
+    steps = counted.sum(axis=-1)
+    out = np.zeros(per_step.shape[:-1] + (4,))
+    out[..., 0] = after[..., -1]
+    for k in range(3):
+        boundary = 0.25 * (k + 1) * steps
+        i = np.minimum(np.floor(boundary).astype(np.int64), per_step.shape[-1] - 1)
+        at = lambda a: np.take_along_axis(a, i[..., None], axis=-1)[..., 0]  # noqa: E731
+        out[..., k + 1] = at(before) + at(per_step) * (boundary - i)
+    return np.where(alive[..., None], out, 0.0)
+
+
+def sun_depth_from_map(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    max_steps: int,
+    local_steps: int,
+    shift_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    octave_mean: float | None = None,
+    depth_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    spread_at: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> np.ndarray:
+    """The shader's ``cloudMapSunDepth``: the optical depth toward the sun from
+    points in the slab, as a cloud's lighting takes it from a cloud shadow
+    map: the sun march's first *local_steps* steps through the field itself
+    (the nearby clouds' shape), then the rest of the chord from the map's
+    levels (:func:`cloud_shadow_on_sphere` with ``levels``, at the point where
+    the sun's line enters the slab's base): the depth the chord accumulates
+    from where the local march ended to where the sun march (``optics.sun_steps``)
+    would have, linearly between the levels. 0 where that
+    line does not enter the base (a low sun), which the shader leaves to the
+    full sun march.
+
+    :param points: (m, 3) planet-frame positions inside the slab
+    :param sun_dirs: (m, 3) unit directions toward the sun (broadcast)
+    :param max_steps: the map's most steps a chord takes
+    :param local_steps: the local march's steps of ``optics.sun_step_length``
+    :returns: (m,) optical depth
+    """
+    points = np.asarray(points, dtype=np.float64)
+    dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
+    inner = radius + spec.slab[0]
+    outer = inner + spec.slab[1]
+    r = np.linalg.norm(points, axis=-1)
+    b = np.sum(points * dirs, axis=-1)
+    # Back along the line to where it left the base's sphere (a negative
+    # distance for a point in the slab under a sun above the horizon).
+    root = (inner - r) * (inner + r) + b * b
+    back = -b + np.sqrt(np.maximum(root, 0.0))
+    valid = (root > 0.0) & (back < 0.0) & (r > inner) & (r < outer)
+    entry = points + dirs * back[..., None]
+    levels = cloud_shadow_on_sphere(
+        volume, spec, optics, entry, dirs, radius, max_steps,
+        shift_at=shift_at, octave_mean=octave_mean, levels=True,
+        depth_at=depth_at, spread_at=spread_at,
+    )  # fmt: skip
+    # The chord from the entry to the slab's top
+    r_e = np.linalg.norm(entry, axis=-1)
+    b_e = np.sum(entry * dirs, axis=-1)
+    chord = -b_e + np.sqrt(np.maximum((outer - r_e) * (outer + r_e) + b_e * b_e, 0.0))
+    if spec.min_top < 1.0 and depth_at is not None:
+        chord = _chord_to_top(spec, radius, entry, dirs, chord, depth_at, spread_at)
+    reach = local_steps * optics.sun_step_length
+    # Out to where the sun march would have reached (its steps), no farther
+    window = max(optics.sun_steps - local_steps, 0) * optics.sun_step_length
+    xs = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+    ys = np.stack(
+        [np.zeros_like(levels[..., 0]), *(levels[..., k] for k in (1, 2, 3, 0))], -1
+    ).reshape(-1, 5)
+    safe = np.maximum(chord, 1e-9).ravel()
+
+    def accumulated(distance):
+        """The depth up to *distance* along the chord, linearly between the
+        levels (the shader's ``cloudLevelDepth``)."""
+        u = np.clip(distance.ravel() / safe, 0.0, 1.0)
+        return np.array([np.interp(f, xs, y) for f, y in zip(u, ys)])
+
+    tail = (accumulated(-back + reach + window) - accumulated(-back + reach)).reshape(
+        back.shape
+    )
+    local = sun_optical_depth_on_sphere(
+        volume,
+        spec,
+        replace(optics, sun_steps=local_steps),
+        points,
+        dirs,
+        radius,
+        shift=0.0 if shift_at is None else shift_at(entry),
+        octave_mean=octave_mean,
+    )
+    return np.where(valid, local + tail, 0.0)
+
+
+#: cloud_field.glsl's CLOUD_FAR_STEP and CLOUD_FAR_STEPS: the far segment's
+#: steps (:func:`far_cloud_depth`), metres, and their most.
+CLOUD_FAR_STEP = 600.0
+CLOUD_FAR_STEPS = 12
+
+
+def far_cloud_depth(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    reach: float,
+    shift_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    octave_mean: float | None = None,
+    depth_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    spread_at: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> np.ndarray:
+    """The shader's ``cloudFarDepth``: the clouds along the sun's ray from
+    points (in or under the slab) past their own march (``sun_steps`` of
+    ``sun_step_length``) out to *reach* metres, or to where the ray leaves
+    the slab's top, in steps of about :data:`CLOUD_FAR_STEP`, the weather
+    (and the cell octave) taken where the segment starts.
+
+    :param volume: the noise octave (quantised, to match the GPU)
+    :param spec: a resolved field (the billboards' layer's)
+    :param optics: its optics (its march, step and shadow strength)
+    :param points: (..., 3) planet-frame positions
+    :param sun_dirs: (..., 3) unit directions toward the sun (broadcast)
+    :param radius: sea-level radius, metres
+    :param reach: how far along the ray, metres (0: nothing)
+    :param shift_at: the weather's fbm shift at planet-frame positions
+        ((m, 3) -> (m,)), taken where the segment starts; None = none
+    :param octave_mean: the noise's mean; None = *volume*'s
+    :param depth_at: the convective depth there, the same way; None = 0
+    :param spread_at: the anvil shelf's spread there, the same way; None =
+        no shelf
+    :returns: (...) optical depth
+    """
+    _require_resolved(spec)
+    points = np.asarray(points, dtype=np.float64)
+    dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
+    near = max(optics.sun_steps, 0) * optics.sun_step_length
+    base, thickness = spec.slab
+    outer = radius + base + thickness
+    r = np.linalg.norm(points, axis=-1)
+    b = np.sum(points * dirs, axis=-1)
+    leave = -b + np.sqrt(np.maximum((outer - r) * (outer + r) + b * b, 0.0))
+    end = np.minimum(reach, leave)
+    alive = (r < outer) & (end > near) & (reach > near)
+    steps = np.clip(np.ceil((end - near) / CLOUD_FAR_STEP), 1, CLOUD_FAR_STEPS)
+    step_length = np.where(alive, end - near, 0.0) / steps
+    start = points + dirs * near
+    k = np.arange(CLOUD_FAR_STEPS)
+    positions = (
+        start[..., None, :]
+        + dirs[..., None, :] * ((k + 0.5) * step_length[..., None])[..., None]
+    )
+    h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
+    coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    pair = fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
+
+    def at(sample):
+        if sample is None:
+            return np.zeros(points.shape[:-1])
+        return np.reshape(sample(start.reshape(-1, 3)), points.shape[:-1])
+
+    convective = at(depth_at)
+    origin = start * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    cell = cell_shift(volume, spec, origin, convective, octave_mean)
+    shelf = None
+    if spec.anvil and spread_at is not None:
+        shelf = (at(spread_at), cell)
+    density = _march_density(
+        spec, h, pair, at(shift_at) + cell, octave_mean, convective, shelf
+    )
+    density = np.where(k < steps[..., None], density, 0.0).sum(axis=-1)
+    depth = density * step_length * spec.density * optics.shadow_strength
+    return np.where(alive, depth, 0.0)
+
+
+def ground_shadow_table(
+    volume: np.ndarray,
+    spec: DensityField,
+    optics: CloudOptics,
+    radius: float,
+    shift_table: ArrayLike,
+    max_steps: int = 8,
+    octave_mean: float | None = None,
+    cosines: int = 32,
+    coverages: int = 17,
+    columns: int = 1024,
+    seed: int = 0,
+) -> np.ndarray:
+    """What the clouds' shadow on the ground (:func:`cloud_shadow_on_sphere`)
+    is on average, by the sun's elevation and the weather's coverage: where
+    a pixel of ground spans several clouds, the shadow is this, not its
+    detail (which would sparkle). The axes are :func:`deck_light_table`'s.
+
+    :param volume: the noise octave (quantised, to match the GPU)
+    :param spec: the deck's resolved field
+    :param optics: the deck's optics
+    :param radius: sea-level radius, metres
+    :param shift_table: coverage to fbm shift (:func:`weather.shift_table`)
+    :param max_steps: the march's most steps
+    :param octave_mean: the noise's mean; None = *volume*'s
+    :param cosines: sun cosines at the ground, evenly over
+        [:data:`DECK_LIGHT_COS_MIN`, 1] (none below the horizon)
+    :param coverages: weather coverages, evenly over [0, 1]
+    :param columns: ground points averaged, spread over the planet
+    :param seed: the sun's azimuth at each point
+    :returns: (coverages, cosines) float32: the mean of ``exp2(-depth)``
+    """
+    from world_builder.clouds.weather import coverage_to_shift
+
+    _require_resolved(spec)
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
+    up = _fibonacci_dirs(columns)
+    reference = np.where(
+        (np.abs(up[:, 2]) < 0.9)[:, None], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]
+    )
+    east = np.cross(reference, up)
+    east /= np.linalg.norm(east, axis=1, keepdims=True)
+    north = np.cross(up, east)
+    azimuth = np.random.default_rng(seed).uniform(0.0, 2.0 * np.pi, columns)
+    level = np.cos(azimuth)[:, None] * east + np.sin(azimuth)[:, None] * north
+    mu = np.linspace(DECK_LIGHT_COS_MIN, 1.0, cosines)
+    lit = np.maximum(mu, 0.0)  # the sun at the horizon at most
+    side = np.sqrt(1.0 - lit * lit)
+    sun = lit[:, None, None] * up[None] + side[:, None, None] * level[None]
+    ground = np.broadcast_to(up * radius, sun.shape)
+    march = _cloud_shadow_samples(volume, spec, optics, ground, sun, radius, max_steps)
+    shifts = coverage_to_shift(
+        np.linspace(0.0, 1.0, coverages), np.asarray(shift_table)
+    )
+    table = np.empty((coverages, cosines), dtype=np.float32)
+    for row, shift in enumerate(shifts):
+        depth = _cloud_shadow_depth(spec, optics, march, shift, octave_mean)
+        table[row] = np.exp2(-depth).mean(axis=1)
+    table[:, mu < 0.0] = 0.0  # below the horizon: the planet's shadow
+    return table
 
 
 #: The lowest sun cosine (at the cloud) of :func:`deck_light_table`: below
@@ -1058,10 +1533,14 @@ def deck_light_table(
 
 def build_deck_light_texture(table: np.ndarray) -> Texture:
     """A :func:`deck_light_table` as an RG32F 2D texture (x: the sun's
-    cosine, y: the coverage), linearly filtered and clamped."""
-    coverages, cosines, _ = table.shape
+    cosine, y: the coverage), linearly filtered and clamped; with a third
+    channel (the ground's shadow, :func:`ground_shadow_table`), RGB32F."""
+    coverages, cosines, channels = table.shape
     tex = Texture("cloud_deck_light")
-    tex.setup_2d_texture(cosines, coverages, Texture.T_float, Texture.F_rg32)
+    layout = Texture.F_rgb32 if channels == 3 else Texture.F_rg32
+    tex.setup_2d_texture(cosines, coverages, Texture.T_float, layout)
+    if channels == 3:
+        table = table[..., ::-1]  # Panda keeps an RGB texture's RAM image as BGR
     tex.set_ram_image(np.ascontiguousarray(table, dtype=np.float32).tobytes())
     tex.set_magfilter(SamplerState.FT_linear)
     tex.set_minfilter(SamplerState.FT_linear)

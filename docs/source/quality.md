@@ -163,6 +163,13 @@ labels and ranges below are what the schema gives.
 
 ### `clouds`: Clouds (`CloudSettings`)
 
+The low clouds are raymarched at every preset (`renderer`, a rebuild knob that
+a preset does not change; "Billboards" selects the billboard renderer). The
+march's own knobs are `march_steps` (24, 40, 64, 96) and `march_resolution`
+(a quarter at LOW and MID, a half at HIGH and ULTRA); the billboard knobs below
+(`count_scale`, overlaps, `shell_octaves`, `shells`, `interior_growth`,
+`half_resolution`) apply to the billboards only.
+
 | Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
 |---|---|---|---|---|---|---|---|
 | `count_scale` | Billboards | rebuild | 0.1 to 4 x | 0.25 | 0.5 | 1 | 2 |
@@ -208,6 +215,19 @@ labels and ranges below are what the schema gives.
 | `texture_size` | Rock texture size | restart | 256, 512, 1024, 2048 px | 256 | 512 | 1024 | 2048 |
 | `terrain_min_radius` (advanced) | Detailed rocks from | live | 50 to 5000 m | 200 | 200 | 200 | 200 |
 | `max_terrain_rocks` | Detailed rocks | live | 0 to 32 | 0 | 4 | 8 | 16 |
+
+### `shadows`: Shadows (`ShadowSettings`)
+
+| Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
+|---|---|---|---|---|---|---|---|
+| `cloud_shadow_steps` | Cloud shadows | live | 0 to 16 samples | 0 | 4 | 8 | 12 |
+| `terrain_map_size` | Mountain shadows | rebuild | off, 256, 512, 1024, 2048 px | 256 | 512 | 1024 | 2048 |
+| `local_map_size` | Nearby ridges' shadows | rebuild | off, 512, 1024, 2048 nodes | off | 512 | 1024 | 2048 |
+| `local_map_spacing` (advanced) | Nearby ridges' detail | rebuild | 20 to 200 m | 50 | 50 | 50 | 50 |
+| `cloud_map_size` | Cloud shadow maps | rebuild | off, 512, 1024, 2048 px | off | 512 | 1024 | 2048 |
+| `cloud_far_reach` | Clouds' long shadows | live | 0 to 10000 m | 0 | 2000 | 4000 | 8000 |
+| `object_shadows` | Objects' shadows | live | on / off | off | on | on | on |
+| `caster_map_size` | Objects' shadow detail | rebuild | 512, 1024, 2048, 4096 px | 512 | 1024 | 2048 | 4096 |
 
 ## Notes
 

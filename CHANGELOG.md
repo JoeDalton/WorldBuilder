@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] 2026-11-04
+
 ### Added
 
 - Clouds by genus (`world_builder.clouds.genera`,
@@ -36,26 +38,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The raymarch is the default low-cloud renderer at every quality preset
+  (`CloudSettings.renderer = "march"`; billboards stay selectable, a
+  rebuild). MID now marches at a quarter of the view's resolution (40 steps).
+  The sea's reflection still shows the deck alone (no shapes, no stratus);
+  a cheap mirror march is described in docs/source/clouds.md#the-raymarch.
+- Faster raymarch (docs/source/performance.md "Phase 4.2"): the billows share
+  the column's noise, the resolve returns early in clear sky, the march stops
+  at 4 % transmittance and its steps grow in dense cloud (about 0.4-1.2 ms at
+  1440p, half resolution). A quarter resolution meets the cost target
+  (2.1-2.3 ms plain, 2.5-3.1 ms genera); HIGH and ULTRA keep a half.
 - `CirrusSpec.base` defaults to 11 km (was 8 km): over the cumulonimbus's
   cap, 10.5 km.
 - The LOW and MID cloud presets draw the clouds at half resolution
   (`CloudSettings.half_resolution`): 2.5-2.9 times faster frames near big
   clouds on a weak GPU. HIGH and ULTRA keep full resolution.
 
-- Raymarched low clouds, an experimental second renderer
-  (`CloudSettings.renderer = "march"`, `world_builder.clouds.march`,
+- Raymarched low clouds, now the default renderer at every preset
+  (`CloudSettings.renderer = "march"`; `"billboards"` stays selectable; `world_builder.clouds.march`,
   docs/source/clouds.md#the-raymarch; #45).
   - `CloudMarch` draws the billboards' field, weather, lighting and far
     field per pixel, from the camera to the scene's depth: a game's model
     inside a cloud is hidden by just the cloud in front of it, and the
     camera inside a cloud sees it all around. It reaches orbit with no deck.
-  - One pixel of every 2 × 2 block is traced each frame and gathered into
+  - One pixel of every 2 × 2 block (4 × 4 at a quarter resolution: LOW and MID) is traced each frame and gathered into
     the full resolution by reprojection (`march_resolution`, `march_steps`,
     stepped by the quality presets). The result is laid over the scene at
     the cloud's own depth, so models cut it at full resolution.
   - 1.3-2 times the billboards' cost over open sky on a weak GPU, the same
     inside the slab, two-fifths in a dense cloud
     (docs/source/performance.md §20).
+  - The raymarch draws the genera (`CloudMarch(genera=...)`, one pass of two
+    families, `march.family_segments`), and `PlanetClouds` no longer forces
+    billboards with them; both families cast their shadows.
+  - The raymarch is steadier at every preset: a blue-noise jitter at the march's
+    pixel (the gradient noise at the view's stride put a lattice of diagonal
+    stripes in motion), features finer than a step fade to their means (the far
+    shimmer), the resolve's statistics and reprojection distance are smooth
+    across a block, and a pixel on fresh samples takes their smooth mean
+    (`march.blue_noise`, `march.SMOOTHING`). `cloud_bench.py --jitter`,
+    `--passes` and `--steps-sweep` measure it; debug bits 128 and 256.
+  - The raymarch casts a cloud shadow on the ground, sea and models, as the
+    billboards do (`CloudMarch.shadow_layer`, `shadow_field`,
+    `bind_shadow_inputs`, `sun_visibility`), and reads the cloud shadow maps'
+    levels for its own lighting (`PlanetClouds.bind_maps`; the maps' texels
+    hold the depth a quarter, a half and three quarters of the way along the
+    chord, `noise.cloud_shadow_on_sphere(levels=True)`).
 - `Knob.kept`: a settings knob that is a choice rather than a level of
   quality. Moving to a preset (`WorldSettings.with_level`,
   `with_section_level`, `QualitySettings.at_level`) keeps it, and it makes
@@ -101,6 +129,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `cirrus_dusk` poses.
   - Its cost is not measured yet: see docs/source/performance_backlog.md,
     "Cirrus".
+- `world_builder.shadows`: what hides the sun from a point, for every
+  receiver (docs/source/shadows.md). Its first term is the eclipse: each
+  body hides the sun's disc for the others, with a physical penumbra
+  (`shadows.glsl`'s `eclipseVisibility`, the covered share of the sun's
+  disc). It darkens the terrain and far water, the cloud billboards and
+  deck, the air's samples (the sky and the aerial perspective), and the
+  sky light (down to `ECLIPSE_SKY_FLOOR`). `Shadows` feeds the shared
+  uniforms, as `Atmospheres` does; `Shadows.eclipse` is its CPU twin, which
+  `World.light_at` (Panda3D's lights, the sea's near look) now applies: an
+  airless moon in its planet's shadow goes dark. `Shadows.set_sun` works
+  out which bodies' shadows can reach which, so a view with no eclipse
+  costs about what it did (within ~0.2 ms). (#13)
+- Cloud shadows (#11): the planet's clouds shade the terrain, the far
+  water and the near sea, marched per pixel through the deck's density
+  field toward the sun (`cloud_field.glsl`'s `cloudShadowDepth`, its CPU twin
+  `noise.cloud_shadow_on_sphere`), so the shadow follows the clouds drawn
+  and the sun. `CloudVolume.bind_shadow_inputs(node)` lets a node's
+  shaders read them, and `PlanetClouds.bind_shadow_inputs` its volume's,
+  again after a change of renderer (`World` binds each body's clouds to
+  its terrain; a raymarched volume casts none yet);
+  `CloudVolume.sun_visibility` (and `PlanetClouds'`) is the CPU side, in
+  `World.sun_visibility` and `lights_at`. The march takes the genera's
+  weather (convective depth, cell octave, anvil shelf) where its chord
+  enters the slab. `PlanetClouds.bind_inputs(bind)` gives every layer's
+  shader more inputs (the eclipses: `World` binds them so). `ShadowSettings`
+  (`cloud_shadow_steps`) is a new `shadows` section of `WorldSettings`.
+  `Sea.set_light(light, sun=...)` takes the sun's share apart, which the
+  shadow dims per pixel. Far away and under a grazing sun the march gives
+  way to its mean (`noise.ground_shadow_table`), which neither sparkles
+  nor bands. F7 in the terrain demos cycles the shadows' preset.
+  `terrain_shots.py` gains `clouds_noon`, `clouds_low` and
+  `clouds_grazing`.
+- Mountain shadows (#11): each body's shadow ceiling cube map
+  (`world_builder.terrain.shadow_map`: per texel the lowest altitude from
+  which the sun clears every occluder, and how far the occluder is),
+  baked in the worker pool for each sun in one pass over a sun-aligned grid
+  (~2.3 s at 1024), its heights sampled once. `ShadowMap` (one per body in
+  `World`, `Body.shadow_map`) swaps it in when ready; shadows.glsl's
+  `terrainShadow` reads it with a physical penumbra, on the terrain (the
+  moon's craters too), the near sea and the clouds; its CPU twin is in
+  `World.sun_visibility` and `lights_at`. `ShadowSettings.terrain_map_size`
+  sets its size. `terrain_shots.py` gains `mountains_low`,
+  `mountains_orbit` and `moon_terminator`.
+- Nearby ridges' shadows (#11): `terrain.shadow_map.LocalShadowMap`, a 50 m
+  shadow map around the camera (owned by each body's `ShadowMap`) for the
+  occluders nearer than the global map's reach, sampled in the pool as the
+  camera moves a quarter of it and baked for each sun (~1 s);
+  `terrainShadow` takes the lesser of the two maps.
+  `ShadowSettings.local_map_size` and `local_map_spacing` set it.
+- The clouds' shadow from maps (#11): `clouds.shadow_map.CloudShadowMaps`
+  marches it once per texel of two maps around the camera (by where the
+  sun's ray enters the clouds' base) instead of once per pixel of ground,
+  drawn again when the camera has moved a quarter of a map or the sun has
+  turned. `ShadowSettings.cloud_map_size` sets them; `World` makes them for
+  a body with clouds (`Body.cloud_maps`).
+- Long cloud shadows (#11): with a low sun, each cloud billboard looks
+  past its own march toward the sun for the clouds kilometres away that
+  shade it (`cloud_field.glsl`'s `cloudFarDepth`, per vertex, its CPU twin
+  `noise.far_cloud_depth`). `ShadowSettings.cloud_far_reach` sets how far
+  (0: off). `terrain_shots.py` gains `dusk_in_clouds` and
+  `dusk_above_clouds`.
+- Models drawn as the world is (#13): `world_builder.objects`, a model
+  shader that decodes a model's colour, lights it as the terrain lights its
+  ground and tonemaps it alike, with the air in front, and shades it per
+  pixel by every world shadow (`model_light.glsl`'s `modelSunlight`: the
+  eclipses, the body's air, clouds and mountains). `World.track_light(node,
+  shader=True)` draws a model with it, by the inputs of the body nearest it
+  (`Body.models`, `ModelLighting`). On an airless body the sun sets at its
+  own horizon with a penumbra (`shadows.glsl`'s `ownShadow`, CPU twin
+  `Shadows.own_shadow`). The demos' test balls (now a white and a textured
+  one) use it; M switches them to Panda3D's lighting. `terrain_shots.py`
+  gains `ball_noon`, `ball_sunset`, `ball_eclipse`, `ball_cloud_edge`,
+  `ball_mountain_edge` and `--panda-lights`.
+- The mountains' shadow maps are baked on the GPU (#11): with a window,
+  `ShadowMap` (`output=`, which `World` passes) marches each texel of the
+  global cube map and each node of the local map toward the sun in a
+  fragment shader (`terrain.shadow_bake`), a band of rows a frame: a new
+  sun's maps within a few frames, not seconds, and the worker pool left
+  to the terrain. The CPU twins march the texels around a point
+  (`march_ceiling`, `march_local`). Without a window, the pool bakes as
+  before. `sky.starfield.texel_directions`.
+- Ring shadows (#13): a ring dims the sun crossing it, on its planet's
+  terrain, sea, clouds, air and models: a band of shadow with its ringlets
+  in it (`Shadows.add_ring`, `shadows.glsl`'s `ringVisibility`, CPU twin
+  `Shadows.ring_visibility`; its depth from its rocks and dust,
+  `asteroids.haze.ring_depth`). `World` adds every ring field's. The
+  bodies' shadows fall on the rocks and the haze (a planet's across its
+  ring). `terrain_shots.py` gains `ring_shadow_ground`,
+  `ring_shadow_orbit` and `ring_planet_shadow`.
+- Objects cast shadows (#13): a model tracked with
+  `World.track_light(node, cast=True)` shadows the terrain, the sea and
+  the models the model shader draws, itself too, through a sun-space depth
+  map fitted every frame to the casters' bounds
+  (`world_builder.shadows.casters.CasterMap`, `World.casters`; read by
+  `shadows.glsl`'s `casterShadow`, 3x3 hardware comparisons). Its pass
+  draws the casters alone (camera bit 20, `depth.CASTER_BIT`).
+  `ShadowSettings.object_shadows` and `caster_map_size` set it. The demos'
+  balls cast; `terrain_shots.py` gains `caster_pad`,
+  `caster_ship_on_ship`, `caster_self` and `caster_altitude`.
+- `World.track_light(node, cast=False)` / `untrack_light(node)`: a game's
+  model lit by the light where it is, not at the camera: its own Panda3D sun
+  and ambient lights (`world_builder.lights.TrackedLights`), set every
+  `update` in one vectorised call. `World.lights_at(points)` and
+  `World.sun_visibility(points)` give the light and the world's shadows at
+  many points at once (`Atmospheres.light_at`, `transmittance_to_sun`,
+  `in_shadow`, `twilight` and `depth_toward` take arrays). The demos' test
+  ball is tracked. (#13)
+- `SunLook.angular_radius` and `Sky(sun_angular_radius=)`: one sun size, the
+  disc the sky draws and every penumbra (`shadows.SUN_ANGULAR_RADIUS`,
+  0.55°). (#13)
+- `scripts/terrain_shots.py`: a pose's sun can be aimed at a body
+  (`AimedSun`), and four eclipse poses: `eclipse_ground`, `eclipse_total`,
+  `eclipse_orbit`, `lunar_eclipse`. (#13)
 - `world_builder.gravity.Gravity` and `World.gravity_field(g_constant)`: the
   bodies' raw gravity vector at many points at once, from point masses
   (`g = -G sum m (x - p) / |x - p|^3`, capped inside a body at its surface
@@ -196,8 +337,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   render's origin at the camera) and gains `--preset ring` and a far view
   (Home). (#14)
 
-### Changed
-
 - A planet's clouds are one part, `world_builder.clouds.planet.PlanetClouds`,
   with two layers named by how they are drawn:
   `clouds.sphere.SphericalClouds` is now `CloudVolume` (the low clouds:
@@ -248,6 +387,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   desert landform (sand seas, canyons by depth, mesas by relief), and the demos (`demo_terrain.py`, `demo_world.py`,
   `terrain_shots.py`) take `--planet PRESET`, `--seed N` and
   `--start LAT LON`.
+- The terrain demo's moon is 21,000 km out (was 10,000 km): as wide in the
+  sky as the sun, so it can eclipse it. (#13)
+- The terrain demos (`demo_terrain.py`, `demo_world.py`, and the shots and
+  flight bench built on them) take `--ring`: a small ring of dust and rocks
+  around the planet, in its equator's plane, 1.5 to 2.1 radii out
+  (`ring_spec`; off by default, so runs compare with earlier ones).
+  `terrain_shots.py --ring` adds its poses, `ring_ground` and `ring_orbit`.
+  (#13)
+- `sky.SUN_ANGULAR_RADIUS` moves to `world_builder.shadows` (`sky` still
+  imports it). (#13)
 - Asteroid fields without thresholds (#14):
   - each size class holds a ball of cells around the camera (not a box),
     moved by its difference and grown over frames (about 30,000 new cells a
@@ -435,7 +584,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `haze_distance` are ignored (the atmosphere hazes the sea). (#20)
 
 ### Fixed
-
+- Clouds no longer turn yellow/orange at the horizon, in the sea's
+  reflection and seen at a grazing angle from orbit, even at noon (#50): none
+  of them (raymarch, billboards, deck, cirrus) draws any air in front of
+  itself any more, as that air removed their blue and its in-scattered light
+  was too dim to restore it. Clouds therefore have no distance haze
+  (docs/source/atmosphere.md#clouds-at-the-horizon). `uCloudDebug` bit 2
+  (no atmosphere) is gone with it.
 - Planet clouds toward the horizon, and toward the limb from above, looked
   orange even with the sun overhead. The air in front of them leaves lit
   tops a little warm, and the clouds' own knee (the hue kept at every level,
@@ -446,6 +601,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   move or for the 15-frame fallback before being shown. (#20)
 - `flight_bench.py`'s descent stopped only over dry land; over a calm sea it
   flew on to its time limit. (#20)
+- A ring seen from the ground was drawn over the clouds (their billboards
+  write no depth, the ring's haze was drawn after them), veiling and
+  dimming them where it passed behind. Its haze is now split at its
+  planet's clouds' tops (`FieldHaze.set_clouds_top`,
+  `PlanetClouds.top_radius`, the cirrus's included): what lies beyond them
+  is drawn before them, and before the cirrus's far side. (#14)
+- `CloudVolume.sun_visibility` raised a `KeyError` once its cache of
+  shades had grown past its size, on a call with a cell already in it and
+  a new one (in flight, after a few thousand 25 m cells): the cache is now
+  dropped before the lookup, not in it. (#11)
 
 ## [0.2.0] 2026-10-23
 

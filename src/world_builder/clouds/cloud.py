@@ -230,11 +230,11 @@ class CloudSettings(QualitySettings):
     """What the clouds cost (:mod:`world_builder.quality`), for a planet's
     (:class:`sphere.CloudVolume`, and :class:`cirrus.CloudSheet` above it).
 
-    :ivar renderer: how the low clouds are drawn: ``"billboards"``
-        (:class:`sphere.CloudVolume`) or ``"march"``, a raymarch at a
-        fraction of the view's resolution (:class:`march.CloudMarch`, which
-        needs the split cameras). The knobs of the other renderer are
-        ignored. Rebuild
+    :ivar renderer: how the low clouds are drawn: ``"march"`` (the
+        default), a raymarch at a fraction of the view's resolution
+        (:class:`march.CloudMarch`, which needs the split cameras), or
+        ``"billboards"`` (:class:`sphere.CloudVolume`). The knobs of the
+        other renderer are ignored. Rebuild
     :ivar march_steps: most steps of the raymarch per pixel (it stops
         sooner once the cloud is opaque). Live
     :ivar march_resolution: the raymarch's resolution over the view's, per
@@ -263,12 +263,11 @@ class CloudSettings(QualitySettings):
     """
 
     renderer: str = knob(
-        "billboards",
+        "march",
         "Renderer",
         REBUILD,
         choices={"Billboards": "billboards", "Raymarch": "march"},
-        help="Billboards, or a raymarch at a fraction of the resolution "
-        "(experimental).",
+        help="A raymarch at a fraction of the resolution, or billboards.",
         kept=True,
     )
     march_steps: int = knob(
@@ -390,6 +389,7 @@ class CloudSettings(QualitySettings):
             "overlap_far": 1.5,
             "shell_octaves": (4, 4, 3, 3),
             "march_steps": 40,
+            "march_resolution": 0.25,
             "interior_growth": True,
             "half_resolution": True,
         },

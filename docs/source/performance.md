@@ -440,7 +440,7 @@ GPU in series, and the difference between two runs is the difference in
 work. Its options: `--size`, `--offscreen`, `--quality
 low|mid|high|ultra` (the whole world's preset), a `--<part>-quality` per
 part over it (`--clouds-quality`, `--ocean-quality`, ...), `--no-clouds`, `--cloud-debug BITS` (cloud.frag's `uCloudDebug`: 1 no
-sun march, 2 no atmosphere, 4 two octaves only, 8 flat colour), `--frames
+sun march, 4 two octaves only, 8 flat colour), `--frames
 N`. `flight_bench.py` takes the same.
 
 ### Cheaper clouds, and the weather
@@ -1112,6 +1112,290 @@ before and after it (MID with half resolution, its preset's):
 
 Under the anvil the sheet fills the view: 1.6 times the frame at MID, 2.4
 at HIGH. Elsewhere it is a few milliseconds at most.
+
+## 23. The raymarch on a strong GPU: the baseline (#45)
+
+Before reworking the raymarch ([the raymarch](clouds.md#the-raymarch)), the
+same comparison as §20–22 on a **GTX 1070** (Linux, 1600×900, offscreen, one
+session), with `scripts/cloud_bench.py`'s new columns: the frame's 95th
+percentile, and with `--stability 16` the clouds' **spread** (each cloud
+pixel's brightness range over 16 frames, 8-bit steps: mean / 99th
+percentile) and **grid** (how much one pixel of each march block stands out
+from the others, 0 = none; the billboards measure their own texture's
+0.003–0.05 at the same block). Cloud cost = the frame less the frame with
+the clouds hidden (0.7–1.6 ms).
+
+**Cumulus, HIGH, still** (cloud cost ms; spread mean / p99; grid):
+
+| Pose | Billboards | March | March spread | March grid |
+|---|---|---|---|---|
+| Below | 1.92 | 3.08 | 2.8 / 18 | 0.066 |
+| Start | 2.67 | 4.84 | 2.0 / 14 | 0.042 |
+| Inside the slab | 4.95 | 6.50 | 1.3 / 15 | 0.035 |
+| Above | 3.23 | 4.77 | 2.8 / 16 | 0.057 |
+| 20 km up | 1.64 | 2.45 | 8.6 / 57 | 0.135 |
+| Orbit | 2.21 | 1.62 | 0.4 / 3 | 0.006 |
+| Sunset | 2.88 | 3.57 | 1.2 / 8 | 0.054 |
+| A model in a dense cloud | 10.92 | 6.95 | 0.7 / 8 | 0.009 |
+
+The billboards' still frames do not change (spread 0). At MID the
+billboards (half resolution, a quarter of the billboards) cost 0.7–2.3 ms;
+the march, whose resolution MID does not lower, 3.1–5.5 ms, as unsteady as
+at HIGH (grid 0.07 everywhere).
+
+**Moving** (10 m a frame, HIGH): the view's own change dominates the
+spread for both (billboards 6–12 mean, march 5–13), but the march's
+**grid** rises to 0.13–0.29 (billboards 0.01–0.02, the sea's glints
+0.21 at `below`): the dot grid seen in flight.
+
+**Genera, billboards** (the march cannot draw them yet): HIGH 2.0–2.7 ms
+far off, 7.8 ms over the anvil and in the congestus, 12.3 / 14.0 ms above /
+under the stratus, 21.5 ms between the towers, 27.3 ms under the anvil. MID
+(half resolution) 0.9–4.3 ms everywhere.
+
+**Where the march's time goes** (HIGH, cloud cost ms):
+
+| Pose | Resolution ¼ (1/16 traced) | ½ (1/4, HIGH's) | 1 (all) | No sun march | No billows | Steps a ray |
+|---|---|---|---|---|---|---|
+| Below | 2.19 | 3.08 | 7.84 | 3.03 | 2.68 | 38 |
+| Start | 2.53 | 4.84 | 12.91 | 4.30 | 4.09 | 45 |
+| Inside | 3.13 | 6.50 | 18.90 | 5.65 | 5.45 | 39 |
+| 20 km up | 1.51 | 2.45 | 5.86 | 2.16 | 2.16 | 9 |
+| Orbit | 1.54 | 1.62 | 3.06 | 1.64 | 1.66 | 5 |
+| Model in cloud | 3.39 | 6.95 | 20.49 | 5.55 | 5.57 | 26 |
+
+- **A fixed ~2.2 ms a frame** (the cost's intercept against the traced
+  share; orbit's 1.5 ms with 5 steps): the depth pass per range, the
+  resolve at full resolution, the composite, the near range's own set.
+  At HIGH that is 35–45 % of the march.
+- **The traced pixels**: ~11–17 ms a frame's worth of them inside the slab.
+- **The lighting is not where the time goes on this GPU**: the per-sample
+  sun march is 0.4–1.4 ms of it, the billows 0.4–1.4 ms, the air nothing
+  measurable.
+
+**In the world** (`flight_bench.py --flight low`, HIGH, frame ms mean /
+p95): billboards 12.2 / 21.4, march 11.2 / 19.1. Low flight is CPU-bound on
+this machine: the march spares the main thread the billboards' tiles, sorts
+and uploads (the demo's update 6.7 → 5.4 ms mean).
+
+So on a strong GPU the march's case is the big clouds (two-thirds of the
+billboards' cost in a dense cloud, and the genera's 12–27 ms close up at
+HIGH) and the main thread; over fair-weather cumulus it costs 1.3–1.8 times
+the billboards, a third of it fixed. Its unsteadiness (still frames that
+flicker, a block grid in motion) is the first thing to fix.
+
+### Steadier: the reconstruction (Phase 1)
+
+What made the march unsteady, and what changed (clouds.md, "The
+raymarch"): the jitter moved on every frame while a pixel was traced once
+every 4 (it skipped through the sequence: its visits never stratified the
+step), so it moves on per visit; the resolve copied a block's one sample
+into the pixels with no history, reprojected the others by the block's
+distance, and gave the traced pixel a fixed third over its history, so
+1 pixel in 4 stood apart every frame: now every pixel blends the four
+nearest samples by the nearest's Gaussian weight, reprojects by its own
+distance, clamps its history to ±1.25 σ of the 3 × 3 samples, and counts
+its samples (this frame's share 1 / (count + 1), down to 0.05); far off,
+the fine octaves and the billows fade to their means where a pixel cannot
+resolve them, and a stretch of the slab takes 8 samples at least. The near
+range gathers too.
+
+The **grid** below is absolute now (the largest class RMS less the
+smallest, in 8-bit steps: the ratio of the first table rose as the noise
+fell). Same session, HIGH, cloud cost ms; spread (mean / p99) still; grid
+still and moving 10 m a frame:
+
+| Pose | Cost, old | Cost, new ½ | Cost, new ¼ | Spread old | Spread new ½ | Spread new ¼ | Grid moving old / ½ / ¼ |
+|---|---|---|---|---|---|---|---|
+| Below | 3.98 | 3.81 | 2.45 | 2.8 / 18 | 0.9 / 8 | 0.8 / 4 | 0.32 / 0.33 / 0.51 (the sea's glints) |
+| Start | 5.35 | 5.49 | 3.08 | 2.0 / 14 | 0.7 / 7 | 0.6 / 3 | 0.19 / 0.06 / 0.06 |
+| Inside | 6.43 | 7.26 | 3.48 | 1.3 / 15 | 0.5 / 5 | 0.4 / 3 | 0.09 / 0.05 / 0.06 |
+| Above | 5.14 | 5.36 | 2.86 | 2.8 / 15 | 0.9 / 6 | 0.8 / 4 | 0.35 / 0.09 / 0.07 |
+| 20 km up | 2.50 | 2.84 | 1.55 | 8.6 / 57 | 1.6 / 20 | 1.4 / 11 | 1.06 / 0.29 / 0.22 |
+| Model in cloud | 6.93 | 7.62 | 3.78 | 0.7 / 8 | 0.2 / 1 | 0.2 / 1 | 0.01 / 0.07 / 0.08 |
+
+(½ and ¼: `march_resolution`, a quarter and a sixteenth of the pixels
+traced a frame.) The cost moved within this machine's drift (the old
+pipeline measured again in one session with the new: 7.19 / 7.15 ms
+inside, 2.04 / 1.98 at orbit). Tried and dropped: the clamp's statistics
+from the 4 bilinear samples instead of the 3 × 3 (twice the spread, no
+faster); steps half as long far off (`STEP_GROWTH` 0.005: the 20 km sparkle
+gone too, but 0.4–0.9 ms dearer and longer rays stretched to the budget).
+
+At **a sixteenth** the march is steadier than it was at a quarter, and
+costs 1.5–3.8 ms: what the billboards cost at HIGH (1.6–4.9; 10.9 in a
+dense cloud). Moving, its detail is coarser (each pixel's samples come at
+a quarter of the resolution until the history fills in): to judge in
+flight before any preset changes.
+
+**Steadier, second pass.** The first pass left a light jitter at ¼, a faint
+grid in flight, and clouds that came in thin when the camera moved fast.
+Causes found in the resolve: the Gaussian weight by the nearest sample's
+distance was itself block-periodic (a traced pixel took a whole sample, its
+neighbours a few per cent, so the samples' noise sat on the lattice); and the
+clamp's width, from 9 samples that often agree, clamped the history by the
+steps' own noise and started its count over, feeding the noise. Now the share
+is the same for every pixel, the clamp has a floor (0.04 + 15 % of the mean)
+**while the view is still** (`uStill`: with the floor on in motion, a cloud
+coming closer kept its thin look: the error against the converged frame was
+twice the old pipeline's, with a bias towards transparent), a clamp takes a
+count down to 4 at least, and `MIN_WEIGHT` is 0.03. RTX 3070, 2560 × 1440, ¼,
+still, 30 frames (spread mean / p99, grid), before → after: start 0.73 / 4.1,
+0.020 → 0.56 / 3.0, 0.012; inside 0.48 / 3.1, 0.026 → 0.30 / 2.1, 0.025; above
+0.99 / 4.8, 0.056 → 0.78 / 3.4, 0.054; 20 km up 2.10 / 15.9, 0.184 → 1.61 /
+9.4, 0.045. The cost is unchanged (start 1.9–2.2 ms, 20 km 1.1–1.2 ms). In
+flight at 80 m a frame (`lag.py`-style: the last moving frame against the
+converged one, RMS in 8-bit steps) the new pipeline equals the old (start
+1.85 vs 1.86, above 3.41 vs 3.35).
+Tried and dropped: a bicubic history read (sharper in motion, but its error
+against the converged frame rose by a quarter and it biased towards
+transparent); no distance weight with a wider Gaussian (in between); a
+Gaussian-smoothed reconstruction for pixels taking a whole frame (no change).
+
+**The streaks in the clouds were the billows' noise** (clouds.md, "The
+raymarch"): value noise has its lattice's planes in it, and the ridged billows
+(`1 - |2n - 1|`) showed them as parallel streaks across every cloud, all one
+way, which no resolve could remove: with the billows off (`--cloud-debug 32`)
+or the flat colour (8) the cloud was smooth or the streaks stayed in its
+alpha; with the billow noise sampled through a rotation off the axes most
+were gone, and the last ones were the ridge itself: `1 - |2n - 1|` carves
+sheets, not lumps, so the billows are now two layers of the raw noise (clouds.md). The same planes are in the field's own octaves (the billboards share
+them); they are fainter, being larger and blobbier, and not changed here.
+`cloud_bench.py --turn D` yaws the view D degrees a frame, for the
+reprojection under rotation; `terrain_shots.py --pose ground_up` is the demo's
+start looking up, where the streaks were seen.
+
+### The raymarch with genera (Phase 3)
+
+RTX 3070, 2560 × 1440, HIGH (the march at **half** resolution, 64 steps),
+`cloud_bench.py --genera`, cloud cost in ms (march / billboards; at a quarter
+the march costs about 3.0 ms between the towers and 3.3 under the anvil):
+
+| Pose | March | Billboards |
+|---|---|---|
+| cb_far | 3.76 | 1.35 |
+| cb_high | 3.25 | 1.55 |
+| anvil_top | 3.65 | 5.87 |
+| between_towers | 7.56 | 16.64 |
+| under_anvil | 8.79 | 21.42 |
+| in_congestus | 7.22 | 5.65 |
+| stratus_above | 8.01 | 9.17 |
+| stratus_below | 5.07 | 10.48 |
+
+The march wins where the genera fill the view (2-2.4 times cheaper under and
+between the towers) and loses over a distant sky, as without genera (§23). It
+draws both families in one pass: the tower's anvil, which billboards render as
+patches, is smooth.
+
+### Phase 4 baseline: where the time goes, and the jitter per preset
+
+**The cost** (RTX 3070, 2560 × 1440, HIGH, pipelined frames, scene of
+`terrain_shots.py`): the frame without clouds is 2.7-4.0 ms, with the march
+6.2-9.2 ms (with genera 8.8-12.8 ms), against 6.25 ms for 160 fps; the frame is
+GPU-bound (the CPU's step is 3.7 ms). Of the clouds' cost the march pass is
+75-80 % (the far range's layer is nearly all of it; the near layer adds about
+0.7 ms of fixed cost even over empty sky), the resolve 0.3-0.5 ms, the depth
+passes 0.1-0.5 (and 0.4-0.5 ms of CPU: the terrain is drawn again per range),
+the composite 0.05-0.4, the cirrus 0.15-0.5, the ground shadows 0.3-1.5. In the
+march pass (start pose, half resolution): fixed passes 1.26 ms, per-pixel
+set-up 0.7, lighting 0.57, billows 0.7, the steps the rest; **88-98 % of the
+steps are in empty air** (`--cloud-debug 128`: red empty, green cloud, blue the
+budget). Measure with `cloud_bench.py --renderer march --passes`, `--steps-sweep`
+and `--cloud-debug 128 | 256` (256: no lighting).
+
+**The jitter** (`cloud_bench.py --renderer march --jitter --quality L`, 1600 ×
+900, a flight of 10 m and 0.3 degrees a frame, 30 frames; **flicker** is the
+RMS of the preset's difference from the same flight at full resolution, from
+frame to frame; grid and spread as above; sharp the gradient ratio):
+
+| Preset (res, steps) | Pose | spread / p99 | still grid | err | flicker | moving grid | sharp |
+|---|---|---|---|---|---|---|---|
+| LOW (¼, 24) | start | 1.17 / 5.6 | 0.035 | 2.42 | 2.09 | 0.059 | 0.92 |
+| | above | 2.94 / 15.6 | 0.075 | 3.68 | 2.38 | 0.093 | 0.93 |
+| | high | 1.38 / 7.2 | 0.084 | 3.26 | 3.79 | 0.087 | 0.88 |
+| | inside | 0.86 / 3.1 | 0.086 | 3.50 | 1.65 | 0.060 | 1.00 |
+| MID (½, 40) | start | 0.80 / 3.1 | 0.008 | 1.14 | 1.35 | 0.023 | 0.98 |
+| | above | 1.23 / 4.4 | 0.037 | 2.24 | 1.91 | 0.034 | 1.00 |
+| | high | 1.23 / 6.4 | 0.051 | 1.78 | 2.39 | 0.071 | 0.95 |
+| HIGH (½, 64) | start | 0.65 / 2.2 | 0.010 | 0.79 | 1.00 | 0.022 | 0.98 |
+| | above | 0.90 / 2.4 | 0.038 | 1.12 | 1.21 | 0.022 | 0.98 |
+| | high | 1.41 / 9.1 | 0.054 | 2.06 | 2.80 | 0.076 | 0.94 |
+| ULTRA (½, 96) | high | 1.42 / 9.3 | 0.054 | 2.06 | 2.81 | 0.076 | 0.94 |
+| genera LOW | between_towers | 1.97 / 6.7 | 0.046 | 14.93 | 5.03 | 0.253 | 0.91 |
+| | under_anvil | 1.39 / 4.1 | 0.045 | 11.05 | 4.83 | 0.410 | 1.16 |
+| genera HIGH | between_towers | 1.23 / 4.1 | 0.038 | 4.34 | 3.03 | 0.255 | 0.98 |
+| | under_anvil | 0.82 / 3.1 | 0.028 | 2.52 | 1.93 | 0.276 | 1.00 |
+
+Still frames are steady (spread near 1); the shimmer is in motion, worst at LOW
+and with genera, and at 20 km (`high`) at every preset: more steps (ULTRA)
+change nothing there, so it is not the sampling along the ray but the
+accumulation and the far edges. The genera's moving grid (0.25-0.41, a
+lattice) is the largest single pattern. These are the numbers Phase 4's
+steadiness work has to beat (MARCH_PLAN).
+
+### Phase 4.1: the jitter, after
+
+Same flights, 1600 × 900 (`cloud_bench.py --renderer march --jitter`; the *err*
+and *flicker* columns compare with a full-resolution render whose detail now
+differs from the preset's, so they no longer isolate noise: read the still
+spread, the grids, the pictures). Before → after:
+
+| Preset | Pose | still spread / p99 | still grid | moving grid |
+|---|---|---|---|---|
+| LOW | start | 1.17 / 5.6 → 0.59 / 2.1 | 0.035 → 0.029 | 0.059 → 0.047 |
+| | above | 2.94 / 15.6 → 0.95 / 3.1 | 0.075 → 0.098 | 0.093 → 0.080 |
+| | high | 1.38 / 7.2 → 1.02 / 3.3 | 0.084 → 0.056 | 0.087 → 0.042 |
+| MID | high | 1.23 / 6.4 → 0.74 / 2.4 | 0.051 → 0.032 | 0.071 → 0.026 |
+| HIGH | start | 0.65 / 2.2 → 0.34 / 1.7 | 0.010 → 0.006 | 0.022 → 0.024 |
+| | high (20 km) | 1.41 / 9.1 → 0.74 / 2.4 | 0.054 → 0.032 | 0.076 → 0.026 |
+| ULTRA | high | 1.42 / 9.3 → 0.73 / 2.4 | 0.054 → 0.032 | 0.076 → 0.026 |
+| genera LOW | between_towers | 1.97 / 6.7 → 1.75 / 7.2 | 0.046 → 0.068 | 0.253 → 0.044 |
+| | under_anvil | 1.39 / 4.1 → 1.57 / 6.4 | 0.045 → 0.089 | 0.410 → 0.063 |
+| genera HIGH | between_towers | 1.23 / 4.1 → 0.78 / 3.1 | 0.038 → 0.015 | 0.255 → 0.049 |
+| | under_anvil | 0.82 / 3.1 → 0.56 / 2.2 | 0.028 → 0.010 | 0.276 → 0.038 |
+
+What the causes were (each found by looking at a moving frame, then confirmed):
+the interleaved gradient noise read at the view pixel (a stride of `uBlock` apart)
+printed diagonal stripes in motion, and on the genera the largest grid; the
+far shimmer was octaves finer than the steps (1 % of the distance) aliasing, not the
+ray's sampling (ULTRA's 96 steps did not touch it); the clamp's statistics and
+the reprojection distance changed with the pixel's place in its block. Tried and
+dropped: a footprint-widened threshold (worse at 20 km), lighting at the step's
+middle (worse), a lower `MIN_WEIGHT` at a quarter (no change), a larger step fade
+at a quarter (no gain, and the look moves between presets). The cost fell a little
+(the faded octaves are not fetched): start at 2560 × 1440, ½: 4.2 → 3.5 ms, ¼: 2.2 → 2.0.
+Still short of the target: the genera at LOW (24 steps over a 10 km slab): still
+p99 6-7 levels. Cumulus at LOW is softer (the billows fade at 24 steps).
+
+### Phase 4.2 (so far): what the speed work found
+
+At 2560 x 1440 on the RTX 3070, cloud cost, half resolution: start 4.2 -> 3.8,
+inside 5.9 -> 4.9, model_in_cloud 5.5 -> 4.5 ms; a quarter: start 2.2 -> 1.9 ms
+(the 4.0 baseline above; the jitter work of 4.1 took 0.7 ms off at the start pose
+and restoring the far detail gave 0.3 back). Genera at half resolution:
+between_towers 6.9, under_anvil 7.9, stratus_above 6.1 ms.
+
+- Built: the billows' pass shares the column's noise (0.1 ms); the resolve returns early
+  in clear sky (0.1-0.2); the march stops at 4 % transmittance and its steps grow
+  with the cloud's depth (`inside` -0.5, `model_in_cloud` -1.2 ms).
+- Tried and dropped: reusing the lighting on every other cloudy step (start 3.78 ->
+  3.78, inside 4.91 -> 4.78 ms: not worth the look risk). The fixed passes are small
+  now (`--passes`: depth 0.08, resolve 0.3, composite 0.14 ms at HIGH), so halving the
+  depth pass or folding the composite cannot reach the target; the march pass is 75 %.
+- Resolution is the lever (steps barely matter: a warp runs as long as its busiest
+  pixel). Cloud cost at 2560 x 1440, 64 steps, a quarter / a half resolution: start
+  2.1 / 3.8, inside 2.3 / 4.9 ms; genera between_towers 2.5 / 6.8, under_anvil 3.1 /
+  8.1 ms. Only a quarter meets the 2.5 / 3.5 ms targets. The price at HIGH
+  (`--jitter`, quarter vs half): still p99 about the same (2.0-3.3 vs 2.2-5.1), error
+  against the full-resolution reference about 3x (start 3.1 vs 1.2), moving flicker
+  2-3x, edge sharpness 0.8-0.9 vs 0.95. MID now marches at a quarter (40 steps); HIGH
+  and ULTRA stay at a half until the look at a quarter has been judged.
+- Not worth it: skipping clear air by a bound (it holds in 0-7 % of steps) or by an
+  occupancy map (38-81 % of steps cleared, 26-30 % fewer iterations, 5-8 % less
+  time: a warp runs as long as its busiest pixel, and cloudy steps cost several
+  empty ones). The per-step cost is the cloudy pixels' (lighting 14-24 %, billows
+  17-22 %, four octaves), and the passes (about 1.1 ms a frame).
+- The far detail (`STEP_FADE`) was the shape regression of 4.1: `march.STEP_FADES`.
 
 ## Not covered
 

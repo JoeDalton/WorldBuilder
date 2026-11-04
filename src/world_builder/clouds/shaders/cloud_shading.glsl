@@ -7,11 +7,7 @@ uniform vec3  skyColor;
 uniform float sunBrightness;
 uniform float skyStrength;
 uniform float skyOcclusion;     // share of sky light reaching a slab's underside
-// The far deck's lighting (noise.deck_light_table): x the sun's cosine at the
-// cloud, from deckLightCosMin to 1; y the weather's coverage. r: the sun
-// term's shadowing (with the powder), g: the shadowing alone.
-uniform sampler2D deckLight;
-uniform float deckLightCosMin;
+// The far deck's lighting: deckLight and deckLightCosMin (cloud_field.glsl).
 
 // Darkens optically THIN cloud. Fed the LOCAL density over a fixed length: the
 // sunward depth would invert it, and the quad's chord would tie it to quad size.
@@ -52,11 +48,14 @@ void planetCloudLight(int atmo, vec3 p, out vec3 sunlight, out vec3 skylight,
 //   twilight     the lit air's above p once p is in the planet's shadow
 //   weather      the weather at p: its fbm shift, the convective depth, the
 //                anvil shelf's shift (weatherAt)
-vec3 cloudRadianceAt(Field f, vec3 p, float density, vec3 V, float shading,
-                     float farCoverage, vec3 sunlight, vec3 skylight,
-                     vec3 twilight, vec3 weather) {
+//   deckTable    the field's light table (deckLight), sunDepth the optical
+//                depth toward the sun from p (cloudSunDepth; needed only with
+//                shading > 0)
+vec3 cloudRadianceFrom(sampler2D deckTable, float sunDepth, Field f, vec3 p,
+                       float density, vec3 V, float shading, float farCoverage,
+                       vec3 sunlight, vec3 skylight, vec3 twilight, vec3 weather) {
     if ((uCloudDebug & 1) != 0) shading = 0.0;
-    float sunVisibility = shading > 0.0 ? exp2(-sunOpticalDepthAt(f, p, weather)) : 1.0;
+    float sunVisibility = shading > 0.0 ? exp2(-sunDepth) : 1.0;
     // What the sun term sees: the shadowing and the powder.
     float sunShadowing = sunVisibility * mix(1.0, powder(f, density), f.powderStrength);
     if (shading < 1.0) {
@@ -66,10 +65,10 @@ vec3 cloudRadianceAt(Field f, vec3 p, float density, vec3 V, float shading,
         // nothing changes colour closing in. A low sun marches along the
         // slab, through the clouds around: the terminator darkens gradually,
         // in the (reddened) sunlight's colour.
-        vec2 size = vec2(textureSize(deckLight, 0));
+        vec2 size = vec2(textureSize(deckTable, 0));
         float cosSun = dot(normalize(p), sunDir);
         vec2 at = vec2((cosSun - deckLightCosMin) / (1.0 - deckLightCosMin), farCoverage);
-        vec2 averaged = texture(deckLight, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size).rg;
+        vec2 averaged = texture(deckTable, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size).rg;
         sunVisibility = mix(averaged.g, sunVisibility, shading);
         sunShadowing = mix(averaged.r, sunShadowing, shading);
     }
@@ -96,6 +95,28 @@ vec3 cloudRadianceAt(Field f, vec3 p, float density, vec3 V, float shading,
          + skylight * ambient
          + twilight * (sunBrightness * TWILIGHT_GLOW * skyReach);
 }
+
+vec3 cloudRadianceAt(Field f, vec3 p, float density, vec3 V, float shading,
+                     float farCoverage, vec3 sunlight, vec3 skylight,
+                     vec3 twilight, vec3 weather) {
+    float sunDepth = shading > 0.0 && (uCloudDebug & 1) == 0
+                   ? cloudSunDepth(f, p, weather) : 0.0;
+    return cloudRadianceFrom(deckLight, sunDepth, f, p, density, V, shading,
+                             farCoverage, sunlight, skylight, twilight, weather);
+}
+
+#ifdef CLOUD_MAP_LIGHTING
+// The same for the second family's clouds (the stratus under the convective
+// ones: its light table, its maps, the convective clouds' shadow on it).
+vec3 cloudRadianceOther(Field f, Field above, vec3 p, float density, vec3 V,
+                        float shading, float farCoverage, vec3 sunlight,
+                        vec3 skylight, vec3 twilight, vec3 weather) {
+    float sunDepth = shading > 0.0 && (uCloudDebug & 1) == 0
+                   ? cloudSunDepthOther(f, above, p, weather) : 0.0;
+    return cloudRadianceFrom(otherDeckLight, sunDepth, f, p, density, V, shading,
+                             farCoverage, sunlight, skylight, twilight, weather);
+}
+#endif
 
 // With only the weather's shift (no convective depth, no shelf).
 vec3 cloudRadianceShifted(Field f, vec3 p, float density, vec3 V, float shading,
