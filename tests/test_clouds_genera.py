@@ -696,7 +696,7 @@ def test_both_families_cast_their_shadow(showbase, executor, genera):
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2),
+        settings=CloudSettings(shells=2, renderer="billboards"),
         genera=genera,
     )
     ground = NodePath("ground")

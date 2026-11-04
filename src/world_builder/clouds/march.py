@@ -383,6 +383,103 @@ def billow_gain(volume: np.ndarray) -> float:
     return ridged / max(layers, 1e-6)
 
 
+#: The blue noise's side, texels (cloud_march.frag's jitter reads it repeated).
+BLUE_NOISE_SIZE = 64
+
+
+@functools.cache
+def blue_noise(size: int = BLUE_NOISE_SIZE, sigma: float = 1.9) -> np.ndarray:
+    """A tileable blue noise (void and cluster: Ulichney's): *size* x *size* in
+    [0, 1), each value once, neighbours as unlike as can be, so the march's
+    jitter has no lattice and no clumps at any scale.
+
+    :returns: (size, size) float32, the ranks over their count
+    """
+    n = size * size
+    axis = np.minimum(np.arange(size), size - np.arange(size))
+    kernel = np.exp(-(axis[:, None] ** 2 + axis[None, :] ** 2) / (2.0 * sigma**2))
+    spectrum = np.fft.rfft2(kernel)
+
+    def energy(pattern: np.ndarray) -> np.ndarray:
+        return np.fft.irfft2(np.fft.rfft2(pattern) * spectrum, s=pattern.shape)
+
+    def shifted(y: int, x: int) -> np.ndarray:
+        return np.roll(kernel, (y, x), axis=(0, 1))
+
+    rng = np.random.default_rng(3)
+    pattern = np.zeros((size, size))
+    ones = max(n // 10, 1)
+    pattern.flat[rng.choice(n, ones, replace=False)] = 1.0
+    field = energy(pattern)
+    # Relax: the tightest cluster's point moves to the largest void, until it
+    # lands where it was.
+    for _ in range(4 * n):
+        tight = int(np.argmax(np.where(pattern > 0, field, -np.inf)))
+        pattern.flat[tight] = 0.0
+        field -= shifted(*divmod(tight, size))
+        void = int(np.argmin(np.where(pattern > 0, np.inf, field)))
+        pattern.flat[void] = 1.0
+        field += shifted(*divmod(void, size))
+        if void == tight:
+            break
+    rank = np.zeros(n)
+    # The ones, the tightest cluster's first, rank down from their count
+    work, work_field = pattern.copy(), field.copy()
+    for r in range(ones - 1, -1, -1):
+        tight = int(np.argmax(np.where(work > 0, work_field, -np.inf)))
+        rank[tight] = r
+        work.flat[tight] = 0.0
+        work_field -= shifted(*divmod(tight, size))
+    # The rest, the largest void's first, rank up from there
+    work, work_field = pattern.copy(), field.copy()
+    for r in range(ones, n):
+        void = int(np.argmin(np.where(work > 0, np.inf, work_field)))
+        rank[void] = r
+        work.flat[void] = 1.0
+        work_field += shifted(*divmod(void, size))
+    return (rank.reshape(size, size) / n).astype(np.float32)
+
+
+@functools.cache
+def _blue_noise_texture() -> Texture:
+    texture = Texture("march_blue_noise")
+    texture.setup_2d_texture(
+        BLUE_NOISE_SIZE, BLUE_NOISE_SIZE, Texture.T_unsigned_byte, Texture.F_red
+    )
+    texture.set_ram_image(
+        np.ascontiguousarray(np.round(blue_noise() * 255.0), np.uint8).tobytes()
+    )
+    texture.set_wrap_u(SamplerState.WM_repeat)
+    texture.set_wrap_v(SamplerState.WM_repeat)
+    texture.set_minfilter(SamplerState.FT_nearest)
+    texture.set_magfilter(SamplerState.FT_nearest)
+    return texture
+
+
+#: How far a pixel on fresh samples takes their smooth mean instead of their
+#: bilinear mix (cloud_resolve.frag's uSmooth), by the march's block: all of it
+#: at a sixteenth of the pixels a frame, half at a quarter, none at all of them.
+SMOOTHING = {1: 0.0, 2: 0.5, 4: 1.0}
+
+
+def smoothing_of(block: int) -> float:
+    """:returns: ``uSmooth`` for a march block of *block* pixels a side"""
+    return SMOOTHING.get(block, 1.0 if block > 4 else 0.0)
+
+
+#: What share of a step's length fades the field's finer features to their means
+#: (cloud_march.frag's uStepFade), by the march's block: the fewer the samples a
+#: frame has, the more shimmer, the more it must fade. It is the clouds' detail
+#: at a distance against their steadiness: Phase 4.1 had 0.4 everywhere, which
+#: made far clouds soft lumps at every preset.
+STEP_FADES = {1: 0.0, 2: 0.1, 4: 0.25}
+
+
+def step_fade_of(block: int) -> float:
+    """:returns: ``uStepFade`` for a march block of *block* pixels a side"""
+    return STEP_FADES.get(block, 0.25 if block > 4 else 0.0)
+
+
 def block_of(resolution: float) -> int:
     """:returns: the view's pixels per march pixel, per axis, for
     ``CloudSettings.march_resolution``"""
@@ -568,7 +665,9 @@ class _MarchLayer:
         self.card = _fullscreen(
             self.buffer, name, _shader("cloud_march.vert", "cloud_march.frag")
         )
-        self.card.set_shader_input("uSceneDepth", self.depth)
+        self.card.set_shader_inputs(
+            uSceneDepth=self.depth, uBlueNoise=_blue_noise_texture()
+        )
         # The jitter's index: this layer's visits (visit_of).
         self.visit = PTA_int.empty_array(1)
         self.card.set_shader_input("uFrame", self.visit)
@@ -587,6 +686,7 @@ class _MarchLayer:
                 uHistory=history.colour,
                 uHistoryDistance=history.distance,
                 uMinWeight=MIN_WEIGHT,
+                uSmooth=smoothing_of(self.block),
             )
 
         # Laid over the range's pass at the cloud's depth.
@@ -626,7 +726,11 @@ class _MarchLayer:
         return (self.block // 2, self.block // 2)
 
     def _set_sizes(self, view: tuple[int, int]) -> None:
-        self.card.set_shader_inputs(uBlock=self.block, uViewSize=LVecBase2f(*view))
+        self.card.set_shader_inputs(
+            uBlock=self.block,
+            uViewSize=LVecBase2f(*view),
+            uStepFade=step_fade_of(self.block),
+        )
         size = self._resolve_size(view)
         for resolve in self.resolves:
             resolve.card.set_shader_inputs(

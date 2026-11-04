@@ -55,7 +55,7 @@ def _clouds(showbase, executor, **kwargs):
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2),
+        settings=CloudSettings(shells=2, renderer="billboards"),
         planet=PLANETS["forest"],
         **kwargs,
     )
@@ -111,7 +111,7 @@ def test_both_layers_are_driven_as_one(showbase, executor):
         half_res.exclude.assert_called_once_with(sheet.root)
 
         # One settings section
-        reflected = CloudSettings(shells=2, reflected=False)
+        reflected = CloudSettings(shells=2, reflected=False, renderer="billboards")
         clouds.set_settings(reflected)
         assert clouds.settings is reflected
         assert volume.settings is reflected and sheet.settings is reflected

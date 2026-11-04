@@ -171,15 +171,41 @@ sphere; near 60 m, far 500 m texels).
 - Tests: extend `tests/test_clouds_march.py` NumPy mirrors (`slab_segments` with two slabs, family by height); a
   march-with-genera case in `tests/test_clouds_genera.py` (both families shade the ground, rebind on renderer change).
 
+## Phase 4.0 (done): the measuring tools and the baseline
+
+`cloud_bench.py --renderer march`: `--passes`, `--steps-sweep`, `--jitter` (per preset, still and moving, against full
+resolution), debug bits 128 (where the steps go) and 256 (no lighting). Baseline in performance.md ("Phase 4
+baseline"): the shimmer is in motion, worst at LOW and with genera (moving grid 0.25-0.41), and at 20 km at every preset
+(ULTRA no better than HIGH: the accumulation and far edges, not the ray's sampling). Plan for 4.1-4.3: jitter first
+(footprint-widened edges, lighting without the jitter, variance-aware accumulation, edge-aware denoise, per preset),
+then speed (empty-air skipping, fixed passes, set-up, billows, lighting, shadows), then the default switch.
+
+## Phase 4.1 (done, to check in flight): the jitter at every preset
+
+Blue-noise jitter at the march's pixel, features finer than a step fade (`STEP_FADE`), smooth statistics and
+reprojection distance in the resolve, smooth mean for pixels on fresh samples (`SMOOTHING`). Still p99 (8-bit levels)
+at 20 km: 9 -> 2.4 (HIGH, ULTRA); genera moving grid 0.25-0.41 -> 0.04-0.06; cost down slightly. Tables in
+performance.md "Phase 4.1". Open: genera at LOW (still p99 6-7), LOW cumulus softer; the `--jitter` err/flicker columns
+need a reference of the same detail (read the still spread and the grids). Next: 4.2 speed.
+
+## Phase 4.2 (partly done): speed
+
+Built (small): shared column in `marchDensity`, resolve early-out in clear sky, opaque at 4 %, steps grow in dense
+cloud; the far detail restored per preset (`STEP_FADES`; 4.1 had faded it everywhere). Tried and dropped, with numbers
+(performance.md "Phase 4.2", BACKLOG.md): bound-based skipping, an occupancy map (warp divergence: the iterations fell
+26-30 %, the time 5-8 %). Not yet done: fixed passes (near layer, depth at half resolution, composite into the resolve),
+lighting reuse, ground shadows, the resolution policy, and the default switch (4.3). The cloud cost at 1440p is
+still above the 2.5 ms (plain) / 3.5 ms (genera) target at HIGH.
+
 ## Phase 4: speed, then the march as default
 
 Measure each lever against Phase 0, keep what pays, record in §23: march resolution/block per preset (¼ at HIGH if
 flight confirms), billows as a cost toggle, near-range pass (merge or keep), and an **occupancy grid** experiment
 (low-res conservative max of the field baked on the GPU; dropped if < ~20 % of steps are skipped, or it flickers).
 
-Default switch: `CloudSettings.renderer = "march"` at every preset (a `kept` knob), billboards selectable.
-Risk to show the user: the sea's reflection with the march shows only the deck; proposal is a cheap mirror march
-(¼ res, no history) unless cost says otherwise. Docs: `clouds.md` "The raymarch" and "Genera", `shadows.md` "The
+Default switch (**done**): `CloudSettings.renderer = "march"` at every preset (a `kept` knob), billboards selectable.
+The sea's reflection with the march shows only the deck; accepted for now (the cheap mirror march, ¼ res, no history,
+is described in clouds.md "The raymarch" and BACKLOG.md). Docs: `clouds.md` "The raymarch" and "Genera", `shadows.md` "The
 cloud shadow maps", `quality.md`, `CHANGELOG.md`.
 
 ## Critical files

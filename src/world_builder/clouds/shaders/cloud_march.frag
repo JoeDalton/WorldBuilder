@@ -38,6 +38,7 @@ uniform float uStepGrowth;       // a step's length per metre of distance, farth
 uniform float uLayerFar[MAX_MARCH_LAYERS];
 uniform int   uLayerCount;       // the layers of one family (its bands, then its far one)
 uniform int   uFamilies;         // 1, or 2 with genera: the convective clouds, the stratus under them
+uniform sampler2D uBlueNoise;    // march.blue_noise, 64 x 64, the steps' jitter
 uniform int   uFrame;            // this pixel's visits: moves its steps' jitter (march.visit_of)
 // The edges' billows (what the billboards' sprites carry): a fine billowy
 // noise, uDetailScale times the field's first octave, moving the threshold
@@ -58,6 +59,14 @@ layout(location = 1) out vec4 fragDistance;
 // than this fades to its mean (it would alias, a different value every
 // frame's jitter and every move), over to twice as many.
 const vec2 RESOLVED = vec2(2.0, 4.0);
+
+// A step is a sample along the ray as a pixel is across it: features finer than
+// about this share of the step's length (over RESOLVED) fade to their means as
+// the sub-pixel ones do, or they alias into the jitter (the shimmer of far
+// clouds, whatever the steps' count). It costs the clouds' detail at a distance
+// (their lumps): march.STEP_FADES gives the least that keeps the shimmer down at
+// each march resolution.
+uniform float uStepFade;
 
 // How much of a feature of this many metres a view pixel of footprint
 // metres resolves: 1 wholly, 0 not at all.
@@ -95,7 +104,14 @@ float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
     float billows = resolved(unit / (f.octaveScales.x * uDetailScale), footprint);
     float window = (uCloudDebug & 32) != 0 ? 0.0  // no billows (profiling)
                  : (f.threshHi - f.threshLo) * uDetailErosion * billows;
-    float most = cloudDensityAt(f, p, vec3(shift + window * uBillowMean, weather.yz));
+    // The field once, at the billows' highest threshold shift: the billows only
+    // lower the column's value afterwards, so their pass costs no more noise.
+    float raw, fill, shelf;
+    if (!cloudColumnAt(f, p, vec3(shift + window * uBillowMean, weather.yz), raw, fill,
+                       shelf)) {
+        return 0.0;
+    }
+    float most = max(smoothstep(f.threshLo, f.threshHi, raw) * fill, shelf);
     if (most <= 0.0 || window <= 0.0) {
         return most;
     }
@@ -111,13 +127,13 @@ float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
                          footprint));
     float billow = uBillowMean + uBillowGain * (sampleNoise(coord) - uBillowRawMean
                                                 + BILLOW_FINER_WEIGHT * (finer - uBillowRawMean));
-    return cloudDensityAt(f, p, vec3(shift + window * (uBillowMean - billow), weather.yz));
+    return max(smoothstep(f.threshLo, f.threshHi, raw - window * billow) * fill, shelf);
 }
 
 // The fewest samples a stretch of the slab takes (march.SEGMENT_SAMPLES).
 const float SEGMENT_SAMPLES = 8.0;
 // The march stops at this transmittance, and counts the cloud opaque.
-const float OPAQUE = 0.01;
+const float OPAQUE = 0.04;
 // A cloudy column's alpha seen from afar: the deck's.
 const float FAR_ALPHA = 0.92;
 // The weather is read once this far along the ray, metres (uWeatherStretch):
@@ -264,7 +280,14 @@ void main() {
     // moved on by the golden ratio each visit of this pixel (not each frame:
     // traced once a block's cycle, it would skip through the sequence), so
     // its visits stratify the step and the resolve averages them away.
-    float jitter = fract(interleavedGradient(vec2(pixel)) + float(uFrame) * 0.618034);
+    // The noise is a blue noise at the march's pixel (the gradient noise at a
+    // view pixel's stride of uBlock aliased its diagonals into a lattice of
+    // stripes), shifted by which pixel of the block this frame traces (the
+    // block's pixels differ: R2 over the offset) and moved on by the visit, so
+    // a pixel's visits stratify the step.
+    float jitter = fract(texelFetch(uBlueNoise, ivec2(gl_FragCoord.xy) & 63, 0).r
+                         + dot(vec2(uOffset), vec2(0.7548776662, 0.5698402909))
+                         + float(uFrame) * 0.618034);
 
     float transmittance = 1.0;
     vec3 light = vec3(0.0);
@@ -276,6 +299,7 @@ void main() {
     int current = -1;
     Field lf = f;
     int steps = 0;
+    int emptySteps = 0;  // steps whose density was 0 (uCloudDebug 128)
     // The weather (the shift, the convective depth, the anvil's spread), read
     // once a WEATHER_STRETCH of ray: it varies over kilometres.
     vec3 weather = vec3(0.0);
@@ -290,7 +314,7 @@ void main() {
         float a = seg.x;
         float least = (seg.y - seg.x) / SEGMENT_SAMPLES;  // the fewest a segment takes
         while (a < seg.y && steps < uMarchSteps + 8 && transmittance > OPAQUE) {
-            float dt = min(min(max(dtMin, a * growth), least), seg.y - a);
+            float dt = min(min(max(dtMin, a * growth) * (1.0 + 1.5 * (1.0 - transmittance)), least), seg.y - a);
             float t = a + dt * jitter;
             steps++;
             int layer = fam * uLayerCount + layerAt(t);
@@ -313,7 +337,8 @@ void main() {
             float detail = 1.0 - smoothstep(0.15, 0.6, footprint);
             float shading = 1.0 - smoothstep(0.04, 0.2, footprint);
             float density = detail > 0.0
-                          ? marchDensity(lf, p, weather, t * uPixelAngle / float(uBlock))
+                          ? marchDensity(lf, p, weather,
+                                         max(t * uPixelAngle / float(uBlock), uStepFade * dt))
                           : 0.0;
             float farCoverage = 0.0;
             if (shading < 1.0) {
@@ -325,6 +350,7 @@ void main() {
             }
             a += dt;
             if (density <= 0.0) {
+                ++emptySteps;
                 continue;
             }
             float alpha = 1.0 - exp2(-lf.extinction * density * dt);
@@ -333,7 +359,8 @@ void main() {
                 planetCloudLight(uOwnAtmosphere, p, sunlight, skylight, twilight);
                 lit = true;
             }
-            vec3 radiance = fam == 0
+            vec3 radiance = (uCloudDebug & 256) != 0 ? vec3(0.8)  // no lighting (profiling)
+                          : fam == 0
                 ? cloudRadianceAt(lf, p, density, -dir, shading, farCoverage, sunlight,
                                   skylight, twilight, weather)
                 : cloudRadianceOther(lf, getField(uLayerCount - 1), p, density, -dir,
@@ -344,6 +371,15 @@ void main() {
             weightedDistance += weight * t;
             transmittance *= 1.0 - alpha;
         }
+    }
+    if ((uCloudDebug & 128) != 0) {
+        // Where the steps go: red the share in empty air, green in cloud, blue
+        // the steps over the budget.
+        float taken = max(float(steps), 1.0);
+        fragColor = vec4(float(emptySteps) / taken, float(steps - emptySteps) / taken,
+                         float(steps) / float(uMarchSteps), 1.0);
+        fragDistance = vec4(0.001, 0.0, 0.0, 1.0);
+        return;
     }
     if ((uCloudDebug & 16) != 0) {
         // The march's work: red its steps over the budget.

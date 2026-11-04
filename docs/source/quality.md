@@ -163,6 +163,13 @@ labels and ranges below are what the schema gives.
 
 ### `clouds`: Clouds (`CloudSettings`)
 
+The low clouds are raymarched at every preset (`renderer`, a rebuild knob that
+a preset does not change; "Billboards" selects the billboard renderer). The
+march's own knobs are `march_steps` (24, 40, 64, 96) and `march_resolution`
+(a quarter at LOW and MID, a half at HIGH and ULTRA); the billboard knobs below
+(`count_scale`, overlaps, `shell_octaves`, `shells`, `interior_growth`,
+`half_resolution`) apply to the billboards only.
+
 | Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
 |---|---|---|---|---|---|---|---|
 | `count_scale` | Billboards | rebuild | 0.1 to 4 x | 0.25 | 0.5 | 1 | 2 |

@@ -36,14 +36,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The raymarch is the default low-cloud renderer at every quality preset
+  (`CloudSettings.renderer = "march"`; billboards stay selectable, a
+  rebuild). MID now marches at a quarter of the view's resolution (40 steps).
+  The sea's reflection still shows the deck alone (no shapes, no stratus);
+  a cheap mirror march is described in docs/source/clouds.md#the-raymarch.
+- Faster raymarch (docs/source/performance.md "Phase 4.2"): the billows share
+  the column's noise, the resolve returns early in clear sky, the march stops
+  at 4 % transmittance and its steps grow in dense cloud (about 0.4-1.2 ms at
+  1440p, half resolution). A quarter resolution meets the cost target
+  (2.1-2.3 ms plain, 2.5-3.1 ms genera); HIGH and ULTRA keep a half.
+
 - `CirrusSpec.base` defaults to 11 km (was 8 km): over the cumulonimbus's
   cap, 10.5 km.
 - The LOW and MID cloud presets draw the clouds at half resolution
   (`CloudSettings.half_resolution`): 2.5-2.9 times faster frames near big
   clouds on a weak GPU. HIGH and ULTRA keep full resolution.
 
-- Raymarched low clouds, an experimental second renderer
-  (`CloudSettings.renderer = "march"`, `world_builder.clouds.march`,
+- Raymarched low clouds, now the default renderer at every preset
+  (`CloudSettings.renderer = "march"`; `"billboards"` stays selectable; `world_builder.clouds.march`,
   docs/source/clouds.md#the-raymarch; #45).
   - `CloudMarch` draws the billboards' field, weather, lighting and far
     field per pixel, from the camera to the scene's depth: a game's model
@@ -59,6 +70,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The raymarch draws the genera (`CloudMarch(genera=...)`, one pass of two
     families, `march.family_segments`), and `PlanetClouds` no longer forces
     billboards with them; both families cast their shadows.
+  - The raymarch is steadier at every preset: a blue-noise jitter at the march's
+    pixel (the gradient noise at the view's stride put a lattice of diagonal
+    stripes in motion), features finer than a step fade to their means (the far
+    shimmer), the resolve's statistics and reprojection distance are smooth
+    across a block, and a pixel on fresh samples takes their smooth mean
+    (`march.blue_noise`, `march.SMOOTHING`). `cloud_bench.py --jitter`,
+    `--passes` and `--steps-sweep` measure it; debug bits 128 and 256.
   - The raymarch casts a cloud shadow on the ground, sea and models, as the
     billboards do (`CloudMarch.shadow_layer`, `shadow_field`,
     `bind_shadow_inputs`, `sun_visibility`), and reads the cloud shadow maps'

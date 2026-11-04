@@ -25,7 +25,8 @@ uniform samplerCube weatherMap;
 // A/B switches for profiling (bits, 0 = normal): 1 no sun march, 2 no
 // atmosphere, 4 two octaves only, 8 flat colour after the density; the
 // raymarch's: 16 its steps per pixel, red over the budget, 32 no billows, 64 the
-// clouds' light from the sun march, not the shadow maps.
+// clouds' light from the sun march, not the shadow maps, 128 where the steps go
+// (red empty air, green cloud, blue the budget), 256 no lighting.
 uniform int   uCloudDebug;
 // The far clouds' averages, by the sun's cosine (x, from deckLightCosMin to
 // 1) and the weather's coverage (y): the deck's lighting
@@ -352,6 +353,37 @@ float cloudDensityAt(Field f, vec3 p, vec3 weather) {
     if (v + bias.x + rest <= f.threshLo) return shelf;
     float column = smoothstep(f.threshLo, f.threshHi, v + highOctaves(f, coord) + bias.x);
     return max(column * bias.y, shelf);
+}
+
+// cloudDensityAt in its pieces, for a caller that moves the threshold after the
+// noise is fetched (the raymarch's billows): the column's density is
+// smoothstep(threshLo, threshHi, raw) * fill, the density the denser of that and
+// shelf. False where the density is 0 (the same early-outs as cloudDensityAt's,
+// at the weather given: a caller that lowers raw later gives the weather its
+// highest shift).
+bool cloudColumnAt(Field f, vec3 p, vec3 weather, out float raw, out float fill,
+                   out float shelf) {
+    raw = -NO_CLOUD_LIFT;
+    fill = 0.0;
+    shelf = 0.0;
+    float h = slabHeight(f, heightOf(p));
+    if (h <= 0.0 || h >= 1.0) return false;
+    vec3 bias = fieldBias(f, h, weather);
+    if (max(bias.x, bias.z) <= -NO_CLOUD_LIFT) return false;
+    vec3 coord = p * f.noiseScale + f.noiseOrigin;
+    float rest = highOctavesMax(f);
+    float mean = f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w);
+    float reach = max(bias.x + rest, bias.z + mean);
+    float v = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x
+            + cellShift(f, coord, weather.y);
+    if (v + f.octaveWeights.y + reach <= f.threshLo) return false;
+    v += sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET) * f.octaveWeights.y;
+    if (v + reach <= f.threshLo) return false;
+    shelf = shelfDensity(f, h, v + mean, bias.z);
+    if (v + bias.x + rest <= f.threshLo) return shelf > 0.0;
+    raw = v + highOctaves(f, coord) + bias.x;
+    fill = bias.y;
+    return true;
 }
 
 // The density at p with only the weather's shift (no convective depth, no

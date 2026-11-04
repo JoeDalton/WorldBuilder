@@ -255,7 +255,8 @@ def test_the_presets_trade_steps_and_resolution():
     levels = [CloudSettings.preset(level) for level in QualityLevel]
     steps = [s.march_steps for s in levels]
     assert steps == sorted(steps)
-    assert all(s.renderer == "billboards" for s in levels)
+    assert all(s.renderer == "march" for s in levels)
+    assert CloudSettings().renderer == "march"
     with pytest.raises(ValueError):
         CloudSettings(renderer="splats")
 
@@ -393,6 +394,36 @@ def test_two_families_slabs_make_up_to_four_sorted_stretches():
         up * (radius + 20e3), -up, radius, slabs, t_start=9e3, t_end=15e3
     )
     assert all(9e3 <= t0 < t1 <= 15e3 for t0, t1, _ in clipped)
+
+
+def test_the_jitters_blue_noise_has_every_rank_once_and_no_low_frequencies():
+    """The steps' jitter reads a tileable blue noise (void and cluster): each
+    value once, almost no power at low frequencies (white noise has a few
+    per cent of it in the lowest tenth of the band), the same pattern wrapped."""
+    from world_builder.clouds.march import BLUE_NOISE_SIZE, blue_noise
+
+    noise = blue_noise()
+    assert noise.shape == (BLUE_NOISE_SIZE, BLUE_NOISE_SIZE)
+    assert len(np.unique(noise)) == BLUE_NOISE_SIZE**2
+    assert 0.0 <= noise.min() and noise.max() < 1.0
+    power = np.abs(np.fft.fft2(noise - noise.mean())) ** 2
+    freq = np.fft.fftfreq(BLUE_NOISE_SIZE)
+    low = (freq[:, None] ** 2 + freq[None, :] ** 2) < 0.01
+    assert power[low].sum() / power.sum() < 1e-3
+
+
+def test_the_far_detail_fades_more_the_fewer_pixels_a_frame_is_traced():
+    from world_builder.clouds.march import step_fade_of
+
+    assert step_fade_of(1) == 0.0
+    assert 0.0 <= step_fade_of(2) < step_fade_of(4) < 0.4
+
+
+def test_the_resolve_smooths_more_the_fewer_pixels_a_frame_is_traced():
+    from world_builder.clouds.march import smoothing_of
+
+    assert smoothing_of(1) == 0.0
+    assert 0.0 < smoothing_of(2) < smoothing_of(4) == 1.0
 
 
 # ── Gathering over the frames ────────────────────────────────────────────────

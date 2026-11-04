@@ -9,6 +9,7 @@ sky and the clouds, so the clouds are most of the frame.
         [--uniform-coverage C] [--no-cirrus] [--cloud-debug BITS]
         [--move M] [--genera] [--interior-growth | --no-interior-growth]
         [--march-resolution R] [--stability N] [--interactive]
+        [--passes] [--steps-sweep] [--jitter]
 
     --out              where the PNGs go (default ./cloud_bench)
     --pose             the poses to time (default: all, in the order below)
@@ -41,6 +42,16 @@ sky and the clouds, so the clouds are most of the frame.
                        (below)
     --interactive      fly the probe in and out of the clouds in a window
                        (keys below); no timing
+    --passes           (raymarch) the cost of each pass at each pose: the far
+                       and the near range alone, then with the depth passes,
+                       the march, the resolve and the composite left out
+    --steps-sweep      (raymarch) the clouds' cost against the step budget
+                       (8 to 128) at a quarter, a half and the full
+                       resolution
+    --jitter           (raymarch) the steadiness at this preset, per pose,
+                       still and moving (--move, --turn; default 10 m and 0.3
+                       degrees a frame; --stability frames, default 30):
+                       against the same flight at full resolution (below)
 
 The planet is the demo level's (its radius and climate drive the weather),
 with no terrain drawn: below the horizon is the sky's own ground. As
@@ -86,6 +97,17 @@ clouds are hidden), from N frames read back after the timing:
   brightness less its 3 x 3 mean, its RMS by the pixel's place in its block;
   the largest less the smallest, 8-bit steps, averaged over the frames (0:
   no pattern; the billboards measure it at the march's block too).
+
+With --jitter, over the clouds' pixels (--quality picks the preset; run it per
+level): **still** (spread mean / p99, grid: as above), then **moving**, the
+same flight twice, at the preset and at full resolution with at least 96 steps
+(the reference): **err** the RMS of their difference (8-bit steps), **flicker**
+the RMS of that difference's change from frame to frame (the shimmer: 0 when
+the preset is as steady as the reference), **added** the shimmer the preset
+adds over the reference's own: the RMS of its frame-to-frame change less the
+reference's (in quadrature), **grid** as above while moving, and
+**sharp** the preset's mean gradient over the reference's (a denoise must not
+buy steadiness with blur: stay near 1).
 
 Interactive (``--interactive``): the probe flies, the camera follows it.
 
@@ -673,7 +695,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--renderer",
-        default="billboards",
+        default="march",
         choices=["billboards", "march"],
         help="the low clouds' renderer",
     )
@@ -723,6 +745,19 @@ def main() -> None:
     parser.add_argument(
         "--interactive", action="store_true", help="fly the probe, no timing"
     )
+    parser.add_argument(
+        "--passes", action="store_true", help="the raymarch's passes' costs"
+    )
+    parser.add_argument(
+        "--steps-sweep",
+        action="store_true",
+        help="the raymarch's cost against its step budget and resolution",
+    )
+    parser.add_argument(
+        "--jitter",
+        action="store_true",
+        help="the raymarch's steadiness, still and moving, against full resolution",
+    )
     args = parser.parse_args()
 
     window_config("Cloud bench", args.size, args.offscreen, vsync=False)
@@ -763,6 +798,18 @@ def main() -> None:
             flight.next_pose()
             print(__doc__.split("Interactive")[1])
             bench.run()
+            return
+        if args.passes or args.steps_sweep or args.jitter:
+            if args.renderer != "march":
+                parser.error(
+                    "--passes, --steps-sweep and --jitter need --renderer march"
+                )
+            if args.passes:
+                bench_passes(bench, args)
+            if args.steps_sweep:
+                bench_steps(bench, args)
+            if args.jitter:
+                bench_jitter(bench, args)
             return
         bench_poses(bench, args)
     finally:
@@ -829,6 +876,195 @@ def bench_poses(bench: CloudBench, args: argparse.Namespace) -> None:
             mean_steps = red.mean() * bench.settings.march_steps if red.size else 0.0
             line += f" {mean_steps:>6.1f}"
         print(line + ("" if settled else "  TIMEOUT"))
+
+
+def _pose_names(args: argparse.Namespace) -> list[str]:
+    return args.pose or list(GENERA_POSES if args.genera else POSES)
+
+
+def _arrive(bench: CloudBench, name: str, timeout: float) -> bool:
+    """Place a pose and wait for its clouds; :returns: whether it settled"""
+    bench.place_pose(name)
+    bench.probe_world = None
+    settled = bench.settle(timeout)
+    for _ in range(30):  # the march's history fills
+        bench.taskMgr.step()
+    return settled
+
+
+def _cost(bench: CloudBench, frames: int, after: int = 10) -> float:
+    """:returns: the median GPU-synced frame, ms, after *after* frames"""
+    for _ in range(after):
+        bench.taskMgr.step()
+    return bench.time_frames(frames)[0]
+
+
+def bench_passes(bench: CloudBench, args: argparse.Namespace) -> None:
+    """Each pose's frame with the raymarch's passes left out in turn (ms over
+    the frame without clouds), see the module."""
+    march = bench.clouds.volume
+    print(f"{'pose':<16} {'none':>6}  " + "  ".join(f"{c:>8}" for c in _PASSES))
+    for name in _pose_names(args):
+        _arrive(bench, name, args.timeout)
+        layers = march._layers
+        active = [layer.active for layer in layers]
+        bench.clouds.set_visible(False)
+        none = _cost(bench, args.frames)
+        bench.clouds.set_visible(True)
+        row = [_cost(bench, args.frames) - none]  # full
+
+        def only(index: int) -> None:
+            for k, layer in enumerate(layers):
+                layer.set_active(k == index and active[k])
+
+        def restore() -> None:
+            for k, layer in enumerate(layers):
+                layer.set_active(active[k])
+
+        for index in (0, 1):
+            only(index)
+            row.append(_cost(bench, args.frames) - none)
+            restore()
+        for leave_out in ("depth_buffer", "buffer"):
+            for layer in layers:
+                getattr(layer, leave_out).set_active(False)
+            row.append(_cost(bench, args.frames) - none)
+            for layer in layers:
+                getattr(layer, leave_out).set_active(layer.active)
+        for cards, show_all in (
+            (lambda: [r.card for layer in layers for r in layer.resolves], None),
+            (lambda: [layer.composite for layer in layers], None),
+        ):
+            for card in cards():
+                card.hide()
+            row.append(_cost(bench, args.frames) - none)
+            for card in cards():
+                card.show()
+        print(f"{name:<16} {none:>6.2f}  " + "  ".join(f"{v:>8.2f}" for v in row))
+        sys.stdout.flush()
+
+
+#: The columns of :func:`bench_passes`: the clouds' cost with everything, then
+#: with only a range, then each pass left out.
+_PASSES = ("full", "far", "near", "-depth", "-march", "-resolve", "-comp")
+
+
+def bench_steps(bench: CloudBench, args: argparse.Namespace) -> None:
+    """The clouds' cost (ms) against the step budget, by resolution."""
+    budgets = (8, 16, 24, 40, 64, 96, 128)
+    original = bench.settings
+    print(f"{'pose':<16} {'res':>5}  " + "  ".join(f"{b:>6}" for b in budgets))
+    for name in _pose_names(args):
+        _arrive(bench, name, args.timeout)
+        bench.clouds.set_visible(False)
+        none = _cost(bench, args.frames)
+        bench.clouds.set_visible(True)
+        for resolution in (0.25, 0.5, 1.0):
+            row = []
+            for budget in budgets:
+                bench.clouds.set_settings(
+                    replace(original, march_resolution=resolution, march_steps=budget)
+                )
+                row.append(_cost(bench, args.frames, after=25) - none)
+            print(
+                f"{name:<16} {resolution:>5}  " + "  ".join(f"{v:>6.2f}" for v in row)
+            )
+        bench.clouds.set_settings(original)
+        sys.stdout.flush()
+
+
+def sharpness(frame: np.ndarray, mask: np.ndarray) -> float:
+    """:returns: the mean gradient magnitude of the brightness over *mask*
+    (8-bit steps a pixel): what a denoise's blur would take away"""
+    if not mask.any():
+        return 0.0
+    gy, gx = np.gradient(luminance(frame))
+    return float(np.hypot(gx, gy)[mask].mean())
+
+
+def fly(
+    bench: CloudBench, start: tuple, frames: int, move: float, turn: float
+) -> list[np.ndarray]:
+    """The same flight each call: from *start* (camera, probe, orientation),
+    the history settled first, then *frames* read back moving *move* metres
+    and turning *turn* degrees a frame."""
+    cam, probe, orientation = start
+    bench.move = bench.turn = 0.0
+    bench.cam_world = cam.copy()
+    bench.probe_world = None if probe is None else probe.copy()
+    bench._orientation = LQuaternionf(orientation)
+    for _ in range(14):
+        bench.taskMgr.step()
+    bench.move, bench.turn = move, turn
+    read = bench.read_frames(frames)
+    bench.move = bench.turn = 0.0
+    return read
+
+
+def bench_jitter(bench: CloudBench, args: argparse.Namespace) -> None:
+    """The steadiness of each pose at the preset, see the module."""
+    original = bench.settings
+    block = block_of(original.march_resolution)
+    move = args.move or (0.0 if args.turn else 10.0)
+    turn = args.turn or (0.0 if args.move else 0.3)
+    frames = args.stability or 30
+    reference = replace(
+        original, march_resolution=1.0, march_steps=max(original.march_steps, 96)
+    )
+    print(
+        f"clouds {args.quality}: resolution {original.march_resolution}, "
+        f"{original.march_steps} steps; flight {move} m and {turn} degrees a frame"
+    )
+    print(
+        f"{'pose':<16} {'spread':>7} {'p99':>6} {'grid':>6}   "
+        f"{'err':>6} {'flicker':>8} {'added':>6} {'grid':>6} {'sharp':>6}"
+    )
+    for name in _pose_names(args):
+        _arrive(bench, name, args.timeout)
+        start = (
+            bench.cam_world.copy(),
+            None if bench.probe_world is None else bench.probe_world.copy(),
+            LQuaternionf(bench._orientation),
+        )
+        bench.clouds.set_visible(False)
+        bench.taskMgr.step()
+        bare = bench.read_frame()
+        bench.clouds.set_visible(True)
+        still = fly(bench, start, frames, 0.0, 0.0)
+        mask = cloud_mask(still[-1], bare)
+        mean, worst = spread(still, mask)
+        still_grid = float(np.mean([grid_score(f, mask, block) for f in still]))
+        moving = fly(bench, start, frames, move, turn)
+        args.out.mkdir(parents=True, exist_ok=True)
+        bench.win.save_screenshot(
+            Filename.from_os_specific(str(args.out / f"{name}_moving.png"))
+        )
+        bench.clouds.set_settings(reference)
+        truth = fly(bench, start, frames, move, turn)
+        bench.clouds.set_settings(original)
+        lum = np.stack([luminance(f) for f in moving])
+        lum_ref = np.stack([luminance(f) for f in truth])
+        error = (lum - lum_ref)[:, mask]
+        err = float(np.sqrt((error**2).mean())) if error.size else 0.0
+        flicker = (
+            float(np.sqrt(((error[1:] - error[:-1]) ** 2).mean()))
+            if error.size
+            else 0.0
+        )
+        # The change from frame to frame (motion and shimmer) over the cloud
+        # pixels, the preset's and the reference's: what the preset adds
+        step = np.sqrt((np.diff(lum, axis=0)[:, mask] ** 2).mean())
+        step_ref = np.sqrt((np.diff(lum_ref, axis=0)[:, mask] ** 2).mean())
+        added = float(np.sqrt(max(step**2 - step_ref**2, 0.0)))
+        moving_grid = float(np.mean([grid_score(f, mask, block) for f in moving]))
+        sharp_ref = sum(sharpness(f, mask) for f in truth)
+        sharp = sum(sharpness(f, mask) for f in moving) / max(sharp_ref, 1e-9)
+        print(
+            f"{name:<16} {mean:>7.2f} {worst:>6.1f} {still_grid:>6.3f}   "
+            f"{err:>6.2f} {flicker:>8.2f} {added:>6.2f} {moving_grid:>6.3f} "
+            f"{sharp:>6.2f}"
+        )
+        sys.stdout.flush()
 
 
 if __name__ == "__main__":
