@@ -584,7 +584,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `haze_distance` are ignored (the atmosphere hazes the sea). (#20)
 
 ### Fixed
-
+- Clouds no longer turn yellow/orange at the horizon, in the sea's
+  reflection and seen at a grazing angle from orbit, even at noon (#50): none
+  of them (raymarch, billboards, deck, cirrus) draws any air in front of
+  itself any more, as that air removed their blue and its in-scattered light
+  was too dim to restore it. Clouds therefore have no distance haze
+  (docs/source/atmosphere.md#clouds-at-the-horizon). `uCloudDebug` bit 2
+  (no atmosphere) is gone with it.
 - Planet clouds toward the horizon, and toward the limb from above, looked
   orange even with the sun overhead. The air in front of them leaves lit
   tops a little warm, and the clouds' own knee (the hue kept at every level,

@@ -414,8 +414,20 @@ Measured on the demo at 1.3 km with the sun 80° up, the brightest horizon
 tops went from (0.86, 0.84, 0.75) to (0.89, 0.87, 0.83) displayed; near
 clouds kept their contrast. Ruled out on the way: the sunlight's own tint
 (`sunset_radius`, `grazingLight`, `cloudTwilight`), since with only the air
-in front turned off (`uCloudDebug` bit 2) the clouds came out white; and too
+in front turned off the clouds came out white; and too
 few samples of that air per vertex (as orange with 8 as with 4).
+
+None of the clouds (the raymarch, the billboards and the deck, the cirrus)
+draws any air in front of them, since that haze still showed them yellow:
+seen at a grazing angle (from orbit, anywhere on the lit side, or at the
+horizon and in the sea's reflection) they turned yellow even at noon, and
+whitened as the camera closed in. The lit top is far brighter than the sky,
+and the extinction of a long path removes its blue, while the light the air
+adds is far too dim to restore it; desaturating either (keeping only the air's
+luminance) did not look natural either. A cloud keeps its own colour at any
+distance, and the sun's reddening (`cloudSunTint`) still turns a dusk cloud
+orange. The cost: no distance haze, so far clouds are as contrasty as near
+ones.
 
 ### Cirrus
 
@@ -562,8 +574,8 @@ translucent things: Panda's transparent bin sorts them all back to front.
 - the sunlight reddened by the air at the cirrus's own height
   (`cloudSunTint`), so it stays lit after the cumulus below has gone into
   the planet's shadow, then twilight (`cloudTwilight`);
-- the air in front of it per vertex (`atmosphereAlong`), and the sky's
-  display transform.
+- the sky's display transform (no air in front of it: see
+  [clouds at the horizon](#clouds-at-the-horizon)).
 
 From inside the slab it fades to nothing near the camera: a veil, not a
 volume to fly through.

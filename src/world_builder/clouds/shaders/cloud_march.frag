@@ -399,16 +399,9 @@ void main() {
     if ((uCloudDebug & 8) != 0) {
         colour = vec3(0.8);
     } else {
-        // The air in front, once, at the cloud's (transmittance-weighted)
-        // distance; its in-scattered light weighted by the cloud's alpha, as
-        // the billboards'.
-        if ((uCloudDebug & 2) == 0) {
-            vec3 airT, airS;
-            // As few samples as the billboards' per vertex: it is smooth.
-            atmosphereAlong(dir, weightedDistance / covered, sunDir, uAtmoVertexSteps,
-                            airT, airS);
-            colour = colour * airT + airS;
-        }
+        // No air in front of the cloud, unlike the billboards': a marched
+        // cloud keeps its own colour at any distance (atmosphere.md, "Clouds
+        // at the horizon"). The sun's reddening is in its light already.
         colour = displayColour(colour * exposure);
     }
     fragColor = vec4(colour * alpha, alpha);  // premultiplied "over"

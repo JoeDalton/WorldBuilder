@@ -252,7 +252,6 @@ What it costs, by construction:
   each (~180k), drawn twice (the `behind` and `front` nodes). They are in 96
   groups that Panda culls to the view.
 - **Per vertex:**
-  - the air in front (`atmosphereAlong` at `uAtmoVertexSteps`);
   - `cloudSunTint` and `cloudTwilight` (4 `atmoSunlight`).
 - **Per fragment:**
   - one mipmapped, anisotropic atlas fetch;

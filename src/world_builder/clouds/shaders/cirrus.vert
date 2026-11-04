@@ -21,8 +21,6 @@ out vec3 vPosition;
 flat out vec3 vEye;
 out vec2 vUv;
 out float vOpacity;
-out vec3 vAtmoT;
-out vec3 vAtmoS;
 out vec3 vSunTint;
 out float vSkyTint;
 out vec3 vTwilight;
@@ -36,13 +34,6 @@ void main() {
     vUv = p3d_MultiTexCoord0;
     vOpacity = i_opacity;
 
-    vec3 rel = p - vEye;
-    float dist = max(length(rel), 1e-3);
-    vAtmoT = vec3(1.0);
-    vAtmoS = vec3(0.0);
-    if ((uCloudDebug & 2) == 0) {
-        atmosphereAlong(rel / dist, dist, sunDir, uAtmoVertexSteps, vAtmoT, vAtmoS);
-    }
     vSunTint = vec3(1.0);
     vSkyTint = 1.0;
     vTwilight = vec3(0.0);

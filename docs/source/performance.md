@@ -440,7 +440,7 @@ GPU in series, and the difference between two runs is the difference in
 work. Its options: `--size`, `--offscreen`, `--quality
 low|mid|high|ultra` (the whole world's preset), a `--<part>-quality` per
 part over it (`--clouds-quality`, `--ocean-quality`, ...), `--no-clouds`, `--cloud-debug BITS` (cloud.frag's `uCloudDebug`: 1 no
-sun march, 2 no atmosphere, 4 two octaves only, 8 flat colour), `--frames
+sun march, 4 two octaves only, 8 flat colour), `--frames
 N`. `flight_bench.py` takes the same.
 
 ### Cheaper clouds, and the weather

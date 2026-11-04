@@ -1273,7 +1273,7 @@ class CloudVolume:
 
     def set_debug(self, flags: int) -> None:
         """Profiling switches (cloud_field.glsl's ``uCloudDebug`` bits): 1 no
-        sun march, 2 no atmosphere, 4 two octaves only, 8 flat colour.
+        sun march, 4 two octaves only, 8 flat colour.
 
         :param flags: the bits, 0 = normal
         """

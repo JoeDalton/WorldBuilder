@@ -241,6 +241,26 @@ def test_the_shader_shares_the_opaque_cutoff_and_the_step_deepening():
     assert "transmittance > OPAQUE" in text
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "cloud_march.frag",
+        "cloud.frag",
+        "cloud_sphere.vert",
+        "cloud_deck.vert",
+        "cirrus.vert",
+        "cirrus.frag",
+    ],
+)
+def test_no_cloud_draws_air_in_front_of_itself(name):
+    # The air's extinction and in-scatter turned clouds yellow at grazing
+    # angles, at the horizon and in the reflection, even at noon (#50)
+    text = (SHADER.parent / name).read_text()
+    assert "atmosphereAlong(" not in text
+    assert "applyAtmospheres(" not in text
+    assert "vAtmo" not in text
+
+
 def test_the_billows_share_the_columns_noise_in_one_evaluation():
     # marchDensity reads the field once (cloudColumnAt) and then only the
     # billows' own noise, not the whole density again per threshold

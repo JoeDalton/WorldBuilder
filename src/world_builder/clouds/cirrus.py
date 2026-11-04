@@ -839,8 +839,7 @@ class CloudSheet:
             self.root.set_shader_input("skyStrength", float(strength))
 
     def set_debug(self, flags: int) -> None:
-        """Profiling switches (``uCloudDebug`` bits): 2 no atmosphere, 8 flat
-        colour.
+        """Profiling switches (``uCloudDebug`` bits): 8 flat colour.
 
         :param flags: the bits, 0 = normal
         """
