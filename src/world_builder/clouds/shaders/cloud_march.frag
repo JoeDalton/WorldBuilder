@@ -134,6 +134,9 @@ float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
 const float SEGMENT_SAMPLES = 8.0;
 // The march stops at this transmittance, and counts the cloud opaque.
 const float OPAQUE = 0.04;
+// A step lengthens by this share of the transmittance already lost (march.STEP_DEEPENING):
+// in a dense cloud the light is spent in a few steps.
+const float STEP_DEEPENING = 1.5;
 // A cloudy column's alpha seen from afar: the deck's.
 const float FAR_ALPHA = 0.92;
 // The weather is read once this far along the ray, metres (uWeatherStretch):
@@ -314,7 +317,7 @@ void main() {
         float a = seg.x;
         float least = (seg.y - seg.x) / SEGMENT_SAMPLES;  // the fewest a segment takes
         while (a < seg.y && steps < uMarchSteps + 8 && transmittance > OPAQUE) {
-            float dt = min(min(max(dtMin, a * growth) * (1.0 + 1.5 * (1.0 - transmittance)), least), seg.y - a);
+            float dt = min(min(max(dtMin, a * growth) * (1.0 + STEP_DEEPENING * (1.0 - transmittance)), least), seg.y - a);
             float t = a + dt * jitter;
             steps++;
             int layer = fam * uLayerCount + layerAt(t);

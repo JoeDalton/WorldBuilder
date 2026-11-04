@@ -427,7 +427,7 @@ from `use_split_depth`):
    view's resolution into a texture. Everything but the clouds and the sky
    is drawn, the terrain through its depth-only stage, as for the
    half-resolution pass;
-2. a fullscreen card **marches** one pixel of every 2 × 2 block
+2. a fullscreen card **marches** one pixel of every block (2 × 2 at a half resolution, 4 × 4 at a quarter)
    (`march_resolution` ½; 4 × 4 at ¼), a different one each frame in a
    Bayer order. It writes the premultiplied cloud and its distance;
 3. a **resolve** gathers them into the view's resolution over the frames.

@@ -61,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     field per pixel, from the camera to the scene's depth: a game's model
     inside a cloud is hidden by just the cloud in front of it, and the
     camera inside a cloud sees it all around. It reaches orbit with no deck.
-  - One pixel of every 2 × 2 block is traced each frame and gathered into
+  - One pixel of every 2 × 2 block (4 × 4 at a quarter resolution: LOW and MID) is traced each frame and gathered into
     the full resolution by reprojection (`march_resolution`, `march_steps`,
     stepped by the quality presets). The result is laid over the scene at
     the cloud's own depth, so models cut it at full resolution.

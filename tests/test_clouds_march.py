@@ -18,12 +18,15 @@ import pytest
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.march import (
     MIN_STEP_FEATURE,
+    OPAQUE,
     SEGMENT_SAMPLES,
+    STEP_DEEPENING,
     STEP_GROWTH,
     VIEW_EXTINCTION_SCALE,
     CloudMarch,
     bayer_offset,
     block_of,
+    march_ray,
     march_steps,
     march_transmittance,
     min_step,
@@ -198,6 +201,65 @@ def test_a_uniform_medium_is_exact_at_any_step():
     for n in (3, 17, 200):
         transmittance, _ = march_transmittance(np.full(n, 0.004), np.full(n, 600.0 / n))
         assert transmittance == pytest.approx(2.0**-2.4)
+
+
+def test_a_dense_cloud_stops_the_march_early_and_counts_opaque():
+    segments = np.array([[0.0, 6000.0]])
+    thin, thin_samples = march_ray(segments, 50.0, STEP_GROWTH, 64, lambda t: 0.0002)
+    dense, dense_samples = march_ray(segments, 50.0, STEP_GROWTH, 64, lambda t: 0.05)
+    assert dense == 0.0  # opaque: the pixel takes the cloud's alpha as 1
+    assert dense_samples < thin_samples / 3
+    assert 0.0 < thin < 1.0
+    # Clear air takes every step and lets everything through
+    clear, _ = march_ray(segments, 50.0, STEP_GROWTH, 64, lambda t: 0.0)
+    assert clear == 1.0
+
+
+def test_stopping_at_opaque_and_the_longer_steps_keep_the_integral():
+    # The shader's early stop and its deepening steps against the fine
+    # integral of media from thin to dense: the pixel's alpha within a few %
+    segments = np.array([[500.0, 3500.0]])
+    for sigma in (0.0002, 0.0006, 0.002, 0.01):
+        t, dt = march_steps(segments, 50.0, STEP_GROWTH, 4096)
+        reference = march_transmittance(np.full(len(t), sigma), dt)[0]
+        mean = np.mean(
+            [
+                march_ray(segments, 50.0, STEP_GROWTH, 64, lambda t: sigma, j)[0]
+                for j in (0.125, 0.375, 0.625, 0.875)
+            ]
+        )
+        assert abs((1.0 - mean) - (1.0 - reference)) < 0.06
+
+
+def test_the_shader_shares_the_opaque_cutoff_and_the_step_deepening():
+    text = SHADER.read_text()
+    assert float(re.search(r"OPAQUE = ([\d.]+);", text).group(1)) == OPAQUE
+    assert (
+        float(re.search(r"STEP_DEEPENING = ([\d.]+);", text).group(1)) == STEP_DEEPENING
+    )
+    assert "STEP_DEEPENING * (1.0 - transmittance)" in text
+    assert "transmittance > OPAQUE" in text
+
+
+def test_the_billows_share_the_columns_noise_in_one_evaluation():
+    # marchDensity reads the field once (cloudColumnAt) and then only the
+    # billows' own noise, not the whole density again per threshold
+    text = SHADER.read_text()
+    start = text.index("float marchDensity(")
+    body = text[start : text.index("\n}\n", start)]
+    assert body.count("cloudColumnAt(") == 1
+    assert "cloudDensityAt(" not in body
+
+
+def test_the_resolve_leaves_clear_sky_alone():
+    # The resolve returns early where the march and the history hold no cloud
+    # (before the history's and the neighbourhood's reads)
+    text = (SHADER.parent / "cloud_resolve.frag").read_text()
+    main = text[text.index("void main") :]
+    clear = main.index("<= 0.0) {")  # the history's alpha, the early-out's test
+    assert "return;" in main[clear : clear + 400]
+    # ... before the 3 x 3's taps for the clamp
+    assert clear < main.index("tapKm")
 
 
 @pytest.fixture(scope="module")

@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import functools
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -159,6 +160,12 @@ STEP_GROWTH = 0.01
 #: than its clouds' edges are thick, would hit or miss thin cloud by the
 #: jitter's chance, frame after frame (sparkle seen from 20 km up).
 SEGMENT_SAMPLES = 8
+#: The march stops at this transmittance and counts the cloud opaque
+#: (cloud_march.frag's OPAQUE).
+OPAQUE = 0.04
+#: A step lengthens by this share of the transmittance already lost
+#: (cloud_march.frag's STEP_DEEPENING).
+STEP_DEEPENING = 1.5
 #: The view ray's extinction over the field's (the sun march keeps the
 #: field's own). The billboards' look: each of their quads carries its
 #: sample's density over a whole chord, which keeps a cloud's edge crisp;
@@ -330,6 +337,44 @@ def march_transmittance(
     alpha = 1.0 - np.exp2(-extinction * dt)
     transmittance = np.concatenate([[1.0], np.cumprod(1.0 - alpha)])
     return float(transmittance[-1]), transmittance[:-1] * alpha
+
+
+def march_ray(
+    segments: ArrayLike,
+    min_step: float,
+    growth: float,
+    budget: int,
+    extinction_at: Callable[[float], float],
+    jitter: float = 0.5,
+) -> tuple[float, int]:
+    """One ray's march as the shader runs it: the steps of :func:`march_steps`
+    that lengthen as the light is spent (:data:`STEP_DEEPENING`), stopping at
+    :data:`OPAQUE`.
+
+    :param extinction_at: the optical depth per metre at a distance along the ray
+    :returns: the transmittance left (0 once the cloud is counted opaque), and
+        the samples taken
+    """
+    k = step_scale(segments, min_step, growth, budget)
+    min_step, growth = min_step * k, growth * k
+    transmittance, samples = 1.0, 0
+    for t0, t1 in segments:
+        if t1 <= t0:
+            continue
+        least = (t1 - t0) / SEGMENT_SAMPLES
+        a = t0
+        while a < t1 and samples < budget + 8 and transmittance > OPAQUE:
+            dt = min(
+                max(min_step, a * growth)
+                * (1.0 + STEP_DEEPENING * (1.0 - transmittance)),
+                least,
+                t1 - a,
+            )
+            samples += 1
+            alpha = 1.0 - 2.0 ** (-extinction_at(a + dt * jitter) * dt)
+            transmittance *= 1.0 - alpha
+            a += dt
+    return (0.0 if transmittance <= OPAQUE else transmittance), samples
 
 
 def min_step(field: DensityField) -> float:

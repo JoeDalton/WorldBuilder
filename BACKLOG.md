@@ -209,40 +209,54 @@ So the remaining time is in the cloudy pixels' work and the passes, not in the
 empty air. Ideas below are re-ranked by that: (the first of them is the one the
 measurements no longer support.)
 
-Ideas, by expected gain:
+Ideas, by expected gain (status after 4.2 and 4.3):
 
-1. ~~Skip empty air~~ (above: tried, 0.1-0.4 ms). What could still help is work per
-   *cloudy* step and per warp: lighting reused across steps, billows only at the
-   edge, a cheaper sun depth, and tracing at a lower resolution where the view is
-   all sky (a coarse pre-pass to find the pixels that see cloud).
-2. **Fewer fixed passes** (0.8-1.2 ms): the resolve early-outs where the four
-   nearest samples and the history are empty (or is a compute shader with
-   shared memory); no near layer when it has nothing to draw; the march's
-   depth at half resolution (the composite tests at full resolution anyway);
-   the composite folded into the resolve.
-3. **Cheaper set-up per pixel** (0.2-0.4 ms): the slabs' constants as uniforms,
-   not repeated `getField` unpacks.
-4. **Billows** (0.3-0.5 ms): one density evaluation, its threshold shifted
-   twice (`marchDensity` evaluates the field twice per cloudy sample).
-5. **Lighting** (0.2-0.4 ms): only where alpha x transmittance matters, or
-   reused across adjacent steps in a cloud.
-6. **Resolution policy:** a quarter in the far range, a half in the near
-   (a quarter everywhere saves about 1.8 ms at the start pose, at a cost in
-   motion).
-7. **Ground shadows** (0.3-1.5 ms): re-bake the maps less often, drop the
-   far map's blend. A weather read every 100 m with genera saves 0.3-0.5 ms
-   (check for bands).
+1. ~~Skip empty air~~ (tried, 0.1-0.4 ms). Work per *cloudy* step and per
+   warp is what is left: billows only at the edge, a cheaper sun depth, and
+   tracing at a lower resolution where the view is all sky (a coarse pre-pass
+   to find the pixels that see cloud). Not tried.
+2. ~~Fewer fixed passes~~: measured small (`--passes` at HIGH: depth 0.08,
+   resolve 0.3, composite 0.14 ms), so a half-resolution depth pass or the
+   composite folded into the resolve would save about 0.1 ms each. The near
+   layer already stops when the slab is out of range. A compute-shader
+   resolve: not tried (only if the resolve grows).
+3. **Cheaper set-up per pixel** (0.2-0.4 ms, measured in 4.0): the slabs'
+   constants as uniforms, not repeated `getField` unpacks. Not done.
+4. ~~Billows~~ done (shared column, 0.1 ms).
+5. ~~Lighting reuse~~ tried: every other cloudy step reuses the last's
+   radiance, 0.1 ms or less (start 3.78 -> 3.78, inside 4.91 -> 4.78):
+   dropped.
+6. **Resolution policy (open decision):** a quarter meets the targets
+   (plain 2.1-2.3 ms, genera 2.5-3.1 ms at 64 steps, 1440p) and a half does
+   not (3.8-4.9, genera 6.8-8.1 ms), at HIGH's price: error against the
+   reference about 3x, moving flicker 2-3x, edges softer. MID went to a
+   quarter in 4.3; HIGH and ULTRA are at a half. Not tried: a quarter in
+   the far range and a half in the near; a denoise (an edge-aware blend in
+   the resolve, MARCH_PLAN 4.1.5, and a variance-aware history, 4.1.4:
+   neither was built, the smoothing and the Gaussian statistics replaced
+   them) to make a quarter look like a half; and a HIGH that is a quarter
+   only when the frame is over budget. A game at 160 fps needs one of them.
+7. **Ground shadows** (0.3-1.5 ms): re-bake the maps less often
+   (`CloudShadowMaps.RECENTRE`, the sun's steps), drop the far map's blend.
+   A weather read every 100 m with genera saves 0.3-0.5 ms (check for
+   bands). Neither done.
 
 Billboards stay faster over a distant sky (genera `cb_far` 1.35 against
-3.7 ms at half resolution). `CloudSettings.renderer` still defaults to
-`"billboards"` (MARCH_PLAN's switch is not made); the demo's
-`--cloud-renderer march` picks the march.
+3.7 ms at half resolution). `CloudSettings.renderer` now defaults to
+`"march"` at every preset (4.3); billboards are selectable.
+
+The jitter that remains: slightly visible at LOW and MID (a quarter), the
+genera at LOW most (p99 6-8 levels still); the user judged it acceptable.
 
 ### Docs and wiring
 
-- performance.md "The raymarch with genera" is labelled quarter resolution
-  but was measured at HIGH's half: relabel (at a quarter: between_towers
-  about 3.0, under_anvil about 3.3 ms of cloud).
+- No test runs the march's GLSL: the shaders are checked as text (the constants
+  they share with Python, `marchDensity`'s single field read, the resolve's
+  clear-sky early-out) and through the NumPy mirror (`march.march_ray`: the
+  opaque stop and the deepening steps against the fine integral). A small
+  offscreen harness that renders a march pass on a fixed weather and reads it
+  back (clear sky -> alpha 0, a dense cloud -> alpha 1, the billows' column
+  equal to `cloudDensityAt`) would close it.
 - The hand-built demo (`scripts/demo_terrain.py`) wires the clouds' shadows
   and maps itself beside `World`'s (`bind_shadow_inputs`, `bind_maps`): keep
   the two in step.
