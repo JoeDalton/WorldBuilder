@@ -1443,6 +1443,46 @@ RTX 3070, 2560 x 1440, HIGH (half resolution, 64 steps), `cloud_bench.py
   14.66 -> 14.46 ms, p95 16.6 -> 16.2 ms, within the run-to-run noise (0.5 ms). The
   camera is 900 m under the slab, where little lies behind an opaque near cloud.
 
+### Non-square blocks: an eighth (4 x 2) and a ninth (3 x 3)
+
+EVE-Redux traces one pixel in 8 or 9 a frame by default (`TemporalUpscaling` x8,
+x9); the march had only a half (2 x 2) and a quarter (4 x 4) per axis, so one in 4
+or one in 16, with nothing between (§23 "Phase 4.2": a half too dear, a quarter
+too soft). `CloudSettings.march_block` now takes (bx, by): 1 x 1, 2 x 2, 4 x 2,
+3 x 3, 4 x 4. EVE's own 4 x 2 and 3 x 3 orders trace touching pixels on consecutive
+frames; ours (`march.block_order`, an exhaustive search) keep consecutive pixels a
+diagonal apart even across the blocks' edges.
+
+RTX 3070, 2560 x 1440, HIGH (64 steps, the one march of the section above): clouds'
+cost (`--passes`, ms) and `--jitter` (moving error against full resolution, edge
+sharpness against it, still p99):
+
+| Pose | 2 x 2 | 4 x 2 | 3 x 3 | 4 x 4 |
+|---|---|---|---|---|
+| start: cost / err / sharp | 2.96 / 1.36 / 0.96 | 1.91 / 1.98 / 0.93 | 1.82 / 2.04 / 0.91 | 1.41 / 3.49 / 0.87 |
+| inside | 3.55 / 1.73 / 0.97 | 2.14 / 2.19 / 0.94 | 2.31 / 2.19 / 0.93 | 1.47 / 3.34 / 0.90 |
+| high (20 km) | 1.52 / 2.29 / 0.91 | 1.11 / 4.37 / 0.84 | 1.09 / 4.40 / 0.82 | 0.99 / 6.80 / 0.75 |
+| sunset | 2.19 / 0.84 / 0.95 | 1.41 / 1.40 / 0.92 | 1.44 / 1.40 / 0.91 | 1.15 / 2.62 / 0.88 |
+| genera cb_far | 2.47 / 3.83 / 0.87 | 1.54 / 5.74 / 0.77 | 1.53 / 5.74 / 0.76 | 1.16 / 9.36 / 0.67 |
+| genera between_towers | 5.47 / 8.37 / 0.84 | 3.13 / 10.68 / 0.75 | 2.94 / 10.68 / 0.73 | 2.03 / 16.37 / 0.62 |
+| genera under_anvil | 6.64 / 4.95 / 0.94 | 3.75 / 8.67 / 0.83 | 3.47 / 8.67 / 0.81 | 2.34 / 16.98 / 0.74 |
+| genera stratus_above | 4.41 / 2.00 / 0.96 | 2.67 / 2.26 / 0.93 | 2.57 / 2.28 / 0.89 | 1.85 / 2.91 / 0.84 |
+
+- An eighth or a ninth costs about 60 % of a half (0.4-2.9 ms less), and its error
+  against the reference is 1.1-1.9 times a half's, against 1.5-3.4 times for a
+  quarter. The still shimmer (p99) is no worse than a half's (2.2-5.9 against
+  2.6-6.4 levels); the moving grid is lower than a half's in the genera's towers.
+- 4 x 2 and 3 x 3 cost the same; 4 x 2 is slightly sharper (0.01-0.04) with a lower
+  grid on the plain poses. `STEP_FADES` and `SMOOTHING` for both are between a
+  half's and a quarter's (0.15, 0.75), not tuned further.
+- What an eighth loses is edge sharpness in motion (0.92-0.94 plain, 0.75-0.85 in
+  towers, against 0.95-0.97 and 0.84-0.94): the reconstruction's bilinear mix of the
+  fresh samples, which the exact-pixel reconstruction (next) aims at.
+- **HIGH now traces 4 x 2** (ULTRA keeps 2 x 2, LOW and MID 4 x 4). SpaceFlight's
+  Mission 3 (still pose, 2560 x 1440, 3 runs each against the tree before §24,
+  alternated): mean 14.88 -> 12.44 ms, median 14.57 -> 11.83, p95 16.64 -> 14.43,
+  p99 20.65 -> 17.86 (runs within 0.2 ms of each other).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

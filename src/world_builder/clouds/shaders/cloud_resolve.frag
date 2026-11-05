@@ -1,6 +1,6 @@
 #version 330
 // The raymarch's full resolution (clouds.march), gathered over the frames:
-// cloud_march.frag traces one pixel of every uBlock x uBlock block a frame;
+// cloud_march.frag traces one pixel of every uBlock.x x uBlock.y block a frame;
 // every pixel here blends this frame's samples around it (reconstructed
 // bilinearly from the four nearest) into the last frame's result, moved to
 // where the camera now sees it (reprojected along the view ray to the pixel's
@@ -24,7 +24,7 @@ uniform sampler2D uHistory;          // the last frame's result, full resolution
 uniform sampler2D uHistoryDistance;  // r: distance, km; g: samples gathered
 uniform mat4  uClipToRel;            // clip space -> relative to the camera (world axes)
 uniform mat4  uPrevRelToClip;        // relative to the camera -> the last frame's clip space
-uniform int   uBlock;
+uniform ivec2 uBlock;
 uniform ivec2 uOffset;
 uniform vec2  uViewSize;
 uniform int   uHistoryValid;         // 0: no usable last frame (first, resized, jumped)
@@ -75,8 +75,8 @@ bool reproject(vec3 dir, float km, out vec2 at) {
 
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    ivec2 last = ivec2(ceil(uViewSize / float(uBlock))) - 1;
-    float block = float(uBlock);
+    ivec2 last = ivec2(ceil(uViewSize / vec2(uBlock))) - 1;
+    vec2 block = vec2(uBlock);
 
     // The march's samples around: sample k sits at view pixel k * block +
     // uOffset. The four nearest, bilinearly; the 3 x 3 around, for the clamp.

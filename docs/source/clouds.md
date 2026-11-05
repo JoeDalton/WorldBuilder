@@ -429,9 +429,13 @@ depths:
    view's resolution into a texture. Everything but the clouds and the sky
    is drawn, the terrain through its depth-only stage, as for the
    half-resolution pass;
-2. a fullscreen card **marches** one pixel of every block (2 × 2 at a half resolution, 4 × 4 at a quarter)
-   (`march_resolution` ½; 4 × 4 at ¼), a different one each frame in a
-   Bayer order, from the near range's near plane to the near range's
+2. a fullscreen card **marches** one pixel of every block
+   (`CloudSettings.march_block`: 2 × 2 at a half resolution, 4 × 2 for an
+   eighth of the pixels, 3 × 3 for a ninth, 4 × 4 at a quarter), a different
+   one each frame (`march.block_order`: consecutive frames never trace
+   touching pixels, even across the blocks' edges; 4 × 4 is a Bayer order,
+   4 × 2 and 3 × 3 were found by an exhaustive search, as EVE-Redux's own
+   sequences for them trace touching pixels in turn), from the near range's near plane to the near range's
    surface where its depth pass drew one, else to the far range's (EVE's
    distance buffer of both cameras, read in the march itself). It stops once
    the cloud is opaque, so a cloud near the camera spares the march the ones

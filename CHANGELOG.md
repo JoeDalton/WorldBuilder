@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `CloudSettings.march_resolution` (per axis: 0.25, 0.5, 1.0) is now
+  `march_block` (bx, by): the march traces one pixel of each block a frame.
+  Besides 4 x 4, 2 x 2 and 1 x 1 (a quarter, a half, full) it takes 4 x 2 (one
+  pixel in 8) and 3 x 3 (one in 9), EVE-Redux's default range, in orders where
+  consecutive frames never trace touching pixels (`march.block_order`).
+  **HIGH now traces 4 x 2** (it was 2 x 2, which ULTRA keeps): its clouds cost
+  about 60 % of what they did (0.4-2.9 ms less at 2560 x 1440), a little softer
+  in motion (performance.md §24). Saved settings keep their block
+  (`RENAMED`; "Quarter", "Half" and "Full" are the same choices).
+  `cloud_bench.py --march-block 4x2` (`--march-resolution` still takes 1, 0.5
+  or 0.25).
 - The raymarched clouds march once over both depth ranges of the split
   cameras (EVE-Redux's single march), not once per range: a ray runs from the
   near range's near plane to its surface, else the far range's, and stops

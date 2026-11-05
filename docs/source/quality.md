@@ -165,8 +165,9 @@ labels and ranges below are what the schema gives.
 
 The low clouds are raymarched at every preset (`renderer`, a rebuild knob that
 a preset does not change; "Billboards" selects the billboard renderer). The
-march's own knobs are `march_steps` (24, 40, 64, 96) and `march_resolution`
-(a quarter at LOW and MID, a half at HIGH and ULTRA); the billboard knobs below
+march's own knobs are `march_steps` (24, 40, 64, 96) and `march_block`
+(one pixel in 16 traced a frame, 4 × 4, at LOW and MID; one in 8, 4 × 2, at
+HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
 (`count_scale`, overlaps, `shell_octaves`, `shells`, `interior_growth`,
 `half_resolution`) apply to the billboards only.
 

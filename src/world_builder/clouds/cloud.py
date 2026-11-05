@@ -237,8 +237,9 @@ class CloudSettings(QualitySettings):
         other renderer are ignored. Rebuild
     :ivar march_steps: most steps of the raymarch per pixel (it stops
         sooner once the cloud is opaque). Live
-    :ivar march_resolution: the raymarch's resolution over the view's, per
-        axis. Live
+    :ivar march_block: the view's pixels per raymarched pixel, (across,
+        up): the march traces one pixel of each block a frame, in turn
+        (``march.block_order``). Live
     :ivar interior_growth: billboards deep inside a cloud grow, fewer of
         them (:func:`sphere.interior_levels`). Rebuild
     :ivar count_scale: billboards relative to the types as authored: their
@@ -278,11 +279,20 @@ class CloudSettings(QualitySettings):
         help="Most samples per pixel of the raymarch: its smoothness along "
         "the view (raymarch only).",
     )
-    march_resolution: float = knob(
-        0.5,
+    march_block: tuple[int, int] = knob(
+        (4, 2),
         "Raymarch resolution",
-        choices={"Quarter": 0.25, "Half": 0.5, "Full": 1.0},
-        help="The raymarch's resolution, per axis, over the view's (raymarch only).",
+        choices={
+            "Quarter": (4, 4),
+            "Ninth (3 x 3)": (3, 3),
+            "Eighth (4 x 2)": (4, 2),
+            "Half": (2, 2),
+            "Full": (1, 1),
+        },
+        help="The share of the view's pixels the raymarch traces each frame (it "
+        "gathers the others over the frames): a quarter of the resolution per axis "
+        "traces one pixel in 16, a ninth one in 9, an eighth one in 8, a half one "
+        "in 4 (raymarch only).",
     )
     interior_growth: bool = knob(
         False,
@@ -364,6 +374,8 @@ class CloudSettings(QualitySettings):
     )
 
     LABEL: ClassVar = "Clouds"
+    # Saved by label: "Quarter", "Half" and "Full" keep their blocks.
+    RENAMED: ClassVar = {"march_resolution": "march_block"}
     # The count is where the frame time is and costs no opacity; the march
     # carries the clouds' form, so it is stepped far more gently. Overlap
     # (a volume fraction) does not change opacity either (the extinction is
@@ -378,7 +390,7 @@ class CloudSettings(QualitySettings):
             "shell_octaves": (4, 3, 3, 2),
             "reflected": False,
             "march_steps": 24,
-            "march_resolution": 0.25,
+            "march_block": (4, 4),
             "interior_growth": True,
             "half_resolution": True,
         },
@@ -389,7 +401,7 @@ class CloudSettings(QualitySettings):
             "overlap_far": 1.5,
             "shell_octaves": (4, 4, 3, 3),
             "march_steps": 40,
-            "march_resolution": 0.25,
+            "march_block": (4, 4),
             "interior_growth": True,
             "half_resolution": True,
         },
@@ -398,6 +410,7 @@ class CloudSettings(QualitySettings):
             "march_scale": 1.5,
             "shell_octaves": (4,),
             "march_steps": 96,
+            "march_block": (2, 2),
         },
     }
 

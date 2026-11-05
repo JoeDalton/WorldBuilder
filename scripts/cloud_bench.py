@@ -8,7 +8,7 @@ sky and the clouds, so the clouds are most of the frame.
         [--half-res | --no-half-res]
         [--uniform-coverage C] [--no-cirrus] [--cloud-debug BITS]
         [--move M] [--genera] [--interior-growth | --no-interior-growth]
-        [--march-resolution R] [--stability N] [--interactive]
+        [--march-block BLOCK] [--stability N] [--interactive]
         [--passes] [--steps-sweep] [--jitter]
 
     --out              where the PNGs go (default ./cloud_bench)
@@ -21,8 +21,9 @@ sky and the clouds, so the clouds are most of the frame.
     --renderer         billboards (the default) or march (the raymarch)
     --half-res         the clouds at half resolution (CloudSettings
                        .half_resolution), over the preset's choice
-    --march-resolution the raymarch's resolution over the view's (1, 0.5,
-                       0.25: CloudSettings.march_resolution), over the preset's
+    --march-block      the raymarch's block, BXxBY (1x1, 2x2, 4x2, 3x3, 4x4:
+                       CloudSettings.march_block; --march-resolution 1, 0.5
+                       or 0.25 is 1x1, 2x2 or 4x4), over the preset's
     --uniform-coverage the same coverage everywhere (no weather systems,
                        climate or terrain): comparisons that do not depend
                        on where the pose is
@@ -47,8 +48,8 @@ sky and the clouds, so the clouds are most of the frame.
                        depth passes, the march, the resolve and the
                        composites left out
     --steps-sweep      (raymarch) the clouds' cost against the step budget
-                       (8 to 128) at a quarter, a half and the full
-                       resolution
+                       (8 to 128) at each march block (4x4, 3x3, 4x2, 2x2,
+                       1x1)
     --jitter           (raymarch) the steadiness at this preset, per pose,
                        still and moving (--move, --turn; default 10 m and 0.3
                        degrees a frame; --stability frames, default 30):
@@ -94,7 +95,7 @@ clouds are hidden), from N frames read back after the timing:
   its mean and 99th percentile (the billboards' still frames: 0). Moving,
   the view changes too: compare renderers at the same --move;
 * **grid**: how much one pixel of each march block (block x block pixels,
-  CloudSettings.march_resolution) stands out from the others: each frame's
+  CloudSettings.march_block) stands out from the others: each frame's
   brightness less its 3 x 3 mean, its RMS by the pixel's place in its block;
   the largest less the smallest, 8-bit steps, averaged over the frames (0:
   no pattern; the billboards measure it at the march's block too).
@@ -243,11 +244,12 @@ def spread(frames: list[np.ndarray], mask: np.ndarray) -> tuple[float, float]:
     return float(ranges.mean()), float(np.percentile(ranges, 99))
 
 
-def grid_score(frame: np.ndarray, mask: np.ndarray, block: int) -> float:
-    """How much one place in each *block* x *block* block stands out: the
+def grid_score(frame: np.ndarray, mask: np.ndarray, block: tuple[int, int]) -> float:
+    """How much one place in each block (across, up) stands out: the
     brightness less its 3 x 3 mean, its RMS per place in the block over the
     masked pixels, the largest less the smallest, 8-bit steps (0: none)."""
-    if block <= 1:
+    bx, by = block
+    if bx * by <= 1:
         return 0.0
     lum = luminance(frame)
     padded = np.pad(lum, 1, mode="edge")
@@ -262,9 +264,9 @@ def grid_score(frame: np.ndarray, mask: np.ndarray, block: int) -> float:
     )
     residual = lum - box
     y, x = np.mgrid[0:h, 0:w]
-    place = (y % block) * block + (x % block)
+    place = (y % by) * bx + (x % bx)
     rms = []
-    for k in range(block * block):
+    for k in range(bx * by):
         chosen = mask & (place == k)
         if chosen.sum() < 64:
             return 0.0
@@ -732,10 +734,13 @@ def main() -> None:
         help="larger billboards inside clouds, over the preset's choice",
     )
     parser.add_argument(
+        "--march-block",
         "--march-resolution",
-        type=float,
+        dest="march_block",
+        type=block_of,
         default=None,
-        help="the raymarch's resolution over the view's, over the preset's",
+        help="the raymarch's block, BXxBY (or an old resolution: 1, 0.5, 0.25), "
+        "over the preset's",
     )
     parser.add_argument(
         "--stability",
@@ -768,8 +773,8 @@ def main() -> None:
         settings = replace(settings, interior_growth=args.interior_growth)
     if args.half_res is not None:
         settings = replace(settings, half_resolution=args.half_res)
-    if args.march_resolution is not None:
-        settings = replace(settings, march_resolution=args.march_resolution)
+    if args.march_block is not None:
+        settings = replace(settings, march_block=args.march_block)
     bench = CloudBench(
         settings,
         cirrus=not args.no_cirrus,
@@ -820,7 +825,7 @@ def main() -> None:
 def bench_poses(bench: CloudBench, args: argparse.Namespace) -> None:
     """Time (and with --stability, score) each pose; see the module."""
     args.out.mkdir(parents=True, exist_ok=True)
-    block = block_of(bench.settings.march_resolution)
+    block = bench.settings.march_block
     steps = (args.cloud_debug & 16) != 0
     header = f"{'pose':<14} {'frame':>9} {'p95':>9} {'no clouds':>10} {'clouds':>9}"
     header += f" {'billboards':>11}"
@@ -950,24 +955,25 @@ _PASSES = ("full", "-near", "-depth", "-march", "-resolve", "-comp")
 
 
 def bench_steps(bench: CloudBench, args: argparse.Namespace) -> None:
-    """The clouds' cost (ms) against the step budget, by resolution."""
+    """The clouds' cost (ms) against the step budget, by march block."""
     budgets = (8, 16, 24, 40, 64, 96, 128)
     original = bench.settings
-    print(f"{'pose':<16} {'res':>5}  " + "  ".join(f"{b:>6}" for b in budgets))
+    print(f"{'pose':<16} {'block':>5}  " + "  ".join(f"{b:>6}" for b in budgets))
     for name in _pose_names(args):
         _arrive(bench, name, args.timeout)
         bench.clouds.set_visible(False)
         none = _cost(bench, args.frames)
         bench.clouds.set_visible(True)
-        for resolution in (0.25, 0.5, 1.0):
+        for block in ((4, 4), (3, 3), (4, 2), (2, 2), (1, 1)):
             row = []
             for budget in budgets:
                 bench.clouds.set_settings(
-                    replace(original, march_resolution=resolution, march_steps=budget)
+                    replace(original, march_block=block, march_steps=budget)
                 )
                 row.append(_cost(bench, args.frames, after=25) - none)
             print(
-                f"{name:<16} {resolution:>5}  " + "  ".join(f"{v:>6.2f}" for v in row)
+                f"{name:<16} {block[0]:>3}x{block[1]}  "
+                + "  ".join(f"{v:>6.2f}" for v in row)
             )
         bench.clouds.set_settings(original)
         sys.stdout.flush()
@@ -1004,16 +1010,17 @@ def fly(
 def bench_jitter(bench: CloudBench, args: argparse.Namespace) -> None:
     """The steadiness of each pose at the preset, see the module."""
     original = bench.settings
-    block = block_of(original.march_resolution)
+    block = original.march_block
     move = args.move or (0.0 if args.turn else 10.0)
     turn = args.turn or (0.0 if args.move else 0.3)
     frames = args.stability or 30
     reference = replace(
-        original, march_resolution=1.0, march_steps=max(original.march_steps, 96)
+        original, march_block=(1, 1), march_steps=max(original.march_steps, 96)
     )
     print(
-        f"clouds {args.quality}: resolution {original.march_resolution}, "
-        f"{original.march_steps} steps; flight {move} m and {turn} degrees a frame"
+        f"clouds {args.quality}: block {original.march_block[0]}x"
+        f"{original.march_block[1]}, {original.march_steps} "
+        f"steps; flight {move} m and {turn} degrees a frame"
     )
     print(
         f"{'pose':<16} {'spread':>7} {'p99':>6} {'grid':>6}   "

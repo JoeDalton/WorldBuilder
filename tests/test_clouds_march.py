@@ -17,6 +17,7 @@ import pytest
 
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.march import (
+    BLOCKS,
     MIN_STEP_FEATURE,
     OPAQUE,
     SEGMENT_SAMPLES,
@@ -26,6 +27,7 @@ from world_builder.clouds.march import (
     CloudMarch,
     bayer_offset,
     block_of,
+    block_order,
     march_ray,
     march_steps,
     march_transmittance,
@@ -516,35 +518,61 @@ def test_the_jitters_blue_noise_has_every_rank_once_and_no_low_frequencies():
 def test_the_far_detail_fades_more_the_fewer_pixels_a_frame_is_traced():
     from world_builder.clouds.march import step_fade_of
 
-    assert step_fade_of(1) == 0.0
-    assert 0.0 <= step_fade_of(2) < step_fade_of(4) < 0.4
+    assert step_fade_of((1, 1)) == 0.0
+    fades = [step_fade_of(b) for b in ((2, 2), (4, 2), (3, 3), (4, 4))]
+    assert 0.0 <= fades[0] < fades[1] <= fades[2] < fades[3] < 0.4
 
 
 def test_the_resolve_smooths_more_the_fewer_pixels_a_frame_is_traced():
     from world_builder.clouds.march import smoothing_of
 
-    assert smoothing_of(1) == 0.0
-    assert 0.0 < smoothing_of(2) < smoothing_of(4) == 1.0
+    assert smoothing_of((1, 1)) == 0.0
+    smooth = [smoothing_of(b) for b in ((2, 2), (4, 2), (3, 3), (4, 4))]
+    assert 0.0 < smooth[0] < smooth[1] <= smooth[2] < smooth[3] == 1.0
 
 
 # ── Gathering over the frames ────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("resolution,block", [(1.0, 1), (0.5, 2), (0.25, 4)])
-def test_each_frame_traces_one_pixel_of_a_block_and_a_cycle_all(resolution, block):
-    assert block_of(resolution) == block
-    cycle = [bayer_offset(block, frame) for frame in range(block * block)]
-    assert sorted(cycle) == [(x, y) for x in range(block) for y in range(block)]
+def test_the_settings_name_a_block():
+    assert block_of((4, 2)) == (4, 2)
+    assert block_of([3, 3]) == (3, 3)
+    assert block_of("4x2") == (4, 2)
+    # The old march_resolution, per axis
+    assert [block_of(r) for r in (1.0, 0.5, 0.25)] == [(1, 1), (2, 2), (4, 4)]
+    with pytest.raises(ValueError):
+        block_of((5, 2))
+    assert set(BLOCKS) == {(1, 1), (2, 2), (4, 2), (3, 3), (4, 4)}
+    choices = dict(CloudSettings.knobs())["march_block"].choices
+    assert set(choices.values()) == set(BLOCKS)
+
+
+def test_a_saved_march_resolution_keeps_its_block():
+    saved = {"march_resolution": "Quarter"}
+    settings = CloudSettings.from_overrides(CloudSettings(), saved)
+    assert settings.march_block == (4, 4)
+    assert CloudSettings.preset(QualityLevel.LOW).march_block == (4, 4)
+    # HIGH traces an eighth (4 x 2), ULTRA a quarter (2 x 2), MID a sixteenth
+    assert CloudSettings().march_block == (4, 2)
+    assert CloudSettings.preset(QualityLevel.ULTRA).march_block == (2, 2)
+    assert CloudSettings.preset(QualityLevel.MID).march_block == (4, 4)
+
+
+@pytest.mark.parametrize("block", BLOCKS)
+def test_each_frame_traces_one_pixel_of_a_block_and_a_cycle_all(block):
+    bx, by = block
+    cycle = [bayer_offset(block, frame) for frame in range(bx * by)]
+    assert sorted(cycle) == sorted((x, y) for x in range(bx) for y in range(by))
     # And then again, in the same order
-    assert bayer_offset(block, block * block) == cycle[0]
+    assert bayer_offset(block, bx * by) == cycle[0]
 
 
-@pytest.mark.parametrize("block", [1, 2, 4])
+@pytest.mark.parametrize("block", BLOCKS)
 def test_each_visit_moves_the_jitter_on_once(block):
-    """A pixel traced once a cycle of block x block frames runs through the
+    """A pixel traced once a cycle of the block's frames runs through the
     jitter's sequence one step a visit, not one a frame (it would skip
     through it, its visits half a step apart and never stratified)."""
-    cycle = block * block
+    cycle = block[0] * block[1]
     traced = [f for f in range(8 * cycle) if bayer_offset(block, f) == (0, 0)]
     assert [visit_of(block, f) for f in traced] == list(range(8))
     golden = 0.618034
@@ -553,8 +581,13 @@ def test_each_visit_moves_the_jitter_on_once(block):
     assert visit_of(block, 7, gather=False) == 7
 
 
+def _torus(a, b, block):
+    dx, dy = abs(a[0] - b[0]), abs(a[1] - b[1])
+    return math.hypot(min(dx, block[0] - dx), min(dy, block[1] - dy))
+
+
 def test_neighbours_come_far_apart_in_time():
-    cycle = [bayer_offset(4, frame) for frame in range(16)]
+    cycle = [bayer_offset((4, 4), frame) for frame in range(16)]
     for a, b in zip(cycle, cycle[1:]):
         assert max(abs(a[0] - b[0]), abs(a[1] - b[1])) >= 1
         assert a != b
@@ -562,6 +595,25 @@ def test_neighbours_come_far_apart_in_time():
     assert all(
         abs(a[0] - b[0]) + abs(a[1] - b[1]) > 1 for a, b in zip(cycle, cycle[1:])
     )
+
+
+@pytest.mark.parametrize("block", [(4, 2), (3, 3)])
+def test_the_eighth_and_the_ninth_never_trace_touching_pixels_in_turn(block):
+    """Consecutive frames trace pixels at least a diagonal apart, even across
+    the blocks' edges (the blocks tile the view), the cycle's last to its
+    first too; the cycle's first frames spread over the block."""
+    order = block_order(block)
+    n = len(order)
+    assert all(
+        _torus(order[k], order[(k + 1) % n], block) >= math.sqrt(2) - 1e-9
+        for k in range(n)
+    )
+    # A row's worth of the cycle's first frames: no two of them touch side by
+    # side (4 x 2: a checkerboard; 3 x 3: a diagonal)
+    first = order[: block[0]]
+    for i, p in enumerate(first):
+        for q in first[i + 1 :]:
+            assert _torus(p, q, block) > 1.0
 
 
 @pytest.fixture

@@ -32,7 +32,7 @@ own ray instead (``shaders/cloud_march.frag``):
 **The passes.** One march over both depth ranges of
 :class:`~world_builder.depth.SplitDepthCameras` (as EVE-Redux marches over
 KSP's two cameras' depths), at a fraction of the view's resolution
-(``CloudSettings.march_resolution``): a camera per range, sharing its lens,
+(``CloudSettings.march_block``): a camera per range, sharing its lens,
 draws the scene's depth into a texture (everything but the clouds and the
 sky, the terrain through its depth-only stage, as :mod:`half_res` does); a
 fullscreen card marches from the near range's near plane to the near
@@ -422,18 +422,38 @@ def min_step(field: DensityField) -> float:
 # ── Drawing ────────────────────────────────────────────────────────────────
 
 
-#: Which pixel of each block the march traces, frame after frame, by block
-#: size: Bayer orders, so neighbours come far apart in time.
-_BAYER = {
-    1: ((0, 0),),
-    2: ((0, 0), (1, 1), (1, 0), (0, 1)),
-    4: tuple(
+#: Which pixel (x, y) of each block the march traces, frame after frame, by
+#: block (across, up): consecutive frames never trace touching pixels, even
+#: across the blocks' edges, and each cycle's first frames spread over the
+#: block. 4 x 4: a Bayer order (EVE-Redux's ``samplingSequence16`` read as
+#: ranks). 4 x 2 and 3 x 3 (the eighth and the ninth, EVE's default range):
+#: found by an exhaustive search over the orders (consecutive pixels at least
+#: a diagonal apart on the torus, then the spread of every prefix), as EVE's own
+#: 4 x 2 and 3 x 3 sequences trace touching pixels on consecutive frames.
+_ORDERS = {
+    (1, 1): ((0, 0),),
+    (2, 2): ((0, 0), (1, 1), (1, 0), (0, 1)),
+    (4, 2): ((0, 0), (2, 0), (1, 1), (3, 1), (1, 0), (3, 0), (0, 1), (2, 1)),
+    (3, 3): (
+        (0, 0),
+        (1, 1),
+        (2, 2),
+        (1, 0),
+        (0, 1),
+        (2, 0),
+        (0, 2),
+        (2, 1),
+        (1, 2),
+    ),
+    (4, 4): tuple(
         divmod(int(v), 4)[::-1]
         for v in np.argsort(
             [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5], kind="stable"
         )
     ),
 }
+#: The march's block shapes (``CloudSettings.march_block``'s choices).
+BLOCKS = tuple(_ORDERS)
 #: This frame's least share in a pixel that has gathered its full count of
 #: samples (cloud_resolve.frag): it averages the steps' jitter over about
 #: this many of its visits' inverse.
@@ -539,12 +559,12 @@ def _blue_noise_texture() -> Texture:
 #: How far a pixel on fresh samples takes their smooth mean instead of their
 #: bilinear mix (cloud_resolve.frag's uSmooth), by the march's block: all of it
 #: at a sixteenth of the pixels a frame, half at a quarter, none at all of them.
-SMOOTHING = {1: 0.0, 2: 0.5, 4: 1.0}
+SMOOTHING = {(1, 1): 0.0, (2, 2): 0.5, (4, 2): 0.75, (3, 3): 0.75, (4, 4): 1.0}
 
 
-def smoothing_of(block: int) -> float:
-    """:returns: ``uSmooth`` for a march block of *block* pixels a side"""
-    return SMOOTHING.get(block, 1.0 if block > 4 else 0.0)
+def smoothing_of(block: tuple[int, int]) -> float:
+    """:returns: ``uSmooth`` for a march block (across, up)"""
+    return SMOOTHING[block]
 
 
 #: What share of a step's length fades the field's finer features to their means
@@ -552,32 +572,56 @@ def smoothing_of(block: int) -> float:
 #: frame has, the more shimmer, the more it must fade. It is the clouds' detail
 #: at a distance against their steadiness: Phase 4.1 had 0.4 everywhere, which
 #: made far clouds soft lumps at every preset.
-STEP_FADES = {1: 0.0, 2: 0.1, 4: 0.25}
+STEP_FADES = {(1, 1): 0.0, (2, 2): 0.1, (4, 2): 0.15, (3, 3): 0.15, (4, 4): 0.25}
 
 
-def step_fade_of(block: int) -> float:
-    """:returns: ``uStepFade`` for a march block of *block* pixels a side"""
-    return STEP_FADES.get(block, 0.25 if block > 4 else 0.0)
+def step_fade_of(block: tuple[int, int]) -> float:
+    """:returns: ``uStepFade`` for a march block (across, up)"""
+    return STEP_FADES[block]
 
 
-def block_of(resolution: float) -> int:
-    """:returns: the view's pixels per march pixel, per axis, for
-    ``CloudSettings.march_resolution``"""
-    return max(1, round(1.0 / resolution))
+#: The old ``CloudSettings.march_resolution`` (per axis) as a block.
+_RESOLUTIONS = {1.0: (1, 1), 0.5: (2, 2), 0.25: (4, 4)}
 
 
-def visit_of(block: int, frame: int, gather: bool = True) -> int:
+def block_of(value: Any) -> tuple[int, int]:
+    """:returns: the march's block (across, up) for ``CloudSettings.march_block``
+    (a block), or an old ``march_resolution`` (0.25, 0.5 or 1.0) or "BXxBY"
+    (the bench's command line)
+
+    :raises ValueError: not a block of :data:`BLOCKS`
+    """
+    if isinstance(value, str):
+        value = tuple(int(v) for v in value.lower().split("x"))
+    elif isinstance(value, (int, float)):
+        value = _RESOLUTIONS.get(float(value), value)
+    block = tuple(int(v) for v in value) if isinstance(value, (tuple, list)) else None
+    if block not in _ORDERS:
+        raise ValueError(f"not a march block: {value!r} (one of {list(BLOCKS)})")
+    return block
+
+
+def pixels_of(block: tuple[int, int]) -> int:
+    """:returns: the view's pixels per march pixel (a block's area)"""
+    return block[0] * block[1]
+
+
+def visit_of(block: tuple[int, int], frame: int, gather: bool = True) -> int:
     """:returns: how many times the pixel traced on *frame* has been traced
-    before (once a cycle of *block* x *block* frames when gathering, every
+    before (once a cycle of the block's pixels' frames when gathering, every
     frame otherwise): what moves its steps' jitter on, so that each pixel's
     visits, not the frames, run through the jitter's sequence"""
-    return frame // (block * block) if gather else frame
+    return frame // pixels_of(block) if gather else frame
 
 
-def bayer_offset(block: int, frame: int) -> tuple[int, int]:
-    """:returns: the pixel of each *block* x *block* block the march traces
-    on *frame*"""
-    order = _BAYER[block]
+def block_order(block: tuple[int, int]) -> tuple[tuple[int, int], ...]:
+    """:returns: the pixels (x, y) of a block, in the order the march traces them"""
+    return _ORDERS[block]
+
+
+def bayer_offset(block: tuple[int, int], frame: int) -> tuple[int, int]:
+    """:returns: the pixel (x, y) of each block the march traces on *frame*"""
+    order = _ORDERS[block]
     return order[frame % len(order)]
 
 
@@ -750,7 +794,7 @@ class _MarchLayer:
         near_lens: Lens,
         far_lens: Lens,
         view: tuple[int, int],
-        block: int,
+        block: tuple[int, int],
         sort: int,
         states: tuple[RenderState, RenderState],
         gather: bool = True,
@@ -880,7 +924,7 @@ class _MarchLayer:
         self._set_sizes(view)
 
     def _march_size(self, view: tuple[int, int]) -> tuple[int, int]:
-        return tuple(max(1, math.ceil(v / self.block)) for v in view)
+        return tuple(max(1, math.ceil(v / b)) for v, b in zip(view, self.block))
 
     def _resolve_size(self, view: tuple[int, int]) -> tuple[int, int]:
         return view if self.gather else self._march_size(view)
@@ -890,24 +934,26 @@ class _MarchLayer:
         gathering, else its middle"""
         if self.gather:
             return bayer_offset(self.block, frame)
-        return (self.block // 2, self.block // 2)
+        return (self.block[0] // 2, self.block[1] // 2)
 
     def _set_sizes(self, view: tuple[int, int]) -> None:
         self.card.set_shader_inputs(
-            uBlock=self.block,
+            uBlock=LVecBase2i(*self.block),
             uViewSize=LVecBase2f(*view),
             uStepFade=step_fade_of(self.block),
         )
         size = self._resolve_size(view)
         for resolve in self.resolves:
             resolve.card.set_shader_inputs(
-                uBlock=self.block if self.gather else 1, uViewSize=LVecBase2f(*size)
+                uBlock=LVecBase2i(*self.block) if self.gather else LVecBase2i(1, 1),
+                uViewSize=LVecBase2f(*size),
             )
         # Made once (again after a resize): update switches between them
         self._composite_attribs = []
         for card in self.composites:
             card.set_shader_input(
-                "uDownscale", 1.0 if self.gather else float(self.block)
+                "uDownscale",
+                LVecBase2f(1.0, 1.0) if self.gather else LVecBase2f(*self.block),
             )
             attribs = []
             for resolve in self.resolves:
@@ -1353,7 +1399,7 @@ class CloudMarch:
     def _build_layers(self) -> None:
         app, depth = self._app, self._depth
         self._size = self._view_size()
-        block = block_of(self._settings.march_resolution)
+        block = block_of(self._settings.march_block)
         layer = _MarchLayer(
             app,
             depth.output,
@@ -1406,7 +1452,7 @@ class CloudMarch:
                     weather = self._family_textures[index][0]
                     self._family_textures[index] = (weather, light)
         self._update_shadow_nodes()
-        if old.march_resolution != settings.march_resolution:
+        if old.march_block != settings.march_block:
             self.set_pixel_angle(self._pixel_angle)
             if self._layers:
                 self.attach(self._app, self._depth)
@@ -1603,7 +1649,9 @@ class CloudMarch:
         :param radians: the angle per pixel of the view
         """
         self._pixel_angle = radians
-        value = float(radians / self._settings.march_resolution)
+        value = float(
+            radians * math.sqrt(pixels_of(block_of(self._settings.march_block)))
+        )
         if value != self._inputs["uPixelAngle"]:
             self._set_inputs(uPixelAngle=value)
 

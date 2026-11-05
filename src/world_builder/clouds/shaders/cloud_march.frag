@@ -8,7 +8,7 @@
 // something, else the far range's), and stops once the cloud is opaque: a
 // cloud near the camera spares the march the clouds behind it.
 //
-// Each frame it traces one pixel of every uBlock x uBlock block of the view
+// Each frame it traces one pixel of every uBlock.x x uBlock.y block of the view
 // (uOffset, in turn), which cloud_resolve.frag gathers into the full
 // resolution over the frames. Out: the premultiplied cloud and its
 // (transmittance-weighted) distance in kilometres (a half float keeps it to
@@ -37,7 +37,7 @@ uniform vec3  uCamRender;        // camera, render frame
 uniform vec3  camPos;            // camera, planet frame
 uniform float exposure;
 uniform int   uOwnAtmosphere;    // the planet's atmosphere (reddens sunlight), -1 none
-uniform float uPixelAngle;       // radians per pixel of the march
+uniform float uPixelAngle;       // radians per pixel of the march (a block's area's side)
 uniform int   uMarchSteps;       // the step budget per pixel
 uniform float uMinStep;          // metres: the shortest step, near the camera
 uniform float uStepGrowth;       // a step's length per metre of distance, farther
@@ -56,7 +56,7 @@ uniform float uDetailErosion;
 uniform float uBillowMean;
 uniform float uBillowGain;       // march.billow_stats: the blobs' spread, as the ridged noise's
 uniform float uBillowRawMean;    // the noise volume's own mean
-uniform int   uBlock;            // view pixels per march pixel, per axis
+uniform ivec2 uBlock;            // view pixels per march pixel, across and up
 uniform ivec2 uOffset;           // the pixel traced in each block this frame
 uniform vec2  uViewSize;         // the view, pixels
 
@@ -362,7 +362,7 @@ void main() {
             float shading = 1.0 - smoothstep(0.04, 0.2, footprint);
             float density = detail > 0.0
                           ? marchDensity(lf, p, weather,
-                                         max(t * uPixelAngle / float(uBlock), uStepFade * dt))
+                                         max(t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y)), uStepFade * dt))
                           : 0.0;
             float farCoverage = 0.0;
             if (shading < 1.0) {
