@@ -306,3 +306,18 @@ def test_the_model_shader_lights_and_tonemaps_as_the_terrain(window):
     expected = aces_tonemap(linear, 0.9)
     assert linear.max() > 1.0  # what Panda's lighting would clip
     np.testing.assert_allclose(got, expected, atol=2.5 / 255.0)
+
+
+def test_apply_leaves_a_node_with_the_inputs_already_alone():
+    """Setting the same shader attrib again would make the node a new state
+    every frame: apply only sets it when it differs."""
+    lighting = ModelLighting()
+    ship = NodePath("ship")
+    lighting.apply(ship)
+    state = ship.get_state()
+    lighting.apply(ship)
+    assert ship.get_state() == state
+    # The inputs' attrib changed (e.g. a texture bound again): set again
+    lighting.inputs.set_shader_input("uExposure", 0.5)
+    lighting.apply(ship)
+    assert ship.get_attrib(ShaderAttrib) == lighting.inputs.get_attrib(ShaderAttrib)

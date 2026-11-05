@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `World(light_period=N)`: the light at the camera and the tracked nodes
+  (`lights_at`, the CPU's march through the clouds' shadow) reckoned every N
+  frames, at once when the sun moves or the tracked nodes change. 1 (the
+  default) is every frame, as before.
+
+### Changed
+
+- Fewer render states made per frame for the tracked models: the model
+  shader's attrib is only set on a node when it differs (`ModelLighting.apply`).
+- The cloud shadow maps and the terrain's shadow bake are not drawn again for
+  a sun that moved less than 0.05° since they were (`utils.SUN_TOLERANCE`,
+  `sun_moved`): a slowly turning sun redraws them every few frames, not
+  every frame.
+- `World.update` reads the tracked nodes' positions once, keeps the bodies'
+  centres and radii, and the caster map compares its casters by key (no
+  quadratic list scan).
+
 ## [0.3.0] 2026-11-04
 
 ### Added

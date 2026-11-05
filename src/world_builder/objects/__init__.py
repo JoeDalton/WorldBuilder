@@ -156,7 +156,12 @@ class ModelLighting:
         """Give a model (and its children) the shader and these inputs, in
         place of any shader state of its own: each frame, as the inputs'
         textures may have changed and its nearest body with them."""
-        node.set_attrib(self.inputs.get_attrib(ShaderAttrib))
+        attrib = self.inputs.get_attrib(ShaderAttrib)
+        # Setting the same attrib again still makes the node a new state,
+        # every frame (Panda's state cache churns, and its garbage
+        # collection with it)
+        if not node.has_attrib(ShaderAttrib) or node.get_attrib(ShaderAttrib) != attrib:
+            node.set_attrib(attrib)
 
     def destroy(self) -> None:
         self.inputs.remove_node()

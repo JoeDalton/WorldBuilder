@@ -298,11 +298,13 @@ class CasterMap:
 
     def _show(self, casters: list[NodePath]) -> None:
         """Show the casters through render's hiding, and no others."""
+        keys = {node.get_key() for node in casters}
+        before = {node.get_key() for node in self.casters if not node.is_empty()}
         for node in self.casters:
-            if not node.is_empty() and node not in casters:
+            if not node.is_empty() and node.get_key() not in keys:
                 node.show(CASTER_CAMERA_MASK)
         for node in casters:
-            if node not in self.casters:
+            if node.get_key() not in before:
                 node.show_through(CASTER_CAMERA_MASK)
         self.casters = casters
 

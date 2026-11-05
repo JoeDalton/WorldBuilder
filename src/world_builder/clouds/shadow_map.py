@@ -47,6 +47,7 @@ from panda3d.core import (
 )
 
 from world_builder.terrain.chart import TangentFrame, latlon
+from world_builder.utils import sun_moved
 
 SHADER_PATH = Path(__file__).parent / "shaders"
 #: The near map's and the far map's texel spacing, metres.
@@ -133,7 +134,7 @@ class _Map:
         moved = float(np.arccos(np.clip(up @ centre, -1.0, 1.0))) * base
         return (
             moved > RECENTRE * self.size * self.spacing
-            or not np.array_equal(sun, drawn_sun)
+            or sun_moved(drawn_sun, sun)
             or steps != drawn_steps
             or layer != drawn_layer
         )

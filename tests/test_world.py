@@ -206,6 +206,10 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world._space_ambient = np.array([0.1, 0.2, 0.3])
     world.fields = []
     world._field_looks = []
+    world.light_period = 1
+    world._light_age = 0
+    world._light_key = None
+    world._body_centres = world._body_radii = None
     return world
 
 
@@ -318,7 +322,7 @@ def test_panda_lights_are_the_light_at_the_camera_scaled():
     world.sun_light, world.ambient_light = MagicMock(), MagicMock()
 
     camera = np.array([0.0, 0.0, R + 10.0])
-    world._light(camera, camera)
+    world._light(camera, camera + world.tracked.positions())
 
     world.sun_light.node().set_color.assert_called_once_with((0.5, 0.5, 0.5, 1.0))
     world.ambient_light.node().set_color.assert_called_once_with(
@@ -411,7 +415,7 @@ def test_one_light_call_lights_the_camera_the_nodes_and_the_sea():
         calls.append(len(points)) or lights_at(points, local)
     )
 
-    world._light(camera, camera)
+    world._light(camera, camera + world.tracked.positions())
 
     assert calls == [3]
     direct, ambient = world.light_at(camera)
@@ -802,3 +806,34 @@ def test_a_ring_in_open_space(window):
     finally:
         world.destroy()
     assert world.fields == [] and ring.root.is_empty()
+
+
+def test_lights_are_reckoned_every_light_period_frames():
+    """With light_period 3 the lights are reckoned on the first frame, then
+    every third; a moved sun or a newly tracked node brings them forward."""
+    world = _world(_body())
+    world.light_period = 3
+    due = [world._lights_due() for _ in range(7)]
+    assert due == [True, False, False, True, False, False, True]
+
+    world._sun = np.array([0.0, 1.0, 0.0])
+    assert world._lights_due()
+    assert not world._lights_due()
+
+    world.track_light(NodePath("ship"))
+    assert world._lights_due()
+    assert not world._lights_due()
+
+
+def test_a_light_period_of_one_reckons_every_frame():
+    world = _world(_body())
+    assert all(world._lights_due() for _ in range(5))
+
+
+def test_the_bodies_centres_are_gathered_once():
+    world = _world(_body())
+    points = np.array([[0.0, 0.0, R + 10.0]])
+    world._nearest_indices(points)
+    centres = world._body_centres
+    world._nearest_indices(points)
+    assert world._body_centres is centres

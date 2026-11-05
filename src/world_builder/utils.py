@@ -1,4 +1,4 @@
-"""Small numeric helpers shared by the ocean and clouds."""
+"""Small numeric helpers shared by the ocean, the clouds and the shadows."""
 
 import math
 
@@ -41,3 +41,20 @@ def compute_next_power_of_2(x: float) -> int:
     :return: That power of 2, as an int (at least 1)
     """
     return 2 ** math.ceil(math.log2(max(x, 1)))
+
+
+#: A sun moved by less than this (radians) leaves the shadow maps drawn for it
+#: as they are: they are not marched or baked again for a step that small
+SUN_TOLERANCE = math.radians(0.05)
+
+
+def sun_moved(drawn: np.ndarray | None, sun: np.ndarray) -> bool:
+    """
+    :param drawn: the sun a map was drawn for (unit vector), None = none yet
+    :param sun: the sun now (unit vector)
+    :returns: whether they are more than :data:`SUN_TOLERANCE` apart
+    """
+    if drawn is None:
+        return True
+    cosine = float(np.clip(np.dot(drawn, sun), -1.0, 1.0))
+    return cosine < math.cos(SUN_TOLERANCE)
