@@ -351,7 +351,8 @@ cloud). Here each pixel steps along its own ray:
 
 - **Through the slab**, between the spheres at its base and top, less the
   planet: up to two segments (a ray skimming under the slab leaves it and
-  comes back), from the depth range's near plane to the **scene's depth**.
+  comes back), from the near plane to the **scene's depth** (the near
+  range's surface where it has one, else the far range's).
   A game's model inside a cloud is hidden by just the cloud in front of it,
   and the camera inside a cloud sees it all around (the billboards fade out
   near the camera, which leaves a clear bubble).
@@ -419,17 +420,23 @@ cloud). Here each pixel steps along its own ray:
   takes the deck's alpha, lit by the deck's averages. The march reaches
   orbit with no deck, and nothing changes colour closing in.
 
-**The passes.** There is one set per depth range of `SplitDepthCameras`
+**The passes.** One march covers both depth ranges of `SplitDepthCameras`
 (`CloudMarch.attach`; `PlanetClouds.use_split_depth`, which a `World` calls
-from `use_split_depth`):
+from `use_split_depth`), as EVE-Redux marches once over KSP's two cameras'
+depths:
 
-1. a camera sharing the range's lens draws the **scene's depth** at the
+1. a camera per range, sharing its lens, draws the **scene's depth** at the
    view's resolution into a texture. Everything but the clouds and the sky
    is drawn, the terrain through its depth-only stage, as for the
    half-resolution pass;
 2. a fullscreen card **marches** one pixel of every block (2 × 2 at a half resolution, 4 × 4 at a quarter)
    (`march_resolution` ½; 4 × 4 at ¼), a different one each frame in a
-   Bayer order. It writes the premultiplied cloud and its distance;
+   Bayer order, from the near range's near plane to the near range's
+   surface where its depth pass drew one, else to the far range's (EVE's
+   distance buffer of both cameras, read in the march itself). It stops once
+   the cloud is opaque, so a cloud near the camera spares the march the ones
+   behind it (two marches, one per range, could not: the far one did not know
+   the near one's cloud). It writes the premultiplied cloud and its distance;
 3. a **resolve** gathers them into the view's resolution over the frames.
    Every pixel blends this frame's samples around it (the four nearest,
    bilinearly) into the last frame's result, by the same share whatever
@@ -454,17 +461,22 @@ from `use_split_depth`):
    down to `MIN_WEIGHT` (0.03), and what the clamp takes away takes the
    count down (to 4 at least, so a noisy sample is not taken
    whole). Two results alternate, each frame's reading the other's;
-4. a card lays the result over the range's own pass, premultiplied "over",
-   at the **cloud's own depth**. The scene's depth test hides it pixel by
-   pixel at the view's resolution, behind anything nearer, which also
-   drops any stale history a moving model would leave behind it.
+4. two cards lay the result over the view, premultiplied "over", at the
+   **cloud's own depth**: the near range's card over the pixels where the
+   near range's depth pass drew something (the near camera draws its
+   surfaces over the far pass afterwards, and the clouds in front of them
+   must come after), the far range's card over the rest, in the far pass's
+   clouds' slot (after the sky, before the cirrus). Each range's depth test
+   hides the cloud pixel by pixel at the view's resolution, behind anything
+   nearer, which also drops any stale history a moving model would leave
+   behind it.
 
-The near range gathers as the far one does (it once traced the middle of
-each block every frame at the march's resolution, upsampled by the
-composite: at a quarter of the resolution, 4 × 4 squares). It runs only
-when the slab reaches into the near range.
+The near range's depth pass and card run only when the slab reaches into the
+near range; otherwise the march stops at the far range's scene, and what the
+near camera draws covers the clouds behind it. The history goes on across
+that switch.
 
-The sea's reflection sees the deck alone (the far layer is packed for it).
+The sea's reflection sees the deck alone (the far field's layer is packed for it).
 The textures may be padded to powers of two, so the shaders address them
 in pixels.
 

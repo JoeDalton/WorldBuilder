@@ -1,10 +1,12 @@
 #version 330
-// A planet's low clouds, raymarched (clouds.march): one depth range of the
-// view (the split cameras'), at a fraction of its resolution. The density
-// field, its lighting and the far field are the billboards' and the deck's
-// (cloud_field.glsl, cloud_shading.glsl); the march replaces their overdraw:
-// each pixel steps along its own ray through the slab, from the range's near
-// plane to the scene's depth, and stops once the cloud is opaque.
+// A planet's low clouds, raymarched (clouds.march): both depth ranges of the
+// view (the split cameras') in one march, at a fraction of its resolution. The
+// density field, its lighting and the far field are the billboards' and the
+// deck's (cloud_field.glsl, cloud_shading.glsl); the march replaces their
+// overdraw: each pixel steps along its own ray through the slab, from the near
+// range's near plane to the scene (the near range's depth where it holds
+// something, else the far range's), and stops once the cloud is opaque: a
+// cloud near the camera spares the march the clouds behind it.
 //
 // Each frame it traces one pixel of every uBlock x uBlock block of the view
 // (uOffset, in turn), which cloud_resolve.frag gathers into the full
@@ -23,8 +25,14 @@ const int MAX_MARCH_LAYERS = 8;        // noise.MAX_LAYERS
 const float NOISE_FEATURE_UNITS = 4.0;  // noise.NOISE_FEATURE
 const float KM = 1000.0;                // the distance's unit out
 
-uniform sampler2D uSceneDepth;   // the range's depth, at the view's resolution
-uniform mat4  uClipToRender;     // the range's clip space -> the render frame
+// The scene's depth in each range, at the view's resolution. The near one is
+// read only while it is drawn (uNearDepthOn: the slab reaches the near range).
+uniform sampler2D uSceneDepthNear;
+uniform sampler2D uSceneDepthFar;
+uniform int   uNearDepthOn;
+uniform mat4  uClipToRender;     // the near range's clip space -> the render frame
+uniform mat4  uClipToRenderFar;  // the far range's
+uniform float uSplit;            // metres: where the near range ends (its step budget)
 uniform vec3  uCamRender;        // camera, render frame
 uniform vec3  camPos;            // camera, planet frame
 uniform float exposure;
@@ -150,6 +158,11 @@ vec3 unproject(vec3 ndc) {
     return p.xyz / p.w;
 }
 
+vec3 unprojectFar(vec3 ndc) {
+    vec4 p = uClipToRenderFar * vec4(ndc, 1.0);
+    return p.xyz / p.w;
+}
+
 // The stretch of the ray c + t dir inside the sphere of radius r around the
 // planet's centre: (t0, t1), empty when t0 >= t1. Through the ray's closest
 // point to the centre: float32 keeps a planet's radius to centimetres, its
@@ -201,11 +214,16 @@ void main() {
     }
     vec2 ndc = (vec2(pixel) + 0.5) / uViewSize * 2.0 - 1.0;
     vec3 nearPoint = unproject(vec3(ndc, -1.0));
-    vec3 farPoint = unproject(vec3(ndc, 1.0));
+    vec3 farPoint = unprojectFar(vec3(ndc, 1.0));
     vec3 dir = normalize(farPoint - nearPoint);
-    float depth = texelFetch(uSceneDepth, pixel, 0).r;
     float tStart = max(dot(nearPoint - uCamRender, dir), 0.0);
-    vec3 end = depth < 1.0 ? unproject(vec3(ndc, depth * 2.0 - 1.0)) : farPoint;
+    // The scene: the near range's surface where it has one, else the far
+    // range's, else the far plane (EVE's distance buffer of both cameras).
+    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, pixel, 0).r : 1.0;
+    float farDepth = texelFetch(uSceneDepthFar, pixel, 0).r;
+    vec3 end = nearDepth < 1.0 ? unproject(vec3(ndc, nearDepth * 2.0 - 1.0))
+             : farDepth < 1.0 ? unprojectFar(vec3(ndc, farDepth * 2.0 - 1.0))
+             : farPoint;
     float tEnd = length(end - uCamRender);
 
     // Each family's slab between two spheres, less the planet: up to two
@@ -265,20 +283,22 @@ void main() {
     }
 
     // Steps uMinStep long near the camera, a share of the distance farther,
-    // all lengthened alike when the ray would need more than the budget.
+    // all lengthened alike when the ray would need more than the budget. The
+    // near range (to uSplit) and the far range each have the budget (as when
+    // each range had a march of its own): one budget for the whole ray would
+    // stretch the near steps for far stretches the march seldom reaches (an
+    // opaque cloud near the camera stops it first).
     float dtMin = uMinStep;
     float growth = uStepGrowth;
-    float needed = 0.0;
+    vec2 needed = vec2(0.0);  // near, far
     for (int i = 0; i < 4; ++i) {
         if (i < count) {
-            needed += stepsOver(segments[i], dtMin, growth);
+            vec2 seg = segments[i];
+            needed.x += stepsOver(vec2(seg.x, min(seg.y, uSplit)), dtMin, growth);
+            needed.y += stepsOver(vec2(max(seg.x, uSplit), seg.y), dtMin, growth);
         }
     }
-    if (needed > float(uMarchSteps)) {
-        float k = needed / float(uMarchSteps);
-        dtMin *= k;
-        growth *= k;
-    }
+    vec2 stretch = max(needed / float(uMarchSteps), vec2(1.0));
     // Where in its step each sample lies: no banding, a fine noise instead,
     // moved on by the golden ratio each visit of this pixel (not each frame:
     // traced once a block's cycle, it would skip through the sequence), so
@@ -316,8 +336,9 @@ void main() {
         weatherUntil = -1.0;
         float a = seg.x;
         float least = (seg.y - seg.x) / SEGMENT_SAMPLES;  // the fewest a segment takes
-        while (a < seg.y && steps < uMarchSteps + 8 && transmittance > OPAQUE) {
-            float dt = min(min(max(dtMin, a * growth) * (1.0 + STEP_DEEPENING * (1.0 - transmittance)), least), seg.y - a);
+        while (a < seg.y && steps < 2 * uMarchSteps + 8 && transmittance > OPAQUE) {
+            float k = a < uSplit ? stretch.x : stretch.y;
+            float dt = min(min(k * max(dtMin, a * growth) * (1.0 + STEP_DEEPENING * (1.0 - transmittance)), least), seg.y - a);
             float t = a + dt * jitter;
             steps++;
             int layer = fam * uLayerCount + layerAt(t);

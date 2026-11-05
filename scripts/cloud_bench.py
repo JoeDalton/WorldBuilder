@@ -42,9 +42,10 @@ sky and the clouds, so the clouds are most of the frame.
                        (below)
     --interactive      fly the probe in and out of the clouds in a window
                        (keys below); no timing
-    --passes           (raymarch) the cost of each pass at each pose: the far
-                       and the near range alone, then with the depth passes,
-                       the march, the resolve and the composite left out
+    --passes           (raymarch) the cost of each pass at each pose: without
+                       the near range's depth pass and card, then with the
+                       depth passes, the march, the resolve and the
+                       composites left out
     --steps-sweep      (raymarch) the clouds' cost against the step budget
                        (8 to 128) at a quarter, a half and the full
                        resolution
@@ -907,46 +908,45 @@ def bench_passes(bench: CloudBench, args: argparse.Namespace) -> None:
     for name in _pose_names(args):
         _arrive(bench, name, args.timeout)
         layers = march._layers
-        active = [layer.active for layer in layers]
         bench.clouds.set_visible(False)
         none = _cost(bench, args.frames)
         bench.clouds.set_visible(True)
         row = [_cost(bench, args.frames) - none]  # full
-
-        def only(index: int) -> None:
-            for k, layer in enumerate(layers):
-                layer.set_active(k == index and active[k])
-
-        def restore() -> None:
-            for k, layer in enumerate(layers):
-                layer.set_active(active[k])
-
-        for index in (0, 1):
-            only(index)
-            row.append(_cost(bench, args.frames) - none)
-            restore()
-        for leave_out in ("depth_buffer", "buffer"):
-            for layer in layers:
-                getattr(layer, leave_out).set_active(False)
-            row.append(_cost(bench, args.frames) - none)
-            for layer in layers:
-                getattr(layer, leave_out).set_active(layer.active)
-        for cards, show_all in (
-            (lambda: [r.card for layer in layers for r in layer.resolves], None),
-            (lambda: [layer.composite for layer in layers], None),
+        # Without the near range's depth pass and card (the march stops at the
+        # far range's scene), where they run.
+        near = [layer.near for layer in layers]
+        for layer in layers:
+            layer.set_near(False)
+        row.append(_cost(bench, args.frames) - none)
+        for layer, was in zip(layers, near):
+            layer.set_near(was)
+        for buffers in (
+            lambda layer: [b for b in layer.depth_buffers if b.is_active()],
+            lambda layer: [layer.buffer],
         ):
-            for card in cards():
+            off = [b for layer in layers for b in buffers(layer)]
+            for buffer in off:
+                buffer.set_active(False)
+            row.append(_cost(bench, args.frames) - none)
+            for buffer in off:
+                buffer.set_active(True)
+        for cards in (
+            lambda: [r.card for layer in layers for r in layer.resolves],
+            lambda: [c for layer in layers for c in layer.composites],
+        ):
+            hidden = [card for card in cards() if not card.is_hidden()]
+            for card in hidden:
                 card.hide()
             row.append(_cost(bench, args.frames) - none)
-            for card in cards():
+            for card in hidden:
                 card.show()
         print(f"{name:<16} {none:>6.2f}  " + "  ".join(f"{v:>8.2f}" for v in row))
         sys.stdout.flush()
 
 
 #: The columns of :func:`bench_passes`: the clouds' cost with everything, then
-#: with only a range, then each pass left out.
-_PASSES = ("full", "far", "near", "-depth", "-march", "-resolve", "-comp")
+#: without the near range's depth pass and card, then each pass left out.
+_PASSES = ("full", "-near", "-depth", "-march", "-resolve", "-comp")
 
 
 def bench_steps(bench: CloudBench, args: argparse.Namespace) -> None:

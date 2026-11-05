@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The raymarched clouds march once over both depth ranges of the split
+  cameras (EVE-Redux's single march), not once per range: a ray runs from the
+  near range's near plane to its surface, else the far range's, and stops
+  once opaque, so a cloud near the camera spares the march what lies behind
+  it. Each range keeps its own step budget. Two cards lay the one result over
+  the view (the near range's over the pixels its depth pass drew). Clouds cost
+  0.3-1.8 ms less at 2560 x 1440, HIGH, where the camera is in or near cloud
+  (performance.md §24); the look is unchanged. `cloud_bench.py --passes` has a
+  `-near` column in place of `far` and `near`.
 - Fewer render states made per frame for the tracked models: the model
   shader's attrib is only set on a node when it differs (`ModelLighting.apply`).
 - The cloud shadow maps and the terrain's shadow bake are not drawn again for

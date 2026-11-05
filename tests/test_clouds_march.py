@@ -33,6 +33,7 @@ from world_builder.clouds.march import (
     slab_segments,
     sphere_interval,
     step_scale,
+    step_scales,
     visit_of,
 )
 from world_builder.clouds.noise import (
@@ -168,6 +169,24 @@ def test_a_ray_that_fits_is_not_stretched():
     segments = np.array([[0.0, 1000.0], [1.0, -1.0]])
     assert step_scale(segments, 50.0, 0.01, 64) == 1.0
     assert step_scale(segments, 50.0, 0.01, 10) > 1.0
+
+
+def test_each_depth_range_has_the_budget():
+    """One march over both ranges: a long far stretch does not lengthen the
+    near range's steps (each range fits its own budget, as when each had a
+    march of its own)."""
+    split = 2000.0
+    segments = np.array([[0.0, 150e3], [1.0, -1.0]])
+    near, far = step_scales(segments, 50.0, 0.01, 64, split)
+    assert near == 1.0  # 2 km of 50 m steps fit 64
+    assert far > 1.0
+    # One budget for the whole ray would stretch the near steps too
+    assert step_scale(segments, 50.0, 0.01, 64) > 1.0
+    t, dt = march_steps(segments, 50.0, 0.01, 64, split=split)
+    assert dt[t < split - 50.0] == pytest.approx(50.0)
+    assert np.sum(t < split) <= 64 + 1
+    assert np.sum(t >= split) <= 64 + 8
+    assert len(t) <= 2 * 64 + 8
 
 
 def test_a_short_segment_still_takes_its_fewest_samples():
@@ -543,6 +562,79 @@ def test_neighbours_come_far_apart_in_time():
     assert all(
         abs(a[0] - b[0]) + abs(a[1] - b[1]) > 1 for a, b in zip(cycle, cycle[1:])
     )
+
+
+@pytest.fixture
+def window(showbase):
+    """The session's ShowBase with an offscreen window; skipped where none
+    can be opened."""
+    if showbase.win is None:
+        try:
+            showbase.openMainWindow(type="offscreen", size=(64, 64))
+        except Exception as error:  # no GL context here
+            pytest.skip(f"no offscreen window: {error}")
+    if showbase.win is None:
+        pytest.skip("no offscreen window")
+    return showbase
+
+
+def test_one_march_covers_both_depth_ranges(window, executor):
+    """EVE's single march over the split cameras: a depth pass per range, one
+    march and one resolve pair, a composite card per range; the near range's
+    depth pass and card follow the slab, and the history goes on."""
+    from world_builder.depth import (
+        FAR_CAMERA_MASK,
+        NEAR_CAMERA_MASK,
+        SplitDepthCameras,
+    )
+
+    clouds = _clouds(window, executor, "march")
+    depth = SplitDepthCameras(window, near=1.0)
+    try:
+        clouds.use_split_depth(window, depth)
+        march = clouds.volume
+        (layer,) = march._layers
+        far_card, near_card = layer.composites
+        assert layer.lens is window.camLens and layer.far_lens is depth.far_lens
+        march._finish()  # the weather in: the passes run
+        assert layer.active
+        assert not far_card.is_hidden(FAR_CAMERA_MASK)
+        assert far_card.is_hidden(NEAR_CAMERA_MASK)
+        assert not near_card.is_hidden(NEAR_CAMERA_MASK)
+        assert near_card.is_hidden(FAR_CAMERA_MASK)
+        for _ in range(2):
+            depth.update(*SplitDepthCameras.planet_ranges(R, R + 3000.0))
+            march.update((0.0, 0.0, R + 3000.0))
+            window.graphicsEngine.render_frame()
+        assert layer._previous is not None
+        layer.set_near(False)
+        assert layer.near_on[0] == 0
+        assert not layer.near_depth.buffer.is_active()
+        assert near_card.is_hidden()
+        assert layer.far_depth.buffer.is_active() and not far_card.is_hidden()
+        assert layer._previous is not None  # the history goes on
+        layer.set_near(True)
+        assert layer.near_on[0] == 1 and layer.near_depth.buffer.is_active()
+        assert not near_card.is_hidden()
+        layer.set_active(False)
+        assert near_card.is_hidden() and far_card.is_hidden()
+        assert not layer.near_depth.buffer.is_active()
+    finally:
+        clouds.remove()
+        depth.destroy()
+
+
+def test_the_march_ends_at_either_range_and_the_cards_split_the_pixels():
+    march = SHADER.read_text()
+    # The near range's surface first, then the far range's, then the far plane.
+    assert re.search(
+        r"nearDepth < 1\.0 \? unproject\(.*\)\s*:\s*farDepth < 1\.0 \? unprojectFar\(",
+        march,
+        re.S,
+    )
+    assert "uNearDepthOn != 0 ? texelFetch(uSceneDepthNear" in march
+    composite = (SHADER.parent / "cloud_composite.frag").read_text()
+    assert "if (nearSurface != (uNearCard != 0))" in composite
 
 
 def test_the_view_ray_takes_its_own_extinction(showbase, executor):

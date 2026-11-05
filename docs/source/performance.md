@@ -1397,6 +1397,52 @@ between_towers 6.9, under_anvil 7.9, stratus_above 6.1 ms.
   17-22 %, four octaves), and the passes (about 1.1 ms a frame).
 - The far detail (`STEP_FADE`) was the shape regression of 4.1: `march.STEP_FADES`.
 
+## 24. Salvaging EVE-Redux: one march over both depth ranges
+
+EVE-Redux (LGhassen's raymarched clouds for KSP) marches once over KSP's two
+cameras, whose depths it merges into one distance buffer. The march here had a
+layer per range of `SplitDepthCameras`: a depth pass, a march (64 steps), two
+resolves and a composite each, so the far march went on behind a cloud the near
+one had already made opaque. Now one march runs from the near range's near plane to
+the near range's surface, else the far range's (both depth passes are kept and read
+in the march), with one history and a card per range
+([clouds.md](clouds.md), "The raymarch").
+
+RTX 3070, 2560 x 1440, HIGH (half resolution, 64 steps), `cloud_bench.py
+--passes`, the clouds' cost (ms over the frame without them):
+
+| Pose | Two layers | One march, one budget | One march, a budget per range |
+|---|---|---|---|
+| start | 3.71 | 3.34 | 2.96 |
+| inside | 4.31 | 3.07 | 3.55 |
+| model_in_cloud | 4.36 | 3.10 | 3.54 |
+| sunset | 2.41 | 2.17 | 2.19 |
+| genera cb_far | 2.81 | 2.29 | 2.47 |
+| genera anvil_top | 2.78 | 2.26 | 2.39 |
+| genera between_towers | 5.70 | 3.52 | 5.47 |
+| genera under_anvil | 6.79 | 4.05 | 6.64 |
+| genera in_congestus | 5.65 | 3.23 | 5.44 |
+| genera stratus_above | 5.73 | 4.39 | 4.41 |
+| genera stratus_below | 3.77 | 1.82 | 2.02 |
+
+- **One step budget for the whole ray** was cheapest, but it lengthened the near
+  range's steps for far stretches that an opaque cloud near the camera never lets the
+  march reach. `--jitter`'s error against the full-resolution reference rose where the
+  camera is in or near cloud: inside 1.74 -> 2.51, under_anvil 4.65 -> 8.30,
+  in_congestus 4.42 -> 6.72, still p99 3.2 -> 4.1 in congestus.
+- **A budget per range** (`uSplit`, `march.step_scales`) gives the near range its own
+  64 steps, as when it had a march of its own. Every `--jitter` and `--stability` column
+  is back at the two layers' values (within 0.1-0.3), and the still shots differ by
+  0.0-1.0 levels on average (jitter noise, no seam at the split). Kept.
+- Where the gain comes from: the far part of a ray is no longer marched behind an
+  opaque near cloud (inside, model_in_cloud, stratus), and the fixed passes are fewer
+  (one march's set-up, one resolve pair). Inside the towers the near range's own 64
+  fine steps are the cost, unchanged: tracing fewer pixels (non-square blocks, next)
+  is the lever there.
+- SpaceFlight's Mission 3 (still pose, 2560 x 1440, 3 runs each, alternated): mean
+  14.66 -> 14.46 ms, p95 16.6 -> 16.2 ms, within the run-to-run noise (0.5 ms). The
+  camera is 900 m under the slab, where little lies behind an opaque near cloud.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the
