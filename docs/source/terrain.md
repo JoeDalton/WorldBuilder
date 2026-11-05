@@ -408,7 +408,7 @@ The ambientCG and Poly Haven naming schemes both work, and a DirectX normal map 
 
 ## Collision
 
-`Terrain.enable_collision(into_mask, name="terrain", owner_tag="owner", max_distance=100_000)` makes the drawn terrain solid to a game's own `CollisionTraverser` (traversing `render`). It adds one into-only `CollisionNode` holding a native `CollisionTerrain` solid (`terrain/native/terrain_collision.cpp`).
+`Terrain.enable_collision(into_mask, name="terrain", owner_tag="owner", max_distance=20_000)` makes the drawn terrain solid to a game's own `CollisionTraverser` (traversing `render`). It adds one into-only `CollisionNode` holding a native `CollisionTerrain` solid (`terrain/native/terrain_collision.cpp`).
 
 The solid answers for every drawn chunk within `max_distance` of the camera. Chunks are registered as the LOD selection shows them and dropped as it hides them.
 

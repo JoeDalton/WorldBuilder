@@ -580,7 +580,7 @@ class Terrain:
         into_mask: BitMask32,
         name: str = "terrain",
         owner_tag: str = "owner",
-        max_distance: float = 100_000.0,
+        max_distance: float = 20_000.0,
         include_ocean: bool | None = None,
     ) -> TerrainCollision:
         """Make the drawn terrain solid to a game's ``CollisionTraverser``.
