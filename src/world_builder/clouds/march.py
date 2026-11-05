@@ -75,11 +75,14 @@ from panda3d.core import (
     OrthographicLens,
     PTA_float,
     PTA_int,
+    PTA_LMatrix4f,
+    PTA_LVecBase2i,
     PTA_LVecBase3f,
     PTA_LVecBase4f,
     RenderState,
     SamplerState,
     Shader,
+    ShaderAttrib,
     Texture,
     TransparencyAttrib,
     Vec3,
@@ -644,6 +647,18 @@ class _Resolve:
         )
 
 
+class _ResolveInputs:
+    """A resolve card's per-frame inputs, written in place
+    (:meth:`_MarchLayer.update`)."""
+
+    def __init__(self) -> None:
+        self.clip_to_rel = PTA_LMatrix4f.empty_array(1)
+        self.previous = PTA_LMatrix4f.empty_array(1)
+        self.offset = PTA_LVecBase2i.empty_array(1)
+        self.valid = PTA_int.empty_array(1)
+        self.still = PTA_float.empty_array(1)
+
+
 class _MarchLayer:
     """One depth range's march: its depth pass, its march, its two
     alternating results and the card that lays them over the range's pass.
@@ -740,18 +755,32 @@ class _MarchLayer:
             _shader("cloud_composite.vert", "cloud_composite.frag")
         )
         self.composite.set_depth_test(True)
-        # Until the first update: inputs every shader reads must be set.
+        # The per-frame inputs, bound once and written in place by update:
+        # new values given as inputs would make each card a new render state
+        # every frame. Until the first update they hold neutral values.
         identity = LMatrix4f.ident_mat()
-        self.card.set_shader_inputs(uClipToRender=identity, uOffset=LVecBase2i(0, 0))
+        self._clip_to_render = PTA_LMatrix4f.empty_array(1)
+        self._clip_to_render[0] = identity
+        self._march_offset = PTA_LVecBase2i.empty_array(1)
+        self.card.set_shader_inputs(
+            uClipToRender=self._clip_to_render, uOffset=self._march_offset
+        )
+        self._resolve_inputs = []
         for resolve in self.resolves:
+            inputs = _ResolveInputs()
+            inputs.clip_to_rel[0] = identity
+            inputs.previous[0] = identity
             resolve.card.set_shader_inputs(
-                uClipToRel=identity,
-                uPrevRelToClip=identity,
-                uOffset=LVecBase2i(0, 0),
-                uHistoryValid=0,
-                uStill=0.0,
+                uClipToRel=inputs.clip_to_rel,
+                uPrevRelToClip=inputs.previous,
+                uOffset=inputs.offset,
+                uHistoryValid=inputs.valid,
+                uStill=inputs.still,
             )
+            self._resolve_inputs.append(inputs)
         self.composite.set_shader_input("uDistance", self.distance)
+        # The composite's two states (showing one resolve or the other)
+        self._composite_attribs: list[ShaderAttrib] = []
         self._view = view
         self.active = True
         self._previous: tuple[Any, np.ndarray, Any] | None = None
@@ -784,6 +813,13 @@ class _MarchLayer:
         self.composite.set_shader_input(
             "uDownscale", 1.0 if self.gather else float(self.block)
         )
+        # Made once (again after a resize): update switches between them
+        self._composite_attribs = []
+        for resolve in self.resolves:
+            self.composite.set_shader_inputs(
+                uClouds=resolve.colour, uDistance=resolve.distance
+            )
+            self._composite_attribs.append(self.composite.get_attrib(ShaderAttrib))
 
     def resize(self, view: tuple[int, int]) -> None:
         self._view = view
@@ -827,9 +863,8 @@ class _MarchLayer:
         rel_to_clip = LMatrix4f(turned)
         rel_to_clip.invert_in_place()
         rel_to_clip = rel_to_clip * projection
-        self.card.set_shader_inputs(
-            uClipToRender=unproject * placed, uOffset=LVecBase2i(*offset)
-        )
+        self._clip_to_render[0] = unproject * placed
+        self._march_offset[0] = LVecBase2i(*offset)
 
         valid = self._previous is not None
         previous = rel_to_clip
@@ -854,14 +889,13 @@ class _MarchLayer:
         read = self.resolves[1 - frame % 2]
         write.buffer.set_active(True)
         read.buffer.set_active(False)
-        write.card.set_shader_inputs(
-            uClipToRel=unproject * turned,
-            uPrevRelToClip=previous,
-            uOffset=LVecBase2i(*offset) if self.gather else LVecBase2i(0, 0),
-            uHistoryValid=int(valid),
-            uStill=still,
-        )
-        self.composite.set_shader_inputs(uClouds=write.colour, uDistance=write.distance)
+        inputs = self._resolve_inputs[frame % 2]
+        inputs.clip_to_rel[0] = unproject * turned
+        inputs.previous[0] = previous
+        inputs.offset[0] = LVecBase2i(*offset) if self.gather else LVecBase2i(0, 0)
+        inputs.valid[0] = int(valid)
+        inputs.still[0] = still
+        self.composite.set_attrib(self._composite_attribs[frame % 2])
 
     def destroy(self, app: Any) -> None:
         self.composite.remove_node()

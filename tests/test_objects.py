@@ -20,6 +20,8 @@ from panda3d.core import (
     GeomVertexData,
     GeomVertexFormat,
     GeomVertexWriter,
+    LMatrix4f,
+    LVecBase3f,
     NodePath,
     OmniBoundingVolume,
     Shader,
@@ -321,3 +323,17 @@ def test_apply_leaves_a_node_with_the_inputs_already_alone():
     lighting.inputs.set_shader_input("uExposure", 0.5)
     lighting.apply(ship)
     assert ship.get_attrib(ShaderAttrib) == lighting.inputs.get_attrib(ShaderAttrib)
+
+
+def test_the_planet_axes_follow_its_rotation_only_when_it_turns():
+    """update gives the shader the body's rotation once, then again only when
+    it changed."""
+    terrain = SimpleNamespace(rotation=np.eye(3))
+    lighting = ModelLighting(terrain=terrain)
+    lighting.update((0.0, 0.0, 0.0))
+    assert LMatrix4f(lighting._axes[0]) == LMatrix4f.ident_mat()
+    turned = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    terrain.rotation = turned
+    lighting.update((0.0, 0.0, 0.0))
+    # Transposed: Panda's rows are GLSL's columns
+    assert LMatrix4f(lighting._axes[0]).get_row3(0) == LVecBase3f(*turned.T[0])

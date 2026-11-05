@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a sun that moved less than 0.05° since they were (`utils.SUN_TOLERANCE`,
   `sun_moved`): a slowly turning sun redraws them every few frames, not
   every frame.
+- The terrain's collision range (`Terrain.enable_collision(max_distance=)`)
+  defaults to 20 km, not 100 km: every drawn chunk within it is checked each
+  frame.
+- The cloud march's per-frame inputs (its matrices, offsets, history flags)
+  are bound once and written in place, and `ModelLighting.update` gives the
+  shader the body's rotation only when it turned: fewer render states made
+  each frame.
 - `World.update` reads the tracked nodes' positions once, keeps the bodies'
   centres and radii, and the caster map compares its casters by key (no
   quadratic list scan).
