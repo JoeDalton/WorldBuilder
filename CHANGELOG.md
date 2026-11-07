@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `atmoTransmittance`) and the light scattered more than once (32 x 32,
   `atmoMultiple`), built on the CPU when an atmosphere is added;
   `inscatter_reference`, a CPU reference for a view ray.
+- The sky-view table (`world_builder.atmosphere.sky_view.SkyView`,
+  `Sky.attach_view`): the air from the camera to space for every direction,
+  baked each frame inside an atmosphere; the sky, the sea's reflection of it
+  and the stars read it instead of marching (from space they still march).
 - `AtmosphereParams.ground_albedo` (0.3): the ground's bounce in the
   multiple scattering.
 - An ozone layer in the air (`AtmosphereParams.ozone`, `ozone_altitude`,

@@ -610,6 +610,8 @@ class World:
             )
             self.shadows.bind(self.sky.node)
             self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it
+            if getattr(app, "win", None) is not None:
+                self.sky.attach_view(app.win, self.shadows)
             self.sky.set_sun(self._sun)
 
         self.light_scale = float(light_scale)

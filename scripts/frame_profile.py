@@ -16,7 +16,9 @@ read back after each step, as terrain_shots.py times them):
 * each part's cost: the median frame with it shown less with it off:
   **terrain** (the terrain's roots, the near sea with them), **refl** (the
   sea's reflection pass), **sky**, **clouds** (the low clouds and their
-  passes), **cirrus**, **models** (the test balls);
+  passes), **cirrus**, **models** (the test balls), **skyview** (the
+  sky-view table and its bake against the sky's march: negative where it
+  saves);
 * **atmo** the per-pixel atmosphere's share: the frame at the preset's
   samples less at 2 (``AtmosphereSettings.steps``), scaled to all of them
   (``* steps / (steps - 2)``): a linear estimate of the whole march.
@@ -93,6 +95,13 @@ def _parts(demo: TerrainDemo) -> dict:
         ),
         "sky": (demo.sky.node.hide, demo.sky.node.show),
     }
+    view = getattr(demo.sky, "view", None)
+    if view is not None:
+        # the sky-view table against the sky's march (negative: it saves)
+        parts["skyview"] = (
+            lambda: view.set_active(False),
+            lambda: view.set_active(True),
+        )
     ocean = getattr(demo, "ocean", None)
     if ocean is not None:
         parts["refl"] = (
@@ -146,7 +155,7 @@ def main() -> None:
     poses = _poses(demo)
     atmo = settings.atmosphere
     columns = ["frame", "p95", "step", "terrain", "refl", "sky", "clouds", "cirrus"]
-    columns += ["models", "atmo"]
+    columns += ["models", "skyview", "atmo"]
     print(f"{'pose':<12} " + " ".join(f"{c:>7}" for c in columns))
     for name in args.pose or list(POSES):
         lat, lon, alt, heading, pitch, view, body = poses[name]

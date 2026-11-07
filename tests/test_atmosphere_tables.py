@@ -401,3 +401,93 @@ def _evaluate_with_sun(window, tmp_path, atmospheres, expression, rows, prelude,
         return _evaluate(window, tmp_path, atmospheres, expression, rows, prelude)
     finally:
         atmospheres.bind = original
+
+
+# ── the sky-view table (B.3) ───────────────────────────────────────────────────
+
+_SKY_VIEW = """
+#pragma include "{path}/sky_view.glsl"
+uniform vec3 uSunDir;
+vec3 tableOf(vec4 q, bool through) {{
+    vec3 transmittance, inscatter;
+    if (!skyViewAlong(normalize(q.xyz), uSunDir, transmittance, inscatter)) {{
+        return vec3(-1.0);
+    }}
+    return through ? transmittance : inscatter;
+}}
+vec3 marchOf(vec4 q, bool through) {{
+    vec3 transmittance, inscatter;
+    atmosphereAlong(normalize(q.xyz), 1e30, uSunDir, 16, transmittance, inscatter);
+    return through ? transmittance : inscatter;
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    "elevation, altitude",
+    [(50.0, 1300.0), (6.0, 1300.0), (-3.0, 1300.0), (20.0, 30e3), (20.0, 100e3)],
+)
+def test_the_sky_view_table_is_the_skys_march(window, tmp_path, elevation, altitude):
+    """The table, baked and read, against the sky's own march (16 samples)
+    over the sky's directions: the in-scatter within 4 % or 1 % of the noon
+    zenith's brightness (5 % within 10 degrees of the sun, where the Mie
+    glow is steep), the transmittance within 3 % or 0.01; nothing (the
+    march) from space."""
+    from math import cos, radians, sin
+
+    from panda3d.core import LVecBase3f, PTA_LVecBase3f
+
+    from world_builder.atmosphere.sky_view import SkyView
+
+    params = AtmosphereParams()
+    atmospheres = Atmospheres()
+    atmospheres.add(R, params)
+    eye = np.array([0.0, 0.0, R + altitude])
+    atmospheres.update(eye)
+    e = radians(elevation)
+    sun_dir = np.array([cos(e) * 0.6, cos(e) * 0.8, sin(e)])
+    sun = PTA_LVecBase3f.empty_array(1)
+    sun[0] = LVecBase3f(*sun_dir)
+    view = SkyView(window.win, atmospheres, sun)
+    # A new buffer draws from its second frame on: the bake before the reads.
+    window.graphicsEngine.render_frame()
+    window.graphicsEngine.render_frame()
+    rng = np.random.default_rng(11)
+    dirs = rng.normal(size=(200, 3))
+    dirs[:, 2] = np.abs(dirs[:, 2]) * 0.7 + 0.02  # above the horizon
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    rows = np.concatenate([dirs, np.zeros((len(dirs), 1))], axis=1)
+    original = atmospheres.bind
+
+    def bind(node):
+        original(node)
+        view.bind(node)
+        node.set_shader_input("uSunDir", sun)
+
+    atmospheres.bind = bind
+    prelude = _SKY_VIEW.format(path=SHADER_PATH)
+    try:
+
+        def run(expression):
+            return _evaluate(window, tmp_path, atmospheres, expression, rows, prelude)
+
+        table = run("tableOf(q, false)")
+        march = run("marchOf(q, false)")
+        table_t = run("tableOf(q, true)")
+        march_t = run("marchOf(q, true)")
+    finally:
+        atmospheres.bind = original
+        view.destroy()
+    if altitude > params.height:  # from space: no table, the march
+        assert np.all(table == -1.0)
+        return
+    assert np.all(table >= 0.0)  # the table was read
+    zenith = inscatter_reference(
+        R, params, (0, 0, R + 1300.0), (0, 0, 1), 1e9, (0, 0, 1)
+    )[1]
+    near_sun = dirs @ sun_dir > np.cos(radians(10.0))
+    bound = np.maximum(np.where(near_sun, 0.05, 0.04)[:, None] * march, 0.01 * zenith)
+    error = np.abs(table - march)
+    worst = int(np.argmax((error - bound).max(axis=1)))
+    assert np.all(error <= bound), (dirs[worst], table[worst], march[worst])
+    np.testing.assert_allclose(table_t, march_t, rtol=0.03, atol=0.01)

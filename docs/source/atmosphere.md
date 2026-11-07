@@ -162,6 +162,28 @@ until B.3-B.4 take the march off the sky and the ground. Still to come (RENDERIN
 B.3-B.5): a sky-view table for the sky, aerial-perspective cells for the
 terrain, sea and models, which take the per-pixel march off them.
 
+**The sky-view table** (B.3, `atmosphere.sky_view`, `shaders/sky_view.glsl`):
+the air between the camera and space for 256 x 128 directions, baked on the
+GPU every frame while the camera is inside an atmosphere, read by the sky
+(`sky.frag`, and so the sea's reflection, which draws the sky) and the stars
+(`stars.vert`) in place of their march; from space they march as before.
+Hillaire's layout: the camera's vertical and the sun's azimuth (so a sun
+turning in azimuth alone turns the table, not its content), texels crowded
+toward the horizon (square roots either side of it, the dip below the
+horizontal from `|cam|^2 - R^2` in float64) and toward the sun (its Mie glow);
+in-scatter in the lower half, transmittance in the upper (the sun's disc and
+the stars are dimmed by it). Each texel is the sky's own `atmosphereAlong` at
+16 samples, so the eclipses, the rings' shadow and the planet's shadow are in
+it. Against that march per pixel: within 4 % or 1 % of the noon zenith (5 %
+within 10° of the sun), the transmittance within 3 %
+(`tests/test_atmosphere_tables.py`). Baked each frame rather than on change:
+it depends on the camera's altitude and the sun's elevation, but also on the
+eclipses, the rings and a second atmosphere, and the bake is cheap
+(performance.md). `Sky.attach_view(window, shadows)` turns it on (World, the
+demo and cloud_bench do); without it the sky marches. Its size is a power of
+two: Panda pads a render target's texture up to one, the content in a
+corner (192 x 108 read back garbled).
+
 **The ozone layer.** Without it the twilight sky went olive-green near the
 zenith and the horizon (green and blue scattered about equally once the sun's
 light has crossed the whole air). Ozone absorbs orange and green (the

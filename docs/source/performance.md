@@ -1561,6 +1561,32 @@ HIGH, 7.0-8.1 ms a frame (genera 7.8-10.1), GPU-bound by 3-4 ms over a 3.5-4.0 m
 CPU step. It also settles this section's open question: compiled out, the second
 order of scattering saves 0.7-0.85 ms with genera.
 
+## 25. The atmosphere's tables (RENDERING_PLAN.md part B)
+
+Hillaire 2020's tables in place of parts of the per-pixel march
+([atmosphere.md, "The tables"](atmosphere.md#the-tables)). RTX 3070, 2560 x
+1440, HIGH, `scripts/frame_profile.py`, two runs each, against the tree
+before (HEAD 2417e7a, alternated in one session; ±0.3-0.4 ms run to run):
+
+- **B.1, transmittance table** (the march's sunlight read, not computed):
+  even, within noise (coast 7.73 / 7.67 against 7.65 / 7.68 ms; 20 km 5.77 /
+  5.72 against 5.99 / 5.85).
+- **B.2, multiple-scattering table and the ozone layer** (a fetch and a
+  density more a sample, the look's change): +0.2 (coast), +0.7 (in clouds),
+  +0.2 (20 km), ~0 (sunset) ms.
+- **B.3, sky-view table** (the sky, its reflection in the sea and the stars
+  read a 256 x 128 table baked each frame instead of marching): **-0.27 to
+  -0.43 ms** against the sky's march with everything else the same
+  (`frame_profile`'s `skyview` column: ground -0.28, coast -0.43, in clouds
+  -0.31, 20 km -0.15, sunset -0.39; most where the sea reflects the sky), its
+  bake included; 0 from orbit (no bake outside the air). The sky's own cost
+  at the ground pose: 0.50 ms before, 0.20 after.
+
+B.1-B.3 together against the tree before: ground +0.24, coast +0.13, in
+clouds +0.12, 20 km +0.38, sunset 0, orbit +0.27 ms (the terrain's per-pixel
+march carries B.2's fetch and ozone, from orbit too: the aerial-perspective
+cells, B.4, are what take it off).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

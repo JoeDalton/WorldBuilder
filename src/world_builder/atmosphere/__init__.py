@@ -272,6 +272,14 @@ class Atmospheres:
                 rho2 - radius * radius,
             )
 
+    def camera_inside(self) -> int:
+        """:returns: the atmosphere the camera was in at the last
+        :meth:`update` (atmosphere.glsl's test: below its top), -1 none"""
+        for index in range(len(self._bodies)):
+            if self._arrays["uAtmoCam"][index][3] < 0.0:
+                return index
+        return -1
+
     def transmittance_to_sun(
         self, index: int, point_world: ArrayLike, sun_direction: ArrayLike
     ) -> np.ndarray:

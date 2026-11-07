@@ -318,6 +318,7 @@ class CloudBench(ShowBase):
         self.atmospheres.add(self.radius, AtmosphereParams())
         self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it
+        self.sky.attach_view(self.win)
         weather = None
         if coverage is not None:
             weather = uniform_weather(self.spec, coverage)
