@@ -180,6 +180,11 @@ float sampleNoise(vec3 coord) {
 const vec3 OCTAVE_2_OFFSET = vec3( 0.31,  0.73,  0.19);
 const vec3 OCTAVE_3_OFFSET = vec3(-0.57,  0.11,  0.83);
 const vec3 OCTAVE_4_OFFSET = vec3( 0.67, -0.29,  0.41);
+// The two finest octaves turned off the noise's axes (its lattice's planes
+// drew slices and interference lines on a tower's face). MUST match
+// OCTAVE_TURNS in noise.py (columns listed; a test reads this file).
+const mat3 OCTAVE_3_TURN = mat3(0.36, 0.48, -0.8, -0.8, 0.6, 0.0, 0.48, 0.64, 0.6);
+const mat3 OCTAVE_4_TURN = mat3(0.6, 0.0, 0.8, 0.64, 0.6, -0.48, -0.48, 0.8, 0.36);
 // A convective field's cell octave: MUST match noise.CELL_SCALE / CELL_OFFSET.
 const float CELL_SCALE = 0.25;
 const vec3 CELL_OFFSET = vec3(0.13, 0.59, 0.37);
@@ -193,9 +198,11 @@ float lowOctaves(Field f, vec3 coord) {
 // it keeps the coverage (noise.fbm's octaves).
 float highOctaves(Field f, vec3 coord) {
     float third = f.octaves >= 3
-        ? sampleNoise(coord * f.octaveScales.z + OCTAVE_3_OFFSET) : f.octaveMean;
+        ? sampleNoise(OCTAVE_3_TURN * (coord * f.octaveScales.z) + OCTAVE_3_OFFSET)
+        : f.octaveMean;
     float fourth = f.octaves >= 4
-        ? sampleNoise(coord * f.octaveScales.w + OCTAVE_4_OFFSET) : f.octaveMean;
+        ? sampleNoise(OCTAVE_4_TURN * (coord * f.octaveScales.w) + OCTAVE_4_OFFSET)
+        : f.octaveMean;
     return third * f.octaveWeights.z + fourth * f.octaveWeights.w;
 }
 

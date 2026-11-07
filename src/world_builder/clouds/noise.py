@@ -47,6 +47,29 @@ OCTAVE_OFFSETS = (
     (-0.57, 0.11, 0.83),
     (0.67, -0.29, 0.41),
 )
+# The two finest octaves are turned off the noise's axes (rotations, columns
+# listed, applied to the scaled coords before the offset). Value noise has its
+# lattice's planes in it, flat spots and creases; at their few hundred metres
+# they drew stacked slices and interference lines across a tower's face seen
+# at a grazing angle (the billows are turned for the same reason). MUST match
+# OCTAVE_n_TURN in cloud_field.glsl (a test reads the shader).
+OCTAVE_TURNS = (
+    None,
+    None,
+    ((0.36, 0.48, -0.8), (-0.8, 0.6, 0.0), (0.48, 0.64, 0.6)),
+    ((0.6, 0.0, 0.8), (0.64, 0.6, -0.48), (-0.48, 0.8, 0.36)),
+)
+
+
+def _turned(coords: np.ndarray, index: int) -> np.ndarray:
+    """An octave's coords turned (:data:`OCTAVE_TURNS`): the shader's
+    ``mat3(columns) * coord``."""
+    turn = OCTAVE_TURNS[index] if index < len(OCTAVE_TURNS) else None
+    if turn is None:
+        return coords
+    return np.asarray(coords, dtype=np.float64) @ np.asarray(turn)
+
+
 #: One octave of weight 1 at scale 1, unshifted: :func:`sample_volume` through
 #: the native fbm (``x * 1.0 + 0.0`` is ``x``: the same samples).
 _ONE = (1.0,)
@@ -446,27 +469,44 @@ def fbm(
     """
     if octave_mean is None:
         octave_mean = float(volume.mean())
+    # zip() below: as many octaves as the shortest of the three
+    count = min(len(spec.octave_scales), len(spec.octave_weights), len(OCTAVE_OFFSETS))
     native = native_library()
     if native is not None and volume.dtype == np.float32:
-        # zip() below: as many octaves as the shortest of the three
-        count = min(
-            len(spec.octave_scales), len(spec.octave_weights), len(OCTAVE_OFFSETS)
-        )
-        return native.volume_fbm(
+        # The unturned octaves in one call, each turned one in its own, on
+        # its turned coords (a rotation commutes with the scale).
+        plain = min(count, 2)
+        total = native.volume_fbm(
             volume,
             coords,
-            spec.octave_scales[:count],
-            spec.octave_weights[:count],
-            OCTAVE_OFFSETS[:count],
-            min(octaves, count),
+            spec.octave_scales[:plain],
+            spec.octave_weights[:plain],
+            OCTAVE_OFFSETS[:plain],
+            min(octaves, plain),
             octave_mean,
         )
+        for index in range(plain, count):
+            weight = spec.octave_weights[index]
+            if index >= octaves:
+                total = total + octave_mean * weight
+                continue
+            total = total + native.volume_fbm(
+                volume,
+                _turned(coords, index),
+                spec.octave_scales[index : index + 1],
+                (weight,),
+                OCTAVE_OFFSETS[index : index + 1],
+                1,
+                octave_mean,
+            )
+        return total
     total = np.zeros(np.shape(coords)[:-1], dtype=np.float64)
     for index, (scale, weight, offset) in enumerate(
         zip(spec.octave_scales, spec.octave_weights, OCTAVE_OFFSETS)
     ):
         if index < octaves:
-            sample = sample_volume(volume, coords * scale + np.asarray(offset))
+            turned = _turned(coords, index) * scale
+            sample = sample_volume(volume, turned + np.asarray(offset))
             total += sample * weight
         else:
             total += octave_mean * weight

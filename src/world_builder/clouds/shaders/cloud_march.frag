@@ -78,7 +78,12 @@ const vec2 RESOLVED = vec2(2.0, 4.0);
 // A step is a sample along the ray as a pixel is across it: features finer than
 // about this share of the step's length (over RESOLVED) fade to their means as
 // the sub-pixel ones do, or they alias into the jitter (the shimmer of far
-// clouds, whatever the steps' count). It costs the clouds' detail at a distance
+// clouds, whatever the steps' count). The step's length by its distance alone
+// (k * max(dtMin, t * growth)), not the step taken: that one lengthens as the
+// ray loses its light in a cloud (STEP_DEEPENING) and is cut at a segment's
+// end, so the octaves a sample kept depended on where its ray entered the
+// cloud, which on a tower's face seen level changes with height: contours,
+// stacked horizontal bands. It costs the clouds' detail at a distance
 // (their lumps): march.STEP_FADES gives the least that keeps the shimmer down at
 // each march resolution.
 uniform float uStepFade;
@@ -337,6 +342,17 @@ void main() {
                                   texelFetch(uBlueNoise, (noiseAt + ivec2(29, 53)) & 63, 0).r)
                              + float(uFrame) * vec3(0.7548777, 0.5698403, 0.618034))
                        - 0.5;
+    // Where the steps' boundaries fall: each segment's first step is this
+    // share of its length, so the boundaries after it move too, by a
+    // different amount each pixel and visit. The jitter above moves a sample
+    // within its step, not the steps: neighbouring pixels shared their
+    // boundaries (from the slab's entry, growing smoothly with distance),
+    // and a long step's light (not linear in its density) carries a bias
+    // that depends on where a cloud's surface falls between two boundaries:
+    // a sawtooth of bands up a tower's face seen level, where the steps are
+    // longest. Moved, the bias is noise the resolve averages.
+    float boundary = max(fract(texelFetch(uBlueNoise, (noiseAt + ivec2(7, 23)) & 63, 0).r
+                               + float(uFrame) * 0.4142136), 0.05);
 
     float transmittance = 1.0;
     vec3 light = vec3(0.0);
@@ -362,9 +378,14 @@ void main() {
         weatherUntil = -1.0;
         float a = seg.x;
         float least = (seg.y - seg.x) / SEGMENT_SAMPLES;  // the fewest a segment takes
+        bool first = true;  // its first step: shortened by boundary
         while (a < seg.y && steps < 2 * uMarchSteps + 8 && transmittance > OPAQUE) {
             float k = a < uSplit ? stretch.x : stretch.y;
             float dt = min(min(k * max(dtMin, a * growth) * (1.0 + STEP_DEEPENING * (1.0 - transmittance)), least), seg.y - a);
+            if (first) {
+                dt *= boundary;
+                first = false;
+            }
             float t = a + dt * jitter;
             steps++;
             int layer = fam * uLayerCount + layerAt(t);
@@ -388,7 +409,8 @@ void main() {
             float shading = 1.0 - smoothstep(0.04, 0.2, footprint);
             float density = detail > 0.0
                           ? marchDensity(lf, p, weather,
-                                         max(t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y)), uStepFade * dt))
+                                         max(t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y)),
+                                             uStepFade * k * max(dtMin, t * growth)))
                           : 0.0;
             float farCoverage = 0.0;
             if (shading < 1.0) {

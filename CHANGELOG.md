@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The clouds' two finest fbm octaves are turned off the noise's axes
+  (`noise.OCTAVE_TURNS`, `OCTAVE_3_TURN` / `OCTAVE_4_TURN` in
+  cloud_field.glsl), as the billows already were: the value noise's lattice
+  planes drew stacked slices and interference lines across a tower's face seen
+  at a grazing angle. The clouds' fine detail is a different pattern; their
+  coverage is unchanged (the calibration follows `noise.fbm`).
 - The air's light scattered more than once comes from the multiple-scattering
   table instead of a flat share of the sunlight: the planet's shadow at dusk
   is lit by the sky above it, and the low sky by day is brighter (the

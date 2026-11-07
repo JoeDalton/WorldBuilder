@@ -32,6 +32,7 @@ from world_builder.clouds.noise import (
     OCTAVE_OFFSETS,
     CloudOptics,
     DensityField,
+    _turned,
     build_noise_texture,
     density_on_sphere,
     fbm,
@@ -331,6 +332,26 @@ def test_fbm_octaves_are_offset_so_they_never_align(volume):
     assert len(set(OCTAVE_OFFSETS)) == 4
 
 
+def test_the_fine_octaves_are_turned_as_the_shader_turns_them():
+    """The two finest octaves are turned off the noise's axes (its lattice's
+    planes drew slices across towers): rotations, the first two octaves not
+    turned, the shader's OCTAVE_n_TURN the same columns."""
+    from world_builder.clouds.noise import OCTAVE_TURNS
+
+    assert OCTAVE_TURNS[0] is None and OCTAVE_TURNS[1] is None
+    source = (_SHADERS / "cloud_field.glsl").read_text()
+    for index in (2, 3):
+        turn = np.asarray(OCTAVE_TURNS[index])
+        np.testing.assert_allclose(turn @ turn.T, np.eye(3), atol=1e-12)
+        assert np.linalg.det(turn) == pytest.approx(1.0)
+        match = re.search(
+            rf"const mat3 OCTAVE_{index + 1}_TURN = mat3\(([^)]*)\);", source
+        )
+        assert match, f"OCTAVE_{index + 1}_TURN not found"
+        values = [float(v) for v in match.group(1).split(",")]
+        np.testing.assert_allclose(values, turn.ravel())
+
+
 def test_fbm_spans_the_threshold_window(volume):
     """The threshold window must sit inside the fbm's actual range, or the field
     is either everywhere or nowhere."""
@@ -361,7 +382,8 @@ def test_the_shadow_march_agrees_with_the_field_it_approximates(volume):
     def octave(index):
         return sample_volume(
             volume,
-            coords * spec.octave_scales[index] + np.asarray(OCTAVE_OFFSETS[index]),
+            _turned(coords * spec.octave_scales[index], index)
+            + np.asarray(OCTAVE_OFFSETS[index]),
         )
 
     full = sum(octave(i) * spec.octave_weights[i] for i in range(4))
