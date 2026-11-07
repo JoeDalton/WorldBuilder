@@ -1483,6 +1483,58 @@ sharpness against it, still p99):
   alternated): mean 14.88 -> 12.44 ms, median 14.57 -> 11.83, p95 16.64 -> 14.43,
   p99 20.65 -> 17.86 (runs within 0.2 ms of each other).
 
+### Tried and dropped: EVE's jitter and reconstruction, a sharper history
+
+Three experiments aimed at the eighth's and the quarter's softness in motion
+(`cloud_bench.py --jitter`, RTX 3070, 2560 x 1440, HIGH at 4 x 2 and LOW at 4 x 4,
+plain and genera, each against the current march). None was kept; the code is in the
+history of this session only.
+
+- **A space-time blue noise for the steps' jitter** (Wolfe et al. 2022, scalar, as
+  EVE-Redux reads NVIDIA's): 64 slices of 64 x 64, each slice blue in space and each
+  pixel's sequence blue in time (void and cluster with the energy counted within a
+  slice and within a pixel's column; low-frequency power 0.0001 in space and 0.015 in
+  time, against 0.06 and 0.28 for white noise; a 21 s bake). Read a slice per visit
+  (shifted by the block's R2 offset) or a slice per frame (EVE's): **no change**. Every
+  column within 0.0-0.2 of the 2D blue noise moved on by the golden ratio, LOW with
+  genera included (still p99 5.69 against 5.67); a slice per frame was slightly worse
+  still (p99 +0.3-0.5). The jitter's residue is not where the steadiness goes.
+- **EVE's reconstruction** (as far as its renderer's buffers show: the pixel traced
+  this frame takes its own ray, the others keep their reprojected history unless the
+  clamp finds it changed): **worse**. HIGH still p99 2.2 -> 3.7-8.3, still grid 3-6
+  times, moving grid up to 10 times (20 km: 0.023 -> 0.248), for +0.01 of sharpness and
+  the same error. Each pixel gathers a sample every 8 (or 16) frames, and the clamp's
+  statistics change with the block's pixel traced: the traced pixels show as a grid.
+  At LOW with genera it was sharper (0.71 -> 0.79) with a strong grid (0.37).
+- **A Catmull-Rom history read** (five bilinear taps, held within the four texels
+  around against its overshoot): **worse**. Cost +0-0.06 ms, but sharpness in motion
+  0.02-0.08 lower and flicker 5-20 % higher (orbit +20 %), the moving grid a little
+  lower. The repeated bilinear read is not what softens the clouds in motion either.
+
+So the eighth's softness in motion (sharpness 0.92-0.94 plain against 0.95-0.97 at a
+half) is not the jitter's, the bilinear mix's or the history filter's. Not yet tried:
+the history's lag (its minimum weight and the clamp in motion), and more samples a
+frame where the view moves (a half while turning, an eighth when still).
+
+### The look: a second order of scattering, curled billows
+
+RTX 3070, 2560 x 1440, HIGH (4 x 2):
+
+- **A second order of scattering** (`CloudOptics.octave_gain` 0.3,
+  `octave_attenuation` 0.5; EVE-Redux's multiple-scattering lobe, in
+  Wrenninge's form): a few operations a cloudy sample and a fourth channel in
+  the far table. `--passes` with genera, gain 0 against 0.3: cb_far 2.04 /
+  2.07, between_towers 4.30 / 4.24, under_anvil 5.01 / 4.98, stratus_above 3.41 /
+  3.38 ms: nothing measurable. At 0.5 of the light and a quarter of the depth it
+  flattened the towers.
+- **Curled billows** (`CURL_STRENGTH` 2): one more fetch of a 32³ RGB8 volume
+  per cloudy sample with billows. Clouds' cost, straight against curled: below
+  1.54 / 1.69, start 2.30 / 2.33, inside 2.80 / 2.89, above 2.42 / 2.52,
+  model_in_cloud 2.66 / 2.58 ms; still spread and grid unchanged.
+- **A zenith sky-occlusion map: not built** (BACKLOG.md): the twin's vertical
+  optical depths make towers thinner than an overcast cumulus deck, so one scale
+  would have lightened tower bases.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

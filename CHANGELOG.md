@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The raymarch's billows are bent by a tileable curl noise
+  (`march.CURL_STRENGTH` 2, `noise.curl_noise_volume`): wisps and small
+  fragments curl into tufts. +0.0-0.15 ms at 2560 x 1440, HIGH; steadiness
+  unchanged.
+- The clouds take a second order of scattering (`CloudOptics.octave_gain`
+  0.3, `octave_attenuation` 0.5, every cloud type): sunlight that scattered
+  once more sees half the sunward depth, its phase half-way to isotropic, as
+  EVE-Redux's multiple-scattering lobe. A share of the first order's light,
+  so lit tops keep their brightness and shadowed sides open up. The far
+  clouds' table (`deckLight`) is RGBA: the second order's column mean in
+  alpha. `octave_gain` 0 is the old look.
 - `CloudSettings.march_resolution` (per axis: 0.25, 0.5, 1.0) is now
   `march_block` (bx, by): the march traces one pixel of each block a frame.
   Besides 4 x 4, 2 x 2 and 1 x 1 (a quarter, a half, full) it takes 4 x 2 (one

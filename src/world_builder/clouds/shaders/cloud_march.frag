@@ -56,6 +56,12 @@ uniform float uDetailErosion;
 uniform float uBillowMean;
 uniform float uBillowGain;       // march.billow_stats: the blobs' spread, as the ridged noise's
 uniform float uBillowRawMean;    // the noise volume's own mean
+// The billows bent by a curl noise (noise.curl_noise_volume, RGB as (c + 1) / 2):
+// by up to uCurlStrength of the billows' noise units, its features uCurlFrequency
+// times the noise volume's tile.
+uniform sampler3D uCurlNoise;
+uniform float uCurlStrength;
+uniform float uCurlFrequency;
 uniform ivec2 uBlock;            // view pixels per march pixel, across and up
 uniform ivec2 uOffset;           // the pixel traced in each block this frame
 uniform vec2  uViewSize;         // the view, pixels
@@ -125,6 +131,12 @@ float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
     }
     vec3 coord = BILLOW_TURN * ((p * f.noiseScale + f.noiseOrigin)
                                 * (f.octaveScales.x * uDetailScale));
+    // Bent by the curl noise: the lumps swirl instead of sitting on the value
+    // noise's lattice (divergence-free, so their mean and spread hold).
+    if (uCurlStrength > 0.0) {
+        vec3 bend = texture(uCurlNoise, coord * (uCurlFrequency / noiseSize)).rgb;
+        coord += uCurlStrength * (2.0 * bend - 1.0);
+    }
     // Round lumps: two scales of the noise itself, carving where it is high.
     // (The ridged noise, 1 - |2n - 1|, carved along sheets, which show as
     // streaks across a cloud seen edge-on.) Its mean and spread are the ridged
@@ -307,7 +319,9 @@ void main() {
     // view pixel's stride of uBlock aliased its diagonals into a lattice of
     // stripes), shifted by which pixel of the block this frame traces (the
     // block's pixels differ: R2 over the offset) and moved on by the visit, so
-    // a pixel's visits stratify the step.
+    // a pixel's visits stratify the step. (A space-time blue noise, a slice a
+    // visit or a frame as EVE-Redux reads it, measured the same: performance.md
+    // §24.)
     float jitter = fract(texelFetch(uBlueNoise, ivec2(gl_FragCoord.xy) & 63, 0).r
                          + dot(vec2(uOffset), vec2(0.7548776662, 0.5698402909))
                          + float(uFrame) * 0.618034);

@@ -353,9 +353,10 @@ def _deck_light(
     table: tuple,
     octaves: int,
 ) -> np.ndarray:
-    """The far clouds' averages (~0.6 s): the deck's lighting
-    (:func:`noise.deck_light_table`) and, a third channel, the clouds'
-    shadow on the ground (:func:`noise.ground_shadow_table`)."""
+    """The far clouds' averages (~0.6 s), RGBA: the deck's lighting
+    (:func:`noise.deck_light_table`: its sun term and visibility), the
+    clouds' shadow on the ground (:func:`noise.ground_shadow_table`) third,
+    and the deck's second order of scattering fourth."""
     volume = _noise(seed)
     mean = float(volume.mean())
     deck = deck_light_table(
@@ -364,7 +365,7 @@ def _deck_light(
     ground = ground_shadow_table(
         volume, field, optics, radius, np.asarray(table), octave_mean=mean
     )
-    return np.dstack([deck, ground])
+    return np.dstack([deck[..., :2], ground, deck[..., 2:]])
 
 
 def octave_offset(full: np.ndarray, fewer: np.ndarray) -> float:

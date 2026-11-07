@@ -110,8 +110,10 @@ from world_builder.clouds.noise import (
     NOISE_FEATURE,
     NOISE_SIZE,
     DensityField,
+    build_curl_texture,
     build_deck_light_texture,
     build_noise_texture,
+    curl_noise_volume,
     pack_layer_params,
 )
 from world_builder.clouds.shadow_defaults import (
@@ -186,6 +188,12 @@ DETAIL_SCALE = 24.0
 #: ...moving the threshold by up to this share of its window about its mean
 #: (the coverage holds). 1 breaks the edges into rags.
 DETAIL_EROSION = 0.5
+#: The billows bent by a curl noise (EVE-Redux bends its detail noise so):
+#: how far, in the billows' noise units (a billow is NOISE_FEATURE of them,
+#: about 4), and the curl's frequency over the billows' (its features some
+#: two billows across). 0 = straight billows.
+CURL_STRENGTH = 2.0
+CURL_FREQUENCY = 2.0
 #: How far along a ray the weather is read once, metres (cloud_march.frag's
 #: ``uWeatherStretch``): the fair-weather shift varies over kilometres; with
 #: genera, a tower's depth over tens of metres, so every sample reads it.
@@ -538,6 +546,11 @@ def blue_noise(size: int = BLUE_NOISE_SIZE, sigma: float = 1.9) -> np.ndarray:
         work.flat[void] = 1.0
         work_field += shifted(*divmod(void, size))
     return (rank.reshape(size, size) / n).astype(np.float32)
+
+
+@functools.cache
+def _curl_texture() -> Texture:
+    return build_curl_texture(curl_noise_volume())
 
 
 @functools.cache
@@ -1328,6 +1341,9 @@ class CloudMarch:
             "uBillowMean": float(np.mean(1.0 - np.abs(2.0 * volume - 1.0))),
             "uBillowGain": billow_gain(volume),
             "uBillowRawMean": float(np.mean(volume)),
+            "uCurlNoise": _curl_texture(),
+            "uCurlStrength": CURL_STRENGTH,
+            "uCurlFrequency": CURL_FREQUENCY,
             # The deck's (cloud_deck.vert, cloud.frag)
             "uDeck": 1,
             "uDeckLayer": self._layers_used - 1,

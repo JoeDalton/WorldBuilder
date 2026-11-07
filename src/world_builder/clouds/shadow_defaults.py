@@ -27,7 +27,7 @@ def _no_weather() -> Texture:
 @functools.cache
 def _no_deck_light() -> Texture:
     """A 1-texel deck lighting table, for shaders that never read it."""
-    return build_deck_light_texture(np.ones((1, 1, 3), dtype=np.float32))
+    return build_deck_light_texture(np.ones((1, 1, 4), dtype=np.float32))
 
 
 @functools.cache

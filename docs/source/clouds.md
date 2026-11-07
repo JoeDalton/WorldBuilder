@@ -152,6 +152,15 @@ The billboards follow the reference shader:
 - a short per-fragment march toward the sun through the field, which is what
   makes clouds shadow each other;
 - the "powder" dark-edge term and a multiple-scattering fill;
+- a second order of scattering (`CloudOptics.octave_gain`, 0.3, and
+  `octave_attenuation`, 0.5; Wrenninge's octaves, as EVE-Redux's clouds light
+  theirs with a multiple-scattering lobe of their own): 30 % of the sunlight
+  sees only half the sunward depth, with a phase half-way to isotropic. It is
+  a share taken out of the first order, so a side-lit cloud in full sun keeps
+  its brightness and only shadowed sides and anvil undersides open up; the far
+  clouds read its column mean from the deck table's fourth channel
+  (`noise.deck_light_table`). At 0.5 of the light and a quarter of the depth it
+  flattened towers;
 - the sky's display transform.
 
 All of these are live uniforms: `set_sun` moves the sun with no rebuild. These
@@ -410,7 +419,13 @@ cloud). Here each pixel steps along its own ray:
     noise `1 - |2n - 1|`, which carves along sheets: seen edge-on they showed
     as parallel streaks across every cloud. The first layer is also sampled
     through a rotation off the field's axes (`BILLOW_TURN`), which hides the
-    value noise's lattice planes.
+    value noise's lattice planes. Both layers are then **bent by a curl
+    noise** (`noise.curl_noise_volume`, 32³, the curl of three value-noise
+    potentials; `CURL_STRENGTH` 2 of the billows' noise units, features about
+    two billows across), as EVE-Redux bends its detail noise: wisps and small
+    fragments curl into tufts instead of round lumps. Curl noise has no
+    divergence, so the billows' mean and spread (and the coverage) hold. At 4
+    it stretched fragments into streaks.
 - **Lit** per sample exactly as the billboards are (`cloud_shading.glsl`,
   which both renderers include). The air is applied once per pixel, at the
   cloud's transmittance-weighted distance, with the billboards' per-vertex

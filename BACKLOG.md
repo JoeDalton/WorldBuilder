@@ -93,7 +93,27 @@ then the default) is measured, not built. What is left:
   noise; a lower `MIN_WEIGHT` for far pixels; more samples per segment far
   off (`SEGMENT_SAMPLES`, +0.4-0.9 ms). Measure with `cloud_bench.py
   --stability 30` (still) and the `--turn` / `--move` runs; the
-  performance.md §23 "Steadier" tables are the baseline.
+  performance.md §23 "Steadier" tables are the baseline. Tried since and
+  dropped (performance.md §24, "Tried and dropped"): a space-time blue
+  noise for the jitter (no change), EVE-Redux's exact-pixel reconstruction
+  (a grid, steadiness halved), a Catmull-Rom history read (softer, more
+  flicker).
+- **Sky occlusion from a zenith map: not built** (the EVE salvage plan's
+  Phase 4 item 2). The cloud shadow maps' bake marched straight up would
+  give each march sample the optical depth above it. But the CPU twin puts
+  the genera's convective towers optically *thinner* than an overcast
+  cumulus deck (median vertical depth at the base 0.8 against 4.9; p90 3.0
+  against 6.9), so one depth-to-sky-light scale that keeps a cumulus base
+  as today lightens tower bases; the height ramp (`skyReach`) already follows
+  each column's own top. Its gain would be the stratus under an anvil and
+  holes in a deck. LIGHT_VOLUME_PLAN.md's sky channel covers it properly.
+- **Softer in motion at an eighth (4 x 2, HIGH)**: sharpness 0.92-0.94
+  plain, 0.75-0.85 in towers, against 0.95-0.97 and 0.84-0.94 at a half.
+  Not the jitter, the bilinear mix of the fresh samples or the history's
+  filter (all three measured, §24). Ideas, not tried: the history's lag in
+  motion (`MIN_WEIGHT`, the clamp's width without `uStill`); tracing more
+  pixels a frame while the view moves (a half while turning, an eighth when
+  still: the march's cost is in its traced pixels).
 - **The clouds lag behind the camera against terrain, when it flies fast.**
   Seen at the demo's camera `{lat: 20.18986, lon: 29.12635, alt: 2769,
   heading: 157.2, pitch: -5.4}`, roll 5.1 (`terrain_shots.py --pose at --at

@@ -100,6 +100,10 @@ struct Field {
     float phaseBackward;
     float phaseIsotropic;
     float forwardAnisotropy;
+    // A second order of scattering (noise.CloudOptics.octave_gain): its share
+    // of the sunlight, and the share of the sunward depth it sees.
+    float octaveGain;
+    float octaveAttenuation;
     // A convective field's growth with depth (noise.DensityField), neutral
     // by default: its top at depth 0 as a share of the slab, its anvil (and
     // shelf), its cell octave's weight, the shelf's fbm shift
@@ -135,6 +139,8 @@ Field getField(int layer) {
     f.topErosion      = v4.w;
     f.extinction      = v5.x;
     f.fieldExtinction = v5.y;
+    f.octaveGain      = v5.z;
+    f.octaveAttenuation = v5.w;
     f.topExponent     = v6.x;
     f.shadowGain      = v6.y;
     f.shadowBias      = v6.z;

@@ -593,7 +593,8 @@ def test_pack_layer_params_round_trips_the_field():
     # The two extinctions are DIFFERENT numbers on purpose: the per-billboard one
     # is scaled by 1/(volume fraction) for a sum over chords, while the sun march
     # is a continuous path integral and must use the field's own density.
-    np.testing.assert_allclose(rows[5], (0.09, 0.037, 0.0, 0.0))
+    # (view extinction, the field's, the second order's gain and attenuation)
+    np.testing.assert_allclose(rows[5], (0.09, 0.037, 0.3, 0.5))
     # Octaves evaluated and their mean (cloud_field.glsl's highOctaves): all
     # four by default.
     np.testing.assert_allclose(rows[9][2:], (4.0, 0.5))
@@ -851,3 +852,36 @@ def test_texture_carries_the_volume_contents():
 def test_feature_size_matches_the_lattice():
     assert NOISE_FEATURE == NOISE_SIZE / NOISE_LATTICE
     assert NOISE_SIZE % NOISE_LATTICE == 0
+
+
+def test_the_curl_noise_is_divergence_free_and_tiles():
+    """The billows' bend (noise.curl_noise_volume): the curl of three potentials,
+    so its divergence (by the same periodic differences) is nothing next to
+    its size; it spans [-1, 1] and wraps."""
+    from world_builder.clouds.noise import CURL_SIZE, curl_noise_volume
+
+    curl = curl_noise_volume()
+    assert curl.shape == (CURL_SIZE, CURL_SIZE, CURL_SIZE, 3)
+    assert np.abs(curl).max() == pytest.approx(1.0)
+
+    def d(field, axis):
+        return 0.5 * (np.roll(field, -1, axis) - np.roll(field, 1, axis))
+
+    divergence = d(curl[..., 0], 2) + d(curl[..., 1], 1) + d(curl[..., 2], 0)
+    gradient = np.abs(d(curl[..., 0], 2)).mean()
+    assert np.abs(divergence).max() < 1e-4 * max(gradient, 1e-9) + 1e-5
+    # Every component carries a bend, of zero mean (no drift of the billows)
+    for k in range(3):
+        assert np.std(curl[..., k]) > 0.1
+        assert abs(float(np.mean(curl[..., k]))) < 0.02
+
+
+def test_the_curl_texture_keeps_its_components_in_order():
+    from world_builder.clouds.noise import build_curl_texture
+
+    curl = np.zeros((2, 2, 2, 3), dtype=np.float32)
+    curl[..., 0], curl[..., 1], curl[..., 2] = -1.0, 0.0, 1.0
+    texture = build_curl_texture(curl)
+    assert texture.get_num_components() == 3
+    stored = np.frombuffer(texture.get_ram_image(), np.uint8)[:3]
+    assert list(stored) == [255, 128, 0]  # Panda's RAM image is BGR

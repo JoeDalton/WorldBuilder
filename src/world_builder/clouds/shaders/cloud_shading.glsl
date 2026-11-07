@@ -57,7 +57,15 @@ vec3 cloudRadianceFrom(sampler2D deckTable, float sunDepth, Field f, vec3 p,
     if ((uCloudDebug & 1) != 0) shading = 0.0;
     float sunVisibility = shading > 0.0 ? exp2(-sunDepth) : 1.0;
     // What the sun term sees: the shadowing and the powder.
-    float sunShadowing = sunVisibility * mix(1.0, powder(f, density), f.powderStrength);
+    float powdered = mix(1.0, powder(f, density), f.powderStrength);
+    float sunShadowing = sunVisibility * powdered;
+    // The second order of scattering (Wrenninge's octaves; EVE-Redux's clouds
+    // light theirs with a multiple-scattering lobe of their own): sunlight that
+    // scattered once more on its way, so it sees only octaveAttenuation of the
+    // sunward depth and its phase is half-way to isotropic. Sunlight-coloured,
+    // it lights a cloud's shadowed side where the flat fill below is the sky's.
+    float octaveShadowing = shading > 0.0
+        ? exp2(-f.octaveAttenuation * sunDepth) * powdered : 1.0;
     if (shading < 1.0) {
         // Far away: the averages of both over the clouds' columns, which
         // the aliasing per-pixel values would not give, for this sun and
@@ -68,9 +76,10 @@ vec3 cloudRadianceFrom(sampler2D deckTable, float sunDepth, Field f, vec3 p,
         vec2 size = vec2(textureSize(deckTable, 0));
         float cosSun = dot(normalize(p), sunDir);
         vec2 at = vec2((cosSun - deckLightCosMin) / (1.0 - deckLightCosMin), farCoverage);
-        vec2 averaged = texture(deckTable, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size).rg;
+        vec4 averaged = texture(deckTable, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size);
         sunVisibility = mix(averaged.g, sunVisibility, shading);
         sunShadowing = mix(averaged.r, sunShadowing, shading);
+        octaveShadowing = mix(averaged.a, octaveShadowing, shading);
     }
     // Skylight comes from above: occlude the SKY term toward the underside
     // only (of the cloud's own height, at its convective depth; over its
@@ -91,7 +100,11 @@ vec3 cloudRadianceFrom(sampler2D deckTable, float sunDepth, Field f, vec3 p,
     // from the sky, so neither phase-weighted nor self-shadowed, and reaching
     // the underside as the sky's does. This is what spreads the terminator
     // over the clouds instead of a line from lit to dark.
-    return sunlight * (sunBrightness * sunShadowing * phase)
+    // Its share comes out of the first order's, so a side-lit cloud in full sun
+    // keeps its brightness and only the shadowed parts gain.
+    float sunTerm = mix(sunShadowing * phase, octaveShadowing * mix(phase, 1.0, 0.5),
+                        f.octaveGain);
+    return sunlight * (sunBrightness * sunTerm)
          + skylight * ambient
          + twilight * (sunBrightness * TWILIGHT_GLOW * skyReach);
 }
