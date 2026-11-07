@@ -78,8 +78,9 @@ class AtmosphereSettings(QualitySettings):
         "Quality",
         unit="samples",
         range=(2, 16),
-        help="Samples along each pixel's view ray through the air: fewer band "
-        "the dusk sky and the haze; the cost is per pixel, everywhere.",
+        help="Samples along a view ray where the air is marched per pixel "
+        "(from space, far ground, the sea's reflection; the grids are baked "
+        "at 16): fewer band the dusk sky and the haze there.",
     )
     vertex_steps: int = knob(
         4,

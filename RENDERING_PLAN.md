@@ -90,6 +90,11 @@ presets (sizes; LOW may keep the march), docs.
 Gates: the atmosphere's total, bakes included, <= 0.5 ms at HIGH, and below A's measured share; no banding
 (`sunset`, orbit, `dusk_in_clouds`, a descent from orbit); the user's dusk and orbit check.
 
+**Done (2026-11-07), B.1-B.5.** The per-pixel atmosphere's share is ~0 wherever the camera is in the air
+(0.4-1.2 ms in A); frames 0.3-0.9 ms faster at HIGH (performance.md §25). B.5: both tables on at every preset
+(they save at LOW's 4 samples too); no banding in the gate poses nor across the air's top (61 / 59 km). Left:
+from orbit the march stays, +0.24 ms on the cheapest frame (3.6 ms).
+
 ## C. The clouds' light volume, and god rays
 
 The march lights its clouds from the cloud shadow maps: 4 cumulative levels along the sun's chord per texel plus 2

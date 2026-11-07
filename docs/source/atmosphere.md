@@ -25,7 +25,11 @@ For a view ray, `atmosphere.glsl` marches `uAtmoSteps` samples (8 at HIGH:
 `AtmosphereSettings.steps`, live through `Atmospheres.set_settings`; the
 stars and the cloud billboards march `vertex_steps`, 4, per vertex) through
 each atmosphere the ray crosses (a ray that meets the ground stops there).
-At each sample:
+With the camera in the air most pixels read the sky-view table and the
+aerial-perspective cells ([the tables](#the-tables)), baked at 16 samples
+whatever the preset; `steps` sets the march that remains: from space, past
+the cells' reach, the sea's reflection rays, and everything with the tables
+off. At each sample:
 
 - the density of both media, for the optical depth back to the camera;
 - the sunlight reaching it, from the **transmittance table**
@@ -158,9 +162,8 @@ even (within run-to-run noise at 2560 x 1440, HIGH); the multiple-scattering
 read (one more fetch a sample) and the ozone (its density a sample) cost
 together ~0.2-0.7 ms a frame at 2560 x 1440, HIGH (coast +0.2, in clouds
 +0.7, 20 km +0.2, sunset ~0; means of two alternated runs, +-0.4 noise),
-until B.3-B.4 take the march off the sky and the ground. Still to come (RENDERING_PLAN.md
-B.3-B.5): a sky-view table for the sky, aerial-perspective cells for the
-terrain, sea and models, which take the per-pixel march off them.
+until the sky-view table and the aerial-perspective cells (below) took the
+march off the sky and the ground wherever the camera is in the air.
 
 **The sky-view table** (B.3, `atmosphere.sky_view`, `shaders/sky_view.glsl`):
 the air between the camera and space for 256 x 128 directions, baked on the
@@ -213,6 +216,14 @@ reach, or with the camera in space is marched as before. Against the march
 (`tests/test_atmosphere_tables.py`), in front of the ground: within 6 % or 1 %
 of the noon zenith (8 % for the ground 45 km below), the transmittance within
 3 %. `AtmosphereSettings.aerial` turns it off (the march everywhere).
+
+**Presets** (B.5). Both tables stay on at every preset, LOW included: at
+LOW's 4 samples a pixel the march is cheaper, but the cells still save
+0.2-0.8 ms a frame and the sky-view table up to 0.25 ms at 2560 x 1440
+(performance.md §25), and their 16-sample bakes look better than the
+march's 4. Their sizes are the same at every preset. From space the march stays, with the multiple-scattering
+fetch and the ozone a sample: +0.24 ms on the orbit pose, the cheapest frame
+(3.6 ms), left as it is.
 
 **The ozone layer.** Without it the twilight sky went olive-green near the
 zenith and the horizon (green and blue scattered about equally once the sun's

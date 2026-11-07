@@ -25,7 +25,9 @@ read back after each step, as terrain_shots.py times them):
   (``* steps / (steps - 2)``): a linear estimate of the whole march.
 
 A part's cost includes its CPU's when the frame is CPU-bound. Every number
-is a median of --frames frames; two runs differ by 0.3-0.5 ms.
+is a median of --frames frames; two runs differ by 0.3-0.5 ms. Frames faster
+than the display's refresh are held to it in a window even with vsync off
+(5.53 ms at 180 Hz, every part 0): use --offscreen there (LOW).
 """
 
 from __future__ import annotations

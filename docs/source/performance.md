@@ -1599,7 +1599,17 @@ runs): ground 7.23 to 6.80, coast 7.62 to 6.69, in clouds 7.85 to 7.04, 20 km
 5.72 to 5.12, sunset 7.95 to 7.68, orbit 3.33 to 3.57. The per-pixel
 atmosphere's share (`atmo`, steps 8 against 2) went from 0.4-1.2 ms to ~0
 wherever the camera is in the air. From orbit the march stays, with B.2's
-extra fetch and ozone (+0.24 ms): left for B.5.
+extra fetch and ozone (+0.24 ms), on the cheapest frame: left (B.5).
+
+- **B.5, presets.** Do the tables pay at LOW and MID, where the march has 4
+  and 6 samples? Yes (two runs each; `aerial` and `skyview` columns, ms):
+  LOW cells -0.37 to -0.77, sky view 0 to -0.25; MID cells -0.40 to -0.96,
+  sky view -0.21 to -0.43. Both stay on at every preset.
+
+  LOW had to be measured `--offscreen`: in a window its frames (~4.3 ms)
+  sat at 5.53 ms, the display's refresh, with every part reading 0, though
+  vsync was off (the compositor holds the swap). A windowed profile below
+  ~5.6 ms measures the display, not the frame.
 
 ## Not covered
 
