@@ -329,6 +329,14 @@ void main() {
     float jitter = fract(texelFetch(uBlueNoise, ivec2(gl_FragCoord.xy) & 63, 0).r
                          + dot(vec2(uOffset), vec2(0.7548776662, 0.5698402909))
                          + float(uFrame) * 0.618034);
+    // The light volumes' read jitter (cloud_field.glsl), three more draws
+    // of the blue noise, moved on each visit the same way.
+    ivec2 noiseAt = ivec2(gl_FragCoord.xy);
+    cloudLightJitter = fract(vec3(texelFetch(uBlueNoise, (noiseAt + ivec2(17, 41)) & 63, 0).r,
+                                  texelFetch(uBlueNoise, (noiseAt + ivec2(43, 9)) & 63, 0).r,
+                                  texelFetch(uBlueNoise, (noiseAt + ivec2(29, 53)) & 63, 0).r)
+                             + float(uFrame) * vec3(0.7548777, 0.5698403, 0.618034))
+                       - 0.5;
 
     float transmittance = 1.0;
     vec3 light = vec3(0.0);

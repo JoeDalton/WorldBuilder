@@ -150,6 +150,7 @@ from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.half_res import HalfResClouds
+from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
@@ -562,6 +563,7 @@ class TerrainDemo(ShowBase):
         )
         self.clouds = None
         self.cloud_maps = None  # the clouds' shadow maps
+        self.cloud_light = None  # their light volumes
         self._cloud_debug = cloud_debug
         self._rebuild_clouds()
         # Built before the depth split changes the lens: the sea's reflection
@@ -782,6 +784,8 @@ class TerrainDemo(ShowBase):
             if self.cloud_maps is not None:
                 steps = self.shadows.settings.cloud_shadow_steps
                 self.cloud_maps.update(self.cam_world, self._sun, steps)
+            if self.cloud_light is not None:
+                self.cloud_light.update(self.cam_world, self._sun)
         self._place_test_balls()
         self._update_sun()
         self._shade_models()
@@ -1045,6 +1049,9 @@ class TerrainDemo(ShowBase):
             if self.cloud_maps is not None:
                 self.cloud_maps.destroy()
                 self.cloud_maps = None
+            if self.cloud_light is not None:
+                self.cloud_light.destroy()
+                self.cloud_light = None
             self.clouds = None
         if self.ring is not None:
             self.ring.haze.set_clouds_top(0.0)  # none: one pass, after them
@@ -1075,6 +1082,10 @@ class TerrainDemo(ShowBase):
         self.cloud_maps.bind(self.terrain.root)
         self.clouds.bind_maps(self.cloud_maps.bind)  # a raymarch's own light
         self.cloud_maps.bind(self.home.models.inputs)
+        self.cloud_light = CloudLightVolumes(
+            self.win, self.clouds, self.world.shadows.cloud_light_size
+        )
+        self.clouds.bind_maps(self.cloud_light.bind)
         if self.ring is not None:
             # Its haze split at their tops: what is beyond them drawn first.
             self.ring.haze.set_clouds_top(self.clouds.top_radius)
@@ -1147,6 +1158,8 @@ class TerrainDemo(ShowBase):
         )
         if self.cloud_maps is not None:
             self.cloud_maps.set_size(world.shadows.cloud_map_size)
+        if self.cloud_light is not None:
+            self.cloud_light.set_tile(world.shadows.cloud_light_size)
         self.casters.set_size(world.shadows.caster_size)
         for body in self.bodies:
             body.shadow_map.set_size(world.shadows.terrain_map_size)
@@ -1273,6 +1286,8 @@ class TerrainDemo(ShowBase):
             body.shadow_map.destroy()
         if self.cloud_maps is not None:
             self.cloud_maps.destroy()
+        if self.cloud_light is not None:
+            self.cloud_light.destroy()
         for terrain in self._terrains():
             terrain.destroy()
         self.executor.shutdown()

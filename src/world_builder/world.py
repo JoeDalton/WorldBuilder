@@ -82,6 +82,7 @@ from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.half_res import HalfResClouds
+from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
@@ -284,6 +285,7 @@ class Body:
         :meth:`World._light_ocean`); set on the first update
     :ivar shadow_map: its mountains' shadow (one per body)
     :ivar cloud_maps: its clouds' shadow maps, or None
+    :ivar cloud_light: its clouds' light volumes, or None
     :ivar models: the model shader's inputs near it (``track_light(...,
         shader=True)``)
     """
@@ -296,6 +298,7 @@ class Body:
     ocean_reference: np.ndarray | None = None
     shadow_map: ShadowMap | None = None
     cloud_maps: CloudShadowMaps | None = None
+    cloud_light: CloudLightVolumes | None = None
     models: ModelLighting | None = None
 
     @property
@@ -523,6 +526,10 @@ class World:
                     )
                     body.cloud_maps.bind(terrain.root)
                     body.clouds.bind_maps(body.cloud_maps.bind)  # their own light
+                    body.cloud_light = CloudLightVolumes(
+                        output, body.clouds, self.settings.shadows.cloud_light_size
+                    )
+                    body.clouds.bind_maps(body.cloud_light.bind)
             body.models = self._model_lighting(
                 look.exposure, index, terrain, len(self.bodies), light_scale
             )
@@ -972,6 +979,8 @@ class World:
                 )
             if body.cloud_maps is not None:
                 body.cloud_maps.set_size(settings.shadows.cloud_map_size)
+            if body.cloud_light is not None:
+                body.cloud_light.set_tile(settings.shadows.cloud_light_size)
         if self.casters is not None:
             self.casters.set_size(settings.shadows.caster_size)
         self._sync_half_res()
@@ -1074,6 +1083,8 @@ class World:
                 if body.cloud_maps is not None:
                     steps = self.shadows.settings.cloud_shadow_steps
                     body.cloud_maps.update(camera, self._sun, steps)
+                if body.cloud_light is not None:
+                    body.cloud_light.update(camera, self._sun)
         for body in self.bodies:
             if body.ocean is not None:
                 body.ocean.update(camera)
@@ -1220,6 +1231,8 @@ class World:
                 body.ocean.destroy()
             if body.cloud_maps is not None:
                 body.cloud_maps.destroy()
+            if body.cloud_light is not None:
+                body.cloud_light.destroy()
             if body.models is not None:
                 body.models.destroy()
             if body.shadow_map is not None:

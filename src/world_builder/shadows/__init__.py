@@ -161,6 +161,18 @@ class ShadowSettings(QualitySettings):
         "the sun still. Wider reaches farther before the march per pixel.",
     )
 
+    cloud_light_size: int = knob(
+        256,
+        "Cloud light volume",
+        REBUILD,
+        unit="px",
+        choices={"off": 0, "128": 128, "256": 256},
+        help="The light reaching every point of the clouds around the camera, "
+        "baked a few slices a frame when the sun turns or the camera moves "
+        "far: the raymarched clouds' light by it rather than by the shadow "
+        "maps. Wider is finer near the camera.",
+    )
+
     cloud_far_reach: float = knob(
         4000.0,
         "Clouds' long shadows",
@@ -194,6 +206,7 @@ class ShadowSettings(QualitySettings):
             "terrain_map_size": 256,
             "local_map_size": 0,
             "cloud_map_size": 0,
+            "cloud_light_size": 0,
             "cloud_far_reach": 0.0,
             "object_shadows": False,
             "caster_map_size": 512,
@@ -203,6 +216,7 @@ class ShadowSettings(QualitySettings):
             "terrain_map_size": 512,
             "local_map_size": 512,
             "cloud_map_size": 512,
+            "cloud_light_size": 128,
             "cloud_far_reach": 2000.0,
             "caster_map_size": 1024,
         },
