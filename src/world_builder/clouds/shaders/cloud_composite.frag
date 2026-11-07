@@ -15,6 +15,7 @@ uniform sampler2D uDistance;   // the cloud's distance from the camera, km, 0 no
 uniform vec2 uDownscale;       // the view's pixels per pixel of theirs, across and up
 uniform sampler2D uNearDepth;  // the near range's depth pass
 uniform int uNearDepthOn;      // 0: not drawn (nothing of the slab in the near range)
+uniform int uDepthScale;       // view pixels per pixel of the depth pass, per axis
 uniform int uNearCard;         // 1: the near range's card, 0: the far range's
 uniform mat4 p3d_ProjectionMatrix;
 uniform mat4 p3d_ProjectionMatrixInverse;
@@ -24,7 +25,7 @@ out vec4 fragColor;
 
 void main() {
     bool nearSurface = uNearDepthOn != 0
-                    && texelFetch(uNearDepth, ivec2(gl_FragCoord.xy), 0).r < 1.0;
+                    && texelFetch(uNearDepth, ivec2(gl_FragCoord.xy) / uDepthScale, 0).r < 1.0;
     if (nearSurface != (uNearCard != 0)) {
         discard;
     }

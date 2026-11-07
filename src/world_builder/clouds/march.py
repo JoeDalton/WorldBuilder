@@ -194,6 +194,17 @@ DETAIL_EROSION = 0.5
 #: two billows across). 0 = straight billows.
 CURL_STRENGTH = 2.0
 CURL_FREQUENCY = 2.0
+#: The view's pixels per pixel of the depth passes, per axis: 2 draws the
+#: scene's depth for the march at half resolution (the march reads it at
+#: the pixels it traces, the composites to tell the near range's pixels).
+DEPTH_SCALE = 2
+
+
+def depth_size(view: tuple[int, int], scale: int = DEPTH_SCALE) -> tuple[int, int]:
+    """:returns: the depth passes' size for a view of *view* pixels"""
+    return tuple(max(1, math.ceil(v / scale)) for v in view)
+
+
 #: How far along a ray the weather is read once, metres (cloud_march.frag's
 #: ``uWeatherStretch``): the fair-weather shift varies over kilometres; with
 #: genera, a tower's depth over tens of metres, so every sample reads it.
@@ -817,7 +828,14 @@ class _MarchLayer:
         self.block = block
         self.gather = gather
         self.far_depth = _DepthPass(
-            app, output, f"{name}_far", far_lens, CLOUD_FAR_BIT, view, sort, states
+            app,
+            output,
+            f"{name}_far",
+            far_lens,
+            CLOUD_FAR_BIT,
+            depth_size(view),
+            sort,
+            states,
         )
         self.near_depth = _DepthPass(
             app,
@@ -825,7 +843,7 @@ class _MarchLayer:
             f"{name}_near",
             near_lens,
             CLOUD_NEAR_BIT,
-            view,
+            depth_size(view),
             sort + 1,
             states,
         )
@@ -863,6 +881,7 @@ class _MarchLayer:
             uSceneDepthNear=self.near_depth.depth,
             uSceneDepthFar=self.far_depth.depth,
             uNearDepthOn=self.near_on,
+            uDepthScale=DEPTH_SCALE,
             uBlueNoise=_blue_noise_texture(),
         )
         # The jitter's index: this layer's visits (visit_of).
@@ -897,6 +916,7 @@ class _MarchLayer:
             card.set_shader_inputs(
                 uNearDepth=self.near_depth.depth,
                 uNearDepthOn=self.near_on,
+                uDepthScale=DEPTH_SCALE,
                 uNearCard=int(side == "near"),
             )
             self.composites.append(card)
@@ -984,7 +1004,7 @@ class _MarchLayer:
     def resize(self, view: tuple[int, int]) -> None:
         self._view = view
         for buffer in self.depth_buffers:
-            buffer.set_size(*view)
+            buffer.set_size(*depth_size(view))
         self.buffer.set_size(*self._march_size(view))
         for resolve in self.resolves:
             resolve.buffer.set_size(*self._resolve_size(view))

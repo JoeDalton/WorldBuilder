@@ -648,6 +648,13 @@ def test_one_march_covers_both_depth_ranges(window, executor):
         (layer,) = march._layers
         far_card, near_card = layer.composites
         assert layer.lens is window.camLens and layer.far_lens is depth.far_lens
+        # The depth passes at half the view's resolution (march.DEPTH_SCALE)
+        from world_builder.clouds.march import DEPTH_SCALE, depth_size
+
+        assert DEPTH_SCALE == 2
+        half = depth_size(march._size)
+        for buffer in layer.depth_buffers:
+            assert (buffer.get_x_size(), buffer.get_y_size()) == half
         march._finish()  # the weather in: the passes run
         assert layer.active
         assert not far_card.is_hidden(FAR_CAMERA_MASK)

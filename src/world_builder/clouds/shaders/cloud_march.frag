@@ -30,6 +30,7 @@ const float KM = 1000.0;                // the distance's unit out
 uniform sampler2D uSceneDepthNear;
 uniform sampler2D uSceneDepthFar;
 uniform int   uNearDepthOn;
+uniform int   uDepthScale;       // view pixels per depth pixel, per axis (march.DEPTH_SCALE)
 uniform mat4  uClipToRender;     // the near range's clip space -> the render frame
 uniform mat4  uClipToRenderFar;  // the far range's
 uniform float uSplit;            // metres: where the near range ends (its step budget)
@@ -231,8 +232,11 @@ void main() {
     float tStart = max(dot(nearPoint - uCamRender, dir), 0.0);
     // The scene: the near range's surface where it has one, else the far
     // range's, else the far plane (EVE's distance buffer of both cameras).
-    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, pixel, 0).r : 1.0;
-    float farDepth = texelFetch(uSceneDepthFar, pixel, 0).r;
+    // The depth passes are drawn at half resolution (march.DEPTH_SCALE): a
+    // pixel reads its 2 x 2 block's depth.
+    ivec2 depthPixel = pixel / uDepthScale;
+    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, depthPixel, 0).r : 1.0;
+    float farDepth = texelFetch(uSceneDepthFar, depthPixel, 0).r;
     vec3 end = nearDepth < 1.0 ? unproject(vec3(ndc, nearDepth * 2.0 - 1.0))
              : farDepth < 1.0 ? unprojectFar(vec3(ndc, farDepth * 2.0 - 1.0))
              : farPoint;

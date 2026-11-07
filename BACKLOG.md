@@ -239,7 +239,10 @@ Ideas, by expected gain (status after 4.2 and 4.3):
    resolve 0.3, composite 0.14 ms), so a half-resolution depth pass or the
    composite folded into the resolve would save about 0.1 ms each. The near
    layer already stops when the slab is out of range. A compute-shader
-   resolve: not tried (only if the resolve grows).
+   resolve: not tried (only if the resolve grows). **Since then** (performance.md §24): one
+   march over both ranges, and the depth passes at half resolution, which
+   saves 0.45-0.55 ms in a game's scene (Mission 3) though cloud_bench saw
+   0.08.
 3. **Cheaper set-up per pixel** (0.2-0.4 ms, measured in 4.0): the slabs'
    constants as uniforms, not repeated `getField` unpacks. Not done.
 4. ~~Billows~~ done (shared column, 0.1 ms).

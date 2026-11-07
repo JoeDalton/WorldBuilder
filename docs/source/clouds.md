@@ -440,8 +440,10 @@ cloud). Here each pixel steps along its own ray:
 from `use_split_depth`), as EVE-Redux marches once over KSP's two cameras'
 depths:
 
-1. a camera per range, sharing its lens, draws the **scene's depth** at the
-   view's resolution into a texture. Everything but the clouds and the sky
+1. a camera per range, sharing its lens, draws the **scene's depth** at half
+   the view's resolution per axis (`march.DEPTH_SCALE`) into a texture (the
+   march reads it at the pixels it traces; the cards, to tell the near range's
+   pixels; static shots differ from full resolution in a few pixels a frame). Everything but the clouds and the sky
    is drawn, the terrain through its depth-only stage, as for the
    half-resolution pass;
 2. a fullscreen card **marches** one pixel of every block

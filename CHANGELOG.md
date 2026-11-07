@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The raymarch's two scene-depth passes are drawn at half the view's
+  resolution per axis (`march.DEPTH_SCALE` 2): about 0.45-0.55 ms less a
+  frame in SpaceFlight's Mission 3 at 2560 x 1440; static shots identical
+  but for a few pixels.
 - The raymarch's billows are bent by a tileable curl noise
   (`march.CURL_STRENGTH` 2, `noise.curl_noise_volume`): wisps and small
   fragments curl into tufts. +0.0-0.15 ms at 2560 x 1440, HIGH; steadiness

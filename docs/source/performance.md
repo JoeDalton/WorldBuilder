@@ -1535,6 +1535,24 @@ RTX 3070, 2560 x 1440, HIGH (4 x 2):
   optical depths make towers thinner than an overcast cumulus deck, so one scale
   would have lightened tower bases.
 
+### Half-resolution depth passes
+
+The two scene-depth passes the march stops at (one per depth range) are drawn at
+half the view's resolution per axis (`march.DEPTH_SCALE` 2); the march and the
+composite cards read a pixel's 2 x 2 block. SpaceFlight's Mission 3 (2560 x 1440,
+HIGH, 3 runs each, alternated, two sessions): mean 14.45 -> 13.90 and 14.43 -> 13.99
+ms, p95 16.65 -> 15.82 ms. In cloud_bench its scenes hold almost no geometry and the
+passes cost ~0.1 ms, so the gain is the game's drawing of the scene twice more, at
+full resolution. `terrain_shots` (ball_noon, in_clouds, mountains_low, ground_up,
+clouds_low) at 2560 x 1440, full against half: mean 0.05-0.19 levels, at most 5
+pixels a frame over 32 levels (the HUD aside).
+
+In the same sessions, the Phase 4 look items (second order of scattering, curled
+billows) cost 0.3-0.8 ms in Mission 3 against "Tuned march" (13.65 ms), where
+cloud_bench showed ~0.1: the curl's share is nil (curl off: 13.93 against 13.89),
+the rest in the second order's always-run code or the noise of a busy desktop
+(single runs move by 0.4 ms). To measure on an idle machine.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the
