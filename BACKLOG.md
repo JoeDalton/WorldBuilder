@@ -106,7 +106,7 @@ then the default) is measured, not built. What is left:
   against 6.9), so one depth-to-sky-light scale that keeps a cumulus base
   as today lightens tower bases; the height ramp (`skyReach`) already follows
   each column's own top. Its gain would be the stratus under an anvil and
-  holes in a deck. LIGHT_VOLUME_PLAN.md's sky channel covers it properly.
+  holes in a deck. RENDERING_PLAN.md's light volume (part C, its sky channel) covers it properly.
 - **Softer in motion at an eighth (4 x 2, HIGH)**: sharpness 0.92-0.94
   plain, 0.75-0.85 in towers, against 0.95-0.97 and 0.84-0.94 at a half.
   Not the jitter, the bilinear mix of the fresh samples or the history's

@@ -1553,6 +1553,14 @@ cloud_bench showed ~0.1: the curl's share is nil (curl off: 13.93 against 13.89)
 the rest in the second order's always-run code or the noise of a busy desktop
 (single runs move by 0.4 ms). To measure on an idle machine.
 
+### Where a frame goes now
+
+The reference profile after this section's work is
+[frame_profile.md](frame_profile.md) (`scripts/frame_profile.py`): at 2560 x 1440,
+HIGH, 7.0-8.1 ms a frame (genera 7.8-10.1), GPU-bound by 3-4 ms over a 3.5-4.0 ms
+CPU step. It also settles this section's open question: compiled out, the second
+order of scattering saves 0.7-0.85 ms with genera.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the
