@@ -13,8 +13,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`lights_at`, the CPU's march through the clouds' shadow) reckoned every N
   frames, at once when the sun moves or the tracked nodes change. 1 (the
   default) is every frame, as before.
+- `world_builder.atmosphere.tables`: the atmospheres' precomputed tables
+  (Hillaire 2020): the sunlight's transmittance (256 x 64, read by
+  `atmoTransmittance`) and the light scattered more than once (32 x 32,
+  `atmoMultiple`), built on the CPU when an atmosphere is added;
+  `inscatter_reference`, a CPU reference for a view ray.
+- `AtmosphereParams.ground_albedo` (0.3): the ground's bounce in the
+  multiple scattering.
+- An ozone layer in the air (`AtmosphereParams.ozone`, `ozone_altitude`,
+  `ozone_width`; Hillaire's Earth values): it absorbs orange and green, so
+  the twilight sky stays blue instead of olive. In the view rays, the
+  multiple scattering and the sunlight (its depth toward the sun marched
+  into the transmittance table's alpha; `transmittance_to_sun` includes it).
 
 ### Changed
+
+- The air's light scattered more than once comes from the multiple-scattering
+  table instead of a flat share of the sunlight: the planet's shadow at dusk
+  is lit by the sky above it, and the low sky by day is brighter (the
+  ground's bounce). `AtmosphereParams.multiple_scattering` is now that
+  light's scale (1, physical), no longer a share (0.12). The per-pixel march
+  reads the sunlight's transmittance from its table (cost even); the
+  multiple-scattering read and the ozone cost ~0.2-0.7 ms at 2560 x 1440,
+  HIGH, until the sky-view and aerial-perspective tables take the march off.
 
 - The raymarch's two scene-depth passes are drawn at half the view's
   resolution per axis (`march.DEPTH_SCALE` 2): about 0.45-0.55 ms less a

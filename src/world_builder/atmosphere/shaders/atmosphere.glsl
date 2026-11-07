@@ -1,17 +1,18 @@
-// Single-scattering atmospheres: aerial perspective, sky colour and sunlight.
+// Atmospheres: aerial perspective, sky colour and sunlight.
 //
 // Include with #pragma include (relative to the including shader). Bind the
 // uniforms with world_builder.atmosphere.Atmospheres.bind(node).
 //
 // Each atmosphere is an exponential Rayleigh + Mie medium around a sphere. A
 // view ray is marched in ATMO_STEPS samples through each atmosphere it
-// crosses; at every sample, the optical depth toward the sun is the analytic
-// Chapman function (no inner march). The planet's shadow is found
-// analytically along the ray, and each sample counts the lit share of its
-// stretch, so the shadow's edge moves smoothly (all-or-nothing samples drew
-// hard bands across the dusk sky). Single scattering, plus a flat share of
-// multiply scattered light that fades through twilight (see docs: precomputed
-// multiple scattering, Bruneton). Lengths in metres, positions relative to
+// crosses; at every sample, the sunlight's transmittance comes from a table
+// (atmoTransmittance: the analytic Chapman optical depth, precomputed). The
+// planet's shadow is found analytically along the ray, and each sample counts
+// the lit share of its stretch, so the shadow's edge moves smoothly
+// (all-or-nothing samples drew hard bands across the dusk sky). Single
+// scattering, plus the light scattered more than once from a table
+// (atmoMultiple: Hillaire 2020's approximation; world_builder.atmosphere.tables).
+// Lengths in metres, positions relative to
 // each planet's centre. Each sample's sunlight is eclipsed by the other
 // bodies (shadows.glsl), and the multiply scattered light dims with it.
 
@@ -37,13 +38,24 @@ uniform vec4 uAtmoScatter[MAX_ATMOSPHERES];
 // x: Mie extinction per metre, y: Mie anisotropy g, z: sun intensity,
 // w: |cam|^2 - ground^2 (float64 on the CPU).
 uniform vec4 uAtmoMie[MAX_ATMOSPHERES];
-// x: multiply scattered light, as a share of direct sunlight; y: the slant
-// path's curvature scale (atmoDepthToward), >= 1.
+// x: the multiply scattered light's scale (1 physical; atmoMultiple); y: the
+// slant path's curvature scale (atmoDepthToward), >= 1; z: the ozone layer's
+// peak altitude, w: its half-width (a tent).
 uniform vec4 uAtmoExtra[MAX_ATMOSPHERES];
+// rgb: the ozone's absorption per metre at its peak.
+uniform vec4 uAtmoOzone[MAX_ATMOSPHERES];
 // The shadow body (shadows.glsl) whose air each atmosphere is: its own
 // planet does not eclipse it (that is atmoShadow's work), -1 none. Bound by
 // world_builder.shadows.Shadows.
 uniform int uAtmoBody[MAX_ATMOSPHERES];
+// The transmittance tables (world_builder.atmosphere.tables), every
+// atmosphere's, stacked along v: atmoTransmittance.
+uniform sampler2D uAtmoTransmittance;
+const vec2 ATMO_TRANSMITTANCE_SIZE = vec2(256.0, 64.0);
+// The multiple-scattering tables (Hillaire's Psi_ms), stacked the same way:
+// atmoMultiple.
+uniform sampler2D uAtmoMultiple;
+const vec2 ATMO_MULTIPLE_SIZE = vec2(32.0, 32.0);
 
 const float ATMO_PI = 3.14159265;
 // A sight line takes every sample once it climbs this many Mie scale heights,
@@ -87,6 +99,58 @@ vec2 atmoDepthToward(float r, float cosChi, float R, vec2 H, float curve) {
     // the tangent the ray is horizontal: Chapman is sqrt(pi x / 2) there.
     return H * (2.0 * exp(-(tangent - R) / H) * sqrt(1.5707963 * (tangent * k))
                 - density * atmoChapman(r * k, -cosChi));
+}
+
+// Sunlight reaching radius r from a direction at cosine mu from the vertical
+// through atmosphere i: atmoDepthToward's transmittance (the sunset_radius
+// curvature with it), from its table (Bruneton's (r, mu) mapping,
+// tables.transmittance_uv). 0 into the ground; r clamped to the air.
+// Differences of squares are factored: as float32 r^2 - R^2 near the ground
+// would be noise.
+// rgb: that, a: the ozone's optical depth along the way, km (with the rgb).
+vec4 atmoTransmittanceTexel(int i, float r, float mu) {
+    float R = uAtmoShape[i].x;
+    float top = uAtmoShape[i].y;
+    r = clamp(r, R, top);
+    float rho2 = (r - R) * (r + R);
+    float rmu = r * mu;
+    if (mu < 0.0 && rmu * rmu > rho2) {
+        return vec4(0.0);  // the ground is in the way
+    }
+    float H = sqrt((top - R) * (top + R));
+    float rho = sqrt(rho2);
+    float d = max(-rmu + sqrt(max((top - r) * (top + r) + rmu * rmu, 0.0)), 0.0);
+    float dMin = top - r;
+    float xMu = clamp((d - dMin) / max(rho + H - dMin, 1e-3), 0.0, 1.0);
+    vec2 size = ATMO_TRANSMITTANCE_SIZE;
+    vec2 uv = vec2((0.5 + xMu * (size.x - 1.0)) / size.x,
+                   (float(i) * size.y + 0.5 + rho / H * (size.y - 1.0))
+                       / (size.y * float(MAX_ATMOSPHERES)));
+    return texture(uAtmoTransmittance, uv);
+}
+
+vec3 atmoTransmittance(int i, float r, float mu) {
+    return atmoTransmittanceTexel(i, r, mu).rgb;
+}
+
+// The ozone layer's density over its peak's at radius r (a tent).
+float atmoOzone(int i, float r) {
+    vec4 extra = uAtmoExtra[i];
+    return max(0.0, 1.0 - abs(r - uAtmoShape[i].x - extra.z) / extra.w);
+}
+
+// Light scattered more than once reaching radius r of atmosphere i with the
+// sun at cosine muS from the vertical, per unit of scattering and sunlight
+// (tables.multiple_table): a sample's share is this times its scattering
+// coefficient, with no phase function.
+vec3 atmoMultiple(int i, float r, float muS) {
+    vec4 shape = uAtmoShape[i];
+    vec2 x = clamp(vec2(muS * 0.5 + 0.5, (r - shape.x) / (shape.y - shape.x)), 0.0, 1.0);
+    vec2 size = ATMO_MULTIPLE_SIZE;
+    vec2 uv = vec2((0.5 + x.x * (size.x - 1.0)) / size.x,
+                   (float(i) * size.y + 0.5 + x.y * (size.y - 1.0))
+                       / (size.y * float(MAX_ATMOSPHERES)));
+    return texture(uAtmoMultiple, uv).rgb;
 }
 
 // Entry and exit distances along a ray from o (relative to the centre) with
@@ -210,8 +274,11 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
     }
     float depthR = 0.0;
     float depthM = 0.0;
+    float depthO = 0.0;
+    vec3 betaO = uAtmoOzone[i].rgb;
     vec3 sumR = vec3(0.0);
     vec3 sumM = vec3(0.0);
+    vec3 sumMultiple = vec3(0.0);
     for (int k = 0; k < steps; ++k) {
         float ta = t0 + float(k) * ds;
         float tc = ta + 0.5 * ds;
@@ -219,8 +286,10 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
         float r = length(p);
         float densityR = exp(-(r - R) / Hr) * ds;
         float densityM = exp(-(r - R) / Hm) * ds;
+        float densityO = atmoOzone(i, r) * ds;
         depthR += 0.5 * densityR;
         depthM += 0.5 * densityM;
+        depthO += 0.5 * densityO;
         // The lit share of this sample's stretch, and a lit point in it to
         // take the sun's depth at (just outside the shadow if the centre is
         // in it: there the sunlight grazes the ground, deep red, finite).
@@ -237,24 +306,31 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
         // The rings dim the direct sun, not the lit sky's fill.
         float ring = mix(ringNear, ringFar,
                          clamp(2.0 * (tc - t0) / (t1 - t0) - 0.5, 0.0, 1.0));
+        // Back to the camera through the air.
+        vec3 view = exp(-(betaR * depthR + betaMExt * depthM + betaO * depthO));
         vec3 direct = vec3(0.0);
         if (lit > 0.0) {
+#ifdef ATMO_ANALYTIC_SUN
             float curve = max(uAtmoExtra[i].y, 1.0);
             vec2 sun = atmoDepthToward(rs, cosSun, R, vec2(Hr, Hm), curve);
-            direct = exp(-(betaR * (depthR + sun.x) + betaMExt * (depthM + sun.y)))
-                   * (lit * eclipse * ring);
+            vec3 toSun = exp(-(betaR * sun.x + betaMExt * sun.y));
+#else
+            vec3 toSun = atmoTransmittance(i, rs, cosSun);
+#endif
+            direct = view * toSun * (lit * eclipse * ring);
         }
-        // Light scattered more than once: a share of the sunlight, wherever
-        // the sky above is lit (fading through twilight, dimmed in an
-        // eclipse as the sky's light is), seen through the air back to the
+        // Light scattered more than once (its table, lit by the sky above
+        // through twilight and the planet's shadow; dimmed in an eclipse as
+        // the sky's light is), isotropic, seen through the air back to the
         // camera.
-        float twilight = smoothstep(-0.3, 0.1, dot(p, sunDir) / r)
-                       * mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
-        vec3 fill = exp(-(betaR * depthR + betaMExt * depthM)) * multiple * twilight;
-        sumR += (direct + fill) * densityR;
-        sumM += (direct + fill) * densityM;
+        vec3 psi = atmoMultiple(i, r, dot(p, sunDir) / r)
+                 * (multiple * mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse));
+        sumMultiple += view * psi * (betaR * densityR + betaM * densityM);
+        sumR += direct * densityR;
+        sumM += direct * densityM;
         depthR += 0.5 * densityR;
         depthM += 0.5 * densityM;
+        depthO += 0.5 * densityO;
     }
     float mu = dot(dir, sunDir);
     float phaseR = 3.0 / (16.0 * ATMO_PI) * (1.0 + mu * mu);
@@ -262,8 +338,9 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
     float g2 = g * g;
     float phaseM = 3.0 / (8.0 * ATMO_PI) * (1.0 - g2) * (1.0 + mu * mu)
                  / ((2.0 + g2) * pow(max(1.0 + g2 - 2.0 * g * mu, 1e-4), 1.5));
-    inscatter = uAtmoMie[i].z * (sumR * betaR * phaseR + sumM * betaM * phaseM);
-    transmittance = exp(-(betaR * depthR + betaMExt * depthM));
+    inscatter = uAtmoMie[i].z * (sumR * betaR * phaseR + sumM * betaM * phaseM
+                                 + sumMultiple);
+    transmittance = exp(-(betaR * depthR + betaMExt * depthM + betaO * depthO));
 }
 
 // Whether a view ray from the camera meets the ground of a planet with an
@@ -354,5 +431,7 @@ vec3 atmoSunlight(int i, vec3 p, vec3 sunDir) {
     float cosSun = dot(p, sunDir) / r;
     float curve = max(uAtmoExtra[i].y, 1.0);
     vec2 depth = atmoDepthToward(r, cosSun, shape.x, shape.zw, curve);
-    return exp(-(uAtmoScatter[i].rgb * depth.x + uAtmoMie[i].x * depth.y));
+    float ozone = atmoTransmittanceTexel(i, r, cosSun).a * 1e3;  // km to metres
+    return exp(-(uAtmoScatter[i].rgb * depth.x + uAtmoMie[i].x * depth.y
+                 + uAtmoOzone[i].rgb * ozone));
 }

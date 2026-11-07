@@ -14,10 +14,9 @@ optical depth toward the sun is analytic (Chapman function, erfcx form,
 share of the sample's stretch gets sun (the planet's shadow is found
 analytically along the ray, so its edge moves smoothly). That gives the sky
 colour, sunsets, the limb seen from space, aerial perspective and the
-reddened sunlight on the ground, with no precomputation. Light scattered more
-than once is only a flat share of the sunlight that fades through twilight
-(:attr:`AtmosphereParams.multiple_scattering`): see the docs for the
-precomputed alternative (Bruneton). :attr:`AtmosphereParams.sunset_radius`
+reddened sunlight on the ground. The sunlight's transmittance and the light
+scattered more than once (Hillaire 2020's approximation) come from tables
+precomputed per atmosphere (:mod:`.tables`). :attr:`AtmosphereParams.sunset_radius`
 lengthens grazing sunlight's path, so a small planet's sunsets are as red as
 Earth's.
 
@@ -44,6 +43,15 @@ from panda3d.core import (
     PTA_LVecBase4f,
 )
 
+from world_builder.atmosphere.tables import (
+    MULTIPLE_SIZE,
+    TRANSMITTANCE_SIZE,
+    multiple_table,
+    ozone_toward,
+    table_texture,
+    transmittance_table,
+    write_rows,
+)
 from world_builder.quality import QualityLevel, QualitySettings, knob
 
 SHADER_PATH = Path(__file__).parent / "shaders"
@@ -99,9 +107,18 @@ class AtmosphereParams:
     :ivar mie_g: Mie anisotropy (forward scattering, 0-1)
     :ivar sun_intensity: radiance scale of the scattered sunlight, in the
         renderer's linear units (the terrain's sun is ~2.6)
-    :ivar multiple_scattering: light scattered more than once, as a share of
-        direct sunlight, reaching air the sun does not (the planet's shadow
-        at dusk is blue-grey, not black); it fades out through twilight
+    :ivar multiple_scattering: scale of the light scattered more than once
+        (:mod:`.tables`' multiple-scattering table, Hillaire's
+        approximation): 1 physical; it lights air the sun does not (the
+        planet's shadow at dusk is blue-grey, not black)
+    :ivar ozone: the ozone layer's absorption (r, g, b) per metre at its peak:
+        absorbs orange and green, so the twilight sky stays blue (Hillaire
+        2020's Earth); (0, 0, 0) none
+    :ivar ozone_altitude: its peak's altitude
+    :ivar ozone_width: its half-width: a tent, 0 beyond the peak +- this
+    :ivar ground_albedo: the ground's reflectance, bouncing sunlight back
+        into the air (in the multiple scattering): brightens the low sky by
+        day
     :ivar sunset_radius: sunlight's slant through the air is taken as over a
         planet of this radius, if larger than the real one: as red near the
         terminator as there (a 600 km planet's grazing sunlight crosses ~11
@@ -116,12 +133,23 @@ class AtmosphereParams:
     mie_height: float = 1200.0
     mie_g: float = 0.8
     sun_intensity: float = 22.0
-    multiple_scattering: float = 0.12
+    multiple_scattering: float = 1.0
+    ground_albedo: float = 0.3
+    ozone: tuple[float, float, float] = (0.650e-6, 1.881e-6, 0.085e-6)
+    ozone_altitude: float = 25e3
+    ozone_width: float = 15e3
     sunset_radius: float | None = 6371e3
 
 
 #: The vec4 uniform arrays atmosphere.glsl reads, MAX_ATMOSPHERES each.
-_ARRAYS = ("uAtmoCam", "uAtmoShape", "uAtmoScatter", "uAtmoMie", "uAtmoExtra")
+_ARRAYS = (
+    "uAtmoCam",
+    "uAtmoShape",
+    "uAtmoScatter",
+    "uAtmoMie",
+    "uAtmoExtra",
+    "uAtmoOzone",
+)
 
 
 class Atmospheres:
@@ -154,6 +182,14 @@ class Atmospheres:
         self._arrays = {
             name: PTA_LVecBase4f.empty_array(MAX_ATMOSPHERES) for name in _ARRAYS
         }
+        #: The transmittance tables (:mod:`.tables`), every atmosphere's.
+        self.transmittance = table_texture(
+            "atmosphere_transmittance", TRANSMITTANCE_SIZE, MAX_ATMOSPHERES
+        )
+        #: The multiple-scattering tables, every atmosphere's.
+        self.multiple = table_texture(
+            "atmosphere_multiple", MULTIPLE_SIZE, MAX_ATMOSPHERES, fill=0.0
+        )
         self.set_settings(settings or AtmosphereSettings())
 
     @property
@@ -189,8 +225,11 @@ class Atmospheres:
         )
         self._arrays["uAtmoScatter"][index] = LVecBase4f(*p.rayleigh, p.mie)
         self._arrays["uAtmoExtra"][index] = LVecBase4f(
-            p.multiple_scattering, _curve(radius, p), 0.0, 0.0
+            p.multiple_scattering, _curve(radius, p), p.ozone_altitude, p.ozone_width
         )
+        self._arrays["uAtmoOzone"][index] = LVecBase4f(*p.ozone, 0.0)
+        write_rows(self.transmittance, index, transmittance_table(radius, params))
+        write_rows(self.multiple, index, multiple_table(float(radius), params))
         self._count[0] = len(self._bodies)
         return index
 
@@ -210,6 +249,8 @@ class Atmospheres:
         node.set_shader_input("uAtmoCount", self._count)
         node.set_shader_input("uAtmoSteps", self._steps)
         node.set_shader_input("uAtmoVertexSteps", self._vertex_steps)
+        node.set_shader_input("uAtmoTransmittance", self.transmittance)
+        node.set_shader_input("uAtmoMultiple", self.multiple)
         for name, array in self._arrays.items():
             node.set_shader_input(name, array)
 
@@ -236,7 +277,8 @@ class Atmospheres:
     ) -> np.ndarray:
         """Sunlight reaching points through atmosphere *index*: the GLSL's
         atmoSunlight on the CPU (the same formula, :func:`depth_toward`, with
-        the same ``sunset_radius`` scale).
+        the same ``sunset_radius`` scale; the ozone's depth from its table,
+        :func:`.tables.ozone_toward`).
 
         :param point_world: (..., 3) points in the world frame, metres
         :param sun_direction: toward the sun, world frame (any length)
@@ -258,10 +300,12 @@ class Atmospheres:
         depth = depth_toward(
             r[..., None], cos_sun[..., None], radius, heights, _curve(radius, params)
         )
+        ozone = ozone_toward(r, cos_sun, radius, params)
         through = np.exp(
             -(
                 np.asarray(params.rayleigh) * depth[..., :1]
                 + params.mie_extinction * depth[..., 1:]
+                + np.asarray(params.ozone) * ozone[..., None]
             )
         )
         through = np.where(depth[..., :1] >= 1e9, 0.0, through)  # planet in the way
@@ -283,8 +327,13 @@ class Atmospheres:
         depth_m = depth_toward(r, cos_sun, radius, params.mie_height, curve)
         if depth_r >= 1e9:
             return np.zeros(3)  # the planet is in the way
+        ozone = float(ozone_toward(r, cos_sun, radius, params))
         return np.exp(
-            -(np.asarray(params.rayleigh) * depth_r + params.mie_extinction * depth_m)
+            -(
+                np.asarray(params.rayleigh) * depth_r
+                + params.mie_extinction * depth_m
+                + np.asarray(params.ozone) * ozone
+            )
         )
 
     def light_at(
@@ -436,6 +485,8 @@ def bind_defaults(node: NodePath) -> None:
             "uAtmoCount": count,
             "uAtmoSteps": steps,
             "uAtmoVertexSteps": vertex_steps,
+            "uAtmoTransmittance": table_texture("no_atmosphere", (1, 1), 1),
+            "uAtmoMultiple": table_texture("no_atmosphere", (1, 1), 1, fill=0.0),
         }
         for name in _ARRAYS:
             array = PTA_LVecBase4f.empty_array(MAX_ATMOSPHERES)

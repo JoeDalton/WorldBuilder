@@ -23,6 +23,9 @@ runs at least of anything compared; trees compared alternated in one session (a 
 - **An alternate march-lighting path from the light volume**, benchmarked against today's (C.3).
 - **No baked density volume** for the clouds (the field is static, but at the march's detail it is ~200M voxels
   around the camera; a clipmap is a project of its own, the payoff unsure).
+- **The clouds' second order of scattering** (0.7-0.85 ms with genera, A) is kept for now and folded into the
+  light volume (C.3): the march reads one stored value for both orders instead of computing the octave per
+  sample.
 - The atmosphere's tables are done even though the GPU is not the only limit (B); the light volume next, with
   **god rays, toggleable** (C.5).
 
@@ -111,7 +114,8 @@ Scatterer for god rays.
   a march up (plus 3 tilted directions if it shows).
 - **C.3 Readers, two paths benchmarked.** (a) the volume in place of the maps' levels in `cloudSunDepthIn` (2
   local steps + the volume's depth at the local reach's end, the whole chord; `sunOpticalDepthAt` beyond it);
-  (b) **the alternate path**: no local steps, the volume alone (one fetch pair a sample) where the camera is far
+  the second order of scattering taken from the volume too (the bake stores the octave's depth scaling, the
+march's per-sample octave goes: A measured it at 0.7-0.85 ms with genera); (b) **the alternate path**: no local steps, the volume alone (one fetch pair a sample) where the camera is far
   enough that its voxels resolve the clouds; both against today's at HIGH (`--passes`, `--jitter`, genera), kept
   per distance band if (b) pays. Sky reach from the sky channel in place of the height ramp. Ground, sea and
   models keep the maps' `.r`. A debug bit to compare with the maps.
