@@ -557,6 +557,9 @@ class TerrainDemo(ShowBase):
         self.shadows.bind(self.sky.node)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.sky.attach_view(self.win, self.shadows)
+        self.atmospheres.attach_aerial(
+            self.win, self.cam, self.camLens, self.sky.sun_input, self.shadows
+        )
         self.clouds = None
         self.cloud_maps = None  # the clouds' shadow maps
         self._cloud_debug = cloud_debug

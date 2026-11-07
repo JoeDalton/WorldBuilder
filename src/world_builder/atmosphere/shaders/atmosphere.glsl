@@ -56,6 +56,20 @@ const vec2 ATMO_TRANSMITTANCE_SIZE = vec2(256.0, 64.0);
 // atmoMultiple.
 uniform sampler2D uAtmoMultiple;
 const vec2 ATMO_MULTIPLE_SIZE = vec2(32.0, 32.0);
+// The aerial-perspective cells (world_builder.atmosphere.aerial): what
+// atmosphereAlong gives from the camera to each cell of a 32 x 32 x 32 grid
+// over the main camera's view, baked each frame; an atlas of its 32 slices,
+// 8 x 4 tiles of 32 x 32, in-scatter in the lower half (rows 0-127),
+// transmittance in the upper. applyAtmospheres reads it (aerialAlong).
+uniform sampler2D uAerial;
+uniform int uAerialOn;
+// A camera-relative world point to the main camera's clip space.
+uniform mat4 uAerialToClip;
+// x: where the slices start, y: their length (slice k ends at
+// x + y ((k + 1) / 32)^2).
+uniform vec4 uAerialRange;
+const float AERIAL_CELLS = 32.0;
+const vec2 AERIAL_ATLAS = vec2(256.0, 256.0);
 
 const float ATMO_PI = 3.14159265;
 // A sight line takes every sample once it climbs this many Mie scale heights,
@@ -204,6 +218,13 @@ vec2 atmoShadow(vec3 o, vec3 dir, vec3 sunDir, float R) {
     return s;
 }
 
+// The aerial cells' bake sets it: a ray goes on through the ground, the air
+// held at the ground's density, so the cells past a point on the ground
+// continue its value smoothly (stopped there, the slice past the ground held
+// the ground's value, and a point between two slices was interpolated toward
+// it: up to ~10 % low near the camera). Everything else stops at the ground.
+bool atmoThroughGround = false;
+
 // One atmosphere's effect on the segment [0, tmax] of a view ray: what the
 // background is multiplied by, and the light scattered toward the eye, from
 // steps samples. near is where the segment starts (for ordering several
@@ -220,9 +241,11 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
         return;
     }
     // Rays that reach the ground stop there (the sky below the horizon, and
-    // anything drawn past it on the far side).
+    // anything drawn past it on the far side); not in the aerial cells' bake
+    // (atmoThroughGround).
     float g0, g1;
-    if (atmoSphere(o, dir, uAtmoMie[i].w, g0, g1) && g1 > 0.0 && g0 > 0.0) {
+    if (!atmoThroughGround
+        && atmoSphere(o, dir, uAtmoMie[i].w, g0, g1) && g1 > 0.0 && g0 > 0.0) {
         tmax = min(tmax, g0);
     }
     t0 = max(t0, 0.0);
@@ -283,7 +306,8 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
         float ta = t0 + float(k) * ds;
         float tc = ta + 0.5 * ds;
         vec3 p = o + dir * tc;
-        float r = length(p);
+        // Through the ground (the aerial cells' bake), the air at the ground's.
+        float r = atmoThroughGround ? max(length(p), R) : length(p);
         float densityR = exp(-(r - R) / Hr) * ds;
         float densityM = exp(-(r - R) / Hm) * ds;
         float densityO = atmoOzone(i, r) * ds;
@@ -343,6 +367,53 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
     transmittance = exp(-(betaR * depthR + betaMExt * depthM + betaO * depthO));
 }
 
+// One slice k of the aerial cells at a cell position (in cells), both
+// halves.
+void aerialSlice(float k, vec2 cell, out vec3 transmittance, out vec3 inscatter) {
+    vec2 tile = vec2(mod(k, 8.0), floor(k / 8.0));
+    vec2 uv = (tile * AERIAL_CELLS + cell) / AERIAL_ATLAS;
+    inscatter = textureLod(uAerial, uv, 0.0).rgb;
+    transmittance = textureLod(uAerial, uv + vec2(0.0, 0.5), 0.0).rgb;
+}
+
+// The air between the camera and a point at dist along dir, from the aerial
+// cells: atmosphereAlong's, interpolated between cells. False where they hold
+// none (not baked, outside the main camera's view, as the sea's reflection's
+// rays, or beyond their reach, as a moon's: march then).
+bool aerialAlong(vec3 dir, float dist, out vec3 transmittance, out vec3 inscatter) {
+    transmittance = vec3(1.0);
+    inscatter = vec3(0.0);
+    if (uAerialOn == 0) {
+        return false;
+    }
+    vec4 clip = uAerialToClip * vec4(dir, 1.0);
+    if (clip.w <= 0.0) {
+        return false;
+    }
+    vec2 ndc = clip.xy / clip.w;
+    if (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0 || dist > uAerialRange.x + uAerialRange.y) {
+        return false;
+    }
+    vec2 cell = clamp((ndc * 0.5 + 0.5) * AERIAL_CELLS, 0.5, AERIAL_CELLS - 0.5);
+    float s = sqrt(max(dist - uAerialRange.x, 0.0) / uAerialRange.y) * AERIAL_CELLS - 1.0;
+    s = clamp(s, -1.0, AERIAL_CELLS - 1.0);
+    float k = floor(s);
+    float f = s - k;
+    vec3 t0 = vec3(1.0);  // slice -1: the camera (or where the air begins)
+    vec3 s0 = vec3(0.0);
+    if (k >= 0.0) {
+        aerialSlice(k, cell, t0, s0);
+    }
+    vec3 t1 = t0;
+    vec3 s1 = s0;
+    if (k + 1.0 < AERIAL_CELLS) {
+        aerialSlice(k + 1.0, cell, t1, s1);
+    }
+    transmittance = mix(t0, t1, f);
+    inscatter = mix(s0, s1, f);
+    return true;
+}
+
 // Whether a view ray from the camera meets the ground of a planet with an
 // atmosphere (the stars and the sun are behind it).
 bool atmoHitsGround(vec3 dir) {
@@ -397,6 +468,10 @@ void atmosphereAlong(vec3 dir, float dist, vec3 sunDir,
 vec3 applyAtmospheres(vec3 background, vec3 dir, float dist, vec3 sunDir) {
     if (uAtmoCount <= 0) {
         return background;
+    }
+    vec3 cellT, cellS;
+    if (aerialAlong(dir, dist, cellT, cellS)) {
+        return background * cellT + cellS;
     }
     vec3 transmittance[MAX_ATMOSPHERES];
     vec3 inscatter[MAX_ATMOSPHERES];

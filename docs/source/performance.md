@@ -1587,6 +1587,20 @@ clouds +0.12, 20 km +0.38, sunset 0, orbit +0.27 ms (the terrain's per-pixel
 march carries B.2's fetch and ozone, from orbit too: the aerial-perspective
 cells, B.4, are what take it off).
 
+- **B.4, aerial-perspective cells** (the terrain, sea and models read a
+  32 x 32 x 32 grid baked each frame instead of marching per pixel, within
+  128 km with the camera in the air): **-0.3 to -1.1 ms** against their
+  march (`frame_profile`'s `aerial` column, its bake included: ground -0.63,
+  coast -1.12, in clouds -0.94, 20 km -0.98, sunset -0.31; 0 from orbit,
+  where it is off).
+
+**B.1-B.4 against the tree before** (frame, ms; the same session's HEAD
+runs): ground 7.23 to 6.80, coast 7.62 to 6.69, in clouds 7.85 to 7.04, 20 km
+5.72 to 5.12, sunset 7.95 to 7.68, orbit 3.33 to 3.57. The per-pixel
+atmosphere's share (`atmo`, steps 8 against 2) went from 0.4-1.2 ms to ~0
+wherever the camera is in the air. From orbit the march stays, with B.2's
+extra fetch and ozone (+0.24 ms): left for B.5.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

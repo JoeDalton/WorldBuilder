@@ -319,6 +319,9 @@ class CloudBench(ShowBase):
         self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it
         self.sky.attach_view(self.win)
+        self.atmospheres.attach_aerial(
+            self.win, self.cam, self.camLens, self.sky.sun_input
+        )
         weather = None
         if coverage is not None:
             weather = uniform_weather(self.spec, coverage)

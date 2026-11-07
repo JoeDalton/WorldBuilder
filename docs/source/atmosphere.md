@@ -184,6 +184,36 @@ demo and cloud_bench do); without it the sky marches. Its size is a power of
 two: Panda pads a render target's texture up to one, the content in a
 corner (192 x 108 read back garbled).
 
+**The aerial-perspective cells** (B.4, `atmosphere.aerial`): the air between
+the camera and every cell of a 32 x 32 x 32 grid over the main camera's view,
+baked on the GPU each frame while the camera is inside an atmosphere, read
+by `applyAtmospheres` (`aerialAlong`: the terrain, the near sea, the models)
+in place of their per-pixel march. Each cell is `atmosphereAlong` from the
+camera to its slice's end at 16 samples (eclipses, rings, the planet's shadow
+with it); the slices reach past the horizon or 128 km
+(`aerial.AERIAL_REACH`), the nearer, spaced as the square of their index;
+the reader interpolates linearly between cells and slices (an atlas of 8 x 4
+tiles a half, in-scatter and transmittance; `uAerialToClip` maps a direction
+into the grid). Two things the first version got wrong:
+
+- **The ground.** A cell's march stopped at the planet's ground like any
+  view ray's, so the slice past a point on the ground held the ground's
+  value, and the point, between two slices, was interpolated toward it: up
+  to ~10 % low near the camera. The bake goes on through the ground, the air
+  held at the ground's density (`atmoThroughGround`), and the cells past a
+  surface continue its value smoothly.
+- **From high up.** The air a ray crosses lies in a thin shell at its far end
+  when the ground is far below; slices from the camera over the longest path
+  the air allows (300 km and more) were ~16 km apart there, and the haze of
+  a ground seen from orbit was up to 38 % off. Hence the 128 km reach, and no
+  cells from space.
+
+A point outside the main camera's view (the sea's reflection), past the
+reach, or with the camera in space is marched as before. Against the march
+(`tests/test_atmosphere_tables.py`), in front of the ground: within 6 % or 1 %
+of the noon zenith (8 % for the ground 45 km below), the transmittance within
+3 %. `AtmosphereSettings.aerial` turns it off (the march everywhere).
+
 **The ozone layer.** Without it the twilight sky went olive-green near the
 zenith and the horizon (green and blue scattered about equally once the sun's
 light has crossed the whole air). Ozone absorbs orange and green (the

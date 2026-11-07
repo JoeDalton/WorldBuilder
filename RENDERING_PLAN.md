@@ -142,6 +142,13 @@ Risks: Panda partial updates of a no-clear target (the terrain bake's bands sugg
 slab's vertical resolution; mixed slices during a sun swing (blend by age); the aerial-perspective volume's slices
 at planet scale; two atmospheres; memory (two 8 MB atlases at HIGH).
 
+## After C: look items logged on the way
+
+- **The cumulonimbus's underside looks too bright** (logged 2026-11-07, after B.3, the user's flight check):
+  to look at once the light volume (C) lights the towers; candidates: the sky fill from below (the ground's
+  bounce, B.2's brighter low sky), the second order of scattering in the base, the height ramp of the sky
+  reach (`skyReach`) that C.3 replaces.
+
 ## Critical files
 
 A: `scripts/flight_bench.py`, `terrain_shots.py`, `cloud_bench.py`, new `docs/source/frame_profile.md`.

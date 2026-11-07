@@ -310,6 +310,12 @@ class Sky:
         if self.view is not None:
             self.view.update()
 
+    @property
+    def sun_input(self) -> PTA_LVecBase3f:
+        """The sky's ``uSunDir`` input, shared live (:meth:`set_sun`): for
+        other bakes that follow the sun (the aerial-perspective cells)."""
+        return self._sun
+
     def attach_view(self, output: Any, shadows: Any = None) -> None:
         """Read the air from a sky-view table baked each frame
         (:class:`~world_builder.atmosphere.sky_view.SkyView`) instead of

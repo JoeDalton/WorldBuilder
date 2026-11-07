@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Sky.attach_view`): the air from the camera to space for every direction,
   baked each frame inside an atmosphere; the sky, the sea's reflection of it
   and the stars read it instead of marching (from space they still march).
+- The aerial-perspective cells (`world_builder.atmosphere.aerial`,
+  `Atmospheres.attach_aerial`, `AtmosphereSettings.aerial`): the air in front
+  of the terrain, sea and models from a 32 x 32 x 32 grid over the view baked
+  each frame, instead of a march per pixel (within 128 km, the camera inside
+  an atmosphere; marched elsewhere, as before).
 - `AtmosphereParams.ground_albedo` (0.3): the ground's bounce in the
   multiple scattering.
 - An ozone layer in the air (`AtmosphereParams.ozone`, `ozone_altitude`,

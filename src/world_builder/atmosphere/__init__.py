@@ -32,15 +32,19 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import (
+    LMatrix4f,
     LVecBase4f,
     NodePath,
     PTA_int,
+    PTA_LMatrix4f,
     PTA_LVecBase4f,
+    SamplerState,
+    Texture,
 )
 
 from world_builder.atmosphere.tables import (
@@ -84,6 +88,12 @@ class AtmosphereSettings(QualitySettings):
         range=(1, 8),
         advanced=True,
         help="The same, per vertex, for the stars and the cloud billboards.",
+    )
+    aerial: bool = knob(
+        True,
+        "Air from a grid",
+        help="The air in front of the ground, sea and models from a grid "
+        "baked once a frame instead of marched per pixel (cheaper).",
     )
 
     LABEL: ClassVar = "Air"
@@ -186,6 +196,22 @@ class Atmospheres:
         self.transmittance = table_texture(
             "atmosphere_transmittance", TRANSMITTANCE_SIZE, MAX_ATMOSPHERES
         )
+        #: The aerial-perspective cells' atlas (:mod:`.aerial`), baked by
+        #: :meth:`attach_aerial`; read by applyAtmospheres while on.
+        self.aerial_texture = Texture("aerial_perspective")
+        self.aerial_texture.setup_2d_texture(
+            256, 256, Texture.T_half_float, Texture.F_rgba16
+        )
+        self.aerial_texture.set_magfilter(SamplerState.FT_linear)
+        self.aerial_texture.set_minfilter(SamplerState.FT_linear)
+        self.aerial_texture.set_wrap_u(SamplerState.WM_clamp)
+        self.aerial_texture.set_wrap_v(SamplerState.WM_clamp)
+        self._aerial_on = PTA_int.empty_array(1)
+        self._aerial_to_clip = PTA_LMatrix4f.empty_array(1)
+        self._aerial_to_clip[0] = LMatrix4f.ident_mat()
+        self._aerial_range = PTA_LVecBase4f.empty_array(1)
+        self._aerial_range[0] = LVecBase4f(0.0, 1.0, 0.0, 0.0)
+        self.aerial = None
         #: The multiple-scattering tables, every atmosphere's.
         self.multiple = table_texture(
             "atmosphere_multiple", MULTIPLE_SIZE, MAX_ATMOSPHERES, fill=0.0
@@ -251,6 +277,10 @@ class Atmospheres:
         node.set_shader_input("uAtmoVertexSteps", self._vertex_steps)
         node.set_shader_input("uAtmoTransmittance", self.transmittance)
         node.set_shader_input("uAtmoMultiple", self.multiple)
+        node.set_shader_input("uAerial", self.aerial_texture)
+        node.set_shader_input("uAerialOn", self._aerial_on)
+        node.set_shader_input("uAerialToClip", self._aerial_to_clip)
+        node.set_shader_input("uAerialRange", self._aerial_range)
         for name, array in self._arrays.items():
             node.set_shader_input(name, array)
 
@@ -271,6 +301,35 @@ class Atmospheres:
                 params.sun_intensity,
                 rho2 - radius * radius,
             )
+        if self.aerial is not None:
+            self.aerial.update(
+                [
+                    (camera - position, radius, radius + params.height)
+                    for radius, params, position in self._bodies
+                ],
+                self._settings.aerial,
+            )
+
+    def attach_aerial(
+        self, output: Any, camera: NodePath, lens: Any, sun: Any, shadows: Any = None
+    ) -> None:
+        """Bake the aerial-perspective cells each frame (:mod:`.aerial`) for
+        applyAtmospheres to read instead of marching (while
+        :attr:`AtmosphereSettings.aerial`).
+
+        :param output: the window (its GSG bakes them)
+        :param camera: the main camera (the grid's view)
+        :param lens: its lens
+        :param sun: the sky's ``uSunDir`` input (``Sky.sun_input``)
+        :param shadows: the world's ``Shadows`` (eclipses, rings), None none
+        """
+        from world_builder.atmosphere.aerial import AerialPerspective
+
+        if self.aerial is not None:
+            return
+        self.aerial = AerialPerspective(output, self, camera, lens, sun)
+        if shadows is not None:
+            shadows.bind(self.aerial.root)
 
     def camera_inside(self) -> int:
         """:returns: the atmosphere the camera was in at the last
@@ -495,6 +554,10 @@ def bind_defaults(node: NodePath) -> None:
             "uAtmoVertexSteps": vertex_steps,
             "uAtmoTransmittance": table_texture("no_atmosphere", (1, 1), 1),
             "uAtmoMultiple": table_texture("no_atmosphere", (1, 1), 1, fill=0.0),
+            "uAerial": table_texture("no_atmosphere", (1, 1), 1, fill=0.0),
+            "uAerialOn": count,  # 0
+            "uAerialToClip": LMatrix4f.ident_mat(),
+            "uAerialRange": LVecBase4f(0.0, 1.0, 0.0, 0.0),
         }
         for name in _ARRAYS:
             array = PTA_LVecBase4f.empty_array(MAX_ATMOSPHERES)

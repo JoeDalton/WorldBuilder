@@ -491,3 +491,152 @@ def test_the_sky_view_table_is_the_skys_march(window, tmp_path, elevation, altit
     worst = int(np.argmax((error - bound).max(axis=1)))
     assert np.all(error <= bound), (dirs[worst], table[worst], march[worst])
     np.testing.assert_allclose(table_t, march_t, rtol=0.03, atol=0.01)
+
+
+# ── the aerial-perspective cells (B.4) ─────────────────────────────────────────
+
+_AERIAL = """
+uniform vec3 uSunDir;
+vec3 cellsOf(vec4 q, bool through) {
+    vec3 transmittance, inscatter;
+    if (!aerialAlong(normalize(q.xyz), q.w, transmittance, inscatter)) {
+        return vec3(-1.0);
+    }
+    return through ? transmittance : inscatter;
+}
+vec3 marchOf(vec4 q, bool through) {
+    vec3 transmittance, inscatter;
+    atmosphereAlong(normalize(q.xyz), q.w, uSunDir, 16, transmittance, inscatter);
+    return through ? transmittance : inscatter;
+}
+"""
+
+
+def _aerial_case(window, tmp_path, eye, hpr, sun_dir, distances, seed=2):
+    """The cells and the march at random points of a camera's view (at
+    *eye*, turned *hpr*), *distances* (low, high) metres away; and the
+    directions."""
+    from panda3d.core import (
+        Camera,
+        LVecBase3f,
+        PerspectiveLens,
+        Point2,
+        Point3,
+        PTA_LVecBase3f,
+    )
+
+    params = AtmosphereParams()
+    atmospheres = Atmospheres()
+    atmospheres.add(R, params)
+    lens = PerspectiveLens()
+    lens.set_fov(70.0, 45.0)
+    lens.set_near_far(1.0, 1e7)
+    camera = NodePath(Camera("view", lens))
+    camera.set_hpr(*hpr)
+    sun = PTA_LVecBase3f.empty_array(1)
+    sun[0] = LVecBase3f(*(np.asarray(sun_dir) / np.linalg.norm(sun_dir)))
+    atmospheres.attach_aerial(window.win, camera, lens, sun)
+    atmospheres.update(eye)
+    window.graphicsEngine.render_frame()
+    window.graphicsEngine.render_frame()
+    rng = np.random.default_rng(seed)
+    rows = []
+    for _ in range(200):
+        near, far = Point3(), Point3()
+        lens.extrude(Point2(*rng.uniform(-0.97, 0.97, 2)), near, far)
+        d = camera.get_mat().xform_vec(far - near)
+        d = np.array([d[0], d[1], d[2]])
+        d /= np.linalg.norm(d)
+        dist = np.exp(rng.uniform(*np.log(distances)))
+        # in front of the ground (where a fragment can be)
+        b = float(eye @ d)
+        disc = b * b - (float(eye @ eye) - R * R)
+        if disc > 0.0 and -b - np.sqrt(disc) > 0.0:
+            dist = min(dist, 0.999 * (-b - np.sqrt(disc)))
+        rows.append((*d, dist))
+    rows = np.array(rows)
+    original = atmospheres.bind
+
+    def bind(node):
+        original(node)
+        node.set_shader_input("uSunDir", sun)
+
+    atmospheres.bind = bind
+    try:
+        out = [
+            _evaluate(window, tmp_path, atmospheres, e, rows, _AERIAL)
+            for e in (
+                "cellsOf(q, false)",
+                "marchOf(q, false)",
+                "cellsOf(q, true)",
+                "marchOf(q, true)",
+            )
+        ]
+    finally:
+        atmospheres.bind = original
+        atmospheres.aerial.destroy()
+    return rows, out
+
+
+@pytest.mark.parametrize(
+    "altitude, hpr, elevation, distances",
+    [
+        (1300.0, (30.0, -10.0, 0.0), 40.0, (200.0, 60e3)),  # the ground ahead
+        (1300.0, (120.0, -4.0, 0.0), 4.0, (1e3, 120e3)),  # low sun, far haze
+        (20e3, (0.0, -30.0, 0.0), 25.0, (5e3, 128e3)),
+        (45e3, (0.0, -50.0, 0.0), 25.0, (45e3, 128e3)),  # the ground far below
+    ],
+)
+def test_the_aerial_cells_are_the_march(
+    window, tmp_path, altitude, hpr, elevation, distances
+):
+    """aerialAlong, baked and read, against the march (16 samples) at random
+    points of the view in front of the ground: the in-scatter within 6 % or
+    1 % of the noon zenith's brightness (8 % for the ground 45 km below,
+    where the slices are ~5 km apart in its haze), the transmittance within
+    3 % or 0.01 (between cells and slices, linearly)."""
+    from math import cos, radians, sin
+
+    e = radians(elevation)
+    eye = np.array([0.0, 0.0, R + altitude])
+    rows, (cells, march, cells_t, march_t) = _aerial_case(
+        window, tmp_path, eye, hpr, (cos(e), 0.3, sin(e)), distances
+    )
+    assert np.all(cells >= 0.0)  # read from the cells (within their reach)
+    zenith = inscatter_reference(
+        R, AtmosphereParams(), (0, 0, R + 1300.0), (0, 0, 1), 1e9, (0, 0, 1)
+    )[1]
+    bound = np.maximum((0.08 if altitude > 30e3 else 0.06) * march, 0.01 * zenith)
+    error = np.abs(cells - march)
+    worst = int(np.argmax((error - bound).max(axis=1)))
+    assert np.all(error <= bound), (rows[worst], cells[worst], march[worst])
+    np.testing.assert_allclose(cells_t, march_t, rtol=0.03, atol=0.01)
+
+
+def test_no_aerial_cells_from_space_or_past_their_reach(window, tmp_path):
+    """From space, and past their reach from the ground, the points are
+    marched (aerialAlong holds none)."""
+    from math import cos, radians, sin
+
+    from world_builder.atmosphere.aerial import AERIAL_REACH
+
+    e = radians(30.0)
+    sun = (cos(e), 0.0, sin(e))
+    _, (cells, *_) = _aerial_case(
+        window,
+        tmp_path,
+        np.array([0.0, 0.0, R + 2e6]),
+        (0.0, -90.0, 0.0),
+        sun,
+        (1.9e6, 2.0e6),
+    )
+    assert np.all(cells == -1.0)
+    _, (cells, *_) = _aerial_case(
+        window,
+        tmp_path,
+        np.array([0.0, 0.0, R + 30e3]),
+        (0.0, 20.0, 0.0),
+        sun,  # over the ground
+        (1.01 * AERIAL_REACH, 2 * AERIAL_REACH),
+    )
+    assert np.all(cells == -1.0)
