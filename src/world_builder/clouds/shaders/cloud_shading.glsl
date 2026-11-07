@@ -90,6 +90,14 @@ vec3 cloudRadianceFrom(sampler2D deckTable, float sunDepth, Field f, vec3 p,
         local = (h - SHELF_BAND.x) / (SHELF_BAND.w - SHELF_BAND.x);
     }
     float skyReach = mix(skyOcclusion, 1.0, clamp(local, 0.0, 1.0));
+    // Where a light volume holds the sample (the raymarch's): by the clouds
+    // actually above it, its optical depth up (cloudSkyDepth), between the
+    // same floor and the open sky, in place of the ramp.
+    if (cloudSkyHeld > 0.0 && shading > 0.0) {
+        skyReach = mix(skyReach, mix(skyOcclusion, 1.0, exp2(-cloudSkyDepth)),
+                       cloudSkyHeld);
+    }
+    cloudSkyHeld = 0.0;
     // Multiple-scattering fill: sky-coloured and NOT phase-weighted, or dusk
     // shadows turn orange and sunward shadow outshines side-lit cloud.
     float ambient = skyStrength * skyReach

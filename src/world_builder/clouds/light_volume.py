@@ -397,7 +397,7 @@ class CloudLightVolumes:
         output: Any,
         clouds: Any,
         tile: int = 256,
-        per_frame: int = 4,
+        per_frame: int = 1,
         steps: int = STEPS,
         to_ram: bool = False,
     ) -> None:

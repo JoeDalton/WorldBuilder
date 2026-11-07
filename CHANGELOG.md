@@ -34,9 +34,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the twilight sky stays blue instead of olive. In the view rays, the
   multiple scattering and the sunlight (its depth toward the sun marched
   into the transmittance table's alpha; `transmittance_to_sun` includes it).
+- The clouds' light volume (`world_builder.clouds.light_volume`,
+  `ShadowSettings.cloud_light_size` and `cloud_light_slices`; RENDERING_PLAN.md
+  part C): the clouds' optical depth toward the sun and up for every voxel of
+  their slab around the camera, baked a slice or two a frame when the sun turns
+  or the camera moves far. The raymarch lights its clouds by it in place of the
+  shadow maps' levels, takes the sky's reach from its depth up in place of the
+  height ramp, and far away (`march.LIGHT_LOCAL_FOOTPRINT`) its sunlight from it
+  alone, without the sun march's local steps (`uCloudDebug` 512 back to the maps
+  and the ramp, 1024 the whole chord). Off at LOW, 128 at MID, 256 at HIGH and
+  ULTRA.
 
 ### Changed
 
+- The raymarch's steps: each stretch's first step is a random share of its
+  length (per pixel and visit), and the field's fine octaves fade by the step's
+  length from its distance alone, not the step deepened in a cloud: both drew
+  bands up a tower's face seen level (weaker now; the rest is the step budget,
+  RENDERING_PLAN.md "After C").
 - The clouds' two finest fbm octaves are turned off the noise's axes
   (`noise.OCTAVE_TURNS`, `OCTAVE_3_TURN` / `OCTAVE_4_TURN` in
   cloud_field.glsl), as the billows already were: the value noise's lattice

@@ -1611,6 +1611,29 @@ extra fetch and ozone (+0.24 ms), on the cheapest frame: left (B.5).
   vsync was off (the compositor holds the swap). A windowed profile below
   ~5.6 ms measures the display, not the frame.
 
+## 26. The clouds' light volume (RENDERING_PLAN.md part C)
+
+The raymarch lit by a baked volume of the clouds' depths toward the sun and up
+([shadows.md](shadows.md#the-cloud-light-volume)). RTX 3070, 2560 x 1440, HIGH,
+the demo's poses, medians of 120 frames, alternated in one session:
+
+- **The bake, re-baking every frame** (the sun turned 0.2 degrees a frame, the
+  worst case: a day's sun re-bakes it every ~12 s), with genera (two volumes),
+  frame on against off: at four slices a frame 128² +0.6, 256² +0.9 to +1.5,
+  512² +3.2 to +3.4 ms; at 256² two slices +0.8 to +1.0, **one slice +0.3 to
+  +0.4** (HIGH's), 512² one slice +1.1 to +1.2. Reading the weather at every
+  step (the towers' streaks' fix) is what made it dearer than its first version
+  (+0.1 to +0.45 ms at four slices). With the sun and the camera still: 0.
+- **Lighting by it against the shadow maps**, still: as the maps within noise
+  for the sun's depth alone; +0.1 to +0.2 ms with the sky's reach read from it
+  too (two more fetches a lit sample).
+- **The volume alone far away** (no local sun steps past a view footprint): with
+  genera -0.1 ms at 0.04 (HIGH), up to -0.2 at 0.02, nothing measurable without
+  genera; at 0.02 far towers 2.3 levels softer on average (p99 22).
+- **The second order of scattering**, compiled out against in, alternated, with
+  genera (ground, in clouds, clouds low): within noise. Part A's 0.7-0.85 ms is
+  gone from the current tree, so it was not folded into the volume.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

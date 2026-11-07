@@ -527,7 +527,10 @@ class World:
                     body.cloud_maps.bind(terrain.root)
                     body.clouds.bind_maps(body.cloud_maps.bind)  # their own light
                     body.cloud_light = CloudLightVolumes(
-                        output, body.clouds, self.settings.shadows.cloud_light_size
+                        output,
+                        body.clouds,
+                        self.settings.shadows.cloud_light_size,
+                        per_frame=self.settings.shadows.cloud_light_slices,
                     )
                     body.clouds.bind_maps(body.cloud_light.bind)
             body.models = self._model_lighting(
@@ -981,6 +984,7 @@ class World:
                 body.cloud_maps.set_size(settings.shadows.cloud_map_size)
             if body.cloud_light is not None:
                 body.cloud_light.set_tile(settings.shadows.cloud_light_size)
+                body.cloud_light.per_frame = settings.shadows.cloud_light_slices
         if self.casters is not None:
             self.casters.set_size(settings.shadows.caster_size)
         self._sync_half_res()

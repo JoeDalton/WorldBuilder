@@ -85,7 +85,11 @@ like:
   tileable octave the shader taps four times, as a `sampler3D`. It is not a
   baked fbm: the octaves are sampled at 1/2/7/16 with independent offsets,
   baking would freeze their relative phase, and resolving the 16x octave
-  would need 1024³.
+  would need 1024³. The two finest are also **turned** off the noise's axes
+  (`OCTAVE_TURNS`, the shader's `OCTAVE_3_TURN` / `OCTAVE_4_TURN`): value
+  noise carries its lattice's planes, flat spots and creases, which at their
+  few hundred metres drew interference lines across a tower's face seen at a
+  grazing angle (the billows are turned for the same reason).
 - **`density_on_sphere`** evaluates the field on the CPU *exactly* as the
   fragment shader does: the same trilinear half-texel addressing, the same
   8-bit quantisation. That equality is load-bearing, because placement is
@@ -378,7 +382,12 @@ cloud). Here each pixel steps along its own ray:
   once a block's cycle, a per-frame jitter skipped half a step a visit and
   never stratified it. (The interleaved gradient noise at the view pixel, a
   stride of `uBlock` apart, aliased its own diagonals into a lattice of
-  stripes that showed in motion, worst at a quarter resolution.) The march stops once the cloud is opaque. The steps' geometry
+  stripes that showed in motion, worst at a quarter resolution.) The steps'
+  **boundaries** move too: each stretch's first step is a random share of its
+  length (another draw of the blue noise, moved on each visit), so neighbouring
+  pixels do not share them; a long step's light, not linear in its density,
+  carries a bias that depends on where a cloud's surface falls between two
+  boundaries, which drew bands up a tower's face seen level. The march stops once the cloud is opaque. The steps' geometry
   has a NumPy mirror that the tests run (`slab_segments`, `march_steps`,
   `march_transmittance`).
 - **No longer steps in clear air.** A step longer than the finest features
@@ -401,7 +410,11 @@ cloud). Here each pixel steps along its own ray:
   and softer): beyond a few
   kilometres the steps grow with the distance (1 %), and an octave they cannot
   sample aliases into the jitter however finely a pixel resolves it (the
-  shimmer of far clouds, which more steps did not remove). The weather's shift is read
+  shimmer of far clouds, which more steps did not remove). The step's length
+  there is its distance's alone (`k * max(dtMin, t * growth)`), not the step
+  taken, which lengthens as the ray loses its light in a cloud and is cut at a
+  stretch's end: the octaves a sample kept then depended on where its ray
+  entered the cloud, contours up a tower's face. The weather's shift is read
   once per kilometre of ray (`cloudDensityShifted`), not at every sample.
   Two departures, march-only, give back the billboards' look:
   - the view ray takes **twice the field's extinction**
@@ -427,7 +440,13 @@ cloud). Here each pixel steps along its own ray:
     divergence, so the billows' mean and spread (and the coverage) hold. At 4
     it stretched fragments into streaks.
 - **Lit** per sample exactly as the billboards are (`cloud_shading.glsl`,
-  which both renderers include). The air is applied once per pixel, at the
+  which both renderers include), but for where the sunward depth and the
+  sky's reach come from: the **light volume** around the camera
+  ([shadows](shadows.md#the-cloud-light-volume)) where it is whole, the
+  cloud shadow maps' levels without it, the sun march beyond both. Past a
+  view footprint of `march.LIGHT_LOCAL_FOOTPRINT` (0.04 of the clouds'
+  feature) a sample takes its sunlight from the volume alone, without the sun
+  march's two local steps. The air is applied once per pixel, at the
   cloud's transmittance-weighted distance, with the billboards' per-vertex
   sample count.
 - **Far away**, where a pixel spans more than the features, it samples the

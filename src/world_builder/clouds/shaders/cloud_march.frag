@@ -88,6 +88,11 @@ const vec2 RESOLVED = vec2(2.0, 4.0);
 // each march resolution.
 uniform float uStepFade;
 
+// Past this view footprint (a pixel's share of the clouds' feature, as
+// shading's) a sample takes its sunlight from the light volume alone, without
+// the sun march's local steps (cloud_field.glsl's cloudLightLocal).
+uniform float uLightLocalFootprint;
+
 // How much of a feature of this many metres a view pixel of footprint
 // metres resolves: 1 wholly, 0 not at all.
 float resolved(float feature, float footprint) {
@@ -407,6 +412,9 @@ void main() {
             float footprint = t * uPixelAngle / feature;
             float detail = 1.0 - smoothstep(0.15, 0.6, footprint);
             float shading = 1.0 - smoothstep(0.04, 0.2, footprint);
+            // The light volume alone (no local sun steps) where a pixel spans
+            // this much of the clouds' feature (cloud_field.glsl).
+            cloudLightLocal = footprint < uLightLocalFootprint;
             float density = detail > 0.0
                           ? marchDensity(lf, p, weather,
                                          max(t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y)),

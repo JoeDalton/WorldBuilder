@@ -106,7 +106,10 @@ then the default) is measured, not built. What is left:
   against 6.9), so one depth-to-sky-light scale that keeps a cumulus base
   as today lightens tower bases; the height ramp (`skyReach`) already follows
   each column's own top. Its gain would be the stratus under an anvil and
-  holes in a deck. RENDERING_PLAN.md's light volume (part C, its sky channel) covers it properly.
+  holes in a deck. **Done by the light volume's sky channel** (RENDERING_PLAN.md C.3): the march's sky
+  reach is `mix(skyOcclusion, 1, exp2(-depth up))` where the volume holds the sample, the ramp elsewhere
+  (`--cloud-debug 512`: the ramp). Watch the tower bases against a cumulus deck's (the twin's warning above)
+  in the user's flight checks.
 - **Softer in motion at an eighth (4 x 2, HIGH)**: sharpness 0.92-0.94
   plain, 0.75-0.85 in towers, against 0.95-0.97 and 0.84-0.94 at a half.
   Not the jitter, the bilinear mix of the fresh samples or the history's
@@ -138,20 +141,25 @@ then the default) is measured, not built. What is left:
   20 km shimmer is p99 4.8 levels (9.1 before 4.1, 2.4 with the fade at 0.4);
   the far clouds are crisp again. LOW is softer by design (24 steps at a
   quarter). A better trade may exist: fade by the distance-driven part of the
-  step only, or only beyond about 5 km, or a variance-driven fade in the resolve.
-- **The field's own octaves carry the value noise's lattice planes** too
-  (fainter than the billows' were, and shared with the billboards): a
-  rotation of their coordinates would need the CPU twin (`noise.py`),
-  `cloud_field.glsl` and the billboards' placement changed together.
-- **Faint horizontal bands in towers** lit from the maps: a map texel holds
-  4 levels (the total and a quarter, a half, three quarters of the chord),
-  linear between them. 8 levels (a second render target, as the resolve's
-  aux plane; MARCH_PLAN's K) would remove them.
+  step only (done 2026-11-07: the step deepened in a cloud and cut at a
+  segment's end drew contours on towers), or only beyond about 5 km, or a
+  variance-driven fade in the resolve.
+- ~~**The field's own octaves carry the value noise's lattice planes**~~ Done
+  (2026-11-07): the two finest are turned (`noise.OCTAVE_TURNS`, the shader's
+  `OCTAVE_n_TURN`), twins and placement with them: they drew interference lines
+  on towers seen at a grazing angle.
+- ~~**Faint horizontal bands in towers** lit from the maps' 4 levels~~ Gone
+  with the light volume (C.3), which holds the depth at every voxel. (The
+  stacked bands on a tower seen level that remain are the march's steps, not
+  its light: RENDERING_PLAN.md "After C".)
 - **The map-lit sun depth counts out to the sun march's reach only**
   (`cloudMapSunDepth`'s window): counting a tower's whole 10 km chord left
   it black, and the levels are too coarse for an anvil. `--cloud-debug 64`
   takes the lighting from the sun march alone, to compare. A longer reach
-  needs more levels or another representation.
+  needs more levels or another representation. With the light volume (C.3)
+  the window is kept, from the volume; its whole chord (`--cloud-debug 1024`)
+  still blackens towers: a longer reach needs the light scattered more than
+  once in the towers, not more resolution.
 - **Low sun (about 4 degrees):** the stratus under the convective clouds is
   shaded by the ones sunward (`cloudSunDepthOther`) with hard-looking
   edges (`terrain_shots.py --pose at --at 24.48163 33.77925 5019 -49.1 8.3

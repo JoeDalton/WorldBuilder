@@ -124,19 +124,34 @@ march's per-sample octave goes: A measured it at 0.7-0.85 ms with genera); (b) *
   enough that its voxels resolve the clouds; both against today's at HIGH (`--passes`, `--jitter`, genera), kept
   per distance band if (b) pays. Sky reach from the sky channel in place of the height ramp. Ground, sea and
   models keep the maps' `.r`. A debug bit to compare with the maps.
+  **Status (2026-11-07):** C.1-C.3 built. (a) The march's sun depth from the volume (2 local steps, then the
+  difference of two volume reads over the sun march's window: the whole chord, debug 1024, blackens towers);
+  each voxel marched with the weather per step (taken once at the chord's start, voxels on one sun ray
+  disagreed: streaked towers); the reads jittered by up to half a texel and slice (the texels' grid showed).
+  Cost: 0 with all still, 0.1-0.45 ms re-baking; as the maps' lighting within noise, +0.1-0.2 ms with the sky
+  read. Sky reach from the volume's up depth (`mix(skyOcclusion, 1, exp2(-depth))`) in place of the ramp
+  (debug 512: maps and ramp, the old look). (b) The volume alone past a view footprint of 0.04
+  (`march.LIGHT_LOCAL_FOOTPRINT`): 0-0.2 ms with genera, nothing plain; a little softer far towers. The second
+  order: compiled out against in, alternated, now ~0 (A's 0.7-0.85 ms gone): not folded, nothing to gain.
 - **C.4 Presets and docs.** Atlas size and slices per preset (off at LOW: the maps stay its light);
   shadows.md "The cloud light volume", clouds.md, CHANGELOG; BACKLOG items it closes.
 - **C.5 God rays, toggleable** (`AtmosphereSettings.god_rays`, off by default at LOW/MID). The aerial-perspective
   bake (B.4) marches each frustum cell's ray through the air: its in-scatter takes the clouds' shadow at each
   sample: the cloud shadow maps' `.r` below the base (the sun ray's entry), the light volume's direct depth inside
-  the slab, unshadowed above. The terrain shadow (mountains) too if its bake covers the cell. The 32 x 32 x 32
+  the slab, unshadowed above. **The mountains' shadow too** (the user's request, 2026-11-07): at each sample
+  `shadows.glsl`'s `terrainShadow(planetDir, altitude)`, which answers for any point, not only the ground (its
+  altitude against the ceiling the mountains set toward the sun there: the global cube map everywhere, the local
+  map's finer one near the camera), so valleys at a low sun take shafts from the ridges as well as the clouds;
+  the bake's root binds the body's `shadow_map` inputs as the terrain does. A test: a cell behind a ridge (a
+  ceiling above it) darker than one beside it, as `shadow_map.terrain_visibility` on the CPU says. The 32 x 32 x 32
   volume is too coarse for crisp shafts: with god rays on, a finer one (e.g. 160 x 90 x 64) or a separate
   half-resolution in-scatter pass with a temporal blend (Scatterer's `historyGodrayOcclusionBuffer` way); measured.
   The sky's own path takes the same shadowed in-scatter where the view ray passes under the clouds.
 
 CPU: `lights_at` / `sun_visibility` keep the maps and the CPU march. Tests: slices read back against a fine
 NumPy march (`noise.cloud_shadow_on_sphere` along the sun and the zenith, `test_cloud_shadows.py:817` pattern);
-recentring continuity; god rays: a cell under a cloud's shadow darker than a lit one, the toggle off equal to B.
+recentring continuity; god rays: a cell under a cloud's shadow darker than a lit one, one behind a ridge darker
+than one beside it, the toggle off equal to B.
 
 Gates (RTX 3070, 2560 x 1440, HIGH): bake <= 0.4 ms a frame while re-baking, ~0 with sun and camera still,
 <= 1.5 ms on a recentre or first fill; the march's cost not up with (a), down with (b) where kept; no tower bands in
@@ -153,6 +168,20 @@ at planet scale; two atmospheres; memory (two 8 MB atlases at HIGH).
   to look at once the light volume (C) lights the towers; candidates: the sky fill from below (the ground's
   bounce, B.2's brighter low sky), the second order of scattering in the base, the height ramp of the sky
   reach (`skyReach`) that C.3 replaces.
+- **Stacked horizontal bands on a tower seen level** (logged 2026-11-07, during C.3, the user's flight check;
+  pose `--genera --at 22.46569 30.31014 2831 0 -1`). Cause: a level ray crosses tens of kilometres of the
+  slab's clear air before the tower and spends ~97 % of its step budget there (`--cloud-debug 128`: green
+  6-10/255, every pixel over budget), so the tower is drawn from 2-4 samples, whose fall on its smooth face
+  bands. ULTRA's 96 steps make them faint; the light volume plays no part (the sun march alone shows them).
+  Done meanwhile: the fine octaves' fade by the step's length from its distance alone (not the deepened, cut
+  step), the steps' boundaries moved per pixel and visit (each segment's first step a random share): both
+  weaken the bands a little. Tried and reverted: blind empty-space skipping (steps doubling in clear air to 4x,
+  back on entering cloud): in-cloud steps 3 % -> 12-16 %, bands weaker, but the tower see-through, its edge
+  speckled (thin cloud jumped), vertical smears. Lead: skip only where the weather says the column cannot
+  hold cloud (`cloudShadowMarch`'s "most the octaves could reach" test), so clear sky is crossed fast and thin
+  edges are not jumped (clouds.md "No longer steps in clear air": blind skipping failed the same way before, and
+  the fbm admits no bound that proves a cell clear; the weather's column test is coarser, so it may); measure
+  with `cloud_bench --stability/--jitter` and the frame's cost.
 
 ## Critical files
 

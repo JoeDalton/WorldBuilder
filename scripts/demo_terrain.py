@@ -1083,7 +1083,10 @@ class TerrainDemo(ShowBase):
         self.clouds.bind_maps(self.cloud_maps.bind)  # a raymarch's own light
         self.cloud_maps.bind(self.home.models.inputs)
         self.cloud_light = CloudLightVolumes(
-            self.win, self.clouds, self.world.shadows.cloud_light_size
+            self.win,
+            self.clouds,
+            self.world.shadows.cloud_light_size,
+            per_frame=self.world.shadows.cloud_light_slices,
         )
         self.clouds.bind_maps(self.cloud_light.bind)
         if self.ring is not None:
@@ -1160,6 +1163,7 @@ class TerrainDemo(ShowBase):
             self.cloud_maps.set_size(world.shadows.cloud_map_size)
         if self.cloud_light is not None:
             self.cloud_light.set_tile(world.shadows.cloud_light_size)
+            self.cloud_light.per_frame = world.shadows.cloud_light_slices
         self.casters.set_size(world.shadows.caster_size)
         for body in self.bodies:
             body.shadow_map.set_size(world.shadows.terrain_map_size)

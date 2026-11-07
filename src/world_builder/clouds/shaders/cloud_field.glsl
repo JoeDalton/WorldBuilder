@@ -27,8 +27,9 @@ uniform samplerCube weatherMap;
 // raymarch's: 16 its steps per pixel, red over the budget, 32 no billows, 64 the
 // clouds' light from the sun march, not the shadow maps, 128 where the steps go
 // (red empty air, green cloud, blue the budget), 256 no lighting, 512 the
-// clouds' light from the shadow maps, not the light volume, 1024 the light
-// volume's whole chord toward the sun, not the sun march's window.
+// clouds' light from the shadow maps and the sky's by the height ramp, not
+// the light volume, 1024 the light volume's whole chord toward the sun, not
+// the sun march's window.
 uniform int   uCloudDebug;
 // The far clouds' averages, by the sun's cosine (x, from deckLightCosMin to
 // 1) and the weather's coverage (y): the deck's lighting
@@ -852,6 +853,11 @@ uniform int   otherLightOn;
 // pixels whatever the distance; jittered, it is noise the resolve averages.
 // The same for both of a sample's reads (their difference is the light).
 vec3 cloudLightJitter = vec3(0.0);
+// Whether the sample takes the sun march's local steps before the volume
+// (the raymarch clears it for samples too far for a pixel to show the
+// nearby clouds' shape, RENDERING_PLAN.md C.3's alternate path: the volume
+// alone, from the sample itself).
+bool cloudLightLocal = true;
 
 // A light volume's depths at p (r: toward the sun, g: up), linear between
 // its texels and its slices; keep: how much the volume holds p (1 inside,
@@ -895,6 +901,9 @@ vec2 cloudLightAt(sampler2D atlas, vec4 chart[4], vec3 p, out float keep) {
 float cloudLightSunDepth(Field f, sampler2D atlas, vec4 chart[4], vec3 p, vec3 dir,
                          vec3 weather, int localSteps, out float depth) {
     depth = 0.0;
+    if (!cloudLightLocal) {
+        localSteps = 0;
+    }
     float reach = float(localSteps) * f.sunStepLength;
     float keepNear;
     float near = cloudLightAt(atlas, chart, p + dir * reach, keepNear).r;
@@ -908,11 +917,20 @@ float cloudLightSunDepth(Field f, sampler2D atlas, vec4 chart[4], vec3 p, vec3 d
     if (held <= 0.0) {
         return 0.0;
     }
-    depth = slabOpticalDepthAt(f, p, dir, f.sunStepLength, localSteps, weather)
-          + max(near - far, 0.0);
+    depth = max(near - far, 0.0);
+    if (localSteps > 0) {
+        depth += slabOpticalDepthAt(f, p, dir, f.sunStepLength, localSteps, weather);
+    }
     return held;
 }
 #endif
+
+// The clouds' optical depth straight up from the sample being lit, from a
+// light volume (its g), and how much the volume holds the sample (0: none,
+// the sky's light by the height ramp, cloud_shading.glsl's skyReach): set by
+// cloudSunDepthIn with the sun's depth, read and cleared by cloudRadianceFrom.
+float cloudSkyDepth = 0.0;
+float cloudSkyHeld = 0.0;
 
 // The optical depth toward the sun from a cloud at p: from the shadow maps
 // where the shader takes its light from them (CLOUD_MAP_LIGHTING: the
@@ -931,6 +949,7 @@ float cloudSunDepthIn(Field f, samplerCube weatherCube, int on, sampler2D nearMa
         if (lightOn != 0 && (uCloudDebug & 512) == 0) {
             held = cloudLightSunDepth(f, light, lightChart, p, sunDir, weather,
                                       localSteps, depth);
+            cloudSkyDepth = cloudLightAt(light, lightChart, p, cloudSkyHeld).g;
         } else {
             held = cloudMapSunDepth(f, weatherCube, on, nearMap, nearChart, farMap,
                                     farChart, p, sunDir, weather, localSteps, depth);

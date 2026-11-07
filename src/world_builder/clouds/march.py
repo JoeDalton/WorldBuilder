@@ -599,6 +599,13 @@ def smoothing_of(block: tuple[int, int]) -> float:
 STEP_FADES = {(1, 1): 0.0, (2, 2): 0.1, (4, 2): 0.15, (3, 3): 0.15, (4, 4): 0.25}
 
 
+#: Past this view footprint (a pixel's share of the clouds' feature, as the
+#: march's shading measures it) a sample takes its sunlight from the light
+#: volume alone, without the sun march's two local steps (cloud_march.frag's
+#: uLightLocalFootprint; RENDERING_PLAN.md C.3's alternate path).
+LIGHT_LOCAL_FOOTPRINT = 0.04
+
+
 def step_fade_of(block: tuple[int, int]) -> float:
     """:returns: ``uStepFade`` for a march block (across, up)"""
     return STEP_FADES[block]
@@ -974,6 +981,7 @@ class _MarchLayer:
             uBlock=LVecBase2i(*self.block),
             uViewSize=LVecBase2f(*view),
             uStepFade=step_fade_of(self.block),
+            uLightLocalFootprint=LIGHT_LOCAL_FOOTPRINT,
         )
         size = self._resolve_size(view)
         for resolve in self.resolves:

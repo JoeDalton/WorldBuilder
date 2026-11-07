@@ -371,6 +371,61 @@ texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
   makes them for a body with clouds and binds them to its terrain
   (`Body.cloud_maps`); the hand-built demo the same.
 
+## The cloud light volume
+
+`clouds.light_volume.CloudLightVolumes` (RENDERING_PLAN.md part C; EVE-Redux's
+`LightVolume`): the light the raymarched clouds are lit by, in place of the
+shadow maps' four levels, whose bands showed in towers.
+
+- **What it holds.** For every voxel of a family's slab around the camera,
+  the clouds' optical depth toward the sun (r) and straight up (g), RG16F.
+  Depths, not transmittances: along one ray a depth is linear, so the depth
+  between two points of a sun ray is the difference of theirs.
+- **Chart.** The cloud shadow maps' azimuthal equidistant chart on the slab
+  base's sphere, warped radially (a texel at `t` in [-1, 1]² of its tile lies
+  `|t|² × reach` from the centre: fine near the camera, about 800 m wide at
+  25 km with 256² tiles), and 32 shells through the slab (330 m in a tower's
+  10.5 km). The reach is the longest sight line inside the slab (40-200 km).
+  An atlas of 8 × 4 tiles (`cloud_field.glsl`'s `lightVoxelAt`,
+  `lightChartCoords`).
+- **Bake** (`cloud_light_bake.frag`). Each voxel marched to the slab's top,
+  toward the sun and up, in steps of half a sun step, the weather and the cell
+  octave read at **every step** (`light_volume.light_depth_on_sphere` on the
+  CPU). With the weather of the chord's start, as the ground's shadow march
+  takes it, two voxels on one sun ray disagreed about the tower between them
+  and its face streaked. A few slices a frame
+  (`ShadowSettings.cloud_light_slices`) into a back atlas, swapped to the front
+  once whole: the readers never see a half-baked volume, nor one of two suns.
+  Baked again when the sun turns past `utils.SUN_TOLERANCE`, the camera moves
+  3 % of the reach, the reach changes by as much, or the clouds' layer
+  changes; one bake at a time. With all still, nothing a frame. Each family
+  has its own (genera).
+- **Readers** (`cloudLightSunDepth`, `cloudLightAt`). A march sample takes the
+  sun march's two local steps (the nearby clouds' shape), then the difference
+  of the volume's depths where they ended and where the sun march would have
+  (its window: the whole chord, `--cloud-debug 1024`, still blackens towers,
+  as the maps' did). Past a view footprint of `march.LIGHT_LOCAL_FOOTPRINT`
+  the volume alone. Each read is jittered by up to half a texel and half a
+  slice (per pixel and visit, the march's blue noise): read at the nodes, the
+  linear interpolation between texels hundreds of metres wide drew their grid
+  on a tower's face; jittered, the resolve averages it. The **sky's reach**
+  comes from the up depth, `mix(skyOcclusion, 1, exp2(-depth))`, in place of
+  the height ramp. Beyond the volume (its last eighth fades), the maps and the
+  ramp as before; `--cloud-debug 512` takes them everywhere (the old look).
+  The ground, the sea and the models keep the shadow maps.
+- **Cost** (RTX 3070, 2560 × 1440, genera; performance.md §26). Re-baking: 0.3-0.4 ms a
+  frame at 256² and a slice a frame (32 frames a bake, a quarter of a second);
+  0.9-1.5 ms at four slices; 1.1-1.2 ms at 512² even at one. Still: 0.
+  Lighting by it instead of the maps: +0.1-0.2 ms (the sky's read), about
+  what the volume-alone path saves far away.
+- **Knobs.** `ShadowSettings.cloud_light_size` (off at LOW, 128 MID, 256 HIGH
+  and ULTRA) and `cloud_light_slices` (2 MID, 1 HIGH, 2 ULTRA). Off, the
+  raymarch lights by the shadow maps as before. `World` and the demo make one
+  for a body with clouds and bind it to the march (`bind_maps`).
+- **Tests** (`tests/test_cloud_light_volume.py`): the chart and its reach;
+  every voxel read back against the CPU twin, toward the sun and up, plain and
+  for each genera family; the change-driven rules.
+
 ## Long cloud shadows across the deck
 
 A cloud's fragment marches toward the sun for its own few hundred metres
