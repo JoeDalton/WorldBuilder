@@ -17,6 +17,10 @@ uniform sampler2D uNearDepth;  // the near range's depth pass
 uniform int uNearDepthOn;      // 0: not drawn (nothing of the slab in the near range)
 uniform int uDepthScale;       // view pixels per pixel of the depth pass, per axis
 uniform int uNearCard;         // 1: the near range's card, 0: the far range's
+// This card's own range's depth pass (its lens: the same depth space as
+// gl_FragDepth here), and 1 to cut the cloud's depth at it.
+uniform sampler2D uSceneDepth;
+uniform int uSceneDepthCut;
 uniform mat4 p3d_ProjectionMatrix;
 uniform mat4 p3d_ProjectionMatrixInverse;
 
@@ -42,6 +46,17 @@ void main() {
     vec3 dir = normalize(far.xyz / far.w - near.xyz / near.w);
     vec4 clip = p3d_ProjectionMatrix * vec4(dir * distance, 1.0);
     // Just short of the cleared depth, or a cloud at the far plane fails the test.
-    gl_FragDepth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 0.99999);
+    float depth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 0.99999);
+    // No farther than the scene the march stopped at: everything it returned
+    // lies in front of it. The resolved distance lags the fresh samples (the
+    // history's mix): flying forward the clouds come nearer each frame, the
+    // lagged distance put them behind the ground they hang over, and the
+    // depth test cut them (90 % of a stratus lost; the edge against the
+    // mountains sliding). The scene's depth does not lag.
+    if (uSceneDepthCut != 0) {
+        float scene = texelFetch(uSceneDepth, ivec2(gl_FragCoord.xy) / uDepthScale, 0).r;
+        depth = min(depth, scene - 1e-6);
+    }
+    gl_FragDepth = depth;
     fragColor = cloud;
 }

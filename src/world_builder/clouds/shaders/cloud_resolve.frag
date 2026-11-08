@@ -100,19 +100,6 @@ void main() {
         }
     }
     reconstructedKm = kmWeight > 0.0 ? reconstructedKm / kmWeight : 0.0;
-    // Clear sky is most of the view: no cloud in the four nearest samples and
-    // none where the history was (at the sky's distance) is no cloud, without the
-    // statistics and the rest.
-    if (reconstructed.a <= 0.0 && uHistoryValid != 0) {
-        vec2 clearAt;
-        vec3 clearDir = rayDir((vec2(pixel) + 0.5) / uViewSize * 2.0 - 1.0);
-        if (reproject(clearDir, 0.0, clearAt)
-            && texture(uHistory, clearAt / vec2(textureSize(uHistory, 0))).a <= 0.0) {
-            fragColor = vec4(0.0);
-            fragDistance = vec4(0.0, 1.0, 0.0, 1.0);
-            return;
-        }
-    }
     ivec2 centre = clamp(ivec2(floor(f + 0.5)), ivec2(0), last);
     // The samples' mean and spread around this pixel, Gaussian-weighted by their
     // distance to it (not a box about the nearest sample: that moves its centre
@@ -122,6 +109,9 @@ void main() {
     float total = 0.0;
     float kmSum = 0.0;
     float kmTotal = 0.0;
+    // The fresh samples' distances' range: what the history's may be.
+    float kmLo = 1e9;
+    float kmHi = 0.0;
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             ivec2 tap = centre + ivec2(x, y);
@@ -135,7 +125,24 @@ void main() {
             if (tapKm > 0.0) {
                 kmSum += g * v.a * tapKm;
                 kmTotal += g * v.a;
+                kmLo = min(kmLo, tapKm);
+                kmHi = max(kmHi, tapKm);
             }
+        }
+    }
+    // Clear sky is most of the view: no cloud in the 3 x 3 samples around
+    // and none where the history was (at the sky's distance) is no cloud,
+    // without the rest. (With the four nearest only, a pixel at a cloud's edge
+    // flipped between that and the full resolve as the samples' offset moved:
+    // its count zeroed, a blink in motion.)
+    if (mean.a <= 0.0 && uHistoryValid != 0) {
+        vec2 clearAt;
+        vec3 clearDir = rayDir((vec2(pixel) + 0.5) / uViewSize * 2.0 - 1.0);
+        if (reproject(clearDir, 0.0, clearAt)
+            && texture(uHistory, clearAt / vec2(textureSize(uHistory, 0))).a <= 0.0) {
+            fragColor = vec4(0.0);
+            fragDistance = vec4(0.0, 1.0, 0.0, 1.0);
+            return;
         }
     }
     // The distance the history is moved by, from the same smooth weights: a
@@ -157,9 +164,20 @@ void main() {
     vec2 historyKm = vec2(0.0);
     if (valid) {
         historyKm = texelFetch(uHistoryDistance, ivec2(at), 0).rg;
+        // The history's distance no farther or nearer than this frame's
+        // samples around: mixed like the colour, it lags them by up to
+        // 1 / uMinWeight frames, and flying forward (the clouds nearer each
+        // frame) it moved the history from too far, where the clamp threw it
+        // away (small clouds lost in a descent).
+        if (historyKm.r > 0.0 && kmHi > 0.0) {
+            historyKm.r = clamp(historyKm.r, kmLo, kmHi);
+        }
         if (historyKm.r > 0.0) {
             valid = reproject(dir, historyKm.r, at);
             historyKm = valid ? texelFetch(uHistoryDistance, ivec2(at), 0).rg : historyKm;
+            if (historyKm.r > 0.0 && kmHi > 0.0) {
+                historyKm.r = clamp(historyKm.r, kmLo, kmHi);
+            }
         }
     }
 

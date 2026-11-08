@@ -500,7 +500,15 @@ depths:
    target's second channel): this frame's share falls as 1 / (count + 1)
    down to `MIN_WEIGHT` (0.03), and what the clamp takes away takes the
    count down (to 4 at least, so a noisy sample is not taken
-   whole). Two results alternate, each frame's reading the other's;
+   whole). The history's distance is held within the fresh samples' around
+   (their least and most): mixed like the colour it lagged them by up to
+   1 / `MIN_WEIGHT` frames, and flying forward (the clouds nearer every
+   frame) it moved the history from too far, where the clamp threw it away
+   (small clouds lost in a fast descent). The history is kept across a move of
+   `HISTORY_JUMP` (2 km) or `HISTORY_JUMP_SHARE` (2 %) of the camera's distance
+   to the slab, the more: from orbit a descent moves kilometres a frame. Clear
+   sky (no cloud in the 3 × 3 samples, none in the history) returns early.
+   Two results alternate, each frame's reading the other's;
 4. two cards lay the result over the view, premultiplied "over", at the
    **cloud's own depth**: the near range's card over the pixels where the
    near range's depth pass drew something (the near camera draws its
@@ -509,7 +517,13 @@ depths:
    clouds' slot (after the sky, before the cirrus). Each range's depth test
    hides the cloud pixel by pixel at the view's resolution, behind anything
    nearer, which also drops any stale history a moving model would leave
-   behind it.
+   behind it. The depth is **no farther than the scene's** (each card's own
+   range's depth pass, `uSceneDepth`): the march stopped there, so all it
+   returned lies in front. The resolved distance alone lagged the fresh
+   samples, and flying forward it put the clouds behind the ground under them:
+   the depth test cut 90 % of a stratus and slid its edge against the
+   mountains, and a fast descent lost half its clouds (performance.md §28;
+   `CloudMarch` layers' `scene_cut` switches it off, to compare).
 
 The near range's depth pass and card run only when the slab reaches into the
 near range; otherwise the march stops at the far range's scene, and what the

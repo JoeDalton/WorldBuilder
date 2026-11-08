@@ -1663,13 +1663,50 @@ an awful p99. RTX 3070, 2560 x 1440, a 180 Hz display.
   while the whole view turns.
 - **The fix: a frame cap** at a divisor of the refresh the frame rate holds
   (`WorldSettings.display.frame_cap`, `world_builder.display.FrameCap`: Panda's
-  clock in its limited mode; 90 fps by default, 0 off). The same turn at 90:
+  clock in its limited mode; off by default, 90 on a 180 Hz display). The same turn at 90:
   median, p95 and p99 all 11.1 ms (max 22.2), against 6.1 / 10.2 / 11.1 (max
   168) uncapped. The benchmarks run uncapped (`--frame-cap` 0 by default in
   `flight_bench.py`, `frame_profile.py`, `terrain_shots.py`).
 - Other ways out: a variable-refresh display (FreeSync, G-Sync) or a
   fullscreen window the compositor leaves alone; or a frame under the refresh
   (5.5 ms here: ~1.4 ms off at this pose).
+
+## 28. The clouds in motion: the composite's depth and the history's distance
+
+`scripts/motion_shots.py` flies the demo from a pose with its speed rule at a
+fixed 120 fps frame time, saves frames, then holds each position still until
+the clouds converge: the moving frame against its converged twin, over the
+clouds (lost: cloud pixels missing while moving; found: extra). 2560 x 1440,
+HIGH, genera. The user's poses: stratus in mountains
+(`--at 19.24143 30.08032 2093 113.1 -30`, flying forward from 2 km), descent
+from 200 km (`--at 28.89450 30.39999 199852 180 -88.7`, forward).
+
+| | stratus fwd: lost / err | stratus back | descent: lost / err |
+|---|---|---|---|
+| before (3015db2) | 94.4 % / 77.2 | 2.0 % / 2.72 | 50.4 % / 37.0 |
+| depth no farther than the scene | 1.2 % / 2.57 | 2.0 % / 2.64 | 13.5 % / 13.2 |
+| + the history's distance clamped | **0.3 % / 1.25** | | **1.6 % / 2.96** |
+
+- **Cause**: the composite wrote the cloud's depth from the resolved distance,
+  mixed over up to ~33 frames like the colour. Flying forward the clouds come
+  nearer each frame, the lagged distance is too far, the depth landed behind
+  the ground under them and the depth test cut them (backward the error errs
+  nearer: nothing cut, the asymmetry reported). Confirmed by a composite
+  writing depth 0: lost 1.1 %. The same lag moved the history from too far,
+  where the clamp threw it away (the descent's small clouds).
+- **Kept, cost ~0** (`cloud_bench --passes` with genera, full frame 2.07 / 4.54
+  / 4.41 against 2.11 / 4.46 / 4.35 ms; `--jitter` identical to two decimals):
+  the scene cut, the distance clamp, the jump limit relative to the slab's
+  distance (2 %: 10 % measured the same on a boosted descent), the clear-sky
+  test over the 3 x 3.
+- **Tried, not kept**: a quarter of the clamp's floor kept in motion: flicker
+  -3 to -6 % in `--jitter` but more ghosting on the flights (stratus err 1.25 to
+  1.51, descent 2.96 to 3.27, found 3.8 to 4.9 %).
+- **Not built**: depth-aware (bilateral) reconstruction and exact-pixel
+  history: no edge halo seen in converged shots, the motion errors already
+  near converged.
+- A boosted descent into the slab (5x, ~10 km a frame at 100 fps) still ghosts
+  at 9-12 km: 27-52 % extra cloud, clouds passed kept by the history.
 
 ## Not covered
 

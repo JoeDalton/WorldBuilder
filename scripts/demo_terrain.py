@@ -457,7 +457,7 @@ class TerrainDemo(ShowBase):
 
         world = settings or WorldSettings()
         self.world = world
-        # The frame-rate cap (WorldSettings.display: 90 fps by default).
+        # The frame-rate cap (WorldSettings.display: off by default).
         self.frame_cap = FrameCap(world.display)
         self._clouds_on = clouds
         self._genera = genera
@@ -1445,7 +1445,7 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         "--frame-cap",
         type=int,
         default=None,
-        help="the most frames a second, 0 none (default: the settings', 90)",
+        help="the most frames a second, 0 none (default: the settings', none)",
     )
     parser.add_argument(
         "--ring", action="store_true", help="a small ring around the planet"

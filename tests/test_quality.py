@@ -386,7 +386,7 @@ def test_a_section_without_levels_is_kept_by_every_preset():
 
 def test_the_frame_cap_sets_the_clock():
     """FrameCap puts a clock in its limited mode at the cap, and back to
-    normal at 0."""
+    normal at 0 (the default)."""
     from dataclasses import replace
 
     from panda3d.core import ClockObject
@@ -403,9 +403,11 @@ def test_the_frame_cap_sets_the_clock():
             self.rate = rate
 
     clock = Clock()
+    assert DisplaySettings().frame_cap == 0  # off by default
     cap = FrameCap(DisplaySettings(), clock)
+    assert clock.mode == ClockObject.M_normal
+    cap.set_settings(replace(DisplaySettings(), frame_cap=90))
     assert clock.mode == ClockObject.M_limited
     assert clock.rate == pytest.approx(90.0)
     cap.set_settings(replace(DisplaySettings(), frame_cap=0))
     assert clock.mode == ClockObject.M_normal
-    assert DisplaySettings().frame_cap == 90

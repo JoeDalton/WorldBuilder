@@ -478,8 +478,13 @@ BLOCKS = tuple(_ORDERS)
 #: this many of its visits' inverse.
 MIN_WEIGHT = 0.03
 #: The camera may move this far between frames and keep its history, metres
-#: (more is a jump: a new pose, a teleport).
+#: (more is a jump: a new pose, a teleport), or :data:`HISTORY_JUMP_SHARE` of
+#: its distance to the clouds' slab if more: from orbit a fast descent moves
+#: kilometres a frame, a small change to clouds hundreds of kilometres away,
+#: and with its history thrown away every frame the clouds were this frame's
+#: few samples, smoothed (the small ones faded out).
 HISTORY_JUMP = 2000.0
+HISTORY_JUMP_SHARE = 0.02
 #: The camera's motion (metres, plus :data:`TURN_METRES` per unit of its
 #: rotation matrix's change) that takes the clamp's noise floor to nothing
 #: (cloud_resolve.frag's uStill): a floor holds a still view steady, but in
@@ -860,6 +865,10 @@ class _MarchLayer:
         self.near_on = PTA_int.empty_array(1)
         self.near_on[0] = 1
         self.near = True
+        #: 1: the composite's depth no farther than the scene's (A/B: 0, the
+        #: resolved distance's alone; cloud_composite.frag)
+        self.scene_cut = PTA_int.empty_array(1)
+        self.scene_cut[0] = 1
 
         # The march: one pixel of every block.
         self.colour = _target(f"{name}_colour")
@@ -920,11 +929,14 @@ class _MarchLayer:
             )
             card.set_shader(_shader("cloud_composite.vert", "cloud_composite.frag"))
             card.set_depth_test(True)
+            own = self.near_depth if side == "near" else self.far_depth
             card.set_shader_inputs(
                 uNearDepth=self.near_depth.depth,
                 uNearDepthOn=self.near_on,
                 uDepthScale=DEPTH_SCALE,
                 uNearCard=int(side == "near"),
+                uSceneDepth=own.depth,
+                uSceneDepthCut=self.scene_cut,
             )
             self.composites.append(card)
         # The per-frame inputs, bound once and written in place by update:
@@ -1050,7 +1062,9 @@ class _MarchLayer:
         else:
             self.composites[1].hide()
 
-    def update(self, app: Any, frame: int, camera: np.ndarray) -> None:
+    def update(
+        self, app: Any, frame: int, camera: np.ndarray, slab_distance: float = 0.0
+    ) -> None:
         """Per frame: this frame's pixel of each block, the ranges' clip
         spaces to the render frame (the march) and the near range's to the
         camera's surroundings now and a frame ago (the reprojection: both
@@ -1058,6 +1072,8 @@ class _MarchLayer:
 
         :param frame: the march's frame count
         :param camera: the camera in the planet frame, float64
+        :param slab_distance: how far the clouds' slab is, metres (the
+            history's jump limit grows with it)
         """
         offset = self._offset(frame)
         self.visit[0] = visit_of(self.block, frame, self.gather)
@@ -1086,7 +1102,9 @@ class _MarchLayer:
             )
             motion = (float(np.linalg.norm(moved)) + turn * TURN_METRES) / STILL_METRES
             still = 1.0 - min(motion, 1.0)
-            valid = float(np.linalg.norm(moved)) <= HISTORY_JUMP
+            valid = float(np.linalg.norm(moved)) <= max(
+                HISTORY_JUMP, HISTORY_JUMP_SHARE * slab_distance
+            )
             # A point relative to the camera now, as it was relative to the
             # camera then (float64 for the move, float32 only near the camera).
             previous = LMatrix4f.translate_mat(LVecBase3f(*moved)) * last_rel_to_clip
@@ -1746,14 +1764,15 @@ class CloudMarch:
             self._frame[0] += 1
             # The near range's depth pass and card run only when the slab
             # reaches into it.
-            near_wanted = self._slab_distance(cam) <= self._depth.split * 1.01
+            slab_distance = self._slab_distance(cam)
+            near_wanted = slab_distance <= self._depth.split * 1.01
             self._split[0] = self._depth.split
             for layer in self._layers:
                 if near_wanted != layer.near:
                     layer.set_near(near_wanted)
             for layer in self._layers:
                 if layer.active:
-                    layer.update(self._app, self._frame[0], cam)
+                    layer.update(self._app, self._frame[0], cam, slab_distance)
 
     def _slab_distance(self, camera: np.ndarray) -> float:
         """:returns: how far the slab's nearest point is from *camera*

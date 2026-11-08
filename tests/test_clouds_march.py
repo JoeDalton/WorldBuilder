@@ -293,14 +293,31 @@ def test_the_billows_share_the_columns_noise_in_one_evaluation():
 
 
 def test_the_resolve_leaves_clear_sky_alone():
-    # The resolve returns early where the march and the history hold no cloud
-    # (before the history's and the neighbourhood's reads)
+    # The resolve returns early where the 3 x 3 samples around and the history
+    # hold no cloud: after the taps (the four nearest alone flipped a cloud's
+    # edge between this and the full resolve as the offset moved), before the
+    # history's reprojection and the clamp.
     text = (SHADER.parent / "cloud_resolve.frag").read_text()
     main = text[text.index("void main") :]
-    clear = main.index("<= 0.0) {")  # the history's alpha, the early-out's test
-    assert "return;" in main[clear : clear + 400]
-    # ... before the 3 x 3's taps for the clamp
-    assert clear < main.index("tapKm")
+    clear = main.index("if (mean.a <= 0.0 && uHistoryValid != 0)")
+    assert "return;" in main[clear : clear + 500]
+    assert main.index("tapKm") < clear < main.index("vec4 sigma")
+
+
+def test_the_history_distance_keeps_within_the_fresh_samples():
+    # Mixed like the colour, the distance lagged the samples: flying forward
+    # it moved the history from too far (small clouds lost in a descent).
+    text = (SHADER.parent / "cloud_resolve.frag").read_text()
+    assert text.count("historyKm.r = clamp(historyKm.r, kmLo, kmHi)") == 2
+
+
+def test_the_composite_is_no_farther_than_the_scene():
+    # The march stops at the scene: the composite's depth is cut there, not
+    # left at the lagging resolved distance (flying forward it put the clouds
+    # behind the ground under them, and the depth test cut them).
+    text = (SHADER.parent / "cloud_composite.frag").read_text()
+    assert "depth = min(depth, scene - 1e-6);" in text
+    assert "uSceneDepthCut != 0" in text
 
 
 @pytest.fixture(scope="module")
@@ -666,6 +683,26 @@ def test_one_march_covers_both_depth_ranges(window, executor):
             march.update((0.0, 0.0, R + 3000.0))
             window.graphicsEngine.render_frame()
         assert layer._previous is not None
+        # Each card cuts at its own range's depth pass (its lens's depth space)
+        assert far_card.get_shader_input("uSceneDepth").get_texture() == (
+            layer.far_depth.depth
+        )
+        assert near_card.get_shader_input("uSceneDepth").get_texture() == (
+            layer.near_depth.depth
+        )
+        assert layer.scene_cut[0] == 1
+        # The history survives a jump that is small against the clouds'
+        # distance (a fast descent from orbit), not one that is not.
+        from world_builder.clouds.march import HISTORY_JUMP, HISTORY_JUMP_SHARE
+
+        here = np.array([0.0, 0.0, R + 3000.0])
+        step = 3.0 * HISTORY_JUMP
+        frame = march._frame[0]
+        far_off = step / HISTORY_JUMP_SHARE * 2.0
+        layer.update(window, frame + 1, here + [0.0, 0.0, step], far_off)
+        assert layer._resolve_inputs[(frame + 1) % 2].valid[0] == 1
+        layer.update(window, frame + 2, here + [0.0, 0.0, 2 * step], 1000.0)
+        assert layer._resolve_inputs[(frame + 2) % 2].valid[0] == 0
         layer.set_near(False)
         assert layer.near_on[0] == 0
         assert not layer.near_depth.buffer.is_active()

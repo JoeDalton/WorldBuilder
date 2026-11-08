@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shafts under broken cloud and down valleys at a low sun, across the sky too.
   `frame_profile.py` has a `godrays` column.
 - A frame-rate cap (`world_builder.display`: `DisplaySettings.frame_cap`,
-  90 fps by default, 0 off; `FrameCap`, which `World` and the demo make): the
+  off (0) by default, 90 on a 180 Hz display; `FrameCap`, which `World` and the demo make): the
   `display` section of `WorldSettings`, a choice kept by every preset
   (`QualitySettings.LEVELLED` False; the schema's sections say `levelled`).
   Capped at a divisor of the display's refresh, every frame shows for the
@@ -63,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The raymarched clouds in motion: the composite's depth is no farther than
+  the scene's (the march stops there), the history's distance is held within
+  the fresh samples', and the history survives a jump small against the
+  clouds' distance (`march.HISTORY_JUMP_SHARE`). Flying forward the lagging
+  distance put the clouds behind the ground: 90 % of a stratus cut, its edge
+  sliding against the mountains, half a descent's clouds missing; now 0.3 % and
+  1.6 % (performance.md §28). The clear-sky early-out tests the 3 × 3 samples.
+- `scripts/motion_shots.py`: the clouds in motion against converged, flown from
+  a pose with the demo's speed rule at a fixed frame time (`--flicker` too).
+- The frame cap is off by default (`DisplaySettings.frame_cap` 0).
 - The raymarch's steps: each stretch's first step is a random share of its
   length (per pixel and visit), and the field's fine octaves fade by the step's
   length from its distance alone, not the step deepened in a cloud: both drew

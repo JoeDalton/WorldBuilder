@@ -8,8 +8,9 @@ refresh (vsync or not). A frame that takes a little more than one refresh
 for one refresh, every third or fourth for two, and turning the view
 stutters although the mean frame rate is fine (performance.md §27). Capped
 at a divisor of the refresh the frame rate can hold (90 fps on 180 Hz),
-every frame shows for the same time. 0 turns the cap off (benchmarks, a
-variable-refresh display, a fullscreen window the compositor leaves alone).
+every frame shows for the same time. Off (0) by default: a game sets it
+for its display (a variable-refresh display, or a fullscreen window the
+compositor leaves alone, needs none).
 
 The cap is Panda3D's global clock in its limited mode (``ClockObject``'s
 ``M_limited``): the frame loop waits out the rest of each frame. It is
@@ -34,12 +35,12 @@ class DisplaySettings(QualitySettings):
     """
 
     frame_cap: int = knob(
-        90,
+        0,
         "Frame cap",
         unit="fps",
         range=(0, 480),
         kept=True,
-        help="The most frames a second, 0 for none. A divisor of the "
+        help="The most frames a second, 0 for none (the default). A divisor of the "
         "display's refresh the game can hold (90 on 180 Hz, 72 on 144 Hz) "
         "shows every frame for the same time: smooth turns. Off, a frame "
         "that misses a refresh is held for two: stutter.",
@@ -59,7 +60,7 @@ class FrameCap:
 
     def __init__(self, settings: DisplaySettings | None = None, clock: Any = None):
         """
-        :param settings: the cap; None = the default (90 fps)
+        :param settings: the cap; None = the default (none)
         :param clock: the clock to cap; None = Panda3D's global clock
         """
         self._clock = clock or ClockObject.get_global_clock()

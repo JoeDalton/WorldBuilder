@@ -117,7 +117,11 @@ then the default) is measured, not built. What is left:
   motion (`MIN_WEIGHT`, the clamp's width without `uStill`); tracing more
   pixels a frame while the view moves (a half while turning, an eighth when
   still: the march's cost is in its traced pixels).
-- **The clouds lag behind the camera against terrain, when it flies fast.**
+- ~~**The clouds lag behind the camera against terrain, when it flies fast.**~~
+  **Fixed** (2026-11-08, performance.md §28): the composite's depth was the
+  resolved distance, which lags the samples; flying forward it put the clouds
+  behind the ground and the depth test cut them. Now no farther than the
+  scene's; the history's distance held within the fresh samples'.
   Seen at the demo's camera `{lat: 20.18986, lon: 29.12635, alt: 2769,
   heading: 157.2, pitch: -5.4}`, roll 5.1 (`terrain_shots.py --pose at --at
   20.18986 29.12635 2769 157.2 -5.4`), advancing toward a mountain: the

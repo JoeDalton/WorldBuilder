@@ -435,8 +435,8 @@ class World:
         self._body_centres: np.ndarray | None = None
         self._body_radii: np.ndarray | None = None
         self.settings = settings or WorldSettings()
-        #: The frame-rate cap (``WorldSettings.display``): Panda3D's global
-        #: clock, process-wide.
+        #: The frame-rate cap (``WorldSettings.display``, off by default):
+        #: Panda3D's global clock, process-wide.
         self.frame_cap = FrameCap(self.settings.display)
         self._sun = self._unit(sun.direction)
         self._sun_color = np.asarray(sun.color, dtype=np.float64)
