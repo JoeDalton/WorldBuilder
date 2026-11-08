@@ -218,7 +218,8 @@ when broken:
 [`genera.py`](../../src/world_builder/clouds/genera.py) adds stratus, and the
 convective continuum from fair-weather cumulus through congestus to
 cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
-`--genera` in the demo, `terrain_shots.py` and `cloud_bench.py`). Its maps are
+`--genera` in the demo and the scripts sharing its options, on by default
+there, `--no-genera` for the plain field; opt-in in `cloud_bench.py`). Its maps are
 a **placeholder** for the weather (issue #8): features laid out around one
 point. Either renderer draws them: billboards (two `CloudVolume`s), or the
 raymarch (one `CloudMarch` of two families, below).
@@ -387,7 +388,12 @@ cloud). Here each pixel steps along its own ray:
   alike when a ray needs more than `CloudSettings.march_steps`, and at
   least `SEGMENT_SAMPLES` (8) a stretch of the slab: a far ray crossing it
   steeply in a few steps longer than its clouds' edges are thick hits or
-  misses thin cloud by chance (the sparkle seen from 20 km up). Each sample
+  misses thin cloud by chance (the sparkle seen from 20 km up). A step's
+  length is its distance's alone: it no longer lengthens as the ray loses
+  its light in a cloud. That made the steps' grid depend on what the samples
+  found, and the visits' jitter no longer averaged out the contours where
+  the grid met a cloud's surface (bands across a tower's face, strongest
+  behind a thin veil). Each sample
   is jittered within its step by a **blue noise** (`blue_noise`, a 64 x 64
   tileable void-and-cluster texture) read at the *march's* pixel, shifted by
   which pixel of its block this frame traces (R2) and moved on by the golden
@@ -425,8 +431,8 @@ cloud). Here each pixel steps along its own ray:
   sample aliases into the jitter however finely a pixel resolves it (the
   shimmer of far clouds, which more steps did not remove). The step's length
   there is its distance's alone (`k * max(dtMin, t * growth)`), not the step
-  taken, which lengthens as the ray loses its light in a cloud and is cut at a
-  stretch's end: the octaves a sample kept then depended on where its ray
+  taken, which is cut at a stretch's end: the octaves a sample kept then
+  depended on where its ray
   entered the cloud, contours up a tower's face. The weather's shift is read
   once per kilometre of ray (`cloudDensityShifted`), not at every sample.
   Two departures, march-only, give back the billboards' look:

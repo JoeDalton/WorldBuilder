@@ -173,9 +173,6 @@ SEGMENT_SAMPLES = 8
 #: The march stops at this transmittance and counts the cloud opaque
 #: (cloud_march.frag's OPAQUE).
 OPAQUE = 0.04
-#: A step lengthens by this share of the transmittance already lost
-#: (cloud_march.frag's STEP_DEEPENING).
-STEP_DEEPENING = 1.5
 #: The view ray's extinction over the field's (the sun march keeps the
 #: field's own). The billboards' look: each of their quads carries its
 #: sample's density over a whole chord, which keeps a cloud's edge crisp;
@@ -399,9 +396,10 @@ def march_ray(
     jitter: float = 0.5,
     split: float = math.inf,
 ) -> tuple[float, int]:
-    """One ray's march as the shader runs it: the steps of :func:`march_steps`
-    that lengthen as the light is spent (:data:`STEP_DEEPENING`), stopping at
-    :data:`OPAQUE`.
+    """One ray's march as the shader runs it: the steps of :func:`march_steps`,
+    whatever the light already spent (a step lengthened by it made the steps'
+    grid depend on the samples, and the visits' jitter no longer averaged its
+    contours away: bands on a tower's face), stopping at :data:`OPAQUE`.
 
     :param extinction_at: the optical depth per metre at a distance along the ray
     :returns: the transmittance left (0 once the cloud is counted opaque), and
@@ -417,13 +415,7 @@ def march_ray(
         a = t0
         while a < t1 and samples < cap and transmittance > OPAQUE:
             k = scales[0] if a < split else scales[1]
-            dt = min(
-                k
-                * max(min_step, a * growth)
-                * (1.0 + STEP_DEEPENING * (1.0 - transmittance)),
-                least,
-                t1 - a,
-            )
+            dt = min(k * max(min_step, a * growth), least, t1 - a)
             samples += 1
             alpha = 1.0 - 2.0 ** (-extinction_at(a + dt * jitter) * dt)
             transmittance *= 1.0 - alpha

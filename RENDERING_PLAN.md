@@ -177,7 +177,10 @@ at planet scale; two atmospheres; memory (two 8 MB atlases at HIGH).
   reach (`skyReach`) that C.3 replaces.
 - **Grain on grey clouds in motion** (logged 2026-11-08, after the base's fade, the user's flight check; before
   the bands below): darker cloud shows the march's sampling noise (performance.md §28). Lead: the sun term's
-  noise at its source (more local sun steps, a smoother volume read).
+  noise at its source (more local sun steps, a smoother volume read). Measured again at the user's own poses
+  (2026-11-08, with their `--start`; the earlier scene had no tower): specks in motion 13-17 % of the clouds,
+  with blocky edges where clouds overlap; not the resolve's rejection at depth steps, not one sample a long
+  step (performance.md §29). Open.
 - **Stacked horizontal bands on a tower seen level** (logged 2026-11-07, during C.3, the user's flight check;
   pose `--genera --at 22.46569 30.31014 2831 0 -1`). Cause: a level ray crosses tens of kilometres of the
   slab's clear air before the tower and spends ~97 % of its step budget there (`--cloud-debug 128`: green
@@ -192,6 +195,10 @@ at planet scale; two atmospheres; memory (two 8 MB atlases at HIGH).
   edges are not jumped (clouds.md "No longer steps in clear air": blind skipping failed the same way before, and
   the fbm admits no bound that proves a cell clear; the weather's column test is coarser, so it may); measure
   with `cloud_bench --stability/--jitter` and the frame's cost.
+  **Done 2026-11-08**: the steps no longer lengthen as the light is spent (a step's length had followed what
+  the samples found, so the visits' jitter kept the grid's contours): the settled bands are gone at the user's
+  poses, also behind a veil (performance.md §29), 0.36 ms more over a stratus deck. The step budget spent in
+  clear air remains, should bands come back on a level view.
 
 ## Critical files
 

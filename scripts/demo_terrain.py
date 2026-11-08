@@ -1457,9 +1457,11 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--genera",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="the low clouds by genus: cumulonimbus, congestus and stratus "
-        "around the start (clouds.genera's placeholder maps)",
+        "around the start (clouds.genera's placeholder maps); on by default, "
+        "--no-genera for the plain field",
     )
     parser.add_argument(
         "--cloud-renderer",

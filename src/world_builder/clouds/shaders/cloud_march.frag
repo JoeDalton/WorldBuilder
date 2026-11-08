@@ -79,9 +79,9 @@ const vec2 RESOLVED = vec2(2.0, 4.0);
 // about this share of the step's length (over RESOLVED) fade to their means as
 // the sub-pixel ones do, or they alias into the jitter (the shimmer of far
 // clouds, whatever the steps' count). The step's length by its distance alone
-// (k * max(dtMin, t * growth)), not the step taken: that one lengthens as the
-// ray loses its light in a cloud (STEP_DEEPENING) and is cut at a segment's
-// end, so the octaves a sample kept depended on where its ray entered the
+// (k * max(dtMin, t * growth)), not the step taken: that one is cut at a
+// segment's end (and once lengthened as the ray lost its light, no more:
+// below), so the octaves a sample kept depended on where its ray entered the
 // cloud, which on a tower's face seen level changes with height: contours,
 // stacked horizontal bands. It costs the clouds' detail at a distance
 // (their lumps): march.STEP_FADES gives the least that keeps the shimmer down at
@@ -165,9 +165,14 @@ float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
 const float SEGMENT_SAMPLES = 8.0;
 // The march stops at this transmittance, and counts the cloud opaque.
 const float OPAQUE = 0.04;
-// A step lengthens by this share of the transmittance already lost (march.STEP_DEEPENING):
-// in a dense cloud the light is spent in a few steps.
-const float STEP_DEEPENING = 1.5;
+// The steps do not lengthen as the light is spent (they did, by 1.5 times the
+// share lost): a step's length then depended on what the samples before it
+// found, so the steps' boundaries were no fixed comb the jitter shifts evenly
+// over the visits, and what the visits averaged kept the contours of where
+// the comb met a cloud's surface: bands across a tower's face, strongest
+// behind a veil (its light spent, every step after longer). Without, the
+// settled bands are gone, for 0.36 ms more over a stratus deck and nothing
+// in convective cloud at 2560 x 1440 (performance.md §29).
 // A cloudy column's alpha seen from afar: the deck's.
 const float FAR_ALPHA = 0.92;
 // The weather is read once this far along the ray, metres (uWeatherStretch):
@@ -386,7 +391,7 @@ void main() {
         bool first = true;  // its first step: shortened by boundary
         while (a < seg.y && steps < 2 * uMarchSteps + 8 && transmittance > OPAQUE) {
             float k = a < uSplit ? stretch.x : stretch.y;
-            float dt = min(min(k * max(dtMin, a * growth) * (1.0 + STEP_DEEPENING * (1.0 - transmittance)), least), seg.y - a);
+            float dt = min(min(k * max(dtMin, a * growth), least), seg.y - a);
             if (first) {
                 dt *= boundary;
                 first = false;

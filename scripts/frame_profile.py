@@ -167,6 +167,7 @@ def main() -> None:
         ring=args.ring,
         preset=args.planet,
         seed=args.seed,
+        start=args.start,
     )
     demo.setFrameRateMeter(False)
     print(describe_window(demo))

@@ -98,6 +98,18 @@ then the default) is measured, not built. What is left:
   noise for the jitter (no change), EVE-Redux's exact-pixel reconstruction
   (a grid, steadiness halved), a Catmull-Rom history read (softer, more
   flicker).
+- **Wavy contours behind faint cloud veils in motion** (found 2026-11-08 while
+  analysing the grain on grey clouds; pose `--genera --at 29.7159 29.8232 2067
+  -175 4`, flying forward). Where the march finds only a faint veil of cloud
+  in front of the sky (alpha well under 0.5), the moving frame differs from
+  its converged twin in wavy, contour-like bands (the error map of
+  `motion_shots.py`'s moving / converged pair): the largest error over the
+  march's pixels in that flight (3-5 levels mean in the 200-220 brightness
+  band, against 0.4-1.8 elsewhere). Not yet known whether it is the veil's
+  reprojection (its distance, a transmittance-weighted mean of a few faint
+  samples, is unstable) or the air behind it (the aerial tables and the god
+  rays change with the camera). Measure with a mask of the march's pixels by
+  their alpha (the analysis's debug output), the history off and on.
 - **Sky occlusion from a zenith map: not built** (the EVE salvage plan's
   Phase 4 item 2). The cloud shadow maps' bake marched straight up would
   give each march sample the optical depth above it. But the CPU twin puts

@@ -158,6 +158,7 @@ def main() -> None:
         ring=args.ring,
         preset=args.planet,
         seed=args.seed,
+        start=args.start,
         cloud_debug=args.cloud_debug,
     )
     demo.setFrameRateMeter(False)
@@ -167,7 +168,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     demo._place_camera(*args.at)
-    demo._sun = start_sun(demo.terrain.spec, None)
+    demo._sun = start_sun(demo.terrain.spec, demo.start_pose)
     _settle(demo, 90.0)
     for _ in range(args.settle):
         demo.taskMgr.step()

@@ -1776,6 +1776,47 @@ from 200 km (`--at 28.89450 30.39999 199852 180 -88.7`, forward).
 - A boosted descent into the slab (5x, ~10 km a frame at 100 fps) still ghosts
   at 9-12 km: 27-52 % extra cloud, clouds passed kept by the history.
 
+## 29. Bands on a tower's face: the steps' lengthening
+
+The user's poses, reproduced only with their start (`--start 29.7159
+29.8232`: the genera's towers are laid out around it; `motion_shots.py` and
+`frame_profile.py` had ignored `--start`, and `motion_shots.py` took the sun
+from the level's reference). 2560 x 1440, HIGH, march.
+
+- **What was seen**: settled, bands and contours across a cumulonimbus's
+  face, strongest behind a thin veil of cumulus
+  (`--at 31.60402 28.72949 2438 -24.5 6.3`), and on the tower at
+  `--at 29.74164 29.82320 2358 0 -8`.
+- **Attribution** (settled shots with one input frozen at a time): the
+  samples' jitter and the steps' boundaries frozen, strong contour bands; the
+  light volume's jitter frozen or the shadow maps' light instead, the bands
+  stay; the noise volume as 32-bit float instead of 8-bit, no change. The
+  steps' grid, then. Without the steps' lengthening by the light already
+  spent (1.5 times the share lost), frozen gives regular bands (the grid
+  alone) and the jitter averages them away: settled, **the bands are gone**.
+  With it, a step's length depended on what the samples before it found, the
+  grid moved with the cloud, and the visits' average kept its contours (a
+  veil's spent light lengthened every step behind it).
+- **Cost** (`cloud_bench --passes`, genera poses, the full clouds' ms): with
+  the lengthening against without, within 0.06 ms at the convective poses
+  (between towers 4.24 / 4.30, under the anvil 5.06 / 5.07); over a stratus
+  deck **+0.36 ms** (above 3.58 / 3.94, below 1.82 / 2.18). Kept: without.
+- **In motion** (`motion_shots.py`, forward, 2 samples, err over the clouds,
+  grain, specks): the tower 4.18, 1.24, 13.0 % against 4.10, 1.18, 12.9 %;
+  the veil 4.97, 1.01, 17.0 % against 4.97, 0.96, 17.1 %. The specks in motion
+  (blocky edges where clouds overlap, grain) are another matter, still open.
+- **Tried and dropped**:
+  - re-marching a step that would take much of the pixel's light, in
+    sub-steps of a fifth of it each: five effective samples on a dense
+    cloud's face, but the bands stayed, and backing up into the step before
+    when it found air ran rays out of steps (the tower turned transparent);
+  - a depth-aware resolve at depth steps (a pixel's history moved by one of
+    the two clouds' distances, the one where the history agrees, and the
+    clamp from that cloud's samples): no change in the specks (13.0 %), a
+    little more grain. Read back in motion, the history on depth steps is
+    kept as anywhere else (this frame's weight 3 %, the clamp moving it by
+    nothing): there was no rejection to correct.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

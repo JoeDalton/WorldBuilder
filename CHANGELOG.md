@@ -63,6 +63,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The raymarch's steps no longer lengthen as a ray's light is spent in a
+  cloud. That made the steps' grid follow what the samples found, and the
+  visits' jitter left its contours: bands across a tower's face, strongest
+  behind a thin veil. 0.36 ms more over a stratus deck at 2560 x 1440
+  (performance.md §29). `march.STEP_DEEPENING` is gone.
+
+- The demo and the scripts sharing its options (`terrain_shots.py`,
+  `motion_shots.py`, `flight_bench.py`, `frame_profile.py`) draw the clouds by
+  genus by default: `--genera` is on, `--no-genera` for the plain field
+  (`cloud_bench.py` keeps its own opt-in `--genera` and pose sets).
+  `motion_shots.py` and `frame_profile.py` now honour `--start` (they
+  ignored it), and `motion_shots.py` takes the sun from the start pose as
+  the demo does.
+
 - The raymarched clouds' multiple-scattering fill and second order fade with
   the cloud above (`1 / (1 + 0.2 * depth)` of the light volume's column up):
   a cumulonimbus's base and its anvil's underside are dark grey at noon (0.57

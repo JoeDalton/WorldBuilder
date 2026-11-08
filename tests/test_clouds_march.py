@@ -21,7 +21,6 @@ from world_builder.clouds.march import (
     MIN_STEP_FEATURE,
     OPAQUE,
     SEGMENT_SAMPLES,
-    STEP_DEEPENING,
     STEP_GROWTH,
     VIEW_EXTINCTION_SCALE,
     CloudMarch,
@@ -252,14 +251,33 @@ def test_stopping_at_opaque_and_the_longer_steps_keep_the_integral():
         assert abs((1.0 - mean) - (1.0 - reference)) < 0.06
 
 
-def test_the_shader_shares_the_opaque_cutoff_and_the_step_deepening():
+def test_the_shader_shares_the_opaque_cutoff():
     text = SHADER.read_text()
     assert float(re.search(r"OPAQUE = ([\d.]+);", text).group(1)) == OPAQUE
-    assert (
-        float(re.search(r"STEP_DEEPENING = ([\d.]+);", text).group(1)) == STEP_DEEPENING
-    )
-    assert "STEP_DEEPENING * (1.0 - transmittance)" in text
     assert "transmittance > OPAQUE" in text
+
+
+def test_the_steps_do_not_lengthen_as_the_light_is_spent():
+    # A step's length from the light already spent made the steps' grid
+    # depend on what the samples found: the visits' jitter no longer averaged
+    # its contours away (bands on a tower's face, behind a veil most).
+    text = SHADER.read_text()
+    step = re.search(r"float dt = (.*);", text).group(1)
+    assert "transmittance" not in step
+    # The CPU twin: a medium that thickens past 2 km takes the same steps
+    # up to there as clear air (a step's length is its distance's alone).
+    segments = np.array([[0.0, 6000.0]])
+    taken = {}
+    for name, sigma in (("clear", 0.0), ("veil", 0.0003)):
+        seen = []
+
+        def extinction(t, sigma=sigma, seen=seen):
+            seen.append(t)
+            return sigma if t < 2000.0 else 0.0
+
+        march_ray(segments, 50.0, STEP_GROWTH, 64, extinction)
+        taken[name] = [t for t in seen if t < 2000.0]
+    assert taken["veil"] == taken["clear"]
 
 
 @pytest.mark.parametrize(
