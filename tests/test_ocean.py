@@ -70,6 +70,39 @@ def test_reflection_decode_keeps_white_highlights_bright():
     np.testing.assert_allclose(aces_tonemap(linear), 1.0, atol=2e-3)
 
 
+@pytest.mark.parametrize(
+    "tint", [(1.0, 0.96, 0.9), (1.0, 1.0, 1.0), (0.6, 0.75, 1.0), (1.0, 0.6, 0.3)]
+)
+def test_reflection_decode_inverts_the_clouds_and_skys_display(tint):
+    """The reflection's clouds and sky are written by displayColour, which
+    keeps a bright colour's hue: decoded by its inverse they come back as they
+    were, a few percent at worst, at every level the display does not clip."""
+    from world_builder.ocean.ocean import display_colour, display_inverse
+
+    for peak in np.geomspace(0.05, 20.0, 40):
+        colour = peak * np.array(tint)
+        display = display_colour(colour)
+        if display.max() > 0.995:
+            continue
+        error = np.abs(np.log(display_inverse(display) / colour)).max()
+        assert error < 0.07, (peak, error)
+
+
+def test_per_channel_decode_turned_a_lit_clouds_reflection_orange():
+    """The bug the display inverse fixes: a slightly warm lit cloud (red 1.11
+    of its blue) decoded per channel came back far redder, near white where
+    the per-channel curve is steep."""
+    from world_builder.ocean.ocean import aces_inverse, display_colour, display_inverse
+
+    colour = 2.9 * np.array([1.0, 0.96, 0.9])
+    display = display_colour(colour)
+    per_channel = aces_inverse(display)
+    inverse = display_inverse(display)
+    true = colour[0] / colour[2]
+    assert per_channel[0] / per_channel[2] > 1.15 * true
+    assert inverse[0] / inverse[2] == pytest.approx(true, rel=0.04)
+
+
 def test_double_tonemap_would_brighten_a_night_sky():
     """The bug the decode fixes: tonemapping the display colour again."""
     night = np.full(3, 0.13)

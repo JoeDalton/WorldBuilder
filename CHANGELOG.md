@@ -68,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a cumulonimbus's base and its anvil's underside are dark grey at noon (0.57
   of a lit cumulus's brightness, was 0.74); thin cumulus and dusk unchanged.
   `--cloud-debug 2048` for the old look.
+- The sea decodes its reflection with the inverse of `displayColour`
+  (`displayInverse`), not of the per-channel tonemap: the sky and the clouds
+  keep a bright colour's hue, and decoded per channel a lit cloud's slight
+  warmth came back far redder (red up to 2.9 times its blue for a true 1.11).
 - The light volume's read jitter moves on at each sample along a ray (was one
   draw a ray): the error over grey clouds in motion 1.55 to 1.41 levels.
 - The raymarched clouds in motion: the composite's depth is no farther than

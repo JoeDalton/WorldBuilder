@@ -175,6 +175,9 @@ at planet scale; two atmospheres; memory (two 8 MB atlases at HIGH).
   to look at once the light volume (C) lights the towers; candidates: the sky fill from below (the ground's
   bounce, B.2's brighter low sky), the second order of scattering in the base, the height ramp of the sky
   reach (`skyReach`) that C.3 replaces.
+- **Grain on grey clouds in motion** (logged 2026-11-08, after the base's fade, the user's flight check; before
+  the bands below): darker cloud shows the march's sampling noise (performance.md §28). Lead: the sun term's
+  noise at its source (more local sun steps, a smoother volume read).
 - **Stacked horizontal bands on a tower seen level** (logged 2026-11-07, during C.3, the user's flight check;
   pose `--genera --at 22.46569 30.31014 2831 0 -1`). Cause: a level ray crosses tens of kilometres of the
   slab's clear air before the tower and spends ~97 % of its step budget there (`--cloud-debug 128`: green
