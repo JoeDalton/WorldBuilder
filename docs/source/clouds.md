@@ -183,6 +183,19 @@ when broken:
   cloud, not down a beam. Sun-tinted, dusk shadows go orange instead of
   blue-grey; phase-weighted, shadowed cloud toward the sun outshines side-lit
   cloud.
+- In the raymarch, the fill and the second order **fade with the cloud
+  above** (`DIFFUSE_FADE` in `cloud_shading.glsl`): times
+  `1 / (1 + 0.2 * depth)` of the column's optical depth straight up, from the
+  light volume, a diffusion's slow fall. The sun's depth a sample sees stops
+  at its window (640 m), so before this a cumulonimbus's base under
+  kilometres of tower was lit as if under 640 m of cloud: at noon its
+  anvil's underside was 0.74 of a lit cumulus's brightness (display levels),
+  0.57 now; thin cumulus are unchanged. The column up, not toward the sun:
+  toward a low sun it crosses tens of kilometres of other clouds, and towers
+  went brown at dusk. The sky's floor under the clouds (`skyOcclusion`) is
+  not faded: a tower's side sees the open sky around it, and without that
+  blue its dusk side browned too (the anvil's underside 0.48 with it).
+  `--cloud-debug 2048`: without (the old look).
 - The field is sampled **on the quad plane**, not offset to mid-chord. The
   offset moves the lookup by up to a particle radius (most of a noise
   feature), so overlapping billboards disagree about where the cloud is and

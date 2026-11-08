@@ -63,6 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The raymarched clouds' multiple-scattering fill and second order fade with
+  the cloud above (`1 / (1 + 0.2 * depth)` of the light volume's column up):
+  a cumulonimbus's base and its anvil's underside are dark grey at noon (0.57
+  of a lit cumulus's brightness, was 0.74); thin cumulus and dusk unchanged.
+  `--cloud-debug 2048` for the old look.
 - The raymarched clouds in motion: the composite's depth is no farther than
   the scene's (the march stops there), the history's distance is held within
   the fresh samples', and the history survives a jump small against the

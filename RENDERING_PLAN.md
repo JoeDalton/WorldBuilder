@@ -170,7 +170,8 @@ at planet scale; two atmospheres; memory (two 8 MB atlases at HIGH).
 
 ## After C: look items logged on the way
 
-- **The cumulonimbus's underside looks too bright** (logged 2026-11-07, after B.3, the user's flight check):
+- **The cumulonimbus's underside looks too bright** (logged 2026-11-07, after B.3, the user's flight check;
+  addressed 2026-11-08: the fill and the second order fade with the column above, clouds.md "Lighting"):
   to look at once the light volume (C) lights the towers; candidates: the sky fill from below (the ground's
   bounce, B.2's brighter low sky), the second order of scattering in the base, the height ramp of the sky
   reach (`skyReach`) that C.3 replaces.

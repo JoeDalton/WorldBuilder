@@ -9,6 +9,24 @@ uniform float skyStrength;
 uniform float skyOcclusion;     // share of sky light reaching a slab's underside
 // The far deck's lighting: deckLight and deckLightCosMin (cloud_field.glsl).
 
+// How the light diffused through a cloud fades with the column above it
+// (its optical depth straight up, exp2 units, from a light volume: the
+// raymarch's): 1 / (1 + DIFFUSE_FADE * depth), a diffusion's slow fall, not
+// the exponential of the light that crosses unscattered. It scales the
+// multiple scattering's fill and the second order: a thin cumulus keeps
+// them, a cumulonimbus's base under kilometres of tower loses them (it was
+// nearly as bright as its lit top at noon). The column up, not toward the
+// sun: toward a low sun it crosses tens of kilometres of other clouds and
+// the gaps between, which diffusion through one cloud does not model (towers
+// went brown at dusk). Not the sky's floor under the clouds: a tower's side
+// sees the open sky around it, and without that blue the low sun's orange
+// browned it at dusk too. Debug bit 2048: without (the old look).
+const float DIFFUSE_FADE = 0.2;
+
+float diffused(float depth) {
+    return 1.0 / (1.0 + DIFFUSE_FADE * max(depth, 0.0));
+}
+
 // Darkens optically THIN cloud. Fed the LOCAL density over a fixed length: the
 // sunward depth would invert it, and the quad's chord would tie it to quad size.
 float powder(Field f, float density) {
@@ -92,16 +110,21 @@ vec3 cloudRadianceFrom(sampler2D deckTable, float sunDepth, Field f, vec3 p,
     float skyReach = mix(skyOcclusion, 1.0, clamp(local, 0.0, 1.0));
     // Where a light volume holds the sample (the raymarch's): by the clouds
     // actually above it, its optical depth up (cloudSkyDepth), between the
-    // same floor and the open sky, in place of the ramp.
+    // same floor and the open sky, in place of the ramp; and the diffused
+    // light's share left by that column (DIFFUSE_FADE).
+    float fade = 1.0;
     if (cloudSkyHeld > 0.0 && shading > 0.0) {
+        float diffuse = (uCloudDebug & 2048) == 0 ? diffused(cloudSkyDepth) : 1.0;
+        fade = mix(1.0, diffuse, cloudSkyHeld);
         skyReach = mix(skyReach, mix(skyOcclusion, 1.0, exp2(-cloudSkyDepth)),
                        cloudSkyHeld);
     }
     cloudSkyHeld = 0.0;
     // Multiple-scattering fill: sky-coloured and NOT phase-weighted, or dusk
     // shadows turn orange and sunward shadow outshines side-lit cloud.
-    float ambient = skyStrength * skyReach
-                  + f.multipleScattering * sunBrightness * (1.0 - sunVisibility);
+    float fill = f.multipleScattering * sunBrightness * (1.0 - sunVisibility) * fade;
+    octaveShadowing *= fade;
+    float ambient = skyStrength * skyReach + fill;
 
     float phase = phaseFunction(f, dot(sunDir, -V));
     // The lit air above a cloud in the planet's shadow (cloudTwilight): light
