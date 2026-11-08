@@ -1817,6 +1817,92 @@ from the level's reference). 2560 x 1440, HIGH, march.
     kept as anywhere else (this frame's weight 3 %, the clamp moving it by
     nothing): there was no rejection to correct.
 
+## 30. Grain and blocks on clouds in motion: the resolve's window and history
+
+The user's poses with their start (`--start 29.7159 29.8232`): the tower
+`--at 29.74164 29.82320 2358 0 -8`, the veil `--at 31.60402 28.72949 2438
+-24.5 6.3`; flown forward by the demo's speed rule (a fixed 120 fps: ~19 m a
+frame at 2.3 km); 2560 x 1440, HIGH (4 x 2). Measured on the resolve's own
+output, read back (the premultiplied cloud over the bare scene): moving
+against converged at each sample's pose, the cloud layer alone (`motion_shots`'
+mask also takes in the sea's reflections and shadows), with the light
+volume's and the shadow maps' bakes frozen from the flight's start. Unfrozen,
+a bake started mid-flight landed while the twin settled, lit otherwise (up to
+25 levels on the anvil's shaded base).
+
+- **What `motion_shots`' 13 % specks were**: mostly a smooth bias (moving
+  brighter on the shaded cloud, the anvil's base and the tower under it; the
+  error's autocorrelation 0.95 eight pixels away), gone with the history off
+  (fresh samples alone: no bias). The history lagging: the shaded base, seen
+  at a grazing angle from inside the slab, changes fast as the camera flies
+  (lumps 25 km away uncover base 34 km away: those pixels' converged look
+  186 to 149 levels over 36 frames), and ~33 frames of history trail it.
+- **What the user saw**: in the moving frame a mosaic of the block's cells
+  (4 x 2 rectangles; the stored distance too, its runs 4, 8, 12 pixels long)
+  and dark specks, over that shaded cloud. Without the clamp: none, a smooth
+  smear instead (the lag twice as large). The clamp drew both. Its box (mean
+  +- 1.25 sigma of the 3 x 3 samples about the nearest one, a Gaussian of 1.5
+  samples in motion) jumped at each cell's edge, a quarter of its weight
+  swapped, and where it cut the lagging history it printed the jumps. And a
+  box from a few noisy samples (a sample's spread ~13 levels there: chiefly
+  its place within its long step) let the lag through where it was wide and
+  cut it where it happened to be narrow: grain (the dark specks clamped 4-5
+  times as often as the rest).
+- **Elsewhere** (a literature review): Unreal, Unity and Frostbite reproject
+  clouds by the same transmittance-weighted distance; Epic's help for
+  `r.VolumetricRenderTarget.MinimumDistanceKmToEnableReprojection` names this
+  failure ("imperfect approximation of cloud depth as a single front surface,
+  especially visible when flying through the cloud layer"). None fixes the
+  depth: they shorten the history (Unreal's cloud buffer replaces a pixel
+  once a cycle, its docs recommend that mode for flying through clouds;
+  Guerrilla's Nubis does not amortize near clouds over frames). Karis
+  (SIGGRAPH 2014): a min/max box "results in 3x3 box artifacts", like low
+  resolution pixels.
+- **Kept**: the statistics' window seamless (the 4 x 4 samples about the
+  pixel weighted by a radial bump, (1 - (d / 2)^2)^2, nothing from two
+  samples away: a sample enters and leaves at no weight), and in motion each
+  frame at least about a cycle of the block's share (`MOVING_WEIGHTS`: 1/8 at
+  4 x 2, 1/16 at 4 x 4, 1/4 at 2 x 2 and 1 x 1; still, as before).
+
+  | | specks | err | smooth err | fine > 5 levels |
+  |---|---|---|---|---|
+  | tower, before | 12.9 % | 4.03 | 3.6 / 3.9 | 0.82 / 1.48 % |
+  | window alone | 12.9 % | 4.01 | 3.6 / 3.9 | 0.57 / 1.11 % (blocks gone) |
+  | weight 1/8 alone | 7.0 % | 2.87 | 2.5 / 2.7 | 0.47 / 0.92 % (blocks stay) |
+  | **both** | **6.8 %** | **2.80** | 2.4 / 2.6 | **0.33 / 0.71 %** |
+  | veil, before / both | 17.0 / **6.4 %** | 4.93 / **3.11** | | |
+
+  The weight's trade (with the window, the tower): 0.08 fine 0.70 %, 0.15
+  0.60 %, 0.25 1.02 % (the samples' noise past it); the moving frame no finer
+  than the converged one at 1/8 (0.63-0.67 against 0.68-0.73).
+- **The references** (`motion_shots`, before and after: error over the
+  clouds, specks, grain): the tower rising 1.57 / 1.09 % / 0.93 to 1.21 /
+  0.24 % / 1.07; the stratus forward 1.39 / 0.16 % / 1.07 to 0.89 / 0.02 % /
+  1.11; the descent 4.63 / 13.2 % / 1.74 to 3.45 / 6.3 % / 1.86 (extra cloud
+  6.1 to 6.9 %).
+- **Cost** (`cloud_bench --passes`, genera, the clouds' ms, two runs each):
+  +0.05 to +0.13 ms (far 2.09 to 2.15, under the anvil 5.02 to 5.11, a stratus
+  deck from above 3.92 to 4.05): ~12 samples and their distances against 9,
+  the four nearest read once with the window. A product of two axes' bumps
+  instead, all 16: +0.16 to +0.20 ms. Still, the window changes nothing
+  (`cloud_bench --stability 30`, genera, 1600 x 900: spread, p99 and grid
+  the same at every pose, p99 a little lower at three: 3.6 to 3.3, 3.8 to
+  3.4, 2.7 to 2.4).
+- **Tried and dropped**: re-marching a step that would take much of the
+  light (sub-steps of a fifth of it): noisier on the anvil, whose rays spend
+  ~125 of their 136 steps before it; choosing the history's distance at depth
+  steps (the near or far cloud's, by where the history agrees), or the front
+  distance (where the opacity passes 0.2): no change (the history on depth
+  steps is not rejected: this frame's weight 3 %, the clamp still); throwing
+  the history away when its distance disagrees with the samples' by 20 %:
+  specks 12.9 to 10.2 %, left out; four times the steps: 11.3 %, the blocks
+  stay; no clamp: the lag doubles; motion taken as still: worse.
+- **Open**: from inside the convective slab, rays toward an anvil 30 km away
+  spend 89-95 % of their steps in clear air, 5-13 in it (RENDERING_PLAN.md's
+  lead: skipping where the weather says no cloud can be); and the light volume
+  re-baked mid-flight (a descent changes its reach by 3 %) swaps a differently
+  lit volume in at once (BACKLOG.md).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

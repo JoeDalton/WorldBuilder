@@ -566,6 +566,50 @@ def test_the_resolve_smooths_more_the_fewer_pixels_a_frame_is_traced():
     assert 0.0 < smooth[0] < smooth[1] <= smooth[2] < smooth[3] == 1.0
 
 
+def test_in_motion_the_history_spans_about_a_cycle_of_the_block():
+    # ~33 frames of history lagged the view of a cloud whose look changes fast
+    # as the camera flies, and the clamp cut the lag into grain: in motion
+    # each frame takes at least a cycle's share (each pixel's own sample
+    # once), a quarter at most (a 1 x 1 march's samples alone are raw noise).
+    from world_builder.clouds.march import (
+        BLOCKS,
+        MIN_WEIGHT,
+        moving_weight_of,
+        pixels_of,
+    )
+
+    for block in BLOCKS:
+        cycle = min(1.0 / pixels_of(block), 0.25)
+        assert moving_weight_of(block) == pytest.approx(cycle)
+        assert MIN_WEIGHT < moving_weight_of(block) <= 0.25
+    text = (SHADER.parent / "cloud_resolve.frag").read_text()
+    # Mixed by the stillness: still, the full count's uMinWeight as before.
+    assert "mix(max(uMovingWeight, uMinWeight), uMinWeight, uStill)" in text
+
+
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("edge", [3.0, 3.5])
+def test_the_resolve_statistics_run_on_unbroken_across_the_cells(axis, edge):
+    # The 3 x 3 samples about the nearest one jumped at each cell's edge (a
+    # quarter of the weight swapped in motion), and where the clamp cut the
+    # history, its box printed the jumps: a mosaic of the block's cells.
+    # Either side of where the window moves on (a whole sample) or the
+    # nearest sample changed (half), each sample weighs the same.
+    from world_builder.clouds.march import stats_window
+
+    before, after = [1.3, 1.3], [1.3, 1.3]
+    before[axis], after[axis] = edge - 1e-6, edge + 1e-6
+    a, b = stats_window(tuple(before)), stats_window(tuple(after))
+    for tap in set(a) | set(b):
+        assert a.get(tap, 0.0) == pytest.approx(b.get(tap, 0.0), abs=1e-4)
+    # Nothing from beyond the reach; the shader weighs the same.
+    assert all(0.0 < w <= 1.0 for w in a.values())
+    text = (SHADER.parent / "cloud_resolve.frag").read_text()
+    assert "float bump = 1.0 - dot(d, d) / (STATS_REACH * STATS_REACH);" in text
+    assert "for (int y = -1; y <= 2; ++y)" in text
+    assert "for (int x = -1; x <= 2; ++x)" in text
+
+
 # ── Gathering over the frames ────────────────────────────────────────────────
 
 

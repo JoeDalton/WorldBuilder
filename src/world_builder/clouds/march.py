@@ -588,6 +588,52 @@ def smoothing_of(block: tuple[int, int]) -> float:
     return SMOOTHING[block]
 
 
+#: This frame's least share in a pixel while the camera moves
+#: (cloud_resolve.frag's uMovingWeight, by its uStill), by the block the
+#: resolve gathers: about one cycle of the block's pixels (each pixel's own
+#: sample once), a quarter at most (a 1 x 1 march's samples alone would be raw
+#: noise). With :data:`MIN_WEIGHT` alone, ~33 frames of history lagged the
+#: view of a cloud whose look changes fast as the camera flies (a lumpy
+#: anvil's base seen at a grazing angle from inside the slab), and the clamp
+#: cut the lag wherever its box of noisy samples happened to be narrow: grain
+#: on the cloud's shaded side in motion (performance.md §30; Unreal's clouds
+#: refresh each pixel once a cycle for flying through them, their docs).
+MOVING_WEIGHTS = {
+    (1, 1): 0.25,
+    (2, 2): 0.25,
+    (4, 2): 0.125,
+    (3, 3): 1.0 / 9.0,
+    (4, 4): 0.0625,
+}
+
+
+def moving_weight_of(block: tuple[int, int]) -> float:
+    """:returns: ``uMovingWeight`` for the block a resolve gathers (across, up)"""
+    return MOVING_WEIGHTS[block]
+
+
+#: The reach of the resolve's statistics, samples (cloud_resolve.frag's
+#: STATS_REACH): each sample's weight a bump of its distance to the pixel,
+#: falling to nothing this far.
+STATS_REACH = 2.0
+
+
+def stats_window(f: tuple[float, float]) -> dict[tuple[int, int], float]:
+    """cloud_resolve.frag's statistics window, mirrored: each sample's
+    weight (by its place in the march's grid) for a pixel at *f* (the
+    pixel's place in that grid): the 4 x 4 samples from ``floor(f) - 1``,
+    each ``(1 - (d / STATS_REACH)^2)^2`` of its distance d, none beyond."""
+    base = (math.floor(f[0]), math.floor(f[1]))
+    weights = {}
+    for y in range(-1, 3):
+        for x in range(-1, 3):
+            tap = (base[0] + x, base[1] + y)
+            bump = 1.0 - ((tap[0] - f[0]) ** 2 + (tap[1] - f[1]) ** 2) / STATS_REACH**2
+            if bump > 0.0:
+                weights[tap] = bump * bump
+    return weights
+
+
 #: What share of a step's length fades the field's finer features to their means
 #: (cloud_march.frag's uStepFade), by the march's block: the fewer the samples a
 #: frame has, the more shimmer, the more it must fade. It is the clouds' detail
@@ -853,6 +899,7 @@ class _MarchLayer:
         self._resolve_block = PTA_LVecBase2i.empty_array(1)
         self._step_fade = PTA_float.empty_array(1)
         self._smooth = PTA_float.empty_array(1)
+        self._moving_weight = PTA_float.empty_array(1)
         self.far_depth = _DepthPass(
             app,
             output,
@@ -936,6 +983,7 @@ class _MarchLayer:
                 uHistory=history.colour,
                 uHistoryDistance=history.distance,
                 uMinWeight=MIN_WEIGHT,
+                uMovingWeight=self._moving_weight,
                 uSmooth=self._smooth,
             )
 
@@ -1019,6 +1067,7 @@ class _MarchLayer:
         self._resolve_block[0] = LVecBase2i(*block) if self.gather else LVecBase2i(1, 1)
         self._step_fade[0] = step_fade_of(block)
         self._smooth[0] = smoothing_of(block)
+        self._moving_weight[0] = moving_weight_of(block if self.gather else (1, 1))
         used = [max(1, math.ceil(v / b)) for v, b in zip(self._view, block)]
         size = self._march_size(self._view)
         self.march_region.set_dimensions(0.0, used[0] / size[0], 0.0, used[1] / size[1])

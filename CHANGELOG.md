@@ -63,6 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The raymarch's resolve in motion: each frame takes at least about a cycle
+  of the block (`march.MOVING_WEIGHTS`: 1/8 at 4 x 2), and the clamp's
+  statistics come from a seamless window (the 4 x 4 samples about a pixel,
+  weighted by a radial bump that vanishes two samples away;
+  `march.stats_window` mirrors it). The 33-frame history had lagged clouds
+  whose look changes fast in flight, and the clamp had cut that lag along its
+  box's jumps between the block's cells: a mosaic of 4 x 2 blocks and grain on
+  shaded cloud. Specks in motion 12.9 to 6.8 % and 17.0 to 6.4 % at the
+  user's poses, +0.05 to 0.13 ms (performance.md §30). `STATS_REACH_MOVING`
+  is gone.
+
 - The raymarch's steps no longer lengthen as a ray's light is spent in a
   cloud. That made the steps' grid follow what the samples found, and the
   visits' jitter left its contours: bands across a tower's face, strongest

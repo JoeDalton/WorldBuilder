@@ -79,6 +79,28 @@ then the default) is measured, not built. What is left:
 
 ### Steadiness
 
+- **The light volume re-baked mid-flight lights the clouds anew at once**
+  (found 2026-11-08, performance.md §30). A bake is started when the camera
+  has moved 3 % of the volume's reach or the reach has changed by as much,
+  and a descent of ~130 m from 2.3 km changes the reach that much
+  (`light_reach` follows the camera's height above the slab's base). The new
+  volume, its texels laid out anew, is swapped in whole: the shaded base of
+  an anvil 30 km off changed by ~25 levels in one frame (bakes frozen, none).
+  The history then takes ~33 frames, now ~8 in motion, to follow. Ideas: a
+  reach that changes in steps or with hysteresis; blending the old volume
+  into the new over a few frames (the readers read both); measuring the pop
+  in motion with the bakes not frozen.
+- **The step budget spent in clear air from inside the slab** (measured
+  2026-11-08 at the user's tower pose): flying inside the convective slab,
+  the rays toward an anvil 30 km off take ~125 steps, 89-95 % in clear air,
+  5-13 in the cloud. Few samples in the cloud make each one noisy on its
+  shaded side, which the resolve's clamp then reads as change. Lead:
+  RENDERING_PLAN.md's weather-aware skipping (the bands' item).
+- **A `motion_shots` run at the stratus pose once read 26 % extra cloud**
+  (error 10.6 against 1.4 when run again, 2026-11-08): not reproduced, maybe a
+  light-volume swap during the flight or the converged twin's settle. Worth a
+  look if it comes back.
+
 - **Jitter is mostly gone** (Phase 4.1: still p99 under 2.5 levels at HIGH and
   ULTRA, moving grid under 0.05); what is left is the genera at LOW (24 steps
   over a 10 km slab: still p99 6-7) and a softer cumulus at LOW. Before 4.1 it
@@ -98,18 +120,6 @@ then the default) is measured, not built. What is left:
   noise for the jitter (no change), EVE-Redux's exact-pixel reconstruction
   (a grid, steadiness halved), a Catmull-Rom history read (softer, more
   flicker).
-- **Wavy contours behind faint cloud veils in motion** (found 2026-11-08 while
-  analysing the grain on grey clouds; pose `--genera --at 29.7159 29.8232 2067
-  -175 4`, flying forward). Where the march finds only a faint veil of cloud
-  in front of the sky (alpha well under 0.5), the moving frame differs from
-  its converged twin in wavy, contour-like bands (the error map of
-  `motion_shots.py`'s moving / converged pair): the largest error over the
-  march's pixels in that flight (3-5 levels mean in the 200-220 brightness
-  band, against 0.4-1.8 elsewhere). Not yet known whether it is the veil's
-  reprojection (its distance, a transmittance-weighted mean of a few faint
-  samples, is unstable) or the air behind it (the aerial tables and the god
-  rays change with the camera). Measure with a mask of the march's pixels by
-  their alpha (the analysis's debug output), the history off and on.
 - **Sky occlusion from a zenith map: not built** (the EVE salvage plan's
   Phase 4 item 2). The cloud shadow maps' bake marched straight up would
   give each march sample the optical depth above it. But the CPU twin puts

@@ -180,7 +180,10 @@ at planet scale; two atmospheres; memory (two 8 MB atlases at HIGH).
   noise at its source (more local sun steps, a smoother volume read). Measured again at the user's own poses
   (2026-11-08, with their `--start`; the earlier scene had no tower): specks in motion 13-17 % of the clouds,
   with blocky edges where clouds overlap; not the resolve's rejection at depth steps, not one sample a long
-  step (performance.md §29). Open.
+  step (performance.md §29). **Done 2026-11-08** (performance.md §30): the specks were the history lagging
+  the fast-changing view of shaded cloud, and the clamp cutting that lag along its box's jumps between the
+  block's cells (the 4 x 2 mosaic) and its noise (the grain). A seamless statistics window and, in motion, a
+  history of about a cycle of the block: specks 12.9 to 6.8 % and 17.0 to 6.4 %, the mosaic gone.
 - **Stacked horizontal bands on a tower seen level** (logged 2026-11-07, during C.3, the user's flight check;
   pose `--genera --at 22.46569 30.31014 2831 0 -1`). Cause: a level ray crosses tens of kilometres of the
   slab's clear air before the tower and spends ~97 % of its step budget there (`--cloud-debug 128`: green

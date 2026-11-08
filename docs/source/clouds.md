@@ -503,21 +503,32 @@ depths:
    the traced pixels on the cloud). The history is reprojected along the
    view ray to the pixel's own cloud distance (this frame's first, then the
    history's there; float64 for the camera's move, float32 only near the
-   camera) and held within 1.25 standard deviations of the 3 × 3 samples
-   around. While the view is still (`uStill`, from the camera's move and
+   camera) and held within 1.25 standard deviations of the samples around.
+   While the view is still (`uStill`, from the camera's move and
    turn), that range is widened by a floor and a share of the mean, or the
    steps' own noise would clamp the history and start its count over; in
    motion a quarter of it stays (`MOTION_FLOOR`): with none a cloud coming
    closer kept less of the thin look it had, but where the samples agree the
    range was their noisy mean, and a tower went grainy whenever the camera
-   moved. In motion this frame's samples are taken as their smooth mean,
-   their statistics spread wider (`STATS_REACH_MOVING`, 1.5 samples).
-   `CloudSettings.march_refresh_moving` (off) traces twice the pixels while
-   moving (`MOVING_BLOCKS`, back after `MOVING_HOLD` still frames): no less
-   grain measured, each sample as noisy and the 3 × 3 half as wide. The samples' mean and spread are Gaussian-weighted by their
-   distance to the pixel (`STATS_REACH`), not a box about the nearest sample
-   (whose centre moves every half block and puts the lattice into the clamp), and
-   so is the distance the history is moved by. A pixel that takes most of this
+   moved. In motion this frame's samples are taken as their smooth mean, and
+   each frame takes at least about a cycle of the block (`MOVING_WEIGHTS`:
+   1/8 at 4 × 2): with the full count's `MIN_WEIGHT` alone, ~33 frames of
+   history lagged the view of a cloud whose look changes fast as the camera
+   flies (a lumpy anvil's base at a grazing angle from inside the slab), and
+   the clamp cut that lag into grain wherever its box of noisy samples
+   happened to be narrow. Unreal's clouds refresh each pixel once a cycle for
+   flying through them. `CloudSettings.march_refresh_moving` (off) traces
+   twice the pixels while moving (`MOVING_BLOCKS`, back after `MOVING_HOLD`
+   still frames): no less grain measured, each sample as noisy. The samples'
+   mean and spread are taken over the 4 × 4 about the pixel, each weighted by
+   a radial bump of its distance, (1 − (d / 2)²)², nothing from two samples
+   away (`STATS_REACH`; `march.stats_window` on the CPU): a sample enters and
+   leaves the window at no weight, so the statistics run on unbroken from one
+   of the block's cells to the next. The 3 × 3 about the nearest sample (a
+   Gaussian) jumped at each cell's edge, and where the clamp cut the history
+   its box printed the jumps: a mosaic of the block's cells in motion
+   (Karis' "3x3 box artifacts"; performance.md §30). The distance the history
+   is moved by takes the same weights. A pixel that takes most of this
    frame's samples (its history lost or short) takes their smooth mean instead
    of the bilinear mix of four, by `uSmooth` (`march.SMOOTHING`: all of it at a
    quarter resolution, half at a half, none at full): each sample's noise was a
@@ -532,7 +543,7 @@ depths:
    (small clouds lost in a fast descent). The history is kept across a move of
    `HISTORY_JUMP` (2 km) or `HISTORY_JUMP_SHARE` (2 %) of the camera's distance
    to the slab, the more: from orbit a descent moves kilometres a frame. Clear
-   sky (no cloud in the 3 × 3 samples, none in the history) returns early.
+   sky (no cloud in the samples around, none in the history) returns early.
    Two results alternate, each frame's reading the other's;
 4. two cards lay the result over the view, premultiplied "over", at the
    **cloud's own depth**: the near range's card over the pixels where the
