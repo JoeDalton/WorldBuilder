@@ -112,6 +112,7 @@ class AerialPerspective:
         bind_defaults(self.root)
         bind_shadow_defaults(self.root)
         atmospheres.bind(self.root)
+        atmospheres.god_ray_root(self.root)
         self._from_clip = PTA_LMatrix4f.empty_array(1)
         self.root.set_shader_inputs(uSunDir=sun, uAerialFromClip=self._from_clip)
         maker = CardMaker("aerial")

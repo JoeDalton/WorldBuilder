@@ -5,7 +5,13 @@
 // eclipses, the rings, the planet's shadow as the sky's own march), its
 // in-scatter in the lower rows, its transmittance in the upper.
 
+// The air with the god rays: the clouds' and the mountains' shadows on it
+// (god_rays.glsl), across the sky as in front of the ground.
+#define ATMO_GOD_RAYS
+#define CLOUD_MAP_LIGHTING
 #pragma include "atmosphere.glsl"
+#pragma include "../../clouds/shaders/cloud_field.glsl"
+#pragma include "god_rays.glsl"
 #pragma include "sky_view.glsl"
 
 uniform vec3 uSunDir;

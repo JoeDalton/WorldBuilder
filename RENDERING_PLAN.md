@@ -133,7 +133,9 @@ march's per-sample octave goes: A measured it at 0.7-0.85 ms with genera); (b) *
   (debug 512: maps and ramp, the old look). (b) The volume alone past a view footprint of 0.04
   (`march.LIGHT_LOCAL_FOOTPRINT`): 0-0.2 ms with genera, nothing plain; a little softer far towers. The second
   order: compiled out against in, alternated, now ~0 (A's 0.7-0.85 ms gone): not folded, nothing to gain.
-- **C.4 Presets and docs.** Atlas size and slices per preset (off at LOW: the maps stay its light);
+- **C.4 Presets and docs.** Done (2026-11-07): 128 MID, 256 HIGH/ULTRA, off at LOW;
+  `cloud_light_slices` 2/1/2 (re-baking 0.3-0.4 ms at 256 and one slice); shadows.md, clouds.md,
+  performance.md §26, BACKLOG. Atlas size and slices per preset (off at LOW: the maps stay its light);
   shadows.md "The cloud light volume", clouds.md, CHANGELOG; BACKLOG items it closes.
 - **C.5 God rays, toggleable** (`AtmosphereSettings.god_rays`, off by default at LOW/MID). The aerial-perspective
   bake (B.4) marches each frustum cell's ray through the air: its in-scatter takes the clouds' shadow at each
@@ -147,6 +149,10 @@ march's per-sample octave goes: A measured it at 0.7-0.85 ms with genera); (b) *
   volume is too coarse for crisp shafts: with god rays on, a finer one (e.g. 160 x 90 x 64) or a separate
   half-resolution in-scatter pass with a temporal blend (Scatterer's `historyGodrayOcclusionBuffer` way); measured.
   The sky's own path takes the same shadowed in-scatter where the view ray passes under the clouds.
+  **Built (2026-11-07):** both bakes (aerial cells, sky-view table) take `god_rays.glsl`'s shadows at each
+  sample's direct sun (the mountains' `terrainShadow`, both families' clouds from the light volume, the maps
+  beyond); 0.09-0.17 ms, 0.31 with genera. The finer grid not built: shafts softly banded, no blocks at
+  1440p; to revisit after the user's look.
 
 CPU: `lights_at` / `sun_visibility` keep the maps and the CPU march. Tests: slices read back against a fine
 NumPy march (`noise.cloud_shadow_on_sphere` along the sun and the zenith, `test_cloud_shadows.py:817` pattern);

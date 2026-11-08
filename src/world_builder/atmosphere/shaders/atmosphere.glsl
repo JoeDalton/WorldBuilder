@@ -225,6 +225,13 @@ vec2 atmoShadow(vec3 o, vec3 dir, vec3 sunDir, float R) {
 // it: up to ~10 % low near the camera). Everything else stops at the ground.
 bool atmoThroughGround = false;
 
+#ifdef ATMO_GOD_RAYS
+// The share of the direct sun the clouds and the mountains leave a point p of
+// atmosphere i's planet frame, toward sunDir (god_rays.glsl, which the
+// includer brings after the clouds' field): the bakes' god rays.
+float atmoGodRays(int i, vec3 p, vec3 sunDir);
+#endif
+
 // One atmosphere's effect on the segment [0, tmax] of a view ray: what the
 // background is multiplied by, and the light scattered toward the eye, from
 // steps samples. near is where the segment starts (for ordering several
@@ -342,6 +349,9 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
             vec3 toSun = atmoTransmittance(i, rs, cosSun);
 #endif
             direct = view * toSun * (lit * eclipse * ring);
+#ifdef ATMO_GOD_RAYS
+            direct *= atmoGodRays(i, ps, sunDir);
+#endif
         }
         // Light scattered more than once (its table, lit by the sky above
         // through twilight and the planet's shadow; dimmed in an eclipse as

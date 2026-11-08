@@ -1633,6 +1633,14 @@ the demo's poses, medians of 120 frames, alternated in one session:
 - **The second order of scattering**, compiled out against in, alternated, with
   genera (ground, in clouds, clouds low): within noise. Part A's 0.7-0.85 ms is
   gone from the current tree, so it was not folded into the volume.
+- **God rays** (C.5; `frame_profile.py`'s `godrays`, on against off): ground
+  +0.09, in clouds +0.11, clouds low ~0, sunset +0.17 ms; with genera, ground
+  +0.31 (the sky-view bake's share in it: `skyview` went from -0.30 to ~0).
+- **Part C against the end of part B** (1315226, a scratch worktree,
+  alternated, two runs): ground 8.45 / 8.30 against 8.70 / 8.73 ms, in clouds
+  8.26 / 8.40 against 8.50 / 8.53: +0.25 to +0.35 ms (the volume's sky read,
+  the god rays). The end-of-B tree itself ran 8.3-8.45 ms in this session
+  against 6.80 / 7.04 when §25 measured it: the machine's state, not the code.
 
 ## Not covered
 

@@ -561,6 +561,9 @@ class TerrainDemo(ShowBase):
         self.atmospheres.attach_aerial(
             self.win, self.cam, self.camLens, self.sky.sun_input, self.shadows
         )
+        # The god rays: the mountains' shadow on the air (the clouds' with them).
+        mountains = [self.home.shadow_map.bind] if self.home.shadow_map else []
+        self.atmospheres.bind_god_rays(0, mountains)
         self.clouds = None
         self.cloud_maps = None  # the clouds' shadow maps
         self.cloud_light = None  # their light volumes
@@ -1089,6 +1092,15 @@ class TerrainDemo(ShowBase):
             per_frame=self.world.shadows.cloud_light_slices,
         )
         self.clouds.bind_maps(self.cloud_light.bind)
+        # The god rays: their shadows (and the mountains') on the air's bake.
+        self.atmospheres.bind_god_rays(
+            0,
+            [
+                self.clouds.bind_shadow_inputs,
+                self.cloud_maps.bind,
+                self.cloud_light.bind,
+            ],
+        )
         if self.ring is not None:
             # Its haze split at their tops: what is beyond them drawn first.
             self.ring.haze.set_clouds_top(self.clouds.top_radius)

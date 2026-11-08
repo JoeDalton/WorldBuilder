@@ -6,7 +6,13 @@
 // samples (the eclipses, the rings and the planet's shadow with it); the
 // in-scatter in the lower half, the transmittance in the upper.
 
+// The air with the god rays: the clouds' and the mountains' shadows on it
+// (god_rays.glsl), the light volume's readers with the clouds' field.
+#define ATMO_GOD_RAYS
+#define CLOUD_MAP_LIGHTING
 #pragma include "atmosphere.glsl"
+#pragma include "../../clouds/shaders/cloud_field.glsl"
+#pragma include "god_rays.glsl"
 
 // The main camera's clip space to camera-relative world points.
 uniform mat4 uAerialFromClip;

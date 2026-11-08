@@ -131,6 +131,7 @@ class SkyView:
 
         bind_shadow_defaults(self.root)
         atmospheres.bind(self.root)
+        atmospheres.god_ray_root(self.root)  # the sky's shafts too
         self.root.set_shader_input("uSunDir", sun)
         maker = CardMaker("sky_view")
         maker.set_frame(-1.0, 1.0, -1.0, 1.0)

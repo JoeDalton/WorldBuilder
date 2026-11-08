@@ -225,6 +225,38 @@ march's 4. Their sizes are the same at every preset. From space the march stays,
 fetch and the ozone a sample: +0.24 ms on the orbit pose, the cheapest frame
 (3.6 ms), left as it is.
 
+**God rays** (RENDERING_PLAN.md C.5, `AtmosphereSettings.god_rays`: off at
+LOW and MID). The two bakes that march the air per texel, the aerial cells
+and the sky-view table, take the shadows of the clouds and the mountains on
+it: each sample's direct sunlight times `atmoGodRays` (`god_rays.glsl`,
+compiled into those bakes only, `ATMO_GOD_RAYS`). The light scattered more
+than once stays, as the sky's fill does under a cloud.
+
+- **The mountains**: `shadows.glsl`'s `terrainShadow(planetDir, altitude)`,
+  which answers for any point, not only the ground (its altitude against the
+  ceiling the ridges set toward the sun there: the global cube map, the
+  local map's finer one near the camera). At a low sun the valleys' air
+  behind a ridge goes dark and shafts fan from the gaps, across the ground
+  and up the sky.
+- **The clouds**, each family's optical depth toward the sun: the light
+  volume's ([shadows](shadows.md#the-cloud-light-volume)) at the point, or
+  where the sun's ray enters the slab's base for a point under it; the cloud
+  shadow maps' total there beyond the volume; nothing above the slab.
+- **Binding.** A bake registers with `Atmospheres.god_ray_root`;
+  `Atmospheres.bind_god_rays(atmosphere, binders)` hands it, now and later,
+  the planet's inputs (its `ShadowMap.bind`, the clouds'
+  `bind_shadow_inputs`, their maps' and light volume's `bind`). `World` binds
+  the first body with air; the demo its planet.
+- **Resolution.** The shafts are as fine as the bakes: the aerial cells'
+  32 x 32 x 32 (soft vertical banding in a shaft, no blocks at 2560 x 1440)
+  and the sky-view table's 256 x 128. The plan's finer grid is not built.
+- **Cost** (RTX 3070, 2560 x 1440, HIGH; `frame_profile.py`'s `godrays`):
+  0.09-0.17 ms, 0.31 ms with genera (both bakes).
+- **Test**: under a ceiling over every point the cells lose their direct
+  sunlight and keep the fill; off, they are B's whatever is bound
+  (`tests/test_atmosphere_tables.py`). Not tested on the GPU: the clouds'
+  part (the readers it uses are, in `test_cloud_light_volume.py`).
+
 **The ozone layer.** Without it the twilight sky went olive-green near the
 zenith and the horizon (green and blue scattered about equally once the sun's
 light has crossed the whole air). Ozone absorbs orange and green (the

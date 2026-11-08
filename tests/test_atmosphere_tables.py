@@ -512,10 +512,10 @@ vec3 marchOf(vec4 q, bool through) {
 """
 
 
-def _aerial_case(window, tmp_path, eye, hpr, sun_dir, distances, seed=2):
+def _aerial_case(window, tmp_path, eye, hpr, sun_dir, distances, seed=2, prepare=None):
     """The cells and the march at random points of a camera's view (at
     *eye*, turned *hpr*), *distances* (low, high) metres away; and the
-    directions."""
+    directions. *prepare* (the atmospheres) runs before the bake."""
     from panda3d.core import (
         Camera,
         LVecBase3f,
@@ -536,6 +536,8 @@ def _aerial_case(window, tmp_path, eye, hpr, sun_dir, distances, seed=2):
     sun = PTA_LVecBase3f.empty_array(1)
     sun[0] = LVecBase3f(*(np.asarray(sun_dir) / np.linalg.norm(sun_dir)))
     atmospheres.attach_aerial(window.win, camera, lens, sun)
+    if prepare is not None:
+        prepare(atmospheres)
     atmospheres.update(eye)
     window.graphicsEngine.render_frame()
     window.graphicsEngine.render_frame()
@@ -640,3 +642,56 @@ def test_no_aerial_cells_from_space_or_past_their_reach(window, tmp_path):
         (1.01 * AERIAL_REACH, 2 * AERIAL_REACH),
     )
     assert np.all(cells == -1.0)
+
+
+def _ceiling(km: float):
+    """A mountains' shadow map (``uTerrainShadow``) whose ceiling is *km*
+    everywhere, its occluder 10 km away: every point under it in shadow."""
+    from panda3d.core import PTA_int, Texture
+
+    texture = Texture("ceiling")
+    texture.setup_cube_map(1, Texture.T_float, Texture.F_rg32)
+    texture.set_ram_image(np.tile(np.float32([km, 10.0]), 6).tobytes())
+    on = PTA_int.empty_array(1)
+    on[0] = 1
+
+    def bind(node):
+        node.set_shader_inputs(uTerrainShadow=texture, uTerrainShadowOn=on)
+
+    return bind
+
+
+def test_the_god_rays_take_the_mountains_shadow(window, tmp_path):
+    """With the god rays on and the mountains' ceiling over every point, the
+    cells' in-scatter loses its direct sunlight (the light scattered more
+    than once stays); with them off, the cells are B's, whatever is bound."""
+    from dataclasses import replace
+    from math import cos, radians, sin
+
+    from world_builder.atmosphere import AtmosphereSettings
+
+    e = radians(40.0)
+    case = (
+        np.array([0.0, 0.0, R + 1300.0]),
+        (30.0, -10.0, 0.0),
+        (cos(e), 0.3, sin(e)),
+        (2e3, 60e3),
+    )
+
+    def cells(settings=None, shade=True):
+        def prepare(atmospheres):
+            if settings is not None:
+                atmospheres.set_settings(settings)
+            atmospheres.bind_god_rays(0, [_ceiling(50.0)] if shade else [])
+
+        _, (got, *_) = _aerial_case(window, tmp_path, *case, prepare=prepare)
+        assert np.all(got >= 0.0)
+        return got
+
+    plain = cells(shade=False)
+    shaded = cells()
+    off = cells(replace(AtmosphereSettings(), god_rays=False))
+    np.testing.assert_allclose(off, plain, rtol=1e-5, atol=1e-7)
+    assert np.all(shaded <= plain * 1.001 + 1e-6)
+    assert shaded.sum() < 0.6 * plain.sum()
+    assert shaded.sum() > 0.05 * plain.sum()  # the sky's fill stays

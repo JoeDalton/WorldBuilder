@@ -625,6 +625,7 @@ class World:
                 self.atmospheres.attach_aerial(
                     app.win, app.cam, app.camLens, self.sky.sun_input, self.shadows
                 )
+                self._bind_god_rays()
             self.sky.set_sun(self._sun)
 
         self.light_scale = float(light_scale)
@@ -988,6 +989,24 @@ class World:
         if self.casters is not None:
             self.casters.set_size(settings.shadows.caster_size)
         self._sync_half_res()
+
+    def _bind_god_rays(self) -> None:
+        """The god rays (``AtmosphereSettings.god_rays``) of the first body
+        with air: its mountains' and its clouds' shadows on the aerial
+        bake."""
+        for body in self.bodies:
+            if body.atmosphere is None:
+                continue
+            binders = []
+            if body.shadow_map is not None:
+                binders.append(body.shadow_map.bind)
+            if body.clouds is not None:
+                binders.append(body.clouds.bind_shadow_inputs)
+            for part in (body.cloud_maps, body.cloud_light):
+                if part is not None:
+                    binders.append(part.bind)
+            self.atmospheres.bind_god_rays(body.atmosphere, binders)
+            return
 
     def use_split_depth(self, depth: SplitDepthCameras) -> None:
         """The split cameras the game built after the world: the clouds'

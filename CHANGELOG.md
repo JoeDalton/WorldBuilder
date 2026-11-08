@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone, without the sun march's local steps (`uCloudDebug` 512 back to the maps
   and the ramp, 1024 the whole chord). Off at LOW, 128 at MID, 256 at HIGH and
   ULTRA.
+- God rays (`AtmosphereSettings.god_rays`, on at HIGH and ULTRA): the clouds'
+  and the mountains' shadows in the air of the aerial cells and the sky-view
+  table (`god_rays.glsl`; `Atmospheres.god_ray_root`, `bind_god_rays`):
+  shafts under broken cloud and down valleys at a low sun, across the sky too.
+  `frame_profile.py` has a `godrays` column.
 
 ### Changed
 

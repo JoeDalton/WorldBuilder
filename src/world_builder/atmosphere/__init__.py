@@ -97,10 +97,18 @@ class AtmosphereSettings(QualitySettings):
         "baked once a frame instead of marched per pixel (cheaper).",
     )
 
+    god_rays: bool = knob(
+        True,
+        "God rays",
+        help="The clouds' and the mountains' shadows in the air in front of "
+        "the ground, sea and models: shafts of light under broken cloud and "
+        "down valleys at a low sun (with the air from a grid).",
+    )
+
     LABEL: ClassVar = "Air"
     PRESETS: ClassVar = {
-        QualityLevel.LOW: {"steps": 4, "vertex_steps": 2},
-        QualityLevel.MID: {"steps": 6, "vertex_steps": 3},
+        QualityLevel.LOW: {"steps": 4, "vertex_steps": 2, "god_rays": False},
+        QualityLevel.MID: {"steps": 6, "vertex_steps": 3, "god_rays": False},
         QualityLevel.ULTRA: {"steps": 12, "vertex_steps": 8},
     }
 
@@ -213,6 +221,13 @@ class Atmospheres:
         self._aerial_range = PTA_LVecBase4f.empty_array(1)
         self._aerial_range[0] = LVecBase4f(0.0, 1.0, 0.0, 0.0)
         self.aerial = None
+        #: The god rays' switch and the atmosphere they shade (-1: none), the
+        #: aerial bake's (god_rays.glsl).
+        self._god_rays = PTA_int.empty_array(1)
+        self._god_rays_atmo = PTA_int.empty_array(1)
+        self._god_rays_atmo[0] = -1
+        self._god_ray_roots: list[NodePath] = []
+        self._god_ray_binders: list = []
         #: The multiple-scattering tables, every atmosphere's.
         self.multiple = table_texture(
             "atmosphere_multiple", MULTIPLE_SIZE, MAX_ATMOSPHERES, fill=0.0
@@ -230,6 +245,7 @@ class Atmospheres:
         self._settings = settings
         self._steps[0] = settings.steps
         self._vertex_steps[0] = settings.vertex_steps
+        self._god_rays[0] = int(settings.god_rays)
 
     def add(
         self, radius: float, params: AtmosphereParams, position: ArrayLike = (0, 0, 0)
@@ -331,6 +347,37 @@ class Atmospheres:
         self.aerial = AerialPerspective(output, self, camera, lens, sun)
         if shadows is not None:
             shadows.bind(self.aerial.root)
+
+    def god_ray_root(self, root: NodePath) -> None:
+        """A bake that takes the god rays (god_rays.glsl: the aerial cells,
+        the sky-view table): their switch and atmosphere now, and what
+        :meth:`bind_god_rays` gives, now and later."""
+        from world_builder.clouds.shadow_defaults import cloud_shadow_defaults
+
+        cloud_shadow_defaults(root)  # no clouds until bind_god_rays
+        root.set_shader_inputs(
+            uGodRays=self._god_rays, uGodRaysAtmo=self._god_rays_atmo
+        )
+        self._god_ray_roots.append(root)
+        for bind in self._god_ray_binders:
+            bind(root)
+
+    def bind_god_rays(self, atmosphere: int, binders: list) -> None:
+        """Give the bakes that take the god rays (:meth:`god_ray_root`) what
+        shades the air of one atmosphere's planet
+        (:attr:`AtmosphereSettings.god_rays`): each of *binders* sets its
+        inputs on a bake's root (the clouds' ``bind_shadow_inputs``, their
+        shadow maps' and light volumes' ``bind``, the mountains'
+        ``ShadowMap.bind``). Again with new clouds.
+
+        :param atmosphere: the planet's atmosphere index
+        """
+        self._god_rays_atmo[0] = int(atmosphere)
+        self._god_ray_binders.extend(binders)
+        self._god_ray_roots = [r for r in self._god_ray_roots if not r.is_empty()]
+        for root in self._god_ray_roots:
+            for bind in binders:
+                bind(root)
 
     def camera_inside(self) -> int:
         """:returns: the atmosphere the camera was in at the last
