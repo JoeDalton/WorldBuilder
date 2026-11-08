@@ -13,7 +13,10 @@ reporting frame times and where the main thread spends them::
 
     --demo           which demo flies: demo_terrain.py's hand-built world
                      (default) or demo_world.py's, built by World
-    --flight         the flights to run, in order (default: all three)
+    --flight         the flights to run, in order (default: all three);
+                     "turn" turns on the spot at --at (A held)
+    --at             the turn's pose: LAT LON ALT HEADING PITCH
+    --sun            the turn's sun: AZIMUTH ELEVATION (default 210 35)
     --seconds        each flight's length, at most (default 15)
     --profile        cProfile the main thread; prints the top 28 by
                      cumulative time
@@ -93,6 +96,13 @@ TRACED = (
     ("world_builder.clouds.sphere", "CloudVolume", "_rebase"),
     ("world_builder.ocean.sea", "Sea", "update"),
     ("demo_terrain", "TerrainDemo", "_fly"),
+    ("world_builder.clouds.light_volume", "CloudLightVolumes", "update"),
+    ("world_builder.clouds.shadow_map", "CloudShadowMaps", "update"),
+    ("world_builder.clouds.planet", "PlanetClouds", "update"),
+    ("world_builder.atmosphere", "Atmospheres", "update"),
+    ("world_builder.shadows", "Shadows", "update"),
+    ("world_builder.sky.sky", "Sky", "update"),
+    ("world_builder.terrain.shadow_map", "ShadowMap", "update"),
     ("direct.showbase.ShowBase", "ShowBase", "_ShowBase__garbageCollectStates"),
     ("direct.showbase.ShowBase", "ShowBase", "_ShowBase__igLoop"),
 )
@@ -178,6 +188,10 @@ class Trace:
 
 
 FLIGHTS = ("low", "cruise", "descent")
+#: The "turn" flight's pose (--at): over the start, 3 km up, level.
+TURN_POSE: tuple | None = None
+#: Its sun (--sun): azimuth and elevation, degrees.
+TURN_SUN: tuple = (210.0, 35.0)
 
 
 def _settle(demo: TerrainDemo, timeout: float = 60.0) -> None:
@@ -197,6 +211,13 @@ def _start(demo: TerrainDemo, flight: str) -> None:
     """Put the camera at a flight's start, boosted, its keys held."""
     spec = demo.terrain.spec
     lat, lon = spec.reference_lat, spec.reference_lon
+    if flight == "turn":
+        # Turning on the spot (A held: yaw at the demo's rate), no move.
+        pose = TURN_POSE or (lat, lon, 3000.0, 0.0, 0.0)
+        demo._place_camera(*pose)
+        demo._keys["a"] = True
+        demo.set_local_sun(*TURN_SUN)
+        return
     if flight == "descent":
         # Nose straight down, flying forward: the camera's own "down" would
         # point backwards at any other pitch, and climb away.
@@ -292,7 +313,8 @@ def run(
     print(
         f"{flight:<8} {len(f):5d} frames  fps {1e3 / np.mean(f):5.1f}   "
         f"frame ms mean {np.mean(f):5.1f} median {np.median(f):5.1f} "
-        f"p95 {np.percentile(f, 95):5.1f} max {f.max():6.1f}   demo update ms "
+        f"p95 {np.percentile(f, 95):5.1f} p99 {np.percentile(f, 99):5.1f} "
+        f"max {f.max():6.1f}   demo update ms "
         f"mean {np.mean(u):5.1f} median {np.median(u):5.1f} "
         f"p95 {np.percentile(u, 95):5.1f}   chunks/s {generated / elapsed:4.0f}"
         f"  backlog mean {np.mean(backlog):4.0f}"
@@ -314,7 +336,24 @@ def main() -> None:
         "--demo", default="terrain", choices=tuple(DEMOS), help="which demo flies"
     )
     parser.add_argument(
-        "--flight", nargs="*", default=list(FLIGHTS), help="low, cruise, descent"
+        "--flight",
+        nargs="*",
+        default=list(FLIGHTS),
+        help="low, cruise, descent; turn (A held at --at)",
+    )
+    parser.add_argument(
+        "--at",
+        nargs=5,
+        type=float,
+        metavar=("LAT", "LON", "ALT", "HEADING", "PITCH"),
+        help="the turn flight's pose (the demo's printed camera line)",
+    )
+    parser.add_argument(
+        "--sun",
+        nargs=2,
+        type=float,
+        metavar=("AZIMUTH", "ELEVATION"),
+        help="the turn flight's sun, degrees (default 210 35)",
     )
     parser.add_argument(
         "--seconds", type=float, default=15.0, help="per flight, at most"
@@ -335,10 +374,16 @@ def main() -> None:
         help="render to an offscreen buffer: no display refresh cap or throttling",
     )
     add_world_arguments(parser)
+    parser.set_defaults(frame_cap=0)  # timings: never capped (--frame-cap N)
     parser.add_argument(
         "--cloud-debug", type=int, default=0, help="PlanetClouds.set_debug bits"
     )
     args = parser.parse_args()
+    global TURN_POSE
+    TURN_POSE = tuple(args.at) if args.at else None
+    global TURN_SUN
+    if args.sun:
+        TURN_SUN = tuple(args.sun)
     window_config("Flight benchmark", args.size, args.offscreen, vsync=False)
     settings = settings_from_args(args)
     trace = Trace() if args.trace else None  # before the demo: see Trace
@@ -349,6 +394,7 @@ def main() -> None:
         settings=settings,
         clouds=not args.no_clouds,
         ring=args.ring,
+        genera=args.genera,
         cloud_debug=args.cloud_debug,
     )
     demo.setFrameRateMeter(False)

@@ -155,6 +155,7 @@ from world_builder.clouds.planet import PlanetClouds
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS, HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.display import FrameCap
 from world_builder.lights import TrackedLights
 from world_builder.objects import ModelLighting
 from world_builder.ocean import Sea
@@ -456,6 +457,8 @@ class TerrainDemo(ShowBase):
 
         world = settings or WorldSettings()
         self.world = world
+        # The frame-rate cap (WorldSettings.display: 90 fps by default).
+        self.frame_cap = FrameCap(world.display)
         self._clouds_on = clouds
         self._genera = genera
         print("starting terrain workers ...")
@@ -1169,7 +1172,12 @@ class TerrainDemo(ShowBase):
         terrain's texture size and workers) is logged and left as it is."""
         self.world = world
         world.apply(
-            *self._terrains(), self.atmospheres, self.shadows, self.sky, self.ocean
+            *self._terrains(),
+            self.atmospheres,
+            self.shadows,
+            self.sky,
+            self.ocean,
+            self.frame_cap,
         )
         if self.cloud_maps is not None:
             self.cloud_maps.set_size(world.shadows.cloud_map_size)
@@ -1434,6 +1442,12 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--no-clouds", action="store_true", help="no clouds")
     parser.add_argument(
+        "--frame-cap",
+        type=int,
+        default=None,
+        help="the most frames a second, 0 none (default: the settings', 90)",
+    )
+    parser.add_argument(
         "--ring", action="store_true", help="a small ring around the planet"
     )
     parser.add_argument(
@@ -1469,6 +1483,8 @@ def settings_from_args(args: argparse.Namespace) -> WorldSettings:
         settings = settings.with_value("clouds", "half_resolution", True)
     if args.cloud_renderer is not None:
         settings = settings.with_value("clouds", "renderer", args.cloud_renderer)
+    if args.frame_cap is not None:
+        settings = settings.with_value("display", "frame_cap", args.frame_cap)
     return settings
 
 

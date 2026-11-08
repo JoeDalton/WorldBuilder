@@ -1642,6 +1642,35 @@ the demo's poses, medians of 120 frames, alternated in one session:
   the god rays). The end-of-B tree itself ran 8.3-8.45 ms in this session
   against 6.80 / 7.04 when §25 measured it: the machine's state, not the code.
 
+## 27. Stutter while turning: frame pacing, and a frame cap
+
+Reported: turning on the spot (A held) at dusk, genera on, shadows ULTRA
+(`flight_bench.py --flight turn --at 17.70233 26.91499 6882 -113.2 -11.6 --sun
+270 0.5 --genera --shadows-quality ultra`), stutter with a passable mean and
+an awful p99. RTX 3070, 2560 x 1440, a 180 Hz display.
+
+- **Not the renderer.** Each frame synced to the GPU, offscreen: 8.8-8.9 ms
+  at every heading, sun at 3 or 0.5 degrees (p99 9.6-9.9, the readback ~2 ms
+  of it); facing the sun costs no more. `--trace`: the Python side flat in the
+  slow frames, the excess all in `renderFrame`. No offscreen bake draws in the
+  slow frames more than in the others (the light volume, the cloud maps and
+  the mountains' shadow do not re-bake on a turn).
+- **The presentation.** In a window the frames are 5.5 ms or 11.0 ms (median
+  5.9, p95 11.0, p99 11.3): one refresh or two. The compositor shows a
+  window's frames on the display's refresh whatever `sync-video` says (vsync
+  on or off measured the same). At ~6.9 ms a frame, three in four make the
+  5.5 ms refresh and the fourth is held for a second: uneven motion, worst
+  while the whole view turns.
+- **The fix: a frame cap** at a divisor of the refresh the frame rate holds
+  (`WorldSettings.display.frame_cap`, `world_builder.display.FrameCap`: Panda's
+  clock in its limited mode; 90 fps by default, 0 off). The same turn at 90:
+  median, p95 and p99 all 11.1 ms (max 22.2), against 6.1 / 10.2 / 11.1 (max
+  168) uncapped. The benchmarks run uncapped (`--frame-cap` 0 by default in
+  `flight_bench.py`, `frame_profile.py`, `terrain_shots.py`).
+- Other ways out: a variable-refresh display (FreeSync, G-Sync) or a
+  fullscreen window the compositor leaves alone; or a frame under the refresh
+  (5.5 ms here: ~1.4 ms off at this pose).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

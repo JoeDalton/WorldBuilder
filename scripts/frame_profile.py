@@ -153,6 +153,7 @@ def main() -> None:
     parser.add_argument("--offscreen", action="store_true")
     parser.add_argument("--frames", type=int, default=80)
     add_world_arguments(parser)
+    parser.set_defaults(frame_cap=0)  # timings: never capped (--frame-cap N)
     args = parser.parse_args()
     window_config("Frame profile", args.size, args.offscreen, vsync=False)
     settings = settings_from_args(args)

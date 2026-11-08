@@ -87,6 +87,7 @@ from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.display import FrameCap
 from world_builder.gravity import Gravity
 from world_builder.lights import TrackedLights
 from world_builder.objects import ModelLighting
@@ -434,6 +435,9 @@ class World:
         self._body_centres: np.ndarray | None = None
         self._body_radii: np.ndarray | None = None
         self.settings = settings or WorldSettings()
+        #: The frame-rate cap (``WorldSettings.display``): Panda3D's global
+        #: clock, process-wide.
+        self.frame_cap = FrameCap(self.settings.display)
         self._sun = self._unit(sun.direction)
         self._sun_color = np.asarray(sun.color, dtype=np.float64)
         self._space_ambient = np.asarray(space_ambient, dtype=np.float64)
@@ -968,7 +972,7 @@ class World:
     def set_settings(self, settings: WorldSettings) -> None:
         """Change what every part costs (see :meth:`WorldSettings.apply`)."""
         self.settings = settings
-        parts: list = [self.atmospheres, self.shadows]
+        parts: list = [self.atmospheres, self.shadows, self.frame_cap]
         if self.sky is not None:
             parts.append(self.sky)
         for body in self.bodies:

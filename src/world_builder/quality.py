@@ -145,8 +145,11 @@ class QualitySettings:
         HIGH values)
     :cvar RENAMED: old field name -> new, read from saved data so a renamed
         knob keeps its saved value
+    :cvar LEVELLED: False for a section of choices only (its knobs all
+        kept, no presets: the display's frame cap): no level of its own
     """
 
+    LEVELLED: ClassVar[bool] = True
     LABEL: ClassVar[str] = ""
     PRESETS: ClassVar[dict[QualityLevel, dict[str, Any]]] = {}
     RENAMED: ClassVar[dict[str, str]] = {}
@@ -226,7 +229,9 @@ class QualitySettings:
     @classmethod
     def level_of(cls: type[S], settings: S) -> QualityLevel | None:
         """:returns: the preset *settings* equals, whatever its kept knobs;
-        None = custom"""
+        None = custom, or a section with no levels (:attr:`LEVELLED`)"""
+        if not cls.LEVELLED:
+            return None
         for level in QualityLevel:
             if settings.at_level(level) == settings:
                 return level

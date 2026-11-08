@@ -631,6 +631,7 @@ def main() -> None:
         "--offscreen", action="store_true", help="an offscreen buffer, no window"
     )
     add_world_arguments(parser)
+    parser.set_defaults(frame_cap=0)  # timings: never capped (--frame-cap N)
     parser.add_argument(
         "--cloud-debug", type=int, default=0, help="PlanetClouds.set_debug bits"
     )

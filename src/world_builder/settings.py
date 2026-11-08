@@ -39,6 +39,7 @@ from typing import Any
 from world_builder.asteroids.settings import AsteroidSettings
 from world_builder.atmosphere import AtmosphereSettings
 from world_builder.clouds.cloud import CloudSettings
+from world_builder.display import DisplaySettings
 from world_builder.ocean.ocean import OceanSettings
 from world_builder.quality import Knob, QualityLevel, QualitySettings
 from world_builder.shadows import ShadowSettings
@@ -61,6 +62,7 @@ SECTIONS: dict[str, type[QualitySettings]] = {
     "ocean": OceanSettings,
     "asteroids": AsteroidSettings,
     "shadows": ShadowSettings,
+    "display": DisplaySettings,
 }
 
 
@@ -80,6 +82,7 @@ class WorldSettings:
     ocean: OceanSettings = field(default_factory=OceanSettings)
     asteroids: AsteroidSettings = field(default_factory=AsteroidSettings)
     shadows: ShadowSettings = field(default_factory=ShadowSettings)
+    display: DisplaySettings = field(default_factory=DisplaySettings)
 
     @classmethod
     def preset(cls, level: QualityLevel | str) -> WorldSettings:
@@ -96,14 +99,21 @@ class WorldSettings:
         build its menu from without naming any.
 
         :returns: ``version``; ``levels`` ([{``id``, ``label``}], cheapest
-            first); ``sections`` ([{``id``, ``label``, ``knobs``}], each knob
-            as :meth:`quality.QualitySettings.schema` describes it)
+            first); ``sections`` ([{``id``, ``label``, ``levelled``,
+            ``knobs``}]: ``levelled`` False for a section with no preset of
+            its own (the display's), each knob as
+            :meth:`quality.QualitySettings.schema` describes it)
         """
         return {
             "version": FORMAT_VERSION,
             "levels": [{"id": lv.value, "label": lv.label} for lv in QualityLevel],
             "sections": [
-                {"id": name, "label": kind.LABEL, "knobs": kind.schema()}
+                {
+                    "id": name,
+                    "label": kind.LABEL,
+                    "levelled": kind.LEVELLED,
+                    "knobs": kind.schema(),
+                }
                 for name, kind in SECTIONS.items()
             ],
         }

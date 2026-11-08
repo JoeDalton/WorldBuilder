@@ -49,6 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table (`god_rays.glsl`; `Atmospheres.god_ray_root`, `bind_god_rays`):
   shafts under broken cloud and down valleys at a low sun, across the sky too.
   `frame_profile.py` has a `godrays` column.
+- A frame-rate cap (`world_builder.display`: `DisplaySettings.frame_cap`,
+  90 fps by default, 0 off; `FrameCap`, which `World` and the demo make): the
+  `display` section of `WorldSettings`, a choice kept by every preset
+  (`QualitySettings.LEVELLED` False; the schema's sections say `levelled`).
+  Capped at a divisor of the display's refresh, every frame shows for the
+  same time: a compositor held a 6.9 ms frame for one 5.5 ms refresh or two,
+  and turning stuttered (performance.md §27). The demos and benchmarks take
+  `--frame-cap N` (the benchmarks 0 by default).
+- `flight_bench.py --flight turn --at LAT LON ALT HEADING PITCH --sun AZ EL`:
+  turning on the spot; the trace times the light volume, the cloud maps, the
+  atmospheres, the sky and the shadow maps too, and the report has p99.
 
 ### Changed
 
