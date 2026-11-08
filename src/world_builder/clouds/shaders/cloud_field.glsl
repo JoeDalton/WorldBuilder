@@ -847,7 +847,8 @@ uniform sampler2D otherLight;
 uniform vec4  otherLightChart[4];
 uniform int   otherLightOn;
 // Where in its texel and slice a sample reads the volumes, in [-0.5, 0.5]
-// of each, per pixel and visit (the raymarch sets it from its blue noise):
+// of each, per pixel and visit (the raymarch sets it from its blue noise),
+// moved on at each sample along the ray (cloudSunDepthIn):
 // read at their nodes, the depths' linear interpolation between texels
 // hundreds of metres wide drew their grid on a tower's face, a few tens of
 // pixels whatever the distance; jittered, it is noise the resolve averages.
@@ -956,6 +957,17 @@ float cloudSunDepthIn(Field f, samplerCube weatherCube, int on, sampler2D nearMa
             held = cloudLightSunDepth(f, light, lightChart, p, sunDir, weather,
                                       localSteps, depth);
             cloudSkyDepth = cloudLightAt(light, lightChart, p, cloudSkyHeld).g;
+            // Moved on for the ray's next sample (R3, low discrepancy): one
+            // draw for the whole ray put all its reads off the same way, and
+            // the pixel's light with them; moved on, they average along it
+            // (the error over grey clouds in motion 1.55 to 1.41 levels,
+            // performance.md §28). The step: Roberts' R3, (1/g, 1/g^2, 1/g^3)
+            // with g = 1.2207440846 the real root of x^4 = x + 1, which
+            // spreads its successive points over the cube most evenly (not
+            // cloud_march.frag's per-frame R2 step: sharing a direction, the
+            // offsets would repeat); the +- 0.5 keeps them in [-0.5, 0.5].
+            cloudLightJitter = fract(cloudLightJitter + 0.5
+                                     + vec3(0.8191725, 0.6710436, 0.5497005)) - 0.5;
         } else {
             held = cloudMapSunDepth(f, weatherCube, on, nearMap, nearChart, farMap,
                                     farChart, p, sunDir, weather, localSteps, depth);

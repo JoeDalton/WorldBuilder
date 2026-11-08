@@ -1759,6 +1759,17 @@ from 200 km (`--at 28.89450 30.39999 199852 180 -88.7`, forward).
   edges, there with the maps' light too); at the first pose specks 1.07 to
   **0.71 %**, error 1.78 to 1.40. With the smoothing the jitter's reach no
   longer matters (a texel 1.25 %, half 1.28, a quarter 1.28): kept at a texel.
+- **Grain on grey clouds in motion after the base's fade** (clouds.md
+  "Lighting", `DIFFUSE_FADE`; the user's screenshot, `--at 29.7159 29.8232
+  2067 -175 4`, forward, 2 samples). Error over the clouds / specks: without
+  the fade (`--cloud-debug 2048`) 1.34 / 0.20 %, with it (0.2) 1.55 / 0.38 %,
+  at 0.1 1.46 / 0.30 %, a uniform 0.3 instead 1.80 / 0.55 %. The fade itself
+  is not noisy (its up read unjittered: 0.39 %; the sky's reach by the ramp:
+  0.35 %; in motion wholly the samples' smooth mean: 0.38 %): darker cloud
+  shows the march's own sampling noise, which the fill washed out. Kept: the
+  volume reads' jitter **moved on at each sample along the ray** (R3), not one
+  draw for the whole ray: 1.41 / 0.36 % (1.18 / 0.19 % without the fade).
+  Open: the sun term's own noise (more local steps, a smoother read).
 - **Not built**: depth-aware (bilateral) reconstruction and exact-pixel
   history: no edge halo seen in converged shots, the motion errors already
   near converged.
