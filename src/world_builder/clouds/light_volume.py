@@ -24,9 +24,14 @@ up to the slab's top, the weather and the cell octave taken at every step
 voxels on one sun ray then disagreed about the clouds between them, and a
 tower's face streaked), in steps of half a sun step (:data:`STEP_SCALE`):
 :func:`light_depth_on_sphere` on the CPU. A few slices a
-frame (:attr:`CloudLightVolumes.per_frame`) into a back atlas, swapped to
-the front once whole: the readers never see a half-baked volume, nor one of
-two suns. Baked again (change-driven, the shadow maps' rules) when the sun
+frame (:attr:`CloudLightVolumes.per_frame`) into a raw atlas; once whole,
+smoothed in one frame (``cloud_light_smooth.frag``: each voxel the
+[1, 2, 1] tent of its neighbours along the three axes, :func:`smooth_volume`
+on the CPU) into a third atlas, swapped to the front: the readers never see
+a half-baked volume, nor one of two suns. The smoothing: far out a feature a
+texel across was one deep voxel among shallow ones, and the readers'
+jittered reads across it came out as dark specks in motion (performance.md
+§28). Baked again (change-driven, the shadow maps' rules) when the sun
 turns past ``utils.SUN_TOLERANCE``, the camera moves :data:`RECENTRE` of the
 reach, the reach changes by as much, or the steps or the clouds' layer
 change; one bake at a time, the next one started when it is swapped in (a
@@ -212,6 +217,22 @@ def light_depth_on_sphere(
     return np.where(alive, depth, 0.0)
 
 
+def smooth_volume(volume: np.ndarray) -> np.ndarray:
+    """``cloud_light_smooth.frag`` on the CPU: a volume (slice, row, column,
+    ...) with each voxel the [1, 2, 1] / 4 tent of its neighbours along each
+    of the three axes, the edges clamped (an edge voxel weighs itself in for
+    the missing side)."""
+    out = np.asarray(volume, dtype=np.float64)
+    for axis in range(3):
+        pad = [(0, 0)] * out.ndim
+        pad[axis] = (1, 1)
+        padded = np.pad(out, pad, mode="edge")
+        n = out.shape[axis]
+        take = lambda a, b: np.take(padded, np.arange(a, a + n), axis=axis)  # noqa: E731
+        out = 0.25 * take(0, n) + 0.5 * take(1, n) + 0.25 * take(2, n)
+    return out
+
+
 class _Atlas:
     """One atlas of the slices: its texture, buffer, region and chart."""
 
@@ -261,8 +282,9 @@ class _Atlas:
 
 
 class _Volume:
-    """A family's light volume: two atlases (front read, back baked) and
-    the bake's card."""
+    """A family's light volume: three atlases (the front read; the raw
+    bake; the smoothed bake, the next front) and the bake's and the
+    smoothing's cards."""
 
     def __init__(
         self, output: Any, bind: Any, name: str, tile: int, to_ram: bool
@@ -271,8 +293,11 @@ class _Volume:
         self.atlases = [
             _Atlas(output, f"{name}_a", tile, to_ram),
             _Atlas(output, f"{name}_b", tile, to_ram),
+            _Atlas(output, f"{name}_c", tile, to_ram),
         ]
         self.front: _Atlas | None = None  # the whole one the readers read
+        #: the last bake before its smoothing (tests compare it to the CPU's)
+        self.raw: _Atlas | None = None
         self.root = NodePath(name)
         # The field's inputs on a holder, the bake's own sun on the card
         # below it (the deeper input wins): a bake keeps the sun it started
@@ -302,7 +327,24 @@ class _Volume:
         self.camera = self.root.attach_new_node(Camera(name, OrthographicLens()))
         for atlas in self.atlases:
             atlas.region.set_camera(self.camera)
-        self._baking: tuple | None = None  # (atlas, wanted tuple, next slice)
+        # The smoothing: a card of its own, seen by its own camera, drawn
+        # into the next front from the raw bake.
+        self._smooth_root = NodePath(f"{name}_smooth")
+        smooth = self._smooth_root.attach_new_node(maker.generate())
+        smooth.node().set_bounds(OmniBoundingVolume())
+        smooth.node().set_final(True)
+        smooth.set_two_sided(True)
+        smooth.set_depth_test(False)
+        smooth.set_depth_write(False)
+        smooth.set_shader(_smooth_shader())
+        smooth.set_shader_input("uLayout", LVecBase3f(tile, SLICES, COLUMNS))
+        self._smooth_card = smooth
+        self._smooth_camera = self._smooth_root.attach_new_node(
+            Camera(f"{name}_smooth", OrthographicLens())
+        )
+        # (raw atlas, target atlas, wanted tuple, next slice: SLICES = the
+        # smoothing's frame)
+        self._baking: tuple | None = None
 
     def rebind(self) -> None:
         """Take the field's inputs again (a new volume) and bake again."""
@@ -310,10 +352,6 @@ class _Volume:
         for atlas in self.atlases:
             atlas.baked = None
         self._baking = None
-
-    @property
-    def back(self) -> _Atlas:
-        return self.atlases[1] if self.front is self.atlases[0] else self.atlases[0]
 
     def wanted(self, want: tuple) -> bool:
         """Whether *want* (centre's up, sun, steps, layer, reach, base's
@@ -332,15 +370,21 @@ class _Volume:
         )
 
     def start(self, want: tuple, chart: list) -> None:
-        """Start baking *want* into the back atlas."""
-        atlas = self.back
-        atlas.baked = None
-        atlas.set_chart(chart)
+        """Start baking *want* into the atlases the front is not."""
+        raw, target = [atlas for atlas in self.atlases if atlas is not self.front][:2]
+        for atlas in (raw, target):
+            atlas.baked = None
+            atlas.set_chart(chart)
+        raw.region.set_camera(self.camera)
+        target.region.set_camera(self._smooth_camera)
+        target.region.set_dimensions(0.0, 1.0, 0.0, 1.0)
+        self._smooth_card.set_shader_input("uRaw", raw.texture)
+        self.raw = raw
         for k, row in enumerate(chart):
             self._chart[k] = LVecBase4f(*row)
         self._sun[0] = LVecBase3f(*map(float, want[1]))
         self._steps[0] = int(want[2])
-        self._baking = (atlas, want, 0)
+        self._baking = (raw, target, want, 0)
 
     def step(self, per_frame: int) -> _Atlas | None:
         """Draw the bake's next slices with this frame.
@@ -352,11 +396,15 @@ class _Volume:
             atlas.buffer.set_active(False)
         if self._baking is None:
             return None
-        atlas, want, first = self._baking
-        if first >= SLICES:
+        atlas, target, want, first = self._baking
+        if first > SLICES:  # smoothed by the frame before
             self._baking = None
-            atlas.baked = want
-            return atlas
+            target.baked = want
+            return target
+        if first == SLICES:  # all baked: smoothed into the target this frame
+            target.buffer.set_active(True)
+            self._baking = (atlas, target, want, first + 1)
+            return None
         count = min(per_frame, COLUMNS - first % COLUMNS, SLICES - first)
         rows = SLICES // COLUMNS
         column, row = first % COLUMNS, first // COLUMNS
@@ -364,7 +412,7 @@ class _Volume:
             column / COLUMNS, (column + count) / COLUMNS, row / rows, (row + 1) / rows
         )
         atlas.buffer.set_active(True)
-        self._baking = (atlas, want, first + count)
+        self._baking = (atlas, target, want, first + count)
         return None
 
     @property
@@ -375,6 +423,7 @@ class _Volume:
         for atlas in self.atlases:
             atlas.destroy(output)
         self.root.remove_node()
+        self._smooth_root.remove_node()
 
 
 class CloudLightVolumes:
@@ -540,3 +589,17 @@ def _bake_shader() -> Shader:
             fragment=SHADER_PATH / "cloud_light_bake.frag",
         )
     return _SHADER
+
+
+_SMOOTH_SHADER: Shader | None = None
+
+
+def _smooth_shader() -> Shader:
+    global _SMOOTH_SHADER
+    if _SMOOTH_SHADER is None:
+        _SMOOTH_SHADER = Shader.load(
+            Shader.SL_GLSL,
+            vertex=SHADER_PATH / "cloud_shadow_map.vert",
+            fragment=SHADER_PATH / "cloud_light_smooth.frag",
+        )
+    return _SMOOTH_SHADER

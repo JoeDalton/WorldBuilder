@@ -853,6 +853,12 @@ uniform int   otherLightOn;
 // pixels whatever the distance; jittered, it is noise the resolve averages.
 // The same for both of a sample's reads (their difference is the light).
 vec3 cloudLightJitter = vec3(0.0);
+// The jitter's reach, texels and slices either way per unit of it: a full
+// one. At half (the first choice) the volume's coarse texels at a distance
+// showed as dark specks on far towers and silhouettes in motion, where the
+// history no longer averages them (2.7 % of the cloud more than 10 levels off
+// its still look, against 0.94 % now; 5.3 % with none). The grid stays gone.
+const float LIGHT_JITTER = 2.0;
 // Whether the sample takes the sun march's local steps before the volume
 // (the raymarch clears it for samples too far for a pixel to show the
 // nearby clouds' shape, RENDERING_PLAN.md C.3's alternate path: the volume
@@ -869,8 +875,8 @@ vec2 cloudLightAt(sampler2D atlas, vec4 chart[4], vec3 p, out float keep) {
     float s;
     lightChartCoords(chart, p, t, s);
     float tile = chart[2].w;
-    t += cloudLightJitter.xy * (2.0 / tile);
-    s += cloudLightJitter.z;
+    t += cloudLightJitter.xy * (LIGHT_JITTER * 2.0 / tile);
+    s += cloudLightJitter.z * LIGHT_JITTER;
     keep = 1.0 - smoothstep(0.875, 1.0 - 1.0 / tile, max(abs(t.x), abs(t.y)));
     float slices = chart[3].y;
     if (keep <= 0.0 || s >= slices - 0.5) {

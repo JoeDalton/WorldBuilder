@@ -42,6 +42,9 @@ const float NO_CLOUD = 1.0e7;
 const float CLAMP_SIGMA = 1.25;
 // The reach of the samples' statistics, in samples (a Gaussian's sigma).
 const float STATS_REACH = 0.9;
+// The same in motion (by uStill): wider, the fresh samples' noise spread over
+// more of them where the history is held loosely (a tower's grain in motion).
+const float STATS_REACH_MOVING = 1.5;
 // The share a pixel takes from the frame (uSmooth's ramp): none below the first,
 // all of uSmooth at the second.
 const float SMOOTH_FROM = 0.08;
@@ -55,6 +58,14 @@ const float CLAMP_SHARE = 0.15;
 // The count a clamp may take a pixel's history down to, at most: a change
 // still starts it over, but a pixel does not take a whole noisy sample.
 const float COUNT_KEPT = 4.0;
+// The share of the clamp's floor kept in motion (1 still). With none, the
+// clamp's range in motion was the 3 x 3 samples' own spread: where they
+// agree it was their noisy mean, which moved every frame and the history
+// with it: a tower grainy in motion, smooth still (motion_shots.py's grain,
+// 1.47 to 1.11 rising past a tower). A floor keeps a little of what a cloud
+// was as it comes closer: a little more lag (the error over the clouds 2.2
+// to 2.6 levels there), traded for the grain (performance.md §28).
+const float MOTION_FLOOR = 0.25;
 
 vec3 rayDir(vec2 ndc) {
     vec4 near = uClipToRel * vec4(ndc, -1.0, 1.0);
@@ -117,7 +128,8 @@ void main() {
             ivec2 tap = centre + ivec2(x, y);
             vec4 v = texelFetch(uMarch, clamp(tap, ivec2(0), last), 0);
             vec2 d = vec2(tap) - f;
-            float g = exp(-dot(d, d) / (2.0 * STATS_REACH * STATS_REACH));
+            float reach = mix(STATS_REACH_MOVING, STATS_REACH, uStill);
+            float g = exp(-dot(d, d) / (2.0 * reach * reach));
             mean += g * v;
             square += g * v * v;
             total += g;
@@ -151,7 +163,7 @@ void main() {
     reconstructedKm = kmTotal > 0.0 ? kmSum / kmTotal : 0.0;
     mean /= total;
     vec4 sigma = sqrt(max(square / total - mean * mean, vec4(0.0)))
-               + uStill * (CLAMP_FLOOR + CLAMP_SHARE * mean);
+               + max(uStill, MOTION_FLOOR) * (CLAMP_FLOOR + CLAMP_SHARE * mean);
     vec4 lo = mean - CLAMP_SIGMA * sigma;
     vec4 hi = mean + CLAMP_SIGMA * sigma;
 
@@ -201,7 +213,11 @@ void main() {
         // The bilinear mix of four samples shows each one's noise as a dot of
         // its own: where the pixel takes most of this frame's (its history lost
         // or short) it takes their smooth mean instead.
-        vec4 fresh = mix(reconstructed, mean, uSmooth * smoothstep(SMOOTH_FROM, SMOOTH_TO, weight));
+        // In motion, wholly the smooth mean: the bilinear mix of four samples
+        // printed each one's noise as a speck as the view moved.
+        vec4 fresh = mix(reconstructed, mean,
+                         uSmooth * max(smoothstep(SMOOTH_FROM, SMOOTH_TO, weight),
+                                       1.0 - uStill));
         colour = mix(held, fresh, weight);
         km = historyKm.r > 0.0 && reconstructedKm > 0.0
            ? mix(historyKm.r, reconstructedKm, weight)

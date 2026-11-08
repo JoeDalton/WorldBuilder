@@ -63,6 +63,8 @@ class _FixedClock:
         return self.time
 
 
+#: A cloud pixel this far off its converged twin (8-bit levels) is a speck.
+SPECK_LEVELS = 10.0
 #: A pixel counts as cloud where the converged shots with and without the
 #: clouds differ by more than this (8-bit levels, the channels' mean).
 CLOUD_LEVELS = 6.0
@@ -73,6 +75,21 @@ def _grab(demo: TerrainDemo) -> np.ndarray:
     w, h = tex.get_x_size(), tex.get_y_size()
     ram = np.frombuffer(bytes(tex.get_ram_image_as("RGB")), np.uint8)
     return ram.reshape(h, w, 3)[::-1].astype(np.float32)
+
+
+def _detail(image: np.ndarray) -> np.ndarray:
+    """The fine detail per pixel: luminance against its 5 x 5 mean (grain)."""
+    lum = image.mean(-1)
+    pad = np.pad(lum, 2, mode="edge")
+    box = (
+        sum(
+            pad[2 + dy : 2 + dy + lum.shape[0], 2 + dx : 2 + dx + lum.shape[1]]
+            for dy in range(-2, 3)
+            for dx in range(-2, 3)
+        )
+        / 25.0
+    )
+    return np.abs(lum - box)
 
 
 def _save(path: Path, images: list[np.ndarray]) -> None:
@@ -95,6 +112,17 @@ def main() -> None:
         metavar=("LAT", "LON", "ALT", "HEADING", "PITCH"),
     )
     parser.add_argument("--backward", action="store_true", help="fly backward")
+    parser.add_argument(
+        "--vertical",
+        choices=("up", "down"),
+        default=None,
+        help="fly straight up or down (the demo's W / X) instead",
+    )
+    parser.add_argument(
+        "--flicker-map",
+        default=None,
+        help="save the flight's mean flicker per pixel as this PPM (bright: blinking)",
+    )
     parser.add_argument("--boost", action="store_true", help="shift held (x5)")
     parser.add_argument("--frames", type=int, default=240, help="frames flown")
     parser.add_argument("--every", type=int, default=24, help="a sample each K")
@@ -146,6 +174,8 @@ def main() -> None:
 
     # The flight: the demo's own keys (its speed rule, its dt).
     key = "arrow_down" if args.backward else "arrow_up"
+    if args.vertical:
+        key = "w" if args.vertical == "up" else "x"
     demo._keys[key] = True
     demo._keys["shift"] = bool(args.boost)
     clock = demo._clock
@@ -175,6 +205,10 @@ def main() -> None:
             f"flicker over {len(flicker)} frames: mean {stack.mean():.2f}, "
             f"p99 {np.percentile(stack.mean(0), 99):.1f} (per pixel, levels)"
         )
+        if args.flicker_map:
+            level = np.clip(stack.mean(0) * 8.0, 0, 255)
+            _save(Path(args.flicker_map), [np.repeat(level[..., None], 3, -1)])
+        np.save(out / "flicker_stack_last.npy", np.stack(previous).astype(np.uint8))
 
     # Each sample again, held still: the converged clouds, then none.
     rows = []
@@ -196,6 +230,14 @@ def main() -> None:
         cloud = np.abs(converged - bare).mean(-1) > CLOUD_LEVELS
         moved = np.abs(moving - bare).mean(-1) > CLOUD_LEVELS
         error = np.abs(moving - converged).mean(-1)
+        # Grain: the moving frame's fine detail where the converged clouds
+        # are smooth (detail under a level), against the converged's there.
+        detail_moving, detail_converged = _detail(moving), _detail(converged)
+        smooth = cloud & (detail_converged < 1.0)
+        grain = 1.0
+        if smooth.any():
+            smooth_converged = max(float(detail_converged[smooth].mean()), 1e-6)
+            grain = float(detail_moving[smooth].mean()) / smooth_converged
         altitude = float(np.linalg.norm(demo._relative())) - demo.body.radius
         rows.append(
             (
@@ -205,22 +247,25 @@ def main() -> None:
                 float((cloud & ~moved).sum() / max(cloud.sum(), 1)),
                 float((moved & ~cloud).sum() / cloud.sum()) if cloud.any() else 0.0,
                 float(cloud.mean()),
+                grain,
+                float((error[cloud] > SPECK_LEVELS).mean()) if cloud.any() else 0.0,
             )
         )
         _save(out / f"sample_{index:02d}.ppm", [moving, converged, bare])
     print(
         f"{'sample':>6} {'alt m':>9} {'err cloud':>9} {'err all':>8} "
-        f"{'lost %':>7} {'found %':>8} {'cloud %':>8}"
+        f"{'lost %':>7} {'found %':>8} {'cloud %':>8} {'grain':>6} {'speck %':>8}"
     )
-    for index, (alt, ec, ea, lost, found, share) in enumerate(rows):
+    for index, (alt, ec, ea, lost, found, share, grain, speck) in enumerate(rows):
         print(
             f"{index:6d} {alt:9.0f} {ec:9.2f} {ea:8.2f} {lost * 100:7.1f} "
-            f"{found * 100:8.1f} {share * 100:8.1f}"
+            f"{found * 100:8.1f} {share * 100:8.1f} {grain:6.2f} {speck * 100:8.2f}"
         )
     r = np.array(rows)
     print(
         f"{'mean':>6} {'':9} {r[:, 1].mean():9.2f} {r[:, 2].mean():8.2f} "
-        f"{r[:, 3].mean() * 100:7.1f} {r[:, 4].mean() * 100:8.1f}"
+        f"{r[:, 3].mean() * 100:7.1f} {r[:, 4].mean() * 100:8.1f} {'':8} "
+        f"{r[:, 6].mean():6.2f} {r[:, 7].mean() * 100:8.2f}"
     )
     demo.destroy_terrain()
 

@@ -1699,9 +1699,66 @@ from 200 km (`--at 28.89450 30.39999 199852 180 -88.7`, forward).
   the scene cut, the distance clamp, the jump limit relative to the slab's
   distance (2 %: 10 % measured the same on a boosted descent), the clear-sky
   test over the 3 x 3.
-- **Tried, not kept**: a quarter of the clamp's floor kept in motion: flicker
-  -3 to -6 % in `--jitter` but more ghosting on the flights (stratus err 1.25 to
-  1.51, descent 2.96 to 3.27, found 3.8 to 4.9 %).
+- **Grain in motion** (the user: a tower grainy moving, smooth still; flying up
+  past one, `--at 20.56659 30.40000 4194 0 -8 --vertical up`). The harness's
+  grain: the moving frame's fine detail (luminance against its 5 x 5 mean)
+  where the converged clouds are smooth, over the converged's (1: as smooth).
+  Tower up / stratus fwd / descent: err over the clouds and grain:
+
+  | | tower | stratus | descent |
+  |---|---|---|---|
+  | above | 2.22, 1.47 | 1.25, 1.11 | 2.86, 1.72 |
+  | fresh samples wholly the smooth mean in motion (A) | 2.24, 1.39 | 1.30, 1.06 | 3.22, 1.63 |
+  | A + count kept 8 after a clamp | 2.26, 1.38 | 1.30, 1.06 | 3.20, 1.62 |
+  | **A + a quarter of the clamp's floor in motion** | **2.63, 1.11** | **1.57, 1.03** | **3.56, 1.40** |
+  | A + half the floor | 2.81, 1.04 | 1.57, 1.03 | 3.89, 1.30 |
+
+  The grain was the clamp's range in motion: the 3 x 3 samples' own spread,
+  nothing where they agree, so the history followed their noisy mean every
+  frame (not the count: keeping 8 changed nothing). Kept: A and a quarter of
+  the floor (`MOTION_FLOOR`), most of the grain gone for a little lag (extra
+  cloud in the descent 5.6 to 7.2 %). Earlier, without A and measured by
+  flicker alone, the quarter floor had looked not worth its lag.
+- **The user still saw grain; more pixels in motion** (asked for). A 2 x 2
+  block while moving (4 x 2 still; `CloudSettings.march_refresh_moving`,
+  `march.MOVING_BLOCKS`): tower up err 2.72, grain **1.31** (worse than 1.11
+  at 4 x 2), stratus 1.51 / 1.06, descent 3.42 / 1.62. Each fresh sample is
+  as noisy, and the 3 x 3 the resolve smooths over is half as wide: no gain.
+  Left opt-in (off), for the user's own flights. Not the light volume's or the
+  step boundaries' jitter either (both off: tower grain 1.18).
+- **The resolve's spread wider in motion** (`STATS_REACH_MOVING` 1.5 samples
+  against 0.9): tower 2.69 / 1.09, stratus 1.62 / 1.03, descent 3.68 / 1.36.
+  Kept. Over the user's own range (4 to 8 km, 84 frames at 120 fps), original
+  against now: grain 1.45 against **0.99** at every sample (0.97-1.01), error
+  over the clouds 1.68 against 1.70: by this measure as smooth moving as
+  still.
+- **What the user still saw: dark specks** on a tower's silhouette and a far
+  small tower, blocks of the march's size (their screenshot,
+  `--at 21.8847 30.40000 4559 0 -7 --vertical up`). The harness's speck: a
+  cloud pixel more than 10 levels off its converged twin. 2.70 % of the cloud,
+  and 2.43-3.18 % with each resolve change of this section undone, 2.49 % with
+  the original resolve: not the resolve. With the shadow maps' light instead
+  of the light volume (`--cloud-debug 512`) 0.74 %: the volume's reads. Its
+  read jitter at none 5.30 %, a quarter of a texel 5.01 %, half (as built)
+  2.70 %, **one 0.94 %**, one and a half 1.04 %: the coarse texels of a far
+  tower made dark samples, which the jitter spreads and the history averages
+  when still. Kept at a texel (`LIGHT_JITTER`): specks 1.07 %, error over the
+  clouds 2.31 to 1.78; the grid stays gone (`in_clouds`). The rest (dark
+  blocks on silhouettes) is there with the maps' light too.
+- **Still seen: specks on a far tower's shaded side** (the user's second
+  screenshot, `--at 22.4116 30.4 3356 0 -6 --vertical up`, 2 samples): 1.39 %,
+  0.68 % with the maps' light. Not the jitter's draw shared along a ray (a new
+  draw each step: 1.40 %), not the far path (local steps everywhere: 1.05 %
+  against 1.02 on one sample), barely the sky's reach (off: 0.92 %). The bake
+  samples the field at each voxel's centre: far out a feature a texel across
+  is one deep voxel among shallow ones, and a jittered read across it a dark
+  sample. **Smoothed** once a bake is whole (a [1, 2, 1] tent along the three
+  axes, `cloud_light_smooth.frag`, 12 bilinear reads a texel over the
+  2048 x 1024 atlas, one frame a bake): specks 1.39 to **1.25 %**, error over
+  the clouds 1.66 to 1.42, the tower clean in the shots (the rest on the deck's
+  edges, there with the maps' light too); at the first pose specks 1.07 to
+  **0.71 %**, error 1.78 to 1.40. With the smoothing the jitter's reach no
+  longer matters (a texel 1.25 %, half 1.28, a quarter 1.28): kept at a texel.
 - **Not built**: depth-aware (bilateral) reconstruction and exact-pixel
   history: no edge halo seen in converged shots, the motion errors already
   near converged.

@@ -611,6 +611,18 @@ STEP_FADES = {(1, 1): 0.0, (2, 2): 0.1, (4, 2): 0.15, (3, 3): 0.15, (4, 4): 0.25
 LIGHT_LOCAL_FOOTPRINT = 0.04
 
 
+#: The block the march takes while the camera moves, by the still one's: a
+#: pixel traced twice as often (its history's grain in motion is the clamp
+#: on fewer, noisier samples), back to the still block once the view has
+#: been still :data:`MOVING_HOLD` frames. Costs the march's share per traced
+#: pixel while moving (performance.md §28).
+MOVING_BLOCKS = {(4, 4): (4, 2), (4, 2): (2, 2), (3, 3): (2, 2)}
+MOVING_HOLD = 8
+#: The camera's motion (cloud_resolve.frag's uStill below this) that counts as
+#: moving for :data:`MOVING_BLOCKS`.
+MOVING_STILL = 0.5
+
+
 def step_fade_of(block: tuple[int, int]) -> float:
     """:returns: ``uStepFade`` for a march block (across, up)"""
     return STEP_FADES[block]
@@ -834,11 +846,21 @@ class _MarchLayer:
         sort: int,
         states: tuple[RenderState, RenderState],
         gather: bool = True,
+        moving_block: tuple[int, int] | None = None,
     ) -> None:
         self.lens = near_lens
         self.far_lens = far_lens
         self.block = block
         self.gather = gather
+        #: (still, moving): the block traced still and while moving
+        self.blocks = (block, moving_block if gather and moving_block else block)
+        self._still_frames = MOVING_HOLD
+        # The block's inputs, written in place as it changes (no new render
+        # state a frame): uBlock (march, resolves), uStepFade, uSmooth.
+        self._block_input = PTA_LVecBase2i.empty_array(1)
+        self._resolve_block = PTA_LVecBase2i.empty_array(1)
+        self._step_fade = PTA_float.empty_array(1)
+        self._smooth = PTA_float.empty_array(1)
         self.far_depth = _DepthPass(
             app,
             output,
@@ -893,6 +915,10 @@ class _MarchLayer:
         self.card = _fullscreen(
             self.buffer, name, _shader("cloud_march.vert", "cloud_march.frag")
         )
+        #: The march's region: the corner of its buffer this frame's block fills
+        self.march_region = self.buffer.get_display_region(
+            self.buffer.get_num_display_regions() - 1
+        )
         self.card.set_shader_inputs(
             uSceneDepthNear=self.near_depth.depth,
             uSceneDepthFar=self.far_depth.depth,
@@ -918,7 +944,7 @@ class _MarchLayer:
                 uHistory=history.colour,
                 uHistoryDistance=history.distance,
                 uMinWeight=MIN_WEIGHT,
-                uSmooth=smoothing_of(self.block),
+                uSmooth=self._smooth,
             )
 
         # Laid over each range's pass at the cloud's depth: (far, near).
@@ -976,7 +1002,12 @@ class _MarchLayer:
         self._set_sizes(view)
 
     def _march_size(self, view: tuple[int, int]) -> tuple[int, int]:
-        return tuple(max(1, math.ceil(v / b)) for v, b in zip(view, self.block))
+        """The march's buffer: room for the block with the most pixels
+        (the moving one's), the still one's drawn in a corner of it."""
+        return tuple(
+            max(max(1, math.ceil(v / block[k])) for block in self.blocks)
+            for k, v in enumerate(view)
+        )
 
     def _resolve_size(self, view: tuple[int, int]) -> tuple[int, int]:
         return view if self.gather else self._march_size(view)
@@ -988,19 +1019,32 @@ class _MarchLayer:
             return bayer_offset(self.block, frame)
         return (self.block[0] // 2, self.block[1] // 2)
 
+    def _set_block(self, block: tuple[int, int]) -> None:
+        """Trace this block from this frame: its inputs, and the march's
+        region the corner of its buffer the block fills."""
+        self.block = block
+        self._block_input[0] = LVecBase2i(*block)
+        self._resolve_block[0] = LVecBase2i(*block) if self.gather else LVecBase2i(1, 1)
+        self._step_fade[0] = step_fade_of(block)
+        self._smooth[0] = smoothing_of(block)
+        used = [max(1, math.ceil(v / b)) for v, b in zip(self._view, block)]
+        size = self._march_size(self._view)
+        self.march_region.set_dimensions(0.0, used[0] / size[0], 0.0, used[1] / size[1])
+
     def _set_sizes(self, view: tuple[int, int]) -> None:
         self.card.set_shader_inputs(
-            uBlock=LVecBase2i(*self.block),
+            uBlock=self._block_input,
             uViewSize=LVecBase2f(*view),
-            uStepFade=step_fade_of(self.block),
+            uStepFade=self._step_fade,
             uLightLocalFootprint=LIGHT_LOCAL_FOOTPRINT,
         )
         size = self._resolve_size(view)
         for resolve in self.resolves:
             resolve.card.set_shader_inputs(
-                uBlock=LVecBase2i(*self.block) if self.gather else LVecBase2i(1, 1),
+                uBlock=self._resolve_block,
                 uViewSize=LVecBase2f(*size),
             )
+        self._set_block(self.block)
         # Made once (again after a resize): update switches between them
         self._composite_attribs = []
         for card in self.composites:
@@ -1075,8 +1119,6 @@ class _MarchLayer:
         :param slab_distance: how far the clouds' slab is, metres (the
             history's jump limit grows with it)
         """
-        offset = self._offset(frame)
-        self.visit[0] = visit_of(self.block, frame, self.gather)
         projection = self.lens.get_projection_mat()
         unproject = self.lens.get_projection_mat_inv()
         placed = self.camera.get_mat(app.render)
@@ -1087,7 +1129,6 @@ class _MarchLayer:
         rel_to_clip = rel_to_clip * projection
         self._clip_to_render[0] = unproject * placed
         self._clip_to_render_far[0] = self.far_lens.get_projection_mat_inv() * placed
-        self._march_offset[0] = LVecBase2i(*offset)
 
         valid = self._previous is not None
         previous = rel_to_clip
@@ -1109,6 +1150,16 @@ class _MarchLayer:
             # camera then (float64 for the move, float32 only near the camera).
             previous = LMatrix4f.translate_mat(LVecBase3f(*moved)) * last_rel_to_clip
         self._previous = (rel_to_clip, camera.copy(), LMatrix4f(turned))
+
+        # The block: the moving one as soon as the view moves, the still one
+        # once it has been still MOVING_HOLD frames.
+        self._still_frames = self._still_frames + 1 if still >= MOVING_STILL else 0
+        block = self.blocks[1] if self._still_frames < MOVING_HOLD else self.blocks[0]
+        if block != self.block:
+            self._set_block(block)
+        offset = self._offset(frame)
+        self.visit[0] = visit_of(self.block, frame, self.gather)
+        self._march_offset[0] = LVecBase2i(*offset)
 
         write = self.resolves[frame % 2]
         read = self.resolves[1 - frame % 2]
@@ -1473,6 +1524,11 @@ class CloudMarch:
             _FIRST_SORT,
             pass_states(),
             gather=True,
+            moving_block=(
+                MOVING_BLOCKS.get(block)
+                if self._settings.march_refresh_moving
+                else None
+            ),
         )
         self._bind(layer.card)
         # Nothing to march until the weather is in (_finish).
@@ -1514,7 +1570,10 @@ class CloudMarch:
                     weather = self._family_textures[index][0]
                     self._family_textures[index] = (weather, light)
         self._update_shadow_nodes()
-        if old.march_block != settings.march_block:
+        if (
+            old.march_block != settings.march_block
+            or old.march_refresh_moving != settings.march_refresh_moving
+        ):
             self.set_pixel_angle(self._pixel_angle)
             if self._layers:
                 self.attach(self._app, self._depth)

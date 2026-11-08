@@ -488,8 +488,14 @@ depths:
    around. While the view is still (`uStill`, from the camera's move and
    turn), that range is widened by a floor and a share of the mean, or the
    steps' own noise would clamp the history and start its count over; in
-   motion the floor is gone, or a cloud coming closer would keep the thin
-   look it had. The samples' mean and spread are Gaussian-weighted by their
+   motion a quarter of it stays (`MOTION_FLOOR`): with none a cloud coming
+   closer kept less of the thin look it had, but where the samples agree the
+   range was their noisy mean, and a tower went grainy whenever the camera
+   moved. In motion this frame's samples are taken as their smooth mean,
+   their statistics spread wider (`STATS_REACH_MOVING`, 1.5 samples).
+   `CloudSettings.march_refresh_moving` (off) traces twice the pixels while
+   moving (`MOVING_BLOCKS`, back after `MOVING_HOLD` still frames): no less
+   grain measured, each sample as noisy and the 3 × 3 half as wide. The samples' mean and spread are Gaussian-weighted by their
    distance to the pixel (`STATS_REACH`), not a box about the nearest sample
    (whose centre moves every half block and puts the lattice into the clamp), and
    so is the distance the history is moved by. A pixel that takes most of this

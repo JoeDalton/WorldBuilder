@@ -240,6 +240,8 @@ class CloudSettings(QualitySettings):
     :ivar march_block: the view's pixels per raymarched pixel, (across,
         up): the march traces one pixel of each block a frame, in turn
         (``march.block_order``). Live
+    :ivar march_refresh_moving: while the camera moves, the march traces a
+        smaller block (``march.MOVING_BLOCKS``). Live
     :ivar interior_growth: billboards deep inside a cloud grow, fewer of
         them (:func:`sphere.interior_levels`). Rebuild
     :ivar count_scale: billboards relative to the types as authored: their
@@ -293,6 +295,15 @@ class CloudSettings(QualitySettings):
         "gathers the others over the frames): a quarter of the resolution per axis "
         "traces one pixel in 16, a ninth one in 9, an eighth one in 8, a half one "
         "in 4 (raymarch only).",
+    )
+    march_refresh_moving: bool = knob(
+        False,
+        "Raymarch: faster refresh in motion",
+        advanced=True,
+        help="While the camera moves, the raymarch traces twice as many "
+        "pixels a frame (an eighth to a quarter, a quarter to an eighth), "
+        "back to its own share once still: at twice the raymarch's cost in "
+        "motion (raymarch only).",
     )
     interior_growth: bool = knob(
         False,

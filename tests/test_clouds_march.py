@@ -720,6 +720,41 @@ def test_one_march_covers_both_depth_ranges(window, executor):
         depth.destroy()
 
 
+def test_the_march_traces_more_pixels_while_moving_when_asked(window, executor):
+    """CloudSettings.march_refresh_moving: the moving block (MOVING_BLOCKS)
+    while the camera moves, its buffer room for it, the still block again
+    after MOVING_HOLD still frames; without it, one block."""
+    from dataclasses import replace
+
+    from world_builder.clouds.march import MOVING_BLOCKS, MOVING_HOLD
+    from world_builder.depth import SplitDepthCameras
+
+    clouds = _clouds(window, executor, "march")
+    depth = SplitDepthCameras(window, near=1.0)
+    try:
+        clouds.use_split_depth(window, depth)
+        march = clouds.volume
+        (layer,) = march._layers
+        assert layer.blocks[0] == layer.blocks[1]
+        march.set_settings(replace(march.settings, march_refresh_moving=True))
+        (layer,) = march._layers
+        still = layer.blocks[0]
+        assert layer.blocks[1] == MOVING_BLOCKS[still]
+        here = np.array([0.0, 0.0, R + 3000.0])
+        depth.update(*SplitDepthCameras.planet_ranges(R, R + 3000.0))
+        for k in range(3):
+            layer.update(window, k, here + [0.0, 0.0, 50.0 * k])
+        assert layer.block == MOVING_BLOCKS[still]
+        used = tuple(-(-v // b) for v, b in zip(layer._view, layer.block))
+        assert layer._march_size(layer._view) == used  # room for the moving block
+        for k in range(MOVING_HOLD + 1):
+            layer.update(window, 3 + k, here + [0.0, 0.0, 100.0])
+        assert layer.block == still
+    finally:
+        clouds.remove()
+        depth.destroy()
+
+
 def test_the_march_ends_at_either_range_and_the_cards_split_the_pixels():
     march = SHADER.read_text()
     # The near range's surface first, then the far range's, then the far plane.

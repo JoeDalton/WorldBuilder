@@ -23,6 +23,7 @@ from world_builder.clouds.light_volume import (
     light_chart,
     light_depth_on_sphere,
     light_reach,
+    smooth_volume,
     voxel_positions,
 )
 from world_builder.clouds.sphere import _noise
@@ -123,14 +124,19 @@ def test_the_bake_is_the_cpus_march_from_each_voxel(window):
         sun /= np.linalg.norm(sun)
         clouds.set_sun(sun)
         volume = volumes.volumes[0]
-        frames = SLICES // 8
+        frames = SLICES // 8 + 1  # the slices, then their smoothing
         for _ in range(frames):
             volumes.update(camera, sun)
             assert volumes._on[0][0] == 0  # nothing whole yet
             window.graphicsEngine.render_frame()
         volumes.update(camera, sun)
         assert volumes._on[0][0] == 1 and volume.front is not None
-        got = _read_atlas(volume.front, tile)
+        got = _read_atlas(volume.raw, tile)
+        # The front: the raw bake smoothed (the CPU's tent, to half floats)
+        front = _read_atlas(volume.front, tile)
+        smoothed = smooth_volume(got)
+        assert np.allclose(front, smoothed, rtol=2e-3, atol=2e-3)
+        assert np.abs(front - got).max() > 0.1  # smoothing did something
 
         chart = [tuple(volume.front.chart[k]) for k in range(4)]
         points = voxel_positions(chart, tile).reshape(-1, 3)
@@ -225,12 +231,12 @@ def test_the_genera_bake_is_the_cpus_march_for_each_family(window, family):
         sun /= np.linalg.norm(sun)
         clouds.set_sun(sun)
         volume = volumes.volumes[family]
-        for _ in range(SLICES // 8):
+        for _ in range(SLICES // 8 + 1):  # the slices, then their smoothing
             volumes.update(camera, sun)
             window.graphicsEngine.render_frame()
         volumes.update(camera, sun)
         assert volume.front is not None
-        got = _read_atlas(volume.front, tile)
+        got = _read_atlas(volume.raw, tile)
         caster = clouds.shadow_caster(family)
         weather = caster.weather
 

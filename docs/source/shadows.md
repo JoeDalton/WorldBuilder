@@ -394,8 +394,13 @@ shadow maps' four levels, whose bands showed in towers.
   CPU). With the weather of the chord's start, as the ground's shadow march
   takes it, two voxels on one sun ray disagreed about the tower between them
   and its face streaked. A few slices a frame
-  (`ShadowSettings.cloud_light_slices`) into a back atlas, swapped to the front
-  once whole: the readers never see a half-baked volume, nor one of two suns.
+  (`ShadowSettings.cloud_light_slices`) into a raw atlas; once whole, smoothed
+  in one frame into a third (`cloud_light_smooth.frag`: each voxel the
+  [1, 2, 1] tent of its neighbours along the three axes,
+  `light_volume.smooth_volume` on the CPU), swapped to the front: the readers
+  never see a half-baked volume, nor one of two suns. Unsmoothed, a feature a
+  far texel across was one deep voxel among shallow ones, and the jittered
+  reads across it showed as dark specks in motion (performance.md §28).
   Baked again when the sun turns past `utils.SUN_TOLERANCE`, the camera moves
   3 % of the reach, the reach changes by as much, or the clouds' layer
   changes; one bake at a time. With all still, nothing a frame. Each family
@@ -405,10 +410,12 @@ shadow maps' four levels, whose bands showed in towers.
   of the volume's depths where they ended and where the sun march would have
   (its window: the whole chord, `--cloud-debug 1024`, still blackens towers,
   as the maps' did). Past a view footprint of `march.LIGHT_LOCAL_FOOTPRINT`
-  the volume alone. Each read is jittered by up to half a texel and half a
-  slice (per pixel and visit, the march's blue noise): read at the nodes, the
-  linear interpolation between texels hundreds of metres wide drew their grid
-  on a tower's face; jittered, the resolve averages it. The **sky's reach**
+  the volume alone. Each read is jittered by up to a texel and a slice either
+  way (`LIGHT_JITTER`; per pixel and visit, the march's blue noise): read at
+  the nodes, the linear interpolation between texels hundreds of metres wide
+  drew their grid on a tower's face; jittered, the resolve averages it. At
+  half that the coarse texels of a far tower still showed in motion, as dark
+  specks the history no longer averaged (performance.md §28). The **sky's reach**
   comes from the up depth, `mix(skyOcclusion, 1, exp2(-depth))`, in place of
   the height ramp. Beyond the volume (its last eighth fades), the maps and the
   ramp as before; `--cloud-debug 512` takes them everywhere (the old look).

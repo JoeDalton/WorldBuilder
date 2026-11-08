@@ -70,6 +70,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distance put the clouds behind the ground: 90 % of a stratus cut, its edge
   sliding against the mountains, half a descent's clouds missing; now 0.3 % and
   1.6 % (performance.md §28). The clear-sky early-out tests the 3 × 3 samples.
+  In motion the resolve keeps a quarter of the clamp's floor and takes this
+  frame's samples as their smooth mean: a tower is no longer grainy while the
+  camera moves (the grain 1.47 to 1.11 of the still look's), and spreads its
+  samples' statistics wider in motion (`STATS_REACH_MOVING`).
+- The light volume's reads are jittered by a texel and a slice either way
+  (`LIGHT_JITTER`), not half: the dark specks on far towers in motion (2.7 %
+  of the cloud off its still look, 1.07 % now).
+- The light volume is smoothed once baked (`cloud_light_smooth.frag`, a
+  [1, 2, 1] tent along its three axes, one frame a bake, into a third atlas):
+  the remaining specks on far towers' shaded sides gone (0.71 % of the cloud
+  off its still look at the first pose, 1.25 % at the second, the rest on the
+  deck's edges).
+- `CloudSettings.march_refresh_moving` (advanced, off): the raymarch traces
+  twice the pixels while the camera moves (`march.MOVING_BLOCKS`).
 - `scripts/motion_shots.py`: the clouds in motion against converged, flown from
   a pose with the demo's speed rule at a fixed frame time (`--flicker` too).
 - The frame cap is off by default (`DisplaySettings.frame_cap` 0).
