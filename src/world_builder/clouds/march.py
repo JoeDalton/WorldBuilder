@@ -853,6 +853,33 @@ class _DepthPass:
         self.buffer.make_display_region().set_camera(self.camera)
 
 
+class _GroundShadow:
+    """The clouds' shadow on the view's scene, at the depth passes'
+    resolution (ground_shadow.frag): what the terrain and the sea read back
+    by their distance instead of shading it per pixel, where the ground's
+    small triangles had every 2 x 2 quad run it (0.8-0.9 ms a frame at 2560
+    x 1440, performance.md §33). Its texture is the march's, kept across
+    rebuilds, so the readers bind it once."""
+
+    def __init__(
+        self,
+        app: Any,
+        output: Any,
+        name: str,
+        size: tuple[int, int],
+        sort: int,
+        texture: Texture,
+    ) -> None:
+        self.texture = texture
+        self.buffer = _buffer(
+            app, output, name, size, sort, {GraphicsOutput.RTP_color: texture}
+        )
+        self.buffer.set_clear_color_active(False)
+        self.card = _fullscreen(
+            self.buffer, name, _shader("cloud_march.vert", "ground_shadow.frag")
+        )
+
+
 class _MarchLayer:
     """The march over both depth ranges (EVE-Redux's single march over the
     split cameras' depths): a depth pass per range, one march, its two
@@ -885,6 +912,7 @@ class _MarchLayer:
         states: tuple[RenderState, RenderState],
         gather: bool = True,
         moving_block: tuple[int, int] | None = None,
+        ground: Texture | None = None,
     ) -> None:
         self.lens = near_lens
         self.far_lens = far_lens
@@ -930,6 +958,14 @@ class _MarchLayer:
         #: resolved distance's alone; cloud_composite.frag)
         self.scene_cut = PTA_int.empty_array(1)
         self.scene_cut[0] = 1
+        #: The clouds' shadow on the scene (None: its readers shade it per pixel)
+        self.ground = (
+            None
+            if ground is None
+            else _GroundShadow(
+                app, output, f"{name}_ground", depth_size(view), sort + 2, ground
+            )
+        )
 
         # The march: one pixel of every block.
         self.colour = _target(f"{name}_colour")
@@ -1019,6 +1055,15 @@ class _MarchLayer:
             uClipToRenderFar=self._clip_to_render_far,
             uOffset=self._march_offset,
         )
+        if self.ground is not None:
+            self.ground.card.set_shader_inputs(
+                uSceneDepthNear=self.near_depth.depth,
+                uSceneDepthFar=self.far_depth.depth,
+                uNearDepthOn=self.near_on,
+                uDepthScale=DEPTH_SCALE,
+                uClipToRender=self._clip_to_render,
+                uClipToRenderFar=self._clip_to_render_far,
+            )
         self._resolve_inputs = []
         for resolve in self.resolves:
             inputs = _ResolveInputs()
@@ -1073,6 +1118,10 @@ class _MarchLayer:
         self.march_region.set_dimensions(0.0, used[0] / size[0], 0.0, used[1] / size[1])
 
     def _set_sizes(self, view: tuple[int, int]) -> None:
+        if self.ground is not None:
+            self.ground.card.set_shader_input(
+                "uViewSize", LVecBase2f(*depth_size(view))
+            )
         self.card.set_shader_inputs(
             uBlock=self._block_input,
             uViewSize=LVecBase2f(*view),
@@ -1110,6 +1159,8 @@ class _MarchLayer:
         self._view = view
         for buffer in self.depth_buffers:
             buffer.set_size(*depth_size(view))
+        if self.ground is not None:
+            self.ground.buffer.set_size(*depth_size(view))
         self.buffer.set_size(*self._march_size(view))
         for resolve in self.resolves:
             resolve.buffer.set_size(*self._resolve_size(view))
@@ -1122,6 +1173,8 @@ class _MarchLayer:
         self.active = active
         for buffer in (self.far_depth.buffer, self.buffer):
             buffer.set_active(active)
+        if self.ground is not None:
+            self.ground.buffer.set_active(active)
         for resolve in self.resolves:
             resolve.buffer.set_active(active)
         self._show_near()
@@ -1220,10 +1273,13 @@ class _MarchLayer:
             card.remove_node()
         for depth in (self.far_depth, self.near_depth):
             depth.camera.remove_node()
-        for card in [self.card] + [r.card for r in self.resolves]:
+        ground = [] if self.ground is None else [self.ground]
+        for card in [self.card] + [p.card for p in self.resolves + ground]:
             card.get_top().remove_node()
         for buffer in (
-            self.depth_buffers + [self.buffer] + [r.buffer for r in self.resolves]
+            self.depth_buffers
+            + [self.buffer]
+            + [p.buffer for p in self.resolves + ground]
         ):
             app.graphicsEngine.remove_window(buffer)
 
@@ -1488,6 +1544,11 @@ class CloudMarch:
         }
         self._nodes: list[NodePath] = []
         self._bind(self.root)
+        # The clouds' shadow on the scene (bind_ground_shadow): its texture
+        # kept across the passes' rebuilds, on while a pass draws it.
+        self._ground_texture = _target("cloud_ground_shadow")
+        self._ground_on = PTA_int.empty_array(1)
+        self._ground_binders: list[Any] = []
         self._app: Any = None
         self._depth: SplitDepthCameras | None = None
         self._layers: list[_MarchLayer] = []
@@ -1526,6 +1587,30 @@ class CloudMarch:
         for node in self._nodes:
             bind(node)
 
+    def bind_ground_shadow(self, node: NodePath, binders: list[Any]) -> None:
+        """Let a node's shaders (the terrain's: terrain_frag.glsl's
+        ``uGroundShadow``) read the clouds' shadow on the view's scene from
+        the march's pass (:class:`_GroundShadow`) while it draws, and shade it
+        per pixel otherwise.
+
+        :param node: the node that reads it
+        :param binders: set the pass's own inputs beyond the clouds' (the
+            world's ``Shadows.bind``: the shadow's steps), now and on the
+            passes' rebuilds
+        """
+        node.set_shader_inputs(
+            uGroundShadow=self._ground_texture,
+            uGroundShadowOn=self._ground_on,
+            uGroundShadowScale=DEPTH_SCALE,
+        )
+        self._ground_binders = list(binders)
+        for layer in self._layers:
+            self._bind_ground_pass(layer)
+
+    def _bind_ground_pass(self, layer: _MarchLayer) -> None:
+        for bind in self._ground_binders:
+            bind(layer.ground.card)
+
     def _set_inputs(self, **inputs: Any) -> None:
         self._inputs.update(inputs)
         for node in self._nodes:
@@ -1547,8 +1632,10 @@ class CloudMarch:
         """Remove the march's passes (it draws nothing until :meth:`attach`)."""
         for layer in self._layers:
             self._nodes.remove(layer.card)
+            self._nodes.remove(layer.ground.card)
             layer.destroy(self._app)
         self._layers = []
+        self._ground_on[0] = 0
 
     def _build_layers(self) -> None:
         app, depth = self._app, self._depth
@@ -1570,8 +1657,12 @@ class CloudMarch:
                 if self._settings.march_refresh_moving
                 else None
             ),
+            ground=self._ground_texture,
         )
         self._bind(layer.card)
+        self._bind(layer.ground.card)
+        self.bind_shadow_inputs(layer.ground.card)
+        self._bind_ground_pass(layer)
         # Nothing to march until the weather is in (_finish).
         layer.set_active(self._visible and self.weather is not None)
         self._layers.append(layer)
@@ -1832,6 +1923,8 @@ class CloudMarch:
         self.root.hide(HIDE_FROM_NEAR | HIDE_FROM_FAR | HIDE_FROM_CLOUD_PASS)
         for layer in self._layers:
             layer.set_active(visible and self.weather is not None)
+        if not visible:
+            self._ground_on[0] = 0
 
     def update(
         self, camera_world: ArrayLike, camera_render: ArrayLike = (0.0, 0.0, 0.0)
@@ -1873,6 +1966,9 @@ class CloudMarch:
             for layer in self._layers:
                 if layer.active:
                     layer.update(self._app, self._frame[0], cam, slab_distance)
+        self._ground_on[0] = int(
+            self._visible and any(layer.active for layer in self._layers)
+        )
 
     def _slab_distance(self, camera: np.ndarray) -> float:
         """:returns: how far the slab's nearest point is from *camera*

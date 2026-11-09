@@ -35,6 +35,7 @@ flat in vec3 vFaceU;   // the face's texture axes, render frame
 flat in vec3 vFaceV;
 flat in int vLevel;    // the chunk's level
 flat in float vStep;   // its vertex spacing (uv metres per step), metres
+flat in int vMirror;   // 1 in the sea's reflection pass (terrain.vert)
 
 uniform sampler2D uNoise;         // four tiling noises, breaks up biome edges
 uniform vec3  uMeanAlbedo[6];     // linear; drawn instead of textures far away
@@ -58,8 +59,16 @@ uniform float uShallowDepth;      // and its e-folding depth, metres
 
 uniform sampler2D uStrata;        // the rock strata's tints by altitude (one row)
 uniform vec2  uStrataRange;       // the altitudes its first and last texels span
-uniform int   uDebugMode;  // 0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts
+uniform int   uDebugMode;  // 0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts,
+                           // 6 the clouds' shadow
 uniform int   uMaxLevel;
+// The clouds' shadow on the view's scene, a pass of the march's
+// (clouds.march.GroundShadow): r the shade, g the scene's distance (km), -1
+// where none, at the view's resolution over uGroundShadowScale. Off (0)
+// without one: then shaded per pixel.
+uniform sampler2D uGroundShadow;
+uniform int   uGroundShadowOn;
+uniform int   uGroundShadowScale;
 
 out vec4 fragColor;
 
@@ -82,11 +91,50 @@ vec3 hue(float t) {
 // its mean where the pixel's footprint (metres) spans several clouds
 // (cloud_field.glsl's planetCloudShadow; uCloudShadowLayer and Other, -1
 // none: CloudVolume.bind_shadow_inputs). Clouds only come with air: the
-// planet frame is the air's.
+// planet frame is the air's. Read from the ground shadow pass where it holds
+// this pixel (the main view's), per pixel elsewhere (the sea's reflection).
+// A texel of the ground shadow agrees with this pixel when their distances
+// differ by less than this share: a slope's neighbouring texel does, the
+// ground behind a silhouette (or a model in front) does not.
+const float GROUND_SHADOW_AGREE = 0.08;
+
+// The ground shadow pass's shade at this pixel: its four texels around it,
+// bilinear, those of another surface left out. False where none agrees (a
+// silhouette's edge, the near range when its depth pass is off).
+bool groundShadowAt(float dist, out float shade) {
+    vec2 at = gl_FragCoord.xy / float(uGroundShadowScale) - 0.5;
+    ivec2 base = ivec2(floor(at));
+    vec2 f = at - vec2(base);
+    ivec2 last = textureSize(uGroundShadow, 0) - 1;
+    float km = dist / 1000.0;
+    float total = 0.0;
+    shade = 0.0;
+    for (int y = 0; y <= 1; ++y) {
+        for (int x = 0; x <= 1; ++x) {
+            vec2 texel = texelFetch(uGroundShadow, clamp(base + ivec2(x, y), ivec2(0), last), 0).rg;
+            vec2 w2 = mix(vec2(1.0) - f, f, vec2(x, y));
+            float w = w2.x * w2.y + 1e-3;
+            if (texel.g >= 0.0 && abs(texel.g - km) <= GROUND_SHADOW_AGREE * km) {
+                shade += w * texel.r;
+                total += w;
+            }
+        }
+    }
+    if (total <= 0.0) {
+        return false;
+    }
+    shade /= total;
+    return true;
+}
+
 float cloudShade(vec3 L, float footprint) {
     if ((uCloudShadowLayer < 0 && uCloudShadowOther < 0) || uCloudShadowSteps <= 0
             || uOwnAtmosphere < 0) {
         return 1.0;
+    }
+    float shade;
+    if (uGroundShadowOn != 0 && vMirror == 0 && groundShadowAt(length(vRelPos), shade)) {
+        return shade;
     }
     vec3 planet = uAtmoCam[uOwnAtmosphere].xyz + vRelPos;
     return planetCloudShadow(planet, L, uCloudShadowSteps, footprint);
@@ -104,6 +152,10 @@ void main() {
     float day = uRadialLight == 1 ? smoothstep(-0.12, 0.08, dot(up, L)) : 1.0;
     // The ground a pixel spans, metres (taken here, out of any branch).
     float footprint = max(length(dFdx(vRelPos)), length(dFdy(vRelPos)));
+    if (uDebugMode == 6) {
+        fragColor = vec4(vec3(cloudShade(L, footprint)), 1.0);
+        return;
+    }
 
 #ifdef SEA_NEAR
     // Water wholly in its near look: none of the land's or the far water's

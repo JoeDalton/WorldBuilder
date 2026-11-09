@@ -48,6 +48,7 @@ flat out vec3 vFaceU;  // the face's texture axes, render frame (the body turns)
 flat out vec3 vFaceV;
 flat out int vLevel;
 flat out float vStep;  // uv metres per vertex step (about the vertex spacing)
+flat out int vMirror;  // 1 in the sea's reflection pass (its clip plane)
 
 const int QUADS = 64;
 const int VERTS = QUADS + 1;
@@ -114,6 +115,7 @@ void main() {
     // vertices are clipped too (clipping, not a discard, which would cost the
     // early depth test everywhere).
     bool mirror = p3d_ClipPlane[0] != vec4(0.0);
+    vMirror = int(mirror);
     gl_ClipDistance[0] = mirror && uSeaSurface == 1 && ground < 0.0
         ? -1.0 : dot(p3d_ClipPlane[0], p3d_ModelViewMatrix * local);
 

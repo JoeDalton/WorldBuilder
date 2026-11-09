@@ -87,3 +87,13 @@ def _no_cloud_map() -> Texture:
     tex.setup_2d_texture(1, 1, Texture.T_float, Texture.F_rgba32)
     tex.set_ram_image(bytes(16))
     return tex
+
+
+def ground_shadow_defaults(node: NodePath) -> None:
+    """Give a node (the terrain's) "no ground shadow pass" inputs
+    (terrain_frag.glsl's ``uGroundShadow``: off, the clouds' shadow shaded
+    per pixel), until :meth:`march.CloudMarch.bind_ground_shadow` binds one.
+    """
+    node.set_shader_inputs(
+        uGroundShadow=_no_cloud_map(), uGroundShadowOn=0, uGroundShadowScale=1
+    )

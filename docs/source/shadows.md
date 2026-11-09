@@ -371,6 +371,35 @@ texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
   makes them for a body with clouds and binds them to its terrain
   (`Body.cloud_maps`); the hand-built demo the same.
 
+## The clouds' shadow on the view's ground (one pass)
+
+`clouds.march._GroundShadow`, `PlanetClouds.bind_ground_shadow`: with the
+raymarch, the ground's lookup above runs once per texel of a pass at the
+depth passes' resolution (half the view's), not per pixel of the terrain and
+the sea.
+
+- **Why.** Far off, the ground's triangles are a pixel or two; the GPU shades
+  2 x 2 quads, so every pixel's work ran for up to four, and the lookup (both
+  families: the chord, the weather, two maps each) cost 0.8-0.9 ms a frame at
+  2560 x 1440 (performance.md §32).
+- **The pass** (`ground_shadow.frag`): from the march's own depth passes (the
+  near range's where it drew, the far range's elsewhere), each texel's scene
+  point, and `planetCloudShadow` there: the same function as the terrain's,
+  its footprint from the pass's own derivatives or, across a silhouette, a
+  level ground's at that distance. Out: the shade, and the distance (km; -1
+  for the sky).
+- **The reading** (`terrain_frag.glsl`'s `groundShadowAt`): the four texels
+  around the pixel, bilinear, keeping those whose distance is within 8 % of
+  the pixel's (`GROUND_SHADOW_AGREE`): a silhouette's far side or a model in
+  front is left out. Where none agrees (a silhouette's edge; the near range
+  while its depth pass is off, the slab being out of it), and in the sea's
+  reflection (`vMirror`), per pixel as before. `uGroundShadowOn` is 1 while the
+  passes draw; the billboards have none (`ground_shadow_defaults`).
+- **Look.** The terrain's debug view 6 shows the shade alone: against per
+  pixel, the same but at far shadows' edges, moved by a pixel (half the
+  resolution) near the horizon (1-2 % of pixels over 2 levels in that view).
+- **Cost.** 0.36-0.70 ms less a frame (performance.md §33).
+
 ## The cloud light volume
 
 `clouds.light_volume.CloudLightVolumes` (RENDERING_PLAN.md part C; EVE-Redux's

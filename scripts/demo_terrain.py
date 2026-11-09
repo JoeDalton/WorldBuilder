@@ -246,7 +246,15 @@ QUALITY_KEYS = (
     ("f7", "shadows"),
 )
 QUALITY_ALL_KEY = "f6"
-_DEBUG_VIEWS = ("shaded", "LOD", "biomes", "slope", "normals", "skirts")
+_DEBUG_VIEWS = (
+    "shaded",
+    "LOD",
+    "biomes",
+    "slope",
+    "normals",
+    "skirts",
+    "cloud shadow",
+)
 
 
 def window_config(
@@ -1095,6 +1103,10 @@ class TerrainDemo(ShowBase):
             per_frame=self.world.shadows.cloud_light_slices,
         )
         self.clouds.bind_maps(self.cloud_light.bind)
+        # Their shadow on the view's ground from the march's pass, not per pixel.
+        self.clouds.bind_ground_shadow(
+            self.terrain.root, [functools.partial(self.shadows.bind, body=0)]
+        )
         # The god rays: their shadows (and the mountains') on the air's bake.
         self.atmospheres.bind_god_rays(
             0,
@@ -1197,7 +1209,8 @@ class TerrainDemo(ShowBase):
         self._sync_half_res()
 
     def set_debug_view(self, view: int) -> None:
-        """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts (all bodies)."""
+        """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts, 6 the
+        clouds' shadow (all bodies)."""
         self._debug = view
         for terrain in self._terrains():
             terrain.set_debug_mode(view)

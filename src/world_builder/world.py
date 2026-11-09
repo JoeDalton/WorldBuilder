@@ -537,6 +537,12 @@ class World:
                         per_frame=self.settings.shadows.cloud_light_slices,
                     )
                     body.clouds.bind_maps(body.cloud_light.bind)
+                # Their shadow on the view's ground from the march's pass, not
+                # per pixel (the shadow's steps from the world's Shadows).
+                body.clouds.bind_ground_shadow(
+                    terrain.root,
+                    [functools.partial(self.shadows.bind, body=len(self.bodies))],
+                )
             body.models = self._model_lighting(
                 look.exposure, index, terrain, len(self.bodies), light_scale
             )

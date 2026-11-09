@@ -854,3 +854,75 @@ def test_a_forgotten_half_res_pass_is_not_given_the_next_volume(showbase, execut
         assert half_res.add.call_count == 1
     finally:
         clouds.remove()
+
+
+def test_the_ground_reads_the_clouds_shadow_from_a_pass(window, executor):
+    """The clouds' shadow on the view's ground from the march's pass at the
+    depth passes' resolution (performance.md §33): its readers bind one
+    texture, on while the passes draw; its card takes the clouds' inputs and
+    the binders given, again on a rebuild; per pixel again with billboards."""
+    from panda3d.core import NodePath
+
+    from world_builder.clouds.march import depth_size
+    from world_builder.depth import SplitDepthCameras
+
+    clouds = _clouds(window, executor, "march")
+    depth = SplitDepthCameras(window, near=1.0)
+    ground = NodePath("ground")
+    bound = []
+    try:
+        clouds.bind_ground_shadow(ground, [bound.append])
+        march = clouds.volume
+        assert march._ground_on[0] == 0  # no passes yet: per pixel
+        texture = ground.get_shader_input("uGroundShadow").get_texture()
+        clouds.use_split_depth(window, depth)
+        (layer,) = march._layers
+        assert layer.ground.texture == texture
+        assert bound == [layer.ground.card]
+        buffer = layer.ground.buffer
+        assert (buffer.get_x_size(), buffer.get_y_size()) == depth_size(march._size)
+        card = layer.ground.card
+        assert card.get_shader_input("uSceneDepthNear").get_texture() == (
+            layer.near_depth.depth
+        )
+        assert card.get_shader_input("uSceneDepthFar").get_texture() == (
+            layer.far_depth.depth
+        )
+        march._finish()
+        depth.update(*SplitDepthCameras.planet_ranges(R, R + 3000.0))
+        march.update((0.0, 0.0, R + 3000.0))
+        window.graphicsEngine.render_frame()
+        assert march._ground_on[0] == 1 and buffer.is_active()
+        march.set_visible(False)
+        assert march._ground_on[0] == 0 and not buffer.is_active()
+        march.set_visible(True)
+        # A rebuild (the march's resolution): a new card, the same texture
+        clouds.set_settings(replace(clouds.settings, march_block=(2, 2)))
+        (layer,) = march._layers
+        assert layer.ground.texture == texture and bound[-1] == layer.ground.card
+        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
+        # The defaults' (off): not the march's texture any more
+        assert ground.get_shader_input("uGroundShadow").get_texture() != texture
+    finally:
+        clouds.remove()
+        depth.destroy()
+
+
+def test_the_ground_takes_the_pass_where_its_distance_agrees():
+    """terrain_frag.glsl: the pass's four texels around a pixel, bilinear,
+    those at another distance (a silhouette's far side, a model in front)
+    left out; per pixel where none agrees, and in the sea's reflection
+    (terrain.vert's vMirror, from its clip plane)."""
+    terrain = Path(__file__).parent.parent / "src/world_builder/terrain/shaders"
+    frag = (terrain / "terrain_frag.glsl").read_text()
+    assert "const float GROUND_SHADOW_AGREE = 0.08;" in frag
+    assert "abs(texel.g - km) <= GROUND_SHADOW_AGREE * km" in frag
+    assert (
+        "uGroundShadowOn != 0 && vMirror == 0 && groundShadowAt(length(vRelPos), shade)"
+        in frag
+    )
+    assert "vMirror = int(mirror);" in (terrain / "terrain.vert").read_text()
+    shadow = (SHADER.parent / "ground_shadow.frag").read_text()
+    # The same shadow as the ground's per pixel, at the scene the march stops at
+    assert "planetCloudShadow(planet, normalize(sunDir), uCloudShadowSteps," in shadow
+    assert "fragColor = vec4(1.0, -1.0, 0.0, 1.0);  // the sky" in shadow

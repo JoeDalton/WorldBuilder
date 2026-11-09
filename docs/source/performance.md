@@ -1985,6 +1985,31 @@ draws, 0.2 without them). Lessons kept:
   to ~4.5 ms. A threaded `Cull/Draw` pipeline takes it to 1.9 ms offscreen
   (the App alone), unmeasured for correctness.
 
+## 33. The clouds' shadow on the ground from one pass
+
+§32's first lever: the terrain's and the sea's `cloudShade` (0.8-0.9 ms at
+every pose). Split by switching its parts off (GPU frame, ms): the march where
+the maps miss costs nothing measurable; the stratus family 0.3-0.45; reading
+the near map first and the far one only where the near does not hold the
+point 0.1-0.15. The lookup itself is the cost, run for every pixel of the 2 x
+2 quads of the ground's small triangles. Now a pass at the depth passes'
+resolution computes it once per texel from the scene the march's depth passes
+drew, and the ground reads it back by distance (shadows.md, "The clouds'
+shadow on the view's ground"). GPU frame, per pixel against the pass (the
+same run, 2560 x 1440, HIGH, genera, `--start 29.7159 29.8232`):
+
+| pose | per pixel | pass | saved |
+|---|---|---|---|
+| ground | 7.45 | 7.01 | 0.44 |
+| coast | 7.56 | 6.85 | 0.70 |
+| open sea | 5.20 | 4.84 | 0.36 |
+| tower (`29.74164 29.82320 2358 0 -8`) | 9.26 | 8.83 | 0.43 |
+
+What remains of the 0.8-0.9: the pass, the four fetches, and the sea's
+reflection, still per pixel. The shade alone (terrain debug view 6, clouds
+hidden, 1600 x 900): the same but at far shadows' edges near the horizon (a
+pixel: half the resolution), over 2 levels on 1.1-2.2 % of pixels.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

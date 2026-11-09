@@ -63,6 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The clouds' shadow on the terrain and the sea, with the raymarch, from one
+  pass at the depth passes' resolution (`clouds.march._GroundShadow`,
+  `PlanetClouds.bind_ground_shadow`, which `World` and the demo call): the
+  ground reads it back by distance, per pixel where none agrees and in the
+  sea's reflection. 0.36-0.70 ms less a frame at 2560 x 1440. The terrain's
+  debug view 6 shows the clouds' shadow alone.
+
 - The raymarch's resolve in motion: each frame takes at least about a cycle
   of the block (`march.MOVING_WEIGHTS`: 1/8 at 4 x 2), and the clamp's
   statistics come from a seamless window (the 4 x 4 samples about a pixel,
