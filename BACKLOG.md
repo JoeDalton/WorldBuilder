@@ -94,8 +94,11 @@ then the default) is measured, not built. What is left:
   2026-11-08 at the user's tower pose): flying inside the convective slab,
   the rays toward an anvil 30 km off take ~125 steps, 89-95 % in clear air,
   5-13 in the cloud. Few samples in the cloud make each one noisy on its
-  shaded side, which the resolve's clamp then reads as change. Lead:
-  RENDERING_PLAN.md's weather-aware skipping (the bands' item).
+  shaded side, which the resolve's clamp then reads as change. The
+  weather-aware skipping (RENDERING_PLAN.md, the bands' item) was measured
+  (performance.md §31): it clears 18-29 % of those clear steps there and saves
+  no time (the fair-weather weather allows cloud almost everywhere; only the
+  noise says clear); 89 % and -1.3 ms above the cumulus tops (4.9 km).
 - **A `motion_shots` run at the stratus pose once read 26 % extra cloud**
   (error 10.6 against 1.4 when run again, 2026-11-08): not reproduced, maybe a
   light-volume swap during the flight or the converged twin's settle. Worth a

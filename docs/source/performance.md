@@ -1899,9 +1899,91 @@ a bake started mid-flight landed while the twin settled, lit otherwise (up to
   stay; no clamp: the lag doubles; motion taken as still: worse.
 - **Open**: from inside the convective slab, rays toward an anvil 30 km away
   spend 89-95 % of their steps in clear air, 5-13 in it (RENDERING_PLAN.md's
-  lead: skipping where the weather says no cloud can be); and the light volume
+  lead: skipping where the weather says no cloud can be, §31: it clears
+  under a third of those steps there); and the light volume
   re-baked mid-flight (a descent changes its reach by 3 %) swaps a differently
   lit volume in at once (BACKLOG.md).
+
+## 31. Skipping clear air by the weather: measured, not built
+
+The lead of §30's open item: a step whose weather (its shift, convective depth
+and anvil spread, read every step with genera) leaves no cloud at its height
+even with every octave, the cell octave and the billows at their most needs no
+noise, and a run of them could be crossed in one step. Probed in the march
+(2026-11-09), `terrain_shots --at`, genera, HIGH, 1600 x 900, the user's
+`--start 29.7159 29.8232`:
+
+| pose | steps in clear air | of them, cleared by the weather |
+|---|---|---|
+| tower (`29.74164 29.82320 2358 0 -8`) | 90 % | 18 % |
+| veil (`31.60402 28.72949 2438 -24.5 6.3`) | 75 % | 23 % |
+| stripes (`22.46569 30.31014 2831 0 -1`) | 92 % | 29 % |
+| grain (`29.54261 29.82320 4912 0 -8.2`) | 99 % | 89 % |
+
+The bound held (no step it cleared found cloud, the far coverage's blend
+aside). The clear air at the low poses is between fair-weather cumulus whose
+weather allows cloud almost everywhere: only the noise tells it clear. The
+ceiling of the time saved, a cleared step taken as eight (unsafe, cloud
+jumped), frame ms, two runs each: tower 8.05 / 8.48 to 9.25 / 8.61, veil
+7.14 / 7.48 to 7.21 / 7.35, stripes 8.24 / 8.08 to 7.95 / 8.21 (no gain: the
+rays then reach and shade farther cloud), grain 6.79 / 7.02 to 5.56 / 5.65
+(-1.3 ms, above the cumulus tops). Not built at the low poses' expense; worth
+it above the convective tops only, where the weather's local top clears most
+of the ray.
+
+## 32. The frame again, per part on the GPU (2026-11-09)
+
+At 2560 x 1440, HIGH, genera (now the default), the march, the user's
+`--start 29.7159 29.8232`, after the light volume, god rays and §28-30.
+
+**How.** PStats with `pstats-gpu-timing 1` (Panda's GPU timer queries) into
+`text-stats`, the demo settled at a pose, then segments of 150 frames each
+with one part off (frame_profile.py's parts, a terrain debug view, or the
+terrain drawn with its depth-only fragment stage); a part's cost is the
+whole GPU frame's drop. Not the passes' own timers: NVIDIA writes a
+timestamp when the commands reach it, so a short pass's time leaks into the
+next collector ("Set State" on the GPU, 0.7-1.4 ms, follows the terrain's
+draws, 0.2 without them). Lessons kept:
+
+- Offscreen and free-running, nothing holds the CPU back: 4.3 ms a frame at
+  `ground` is the CPU alone. Windowed, the same pose takes 6.85 ms, the GPU
+  frame (7.0 under the timers); the GPU is at 100 % throughout at full clock
+  (`nvidia-smi dmon`), and `auto-flip` or a threaded pipeline (`Cull/Draw`,
+  `/Draw`) change nothing: **the frame is GPU-bound**, every GPU millisecond
+  counts.
+- At 1280 x 720 the CPU is the limit (~4.4-5 ms), the GPU waits and the
+  timers count its waits: no use there.
+- The p95 at still poses (16-18 ms against medians of 9-11 in frame_profile)
+  was the demo's HUD: a 6 ms stutter every 16 frames, fixed (CHANGELOG).
+
+**The GPU frame and what each part takes off it, ms:**
+
+| pose | GPU | clouds | terrain | of it: shading / geometry | sea refl. | cloud shadows on the ground | textures |
+|---|---|---|---|---|---|---|---|
+| ground | 7.0 | 2.6 | 4.1 | 2.1 / 2.0 | 1.1 | 0.8 | 1.1 |
+| coast | 7.0 | 3.2 | 3.0 | 2.1 / 0.9 | 0.9 | 0.9 | 0.1 |
+| open sea | 4.9 | 2.4 | 1.9 | (sea shading ~0.9) | 0.45 | 0.45 | - |
+| tower (`29.74164 29.82320 2358 0 -8`) | 9.2 | 6.1 | 2.5 | 1.9 / 0.6 | 0.8 | 0.8 | 0.1 |
+
+- **Clouds**: the march 1.1 (ground, open sea), 2.1 (coast), 4.2-4.6 (tower,
+  veil `31.60402 28.72949 2438 -24.5 6.3`); the two resolves 0.3-0.4; the
+  rest their depth passes, composite and cirrus (0.1-0.4).
+- **Terrain**: its fragment stage (main view and reflection) ~2 ms: the
+  layered textures 1.1 at ground, the clouds' shadow (`cloudShade`: maps and
+  weather per pixel, both families) 0.8-0.9 everywhere, the air
+  (`applyAtmospheres`, `atmoSunlight`) 0.4, the mountains', objects' and
+  rings' shadows 0.4; the near sea's shading ~0.9 at sea. Its geometry, drawn
+  by five passes (the near and far ranges, the sea's reflection, the clouds'
+  two depth passes; ~3.4 M triangles, ~420 draws a frame), 0.6-2.0. Not
+  overdraw (front to back already) nor the resolution (the same at 720p
+  shaded flat); `split_factor` 1.25 instead of 2 takes 30 % of the triangles
+  and 0.9 ms (1.5: 0.3).
+- **Others**: the sky 0.2-0.3, the cirrus 0.1-0.4, god rays 0.2-0.4, the
+  sky-view and aerial tables save 0.4 and 1.2-1.4 against their marches.
+- **The CPU**: 3.5-4.5 ms a frame (the demo's update 1.6-2.5, cull 0.7, draw
+  submission ~2); not the limit at 1440p, but the floor once the GPU is down
+  to ~4.5 ms. A threaded `Cull/Draw` pipeline takes it to 1.9 ms offscreen
+  (the App alone), unmeasured for correctness.
 
 ## Not covered
 

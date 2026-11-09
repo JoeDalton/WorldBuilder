@@ -411,3 +411,23 @@ def test_the_frame_cap_sets_the_clock():
     assert clock.rate == pytest.approx(90.0)
     cap.set_settings(replace(DisplaySettings(), frame_cap=0))
     assert clock.mode == ClockObject.M_normal
+
+
+def test_a_settings_class_resolves_its_type_hints_once(monkeypatch):
+    """Resolving the hints took ~0.3 ms a settings object: the demo's HUD,
+    naming every section's preset, stuttered 6 ms every 16 frames."""
+    import typing
+
+    from world_builder import quality
+
+    calls = []
+    real = typing.get_type_hints
+    monkeypatch.setattr(
+        typing, "get_type_hints", lambda cls: calls.append(cls) or real(cls)
+    )
+    quality._type_hints.cache_clear()
+    world = WorldSettings()
+    for _ in range(3):
+        for name in SECTIONS:
+            world.section_level(name)
+    assert len(calls) == len(set(calls))

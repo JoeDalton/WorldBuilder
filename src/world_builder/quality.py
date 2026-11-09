@@ -31,6 +31,7 @@ what saved settings are keyed by; a renamed knob keeps reading its old id
 from __future__ import annotations
 
 import dataclasses
+import functools
 import logging
 import typing
 from collections.abc import Mapping
@@ -136,6 +137,15 @@ def knob(default: Any, label: str, apply: str = LIVE, **meta) -> Any:
 S = TypeVar("S", bound="QualitySettings")
 
 
+@functools.cache
+def _type_hints(cls: type) -> dict[str, Any]:
+    """:returns: a settings class's type hints, resolved once: they never
+    change, and resolving them (``typing.get_type_hints``) took ~0.3 ms a
+    settings object (the demo's HUD built 18 a refresh: a 6 ms stutter every
+    16 frames)"""
+    return typing.get_type_hints(cls)
+
+
 class QualitySettings:
     """What every settings dataclass shares (a mixin for frozen dataclasses
     whose fields are all :func:`knob` fields).
@@ -155,7 +165,7 @@ class QualitySettings:
     RENAMED: ClassVar[dict[str, str]] = {}
 
     def __post_init__(self):
-        hints = typing.get_type_hints(type(self))
+        hints = _type_hints(type(self))
         for f in dataclasses.fields(self):
             value = getattr(self, f.name)
             fixed, problem = _check(f.metadata["knob"], hints[f.name], value)
@@ -192,7 +202,7 @@ class QualitySettings:
             ``presets`` (level name -> value), values as saved (choices by
             label)
         """
-        hints = typing.get_type_hints(cls)
+        hints = _type_hints(cls)
         presets = {level: cls.preset(level) for level in QualityLevel}
         default = cls()
         out = []
@@ -270,7 +280,7 @@ class QualitySettings:
         if not isinstance(data, Mapping):
             LOGGER.warning(f"settings {where or cls.__name__}: not a mapping, ignored")
             return base
-        hints = typing.get_type_hints(cls)
+        hints = _type_hints(cls)
         knobs = dict(cls.knobs())
         values = {}
         for name, raw in data.items():

@@ -5,6 +5,7 @@ docs/source/frame_profile.md)::
 
     python scripts/frame_profile.py [--pose NAME ...] [--size "W H"]
         [--quality LEVEL] [--genera] [--ring] [--frames N] [--offscreen]
+        [--at LAT LON ALT HEADING PITCH ...]
 
 At each pose (terrain_shots.py's), settled, GPU-synced frames (a one-pixel
 read back after each step, as terrain_shots.py times them):
@@ -152,6 +153,15 @@ def main() -> None:
     parser.add_argument("--size", default="2560 1440", help='"width height"')
     parser.add_argument("--offscreen", action="store_true")
     parser.add_argument("--frames", type=int, default=80)
+    parser.add_argument(
+        "--at",
+        nargs=5,
+        type=float,
+        action="append",
+        default=[],
+        metavar=("LAT", "LON", "ALT", "HEADING", "PITCH"),
+        help='more poses, "at1", "at2"...: the demo\'s printed camera line',
+    )
     add_world_arguments(parser)
     parser.set_defaults(frame_cap=0)  # timings: never capped (--frame-cap N)
     args = parser.parse_args()
@@ -174,11 +184,14 @@ def main() -> None:
     win = demo.win
     probe = win.make_display_region(0, 1 / win.get_x_size(), 0, 1 / win.get_y_size())
     poses = _poses(demo)
+    extra = [f"at{i + 1}" for i in range(len(args.at))]
+    for name, at in zip(extra, args.at):
+        poses[name] = (*at, 0, 0)
     atmo = settings.atmosphere
     columns = ["frame", "p95", "step", "terrain", "refl", "sky", "clouds", "cirrus"]
     columns += ["models", "skyview", "aerial", "godrays", "atmo"]
     print(f"{'pose':<12} " + " ".join(f"{c:>7}" for c in columns))
-    for name in args.pose or list(POSES):
+    for name in (args.pose or list(POSES)) + extra:
         lat, lon, alt, heading, pitch, view, body = poses[name]
         demo.set_debug_view(view)
         demo._place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])

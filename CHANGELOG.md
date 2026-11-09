@@ -195,6 +195,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   centres and radii, and the caster map compares its casters by key (no
   quadratic list scan).
 
+### Fixed
+
+- A stutter every 16 frames in the demo: its HUD, naming each settings
+  section's preset, built every preset anew, and each settings object
+  resolved its class's type hints (~0.3 ms each, ~6 ms a refresh). The hints
+  are now resolved once per class (`quality._type_hints`); the frame's p95 at
+  a still pose fell from 17.7 to 14.3 ms.
+
 ## [0.3.0] 2026-11-04
 
 ### Added
