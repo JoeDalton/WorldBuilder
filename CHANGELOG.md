@@ -63,6 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Each terrain chunk carries a coarse mesh over its own vertices (every
+  other one: `chunkgen.triangle_indices(COARSE_STRIDE)`, a quarter of the
+  triangles), drawn instead of the full one by the clouds' depth passes and
+  the sea's reflection (`mesh.COARSE_PASSES`); `build_chunk_node` returns a
+  node holding the two. Up to 0.3 ms less a frame at 2560 x 1440.
+
 - The clouds' shadow on the terrain and the sea, with the raymarch, from one
   pass at the depth passes' resolution (`clouds.march._GroundShadow`,
   `PlanetClouds.bind_ground_shadow`, which `World` and the demo call): the

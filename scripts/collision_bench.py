@@ -119,7 +119,7 @@ def tile_materials(chunk, per_side: int) -> list[int]:
 
 
 def build_collision(node: NodePath, chunk, prims, per_side, layout) -> NodePath:
-    vdata = node.node().get_geom(0).get_vertex_data()
+    vdata = node.get_child(0).node().get_geom(0).get_vertex_data()  # the fine mesh
     materials = tile_materials(chunk, per_side)
     # A sibling, not a child: chunk nodes are final (their bounds stand for
     # everything below), so the traverser would not cull tiles under them.

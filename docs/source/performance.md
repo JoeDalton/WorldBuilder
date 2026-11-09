@@ -2010,6 +2010,43 @@ reflection, still per pixel. The shade alone (terrain debug view 6, clouds
 hidden, 1600 x 900): the same but at far shadows' edges near the horizon (a
 pixel: half the resolution), over 2 levels on 1.1-2.2 % of pixels.
 
+## 34. The terrain's geometry: a coarse mesh for the passes that need no detail
+
+§32 put the terrain's geometry at 0.6-2.0 ms (its fragment stage emptied in
+the main view and the reflection: the GPU frame against the terrain hidden).
+Hidden from one camera at a time, that empty-shaded run, ms off the GPU frame:
+
+| pose | all of it | the clouds' depth passes | the reflection | main, far | main, near |
+|---|---|---|---|---|---|
+| ground | 2.0 | 0.75 | 0.55 | 0.57 | 0.36 |
+| coast | 0.85 | 0.41 | 0.22 | 0.14 | ~0 |
+| tower | 0.57 | 0.34 | 0.13 | 0.09 | ~0 |
+
+(The depth passes' share includes what the march and the ground shadow pass
+change without the ground's depth.) The depth passes draw as many vertices as
+the view, the reflection about as many again: ~10 M indices a frame at
+`ground`, a third each. Now each chunk has a coarse mesh over its own vertices
+(every other one: a quarter of the triangles; terrain.md, "LOD"), which those
+passes draw instead. Same run, fine mesh everywhere against the coarse one in
+those passes (GPU frame, ms):
+
+| pose | fine everywhere | coarse passes | indices a frame |
+|---|---|---|---|
+| ground | 6.65 | 6.34 | 10.0 M to 5.7 M |
+| coast | 6.34 | 6.27 | 8.3 M to 4.8 M |
+| open sea | 4.55 | 4.55 | 3.7 M to 2.8 M |
+| tower | 8.48 | 8.41 | 6.0 M to 3.9 M |
+
+Less than the vertex counts promised: what those passes cost was only partly
+their vertices. The CPU: +0.03 to 0.11 ms a frame (offscreen, free-running:
+4.10 to 4.13-4.21 at `ground`), a node more per chunk to cull. The look: the
+reflection differs on 0.18 % of pixels at `coast` (two shots of one: 0.08 %),
+along the shore; the clouds against the hills at the tower and veil poses
+within two shots' own noise (1.3 % against 1.7 %, 2.7 % against 3.8 % over 2
+levels). What remains of the terrain's geometry is the view's own (0.4-0.9 ms
+at `ground`), at its level of detail: §32's `split_factor` 1.25 took 0.9 ms
+and 30 % of the triangles.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

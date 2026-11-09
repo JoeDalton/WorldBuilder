@@ -610,7 +610,8 @@ def test_the_gpu_reads_each_chunks_values(window, terrain):
             )
             np.testing.assert_array_equal(got[:, slot], expected)
             # Every vertex of the chunk's node names the slot.
-            vdata = terrain.nodes[key].node().get_geom(0).get_vertex_data()
+            fine = terrain.nodes[key].get_child(0).node()  # (fine, coarse) share it
+            vdata = fine.get_geom(0).get_vertex_data()
             rows = np.frombuffer(memoryview(vdata.get_array(0)).cast("B"), np.uint8)
             rows = rows.reshape(-1, 36).astype(np.int64)
             assert np.all(rows[:, 34] + 256 * (rows[:, 35] & 127) == slot)
