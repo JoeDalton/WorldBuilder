@@ -42,7 +42,6 @@ from demo_terrain import (  # noqa: E402
     start_sun,
     window_config,
 )
-
 from terrain_shots import _settle  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 

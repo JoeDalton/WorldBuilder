@@ -148,7 +148,6 @@ from demo_terrain import (  # noqa: E402
     sun_lighting,
     window_config,
 )
-
 from world_builder.atmosphere import AtmosphereParams, Atmospheres  # noqa: E402
 from world_builder.clouds.cirrus import CirrusSpec  # noqa: E402
 from world_builder.clouds.cloud import CloudSettings  # noqa: E402

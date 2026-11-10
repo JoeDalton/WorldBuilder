@@ -146,7 +146,6 @@ from demo_terrain import (  # noqa: E402
     settings_from_args,
     window_config,
 )
-
 from world_builder.terrain.chart import (  # noqa: E402
     AzimuthalEquidistantChart,
     TangentFrame,

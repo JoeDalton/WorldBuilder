@@ -86,6 +86,12 @@ line-length = 88
 select = ["E", "F", "W", "I"]
 ignore = ["E203", "E701"]
 
+# scripts/ import each other by bare name (demo_terrain, terrain_shots). Name
+# them as first-party so the import order does not depend on what happens to
+# be in the working tree (terrain_shots/ is also a PNG output folder at the root).
+[tool.ruff.lint.isort]
+known-first-party = ["demo_terrain", "terrain_shots"]
+
 [tool.tox]
 legacy_tox_ini = """
     [tox]

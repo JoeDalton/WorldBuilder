@@ -68,6 +68,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from demo_world import WorldDemo  # noqa: E402
+
 from demo_terrain import (  # noqa: E402
     TerrainDemo,
     add_world_arguments,
@@ -75,8 +77,6 @@ from demo_terrain import (  # noqa: E402
     settings_from_args,
     window_config,
 )
-from demo_world import WorldDemo  # noqa: E402
-
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 
 DEMOS = {"terrain": TerrainDemo, "world": WorldDemo}

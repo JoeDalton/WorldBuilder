@@ -68,7 +68,6 @@ from demo_terrain import (  # noqa: E402
     start_sun,
     window_config,
 )
-
 from world_builder.atmosphere import AtmosphereParams  # noqa: E402
 from world_builder.clouds.cirrus import CirrusSpec  # noqa: E402
 from world_builder.depth import SplitDepthCameras  # noqa: E402
