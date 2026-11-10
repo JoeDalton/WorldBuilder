@@ -301,12 +301,42 @@ Ideas, by expected gain (status after 4.2 and 4.3):
    A weather read every 100 m with genera saves 0.3-0.5 ms (check for
    bands). Neither done.
 
+8. **The near range's step budget** (performance.md §35, 2026-11-09): from
+   inside the slab the first 2 km cost twice the 28 beyond (64 steps each;
+   the near range needs 100-170). Halved: -1.1 to -1.25 ms at the tower,
+   veil and in_clouds poses, stills within two shots' noise, but in motion
+   error 2.36 -> 2.41, grain 1.23 -> 1.27, specks 3.79 -> 3.95 %: a trade
+   left to the user (48 not measured). Exact trims of the loop's body bought
+   nothing (billows and fine octaves skipped in whole cores, one light-volume
+   read instead of two): the time follows the iterations.
+
 Billboards stay faster over a distant sky (genera `cb_far` 1.35 against
 3.7 ms at half resolution). `CloudSettings.renderer` now defaults to
 `"march"` at every preset (4.3); billboards are selectable.
 
 The jitter that remains: slightly visible at LOW and MID (a quarter), the
 genera at LOW most (p99 6-8 levels still); the user judged it acceptable.
+
+### The frame at 1440p (performance.md §32-35, 2026-11-09)
+
+- **The terrain's own geometry** in the view (0.4-0.9 ms at `ground`): its
+  LOD splits by distance alone, so flat ground and the seabed get as many
+  triangles as mountains; a split by each chunk's roughness (its height
+  range against its parent's interpolation) would keep them coarse. Python
+  selector and `lod.c` both. `split_factor` 1.25 took 0.9 ms, by detail.
+- **The terrain's textures** (1.1 ms over land at `ground`,
+  `layeredMaterial`: 6-11 filtered reads where biomes meet): the normal map
+  past 600 m (faded out), the two strongest biomes only, anisotropy 4 at
+  HIGH, the textures' fade (`detail_far`) sooner. None measured.
+- **A step in the clouds' shadow along chunk borders near the coast**
+  (terrain debug view 6, the veil pose `31.60402 28.72949 2438 -24.5 6.3`):
+  darker inside a staircase of chunks, with the ground shadow pass or
+  without. Not looked into.
+- **The sea's reflection still shades the clouds' shadow per pixel** (no
+  ground shadow pass from the mirrored camera): ~0.1 ms.
+- **The CPU** (3.5-4.5 ms a frame) is the floor once the GPU nears 4.5 ms;
+  a threaded `Cull/Draw` pipeline took it to 1.9 ms offscreen, unchecked for
+  correctness (per-frame inputs written in place from Python).
 
 ### Docs and wiring
 

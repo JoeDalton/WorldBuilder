@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `scripts/frame_profile.py --at LAT LON ALT HEADING PITCH` (repeatable):
+  more poses, from the demo's printed camera line.
+
 - `World(light_period=N)`: the light at the camera and the tracked nodes
   (`lights_at`, the CPU's march through the clouds' shadow) reckoned every N
   frames, at once when the sun moves or the tracked nodes change. 1 (the

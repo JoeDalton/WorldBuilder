@@ -112,3 +112,25 @@ def test_the_coarse_indices_take_every_other_vertex():
 
 def test_vertex_format_carries_the_height_column():
     assert vertex_format().get_array(0).has_column("height")
+
+
+def test_the_demo_names_every_terrain_debug_view():
+    """The demo's HUD names the view by index (``_DEBUG_VIEWS``): a view the
+    terrain's shader has (``uDebugMode == N``) and the HUD does not name
+    crashed it (the clouds' shadow, 6)."""
+    import ast
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent
+    shader = (root / "src/world_builder/terrain/shaders/terrain_frag.glsl").read_text()
+    modes = {int(n) for n in re.findall(r"uDebugMode == (\d+)", shader)}
+    demo = ast.parse((root / "scripts/demo_terrain.py").read_text())
+    (names,) = [
+        node.value
+        for node in demo.body
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "_DEBUG_VIEWS" for t in node.targets)
+    ]
+    assert len(names.elts) == max(modes) + 1
+    assert 6 in modes  # the clouds' shadow alone

@@ -2047,6 +2047,40 @@ levels). What remains of the terrain's geometry is the view's own (0.4-0.9 ms
 at `ground`), at its level of detail: §32's `split_factor` 1.25 took 0.9 ms
 and 30 % of the triangles.
 
+## 35. The march at the user's tower pose: where its 4.5 ms go
+
+2560 x 1440, HIGH, genera, `--start 29.7159 29.8232`, GPU frame (PStats GPU
+timers, segments of one run): what each switch takes off the march pass.
+
+| switched off | tower (`29.74164 29.82320 2358 0 -8`) | veil (`31.60402 28.72949 2438 -24.5 6.3`) | coast |
+|---|---|---|---|
+| (the march) | 4.6 | 4.2 | 2.1 |
+| lighting (`--cloud-debug 256`) | 1.0 | 0.95 | 0.2 |
+| the sun's depth (1) | 0.85 | 0.8 | 0.2 |
+| billows (32) | 0.75 | 0.5 | 0.07 |
+| two octaves only (4) | 0.4 | - | 0.15 |
+| half the step budget (32) | 1.75 | 1.8 | 0.7 |
+| half the near range's budget only | 1.16 | 1.25 | 0.06 |
+| half the far range's budget only | 0.51 | 0.50 | 0.67 |
+
+(`in_clouds`: 1.05 and 0.54.) From inside the slab the first 2 km cost twice
+the 28 beyond: each range has 64 steps, the near one needs 100-170 at its
+shortest step (~30 m as stretched), and there every cloudy step takes the
+whole detail (billows, the fine octaves, the sun march's two local steps).
+
+**Tried and dropped (no change, exact):** the billows and the fine octaves
+skipped where the column is whole however deep the billows carve (a bound:
+1.47 of their window); the light volume read once, not twice, where a sample
+has no local steps (its sun read and its sky read at the same point). Taking
+work out of the loop's body without taking iterations away buys nothing:
+the time follows the iterations, the cloudy ones dear.
+
+**A trade, not taken:** the near range's budget halved (32): settled stills
+within two shots' own noise (tower 3.2 % against 2.6 % of pixels over 2
+levels, veil 4.9 against 4.4, in_clouds 0.6 against 0.7); in motion
+(`motion_shots`, tower, forward) error 2.36 to 2.41, grain 1.23 to 1.27,
+specks 3.79 to 3.95 %.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

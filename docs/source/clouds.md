@@ -566,6 +566,15 @@ near range; otherwise the march stops at the far range's scene, and what the
 near camera draws covers the clouds behind it. The history goes on across
 that switch.
 
+**Their shadow on the ground** comes from one more pass of the march's
+(`_GroundShadow`, `ground_shadow.frag`): from the same two depth passes, at
+their resolution, the clouds' shadow at each texel's scene point
+(`planetCloudShadow`, as the terrain's per pixel), and the distance there.
+The terrain and the sea read it back by their distance (`groundShadowAt`) and
+shade it per pixel only where no texel agrees, and in the sea's reflection
+(shadows.md, "The clouds' shadow on the view's ground"; performance.md §33).
+The depth passes draw the terrain's coarse mesh (terrain.md, "LOD").
+
 The sea's reflection sees the deck alone (the far field's layer is packed for it).
 The textures may be padded to powers of two, so the shaders address them
 in pixels.

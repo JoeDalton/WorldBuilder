@@ -6,6 +6,12 @@ tables) and C (the clouds' light volume). SpaceFlight's frame (its draw of the
 ships, its bots) is out of scope here: see [the performance
 backlog](performance_backlog.md) for it.
 
+A newer profile, per part on the GPU (PStats' GPU timers, after the light
+volume, the god rays and genera by default), is in
+[performance.md §32](performance.md), with the levers taken since (§33-35).
+`frame_profile.py --at LAT LON ALT HEADING PITCH` (repeatable) adds the
+demo's printed camera lines as poses (`at1`, `at2`...).
+
 ## How it was measured
 
 - RTX 3070, 2560 x 1440 (and 1280 x 720), HIGH, the raymarched clouds, offscreen,
