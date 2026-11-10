@@ -132,7 +132,7 @@ labels and ranges below are what the schema gives.
 
 | Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
 |---|---|---|---|---|---|---|---|
-| `min_level` | Finest detail dropped | live | 0 to 8 levels | 3 | 1 | 0 | 0 |
+| `min_level` | Finest detail dropped | live | 0 to 8 levels | 4 | 2 | 1 | 0 |
 | `split_factor` | Detail distance | live | 1.25 to 3 x | 1.5 | 1.75 | 2 | 2.5 |
 | `detail_far` | Texture distance | live | 500 to 10000 m | 1500 | 2500 | 4000 | 6000 |
 | `anisotropy` | Texture filtering | live | 1x, 2x, 4x, 8x, 16x | 2x | 4x | 8x | 16x |
@@ -235,7 +235,8 @@ HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
 - **The terrain's finest detail** (`min_level`) counts levels dropped below
   the finest. Level 0 is about 2 m of vertex spacing at any planet radius,
   so the knob means the same on every planet.
-  - MID drops one level (about 3.6 m) and LOW three (about 14 m).
+  - HIGH drops one level (about 3.6 m), MID two (about 7 m) and LOW four
+    (about 29 m); ULTRA keeps the finest.
   - Collision queries follow it, because they read the drawn grid, so the
     ground a ship hits stays the one on screen.
 - **The air's steps** are a uniform, not a `#define`. They are written in

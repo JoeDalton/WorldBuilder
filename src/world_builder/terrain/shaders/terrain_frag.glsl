@@ -2,18 +2,17 @@
 // far look) and terrain_sea.frag (SEA_NEAR: the sea's near look too, for
 // the chunks with water while a Sea shows it).
 
-#pragma include "../../atmosphere/shaders/atmosphere.glsl"
-#pragma include "../../atmosphere/shaders/display.glsl"
-#pragma include "../../clouds/shaders/cloud_field.glsl"
+#pragma include "terrain_light.glsl"
 #pragma include "../../ocean/shaders/water.glsl"
-#pragma include "cube_faces.glsl"
 #pragma include "terrain_material.glsl"
-#pragma include "object_light.glsl"
+#pragma include "vegetation_far.glsl"
 
 // Terrain fragment shader: biome texture blending, lighting (sunlight through
-// the planet's own air), the sea (seabed lifted to the water by terrain.vert),
-// aerial perspective through every atmosphere, and the ACES tonemap. "Up" is
-// the local vertical of the sphere (vUp), never the render frame's +Z.
+// the planet's own air: terrain_light.glsl), the sea (seabed lifted to the
+// water by terrain.vert), the far look of the vegetation
+// (vegetation_far.glsl), aerial perspective through every atmosphere, and
+// the ACES tonemap. "Up" is the local vertical of the sphere (vUp), never the
+// render frame's +Z.
 //
 // The sea has two looks: near the camera the full one of sea.glsl (waves,
 // the planar reflection, foam), from high up a flat water lit per pixel,
@@ -36,6 +35,7 @@ flat in vec3 vFaceV;
 flat in int vLevel;    // the chunk's level
 flat in float vStep;   // its vertex spacing (uv metres per step), metres
 flat in int vMirror;   // 1 in the sea's reflection pass (terrain.vert)
+flat in vec2 vPeriod;  // which UV_PERIOD the chunk's first vertex is in (u, v)
 
 uniform sampler2D uNoise;         // four tiling noises, breaks up biome edges
 uniform vec3  uMeanAlbedo[6];     // linear; drawn instead of textures far away
@@ -43,16 +43,6 @@ uniform vec3  uFlatAlbedo[6];     // linear; untextured mode and the biome view
 uniform int   uTextured;
 uniform float uDetailFar;         // textures fade to the mean colour by here
 
-uniform vec3  uCamPos;            // the main camera, render frame
-uniform vec3  uSunDir;            // toward the sun, render frame
-uniform vec3  uSunColor;          // sunlight above any air
-uniform vec3  uAmbient;           // sky light (near none on an airless body)
-uniform float uExposure;
-uniform int   uTonemap;           // 1: aces_tonemap, 0: a plain display encoding
-uniform int   uRadialLight;       // 1: a planet's day and night, by its vertical;
-                                  // 0: an object's (a rock): each face as it
-                                  // faces the sun, the sky light from all round
-uniform int   uOwnAtmosphere;     // this planet's atmosphere index, -1 = airless
 uniform int   uSeaSurface;
 uniform vec3  uShallowWater;      // the sea surface's shallow tint, linear
 uniform float uShallowDepth;      // and its e-folding depth, metres
@@ -62,13 +52,6 @@ uniform vec2  uStrataRange;       // the altitudes its first and last texels spa
 uniform int   uDebugMode;  // 0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts,
                            // 6 the clouds' shadow
 uniform int   uMaxLevel;
-// The clouds' shadow on the view's scene, a pass of the march's
-// (clouds.march.GroundShadow): r the shade, g the scene's distance (km), -1
-// where none, at the view's resolution over uGroundShadowScale. Off (0)
-// without one: then shaded per pixel.
-uniform sampler2D uGroundShadow;
-uniform int   uGroundShadowOn;
-uniform int   uGroundShadowScale;
 
 out vec4 fragColor;
 
@@ -76,7 +59,6 @@ out vec4 fragColor;
 #pragma include "../../ocean/shaders/swell.glsl"
 #pragma include "../../ocean/shaders/sea.glsl"
 #endif
-
 
 const vec3 WATER_SHALLOW = vec3(0.03, 0.09, 0.16);  // linear; ocean.py water_color is deep
 const vec3 WATER_DEEP = vec3(0.02, 0.06, 0.14);
@@ -86,58 +68,8 @@ vec3 hue(float t) {
     return clamp(abs(fract(t + vec3(0.0, 2.0, 1.0) / 3.0) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
 }
 
-// The share of the sun the planet's clouds leave here: their shadow, marched
-// through the deck's field toward the sun (both families' with genera), or
-// its mean where the pixel's footprint (metres) spans several clouds
-// (cloud_field.glsl's planetCloudShadow; uCloudShadowLayer and Other, -1
-// none: CloudVolume.bind_shadow_inputs). Clouds only come with air: the
-// planet frame is the air's. Read from the ground shadow pass where it holds
-// this pixel (the main view's), per pixel elsewhere (the sea's reflection).
-// A texel of the ground shadow agrees with this pixel when their distances
-// differ by less than this share: a slope's neighbouring texel does, the
-// ground behind a silhouette (or a model in front) does not.
-const float GROUND_SHADOW_AGREE = 0.08;
-
-// The ground shadow pass's shade at this pixel: its four texels around it,
-// bilinear, those of another surface left out. False where none agrees (a
-// silhouette's edge, the near range when its depth pass is off).
-bool groundShadowAt(float dist, out float shade) {
-    vec2 at = gl_FragCoord.xy / float(uGroundShadowScale) - 0.5;
-    ivec2 base = ivec2(floor(at));
-    vec2 f = at - vec2(base);
-    ivec2 last = textureSize(uGroundShadow, 0) - 1;
-    float km = dist / 1000.0;
-    float total = 0.0;
-    shade = 0.0;
-    for (int y = 0; y <= 1; ++y) {
-        for (int x = 0; x <= 1; ++x) {
-            vec2 texel = texelFetch(uGroundShadow, clamp(base + ivec2(x, y), ivec2(0), last), 0).rg;
-            vec2 w2 = mix(vec2(1.0) - f, f, vec2(x, y));
-            float w = w2.x * w2.y + 1e-3;
-            if (texel.g >= 0.0 && abs(texel.g - km) <= GROUND_SHADOW_AGREE * km) {
-                shade += w * texel.r;
-                total += w;
-            }
-        }
-    }
-    if (total <= 0.0) {
-        return false;
-    }
-    shade /= total;
-    return true;
-}
-
 float cloudShade(vec3 L, float footprint) {
-    if ((uCloudShadowLayer < 0 && uCloudShadowOther < 0) || uCloudShadowSteps <= 0
-            || uOwnAtmosphere < 0) {
-        return 1.0;
-    }
-    float shade;
-    if (uGroundShadowOn != 0 && vMirror == 0 && groundShadowAt(length(vRelPos), shade)) {
-        return shade;
-    }
-    vec3 planet = uAtmoCam[uOwnAtmosphere].xyz + vRelPos;
-    return planetCloudShadow(planet, L, uCloudShadowSteps, footprint);
+    return cloudShade(L, footprint, vRelPos, vMirror != 0);
 }
 
 void main() {
@@ -146,10 +78,6 @@ void main() {
     vec3 up = normalize(vUp);
     float upN = dot(N, up);
     vec3 L = normalize(uSunDir);
-    // Planet-scale day factor: past the terminator the sun does not light the
-    // ground, whatever the local slope says. Used on an airless body only;
-    // through an atmosphere, atmoSunlight below also does the reddening.
-    float day = uRadialLight == 1 ? smoothstep(-0.12, 0.08, dot(up, L)) : 1.0;
     // The ground a pixel spans, metres (taken here, out of any branch).
     float footprint = max(length(dFdx(vRelPos)), length(dFdy(vRelPos)));
     if (uDebugMode == 6) {
@@ -261,29 +189,17 @@ void main() {
     }
 
     vec3 V = normalize(-vRelPos);
-    // Sunlight through this planet's own air: reddened low, gone in its
-    // shadow. An airless body just has the day/night line. Other bodies
-    // eclipse it.
-    float eclipse = eclipseVisibility(vRelPos, L, uShadowSelf);
-    // The clouds' shadow only where the sun can light this pixel at all
-    // (objectLight's terms go as N.L): the march is the dear part.
-    float shade = dot(surfaceN, L) > 0.0 && dot(up, L) > -0.05 ? cloudShade(L, footprint)
-                                                              : 1.0;
-    // The mountains' (one fetch): what the sun clears from this height.
-    shade *= terrainShadow(normalize(vPlanetPos), vHeight);
-    // The game's objects' (their map: nothing to do without one), and the
-    // rings'.
-    shade *= casterShadow(vRelPos, N, L) * ringVisibility(vRelPos, L);
-    vec3 sunlight = uSunColor * (eclipse * shade);
-    float sunDay = day;
-    if (uOwnAtmosphere >= 0) {
-        sunlight *= atmoSunlight(uOwnAtmosphere, uAtmoCam[uOwnAtmosphere].xyz + vRelPos, L);
-        sunDay = 1.0;
+    vec3 sunlight, skylight;
+    float sunDay, shade;
+    surfaceLight(vRelPos, vPlanetPos, vHeight, N, surfaceN, up, L, footprint,
+                 vMirror != 0, sunlight, skylight, sunDay, shade);
+    if (!water && uDebugMode == 0) {
+        // The trees and bushes: their far look (sub-pixel canopy), and their
+        // shadows and shade on the ground near the camera.
+        float variation = 0.7 + 0.35 * (nearNoise.b + farNoise.g);
+        vegetationGround(w, vUv, vPeriod, vFace, Tu, Tv, up, L, V, dist, footprint,
+                         variation, albedo, surfaceN, sunlight, roughness, ao);
     }
-    // Sky light fades through twilight, and dims in an eclipse.
-    vec3 skylight = (uRadialLight == 1 ? uAmbient * smoothstep(-0.2, 0.2, dot(up, L))
-                                       : uAmbient)
-                  * mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
     vec3 C = objectLight(albedo, surfaceN, roughness, ao,
                          uRadialLight == 1 ? up : surfaceN, L, V, sunlight, sunDay, skylight);
     if (water) {
@@ -309,10 +225,5 @@ void main() {
     if (uDebugMode == 5) {
         C = mix(C, hue(float(vLevel) / float(uMaxLevel + 1)), 0.5);
     }
-    // Aerial perspective: the air between the camera and the ground, of
-    // every atmosphere the sight line crosses.
-    C = applyAtmospheres(C, vRelPos / max(dist, 1e-3), dist, L);
-    C *= uExposure;
-    fragColor = vec4(uTonemap == 1 ? aces_tonemap(C)
-                                   : pow(clamp(C, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);
+    fragColor = surfaceColor(C, vRelPos, L);
 }

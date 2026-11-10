@@ -48,26 +48,11 @@ flat out vec3 vFaceU;  // the face's texture axes, render frame (the body turns)
 flat out vec3 vFaceV;
 flat out int vLevel;
 flat out float vStep;  // uv metres per vertex step (about the vertex spacing)
+flat out vec2 vPeriod; // which UV_PERIOD the chunk's first vertex is in (u, v):
+                       // the vegetation's cells (vegetation_cells.glsl)
 flat out int vMirror;  // 1 in the sea's reflection pass (its clip plane)
 
-const int QUADS = 64;
-const int VERTS = QUADS + 1;
-
-// (column, row) of a vertex in the chunk grid; skirt vertices repeat their edge
-// vertex, in chunkgen.skirt_ring's order.
-vec2 gridCoord(int id) {
-    if (id < VERTS * VERTS) {
-        return vec2(id % VERTS, id / VERTS);
-    }
-    int p = id - VERTS * VERTS;
-    int side = p / QUADS;
-    float t = float(p % QUADS);
-    float n = float(QUADS);
-    if (side == 0) return vec2(t, 0.0);       // south
-    if (side == 1) return vec2(n, t);         // east
-    if (side == 2) return vec2(n - t, n);     // north
-    return vec2(0.0, n - t);                  // west
-}
+#pragma include "chunk_grid.glsl"
 
 void main() {
     vec4 local = p3d_Vertex;
@@ -81,6 +66,7 @@ void main() {
     vec4 uChunkCentre = texelFetch(uChunkTable, ivec2(slot, 0), 0);
     vec4 uChunk = texelFetch(uChunkTable, ivec2(slot, 1), 0);
     vec4 ids = texelFetch(uChunkTable, ivec2(slot, 2), 0);
+    vec4 vegetation = texelFetch(uChunkTable, ivec2(slot, 3), 0);
     float ground = skirt ? height + uChunk.w : height;  // the (edge) ground height
     float drawn = height;
     vSwell = vec4(0.0, 0.0, 0.0, SWELL_MEAN);
@@ -133,4 +119,5 @@ void main() {
     vFaceV = rotation * FACE_V[vFace];
     vLevel = int(ids.x + 0.5);
     vStep = uChunk.z;
+    vPeriod = vegetation.xy;
 }

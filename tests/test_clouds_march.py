@@ -909,18 +909,20 @@ def test_the_ground_reads_the_clouds_shadow_from_a_pass(window, executor):
 
 
 def test_the_ground_takes_the_pass_where_its_distance_agrees():
-    """terrain_frag.glsl: the pass's four texels around a pixel, bilinear,
+    """terrain_light.glsl: the pass's four texels around a pixel, bilinear,
     those at another distance (a silhouette's far side, a model in front)
     left out; per pixel where none agrees, and in the sea's reflection
     (terrain.vert's vMirror, from its clip plane)."""
     terrain = Path(__file__).parent.parent / "src/world_builder/terrain/shaders"
-    frag = (terrain / "terrain_frag.glsl").read_text()
-    assert "const float GROUND_SHADOW_AGREE = 0.08;" in frag
-    assert "abs(texel.g - km) <= GROUND_SHADOW_AGREE * km" in frag
+    light = (terrain / "terrain_light.glsl").read_text()  # terrain_frag.glsl's light
+    assert "const float GROUND_SHADOW_AGREE = 0.08;" in light
+    assert "abs(texel.g - km) <= GROUND_SHADOW_AGREE * km" in light
     assert (
-        "uGroundShadowOn != 0 && vMirror == 0 && groundShadowAt(length(vRelPos), shade)"
-        in frag
+        "uGroundShadowOn != 0 && !mirror && groundShadowAt(length(relPos), shade)"
+        in light
     )
+    frag = (terrain / "terrain_frag.glsl").read_text()
+    assert "cloudShade(L, footprint, vRelPos, vMirror != 0)" in frag
     assert "vMirror = int(mirror);" in (terrain / "terrain.vert").read_text()
     shadow = (SHADER.parent / "ground_shadow.frag").read_text()
     # The same shadow as the ground's per pixel, at the scene the march stops at

@@ -70,6 +70,20 @@ from world_builder.terrain.stamps import Paint, Placement, Stamp
 
 LEVELS_PATH = Path(__file__).parent / "levels"
 DEMO_LEVEL = LEVELS_PATH / "demo.yaml"
+#: The tiny test planet's own level (no stamps: the demo level's are placed
+#: for a 600 km planet, and its radius would override the preset's).
+TINY_LEVEL = LEVELS_PATH / "tiny.yaml"
+#: Presets with a level of their own, taken in place of the demo level.
+PRESET_LEVELS = {"tiny": TINY_LEVEL}
+
+
+def level_for(path: Path | str, preset: str | None) -> Path:
+    """:returns: *path*, or *preset*'s own level when *path* is the demo
+    level (:data:`PRESET_LEVELS`)"""
+    path = Path(path)
+    if preset in PRESET_LEVELS and path.resolve() == DEMO_LEVEL.resolve():
+        return PRESET_LEVELS[preset]
+    return path
 
 
 def load_level(

@@ -171,7 +171,7 @@ from world_builder.terrain.chart import (
     latlon,
 )
 from world_builder.terrain.cubesphere import FACE_NAMES, dirs_to_face
-from world_builder.terrain.level import DEMO_LEVEL, load_level
+from world_builder.terrain.level import DEMO_LEVEL, level_for, load_level
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.terrain.shadow_map import ShadowMap
@@ -456,7 +456,7 @@ class TerrainDemo(ShowBase):
         self.speed = SPEED
 
         spec, self.start_pose = load_level(
-            level_path, preset=preset, seed=seed, radius=radius
+            level_for(level_path, preset), preset=preset, seed=seed, radius=radius
         )
         self.start_pose = start_pose(spec, self.start_pose, start)
 
@@ -467,7 +467,8 @@ class TerrainDemo(ShowBase):
         self.world = world
         # The frame-rate cap (WorldSettings.display: off by default).
         self.frame_cap = FrameCap(world.display)
-        self._clouds_on = clouds
+        # A planet drawn without clouds (the tiny test planet) has none.
+        self._clouds_on = clouds and spec.has_clouds
         self._genera = genera
         print("starting terrain workers ...")
         self.executor = ChunkExecutor(
@@ -492,6 +493,7 @@ class TerrainDemo(ShowBase):
             sun_color=SUN_COLOR,
             ambient=SKY_AMBIENT,
             settings=world.terrain,
+            vegetation=world.vegetation,
         )
         self.shadows.bind(self.terrain.root, 0)
         self.home = Body("planet", self.terrain, atmosphere=True)
@@ -1185,6 +1187,7 @@ class TerrainDemo(ShowBase):
         self.world = world
         world.apply(
             *self._terrains(),
+            *(terrain.canopy for terrain in self._terrains()),
             self.atmospheres,
             self.shadows,
             self.sky,

@@ -224,7 +224,7 @@ toggles it), which doubles all of that.
 
 Levers, all in `TerrainSettings` ([Quality settings](quality.md)):
 
-- `min_level` (MID drops one, LOW three): each dropped level removes ~40–60
+- `min_level` (HIGH drops one, MID two, LOW four): each dropped level removes ~40–60
   chunks.
 - `split_factor` K = 1.5 instead of 2 (LOW's): ~40 chunks per level instead
   of ~66, with coarser triangles on screen (~16 px instead of ~12 px at the

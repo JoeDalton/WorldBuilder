@@ -66,6 +66,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- HIGH terrain drops one level of the finest LOD (`TerrainSettings.min_level`
+  defaults to 1, about 3.6 m of vertex spacing); ULTRA keeps the finest (0).
+
 - Each terrain chunk carries a coarse mesh over its own vertices (every
   other one: `chunkgen.triangle_indices(COARSE_STRIDE)`, a quarter of the
   triangles), drawn instead of the full one by the clouds' depth passes and

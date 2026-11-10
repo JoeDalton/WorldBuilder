@@ -65,6 +65,9 @@ class ChunkData:
     :ivar geometric_error: max height change against the parent's coarser
         interpolation, metres
     :ivar gen_ms: generation time, milliseconds
+    :ivar canopy_lift: (VERTS, VERTS) float32 the vegetation shell's lift
+        per vertex (:func:`world_builder.terrain.vegetation.shell_lift`), for
+        a chunk fine enough to draw its plants and growing any; else None
     """
 
     key: Key
@@ -80,6 +83,7 @@ class ChunkData:
     skirt_depth: float
     geometric_error: float
     gen_ms: float
+    canopy_lift: np.ndarray | None = None
 
     def vertices(self) -> np.ndarray:
         """:returns: the vertex records as a :data:`VERTEX_DTYPE` array (a view)"""
@@ -231,6 +235,12 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         strata = sample.strata[inner].ravel()
         packed[:, 5] = np.clip(np.rint(strata * 255.0), 0, 255).astype(np.uint8)
 
+    canopy_lift = None
+    if spec.has_vegetation:
+        from world_builder.terrain import vegetation
+
+        canopy_lift = vegetation.chunk_lift(grid, key, elevation, w_bytes, spec)
+
     geometric_error = float(np.max(np.abs(elevation - parent_interpolation(elevation))))
     h_min, h_max = float(elevation.min()), float(elevation.max())
     skirt_depth = min(
@@ -274,6 +284,7 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         skirt_depth=skirt_depth,
         geometric_error=geometric_error,
         gen_ms=(time.perf_counter() - start) * 1e3,
+        canopy_lift=canopy_lift,
     )
 
 

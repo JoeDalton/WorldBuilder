@@ -75,6 +75,7 @@ from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.biomes import BIOME_COLORS
 from world_builder.terrain.chunkgen import ChunkData
 from world_builder.terrain.collision import TerrainCollision
+from world_builder.terrain.cubesphere import QUADS, UV_PERIOD
 from world_builder.terrain.materials import (
     MaterialSet,
     load_materials,
@@ -93,6 +94,7 @@ from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.strata import HIGH as STRATA_HIGH
 from world_builder.terrain.strata import LOW as STRATA_LOW
 from world_builder.terrain.strata import strata_lut
+from world_builder.terrain.vegetation import Canopy, VegetationSettings
 from world_builder.terrain.workers import ChunkExecutor
 
 SHADER_PATH = Path(__file__).parent / "shaders"
@@ -184,7 +186,7 @@ class TerrainSettings(QualitySettings):
     """
 
     min_level: int = knob(
-        0,
+        1,
         "Finest detail dropped",
         unit="levels",
         range=(0, 8),
@@ -305,6 +307,7 @@ class TerrainSettings(QualitySettings):
             "texture_size": 1024,
         },
         QualityLevel.ULTRA: {
+            "min_level": 0,
             "split_factor": 2.5,
             "detail_far": 6000.0,
             "anisotropy": 16,
@@ -357,6 +360,7 @@ class Terrain:
         orientation: ArrayLike = (1.0, 0.0, 0.0, 0.0),
         executor: ChunkExecutor | None = None,
         settings: TerrainSettings | None = None,
+        vegetation: VegetationSettings | None = None,
     ):
         """
         :param parent: node to hang the terrain root under; must not be offset
@@ -393,6 +397,9 @@ class Terrain:
             creates a private one from *backend* and ``settings.workers``
         :param settings: what the terrain costs (:class:`TerrainSettings`;
             :meth:`set_settings` changes it); None = the HIGH preset
+        :param vegetation: what its trees and bushes cost
+            (:class:`~world_builder.terrain.vegetation.VegetationSettings`;
+            :attr:`canopy`'s ``set_settings`` changes it); None = HIGH
         """
         settings = settings or TerrainSettings()
         self._settings = settings
@@ -470,8 +477,11 @@ class Terrain:
             "finest": 0,
             "generated": 0,
         }
+        #: The trees and bushes (:class:`~world_builder.terrain.vegetation.Canopy`)
+        self.canopy: Canopy | None = None
         self.set_spec(spec)
         self._apply_settings(settings)
+        self.canopy = Canopy(self, vegetation)
 
     # ── settings ───────────────────────────────────────────────────────────────
 
@@ -578,6 +588,8 @@ class Terrain:
         self._last_select_pos = None
         self._loading = True
         self.stats["finest"] = self.grid.max_level
+        if self.canopy is not None:
+            self.canopy.reset()
 
     def enable_collision(
         self,
@@ -1072,16 +1084,28 @@ class Terrain:
         slot = self._free_slots.pop()
         self._slots[key] = slot
         self._new_slots.append(slot)
-        level, face = key[0], key[1]
+        level, face, i, j = key
         u0, v0 = self.grid.uv_origin(key)
         values = self._chunk_values
         values[0, slot] = (*chunk.centre, 0.25 / self.grid.spacing(level))
         values[1, slot] = (u0, v0, (1 << level) * self.grid.uv_unit, chunk.skirt_depth)
         values[2, slot] = (level, face, 0.0, 0.0)
+        # Which UV_PERIOD its first vertex is in: the vegetation's cells are
+        # numbered across the wrap (vegetation_cells.glsl); then its canopy
+        # layer and whether it has one (vegetation.Canopy).
+        unit = self.grid.uv_unit
+        values[3, slot] = (
+            math.floor(((i * QUADS) << level) * unit / UV_PERIOD),
+            math.floor(((j * QUADS) << level) * unit / UV_PERIOD),
+            0.0,
+            0.0,
+        )
         return slot
 
     def _drop_node(self, key) -> None:
         """Remove an uploaded chunk's node and free its slot."""
+        if self.canopy is not None:
+            self.canopy.drop(key)
         self.nodes.pop(key).remove_node()
         self._free_slots.append(self._slots.pop(key))
         self.selector.set_ready(key, False)
@@ -1158,5 +1182,7 @@ class Terrain:
         )
         self._evict_store()
         self._evict_nodes()
+        if self.canopy is not None:
+            self.canopy.update(draw, cam)
         self.stats["select_ms"] = (time.perf_counter() - start) * 1e3
         self.stats["finest"] = min((k[0] for k in draw), default=self.grid.max_level)

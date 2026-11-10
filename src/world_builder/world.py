@@ -320,7 +320,7 @@ class Body:
 
     def parts(self) -> list:
         """:returns: its parts that take world settings"""
-        parts = [self.terrain]
+        parts = [self.terrain, self.terrain.canopy]
         if self.clouds is not None:
             parts.append(self.clouds)
         if self.ocean is not None:
@@ -498,6 +498,7 @@ class World:
                 materials=materials,
                 position=look.position,
                 settings=self.settings.terrain,
+                vegetation=self.settings.vegetation,
             )
             self.shadows.bind(terrain.root, len(self.bodies))
             # One texture set for every body (they load once)

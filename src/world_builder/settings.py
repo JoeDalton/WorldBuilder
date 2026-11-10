@@ -45,6 +45,7 @@ from world_builder.quality import Knob, QualityLevel, QualitySettings
 from world_builder.shadows import ShadowSettings
 from world_builder.sky.sky import SkySettings
 from world_builder.terrain.terrain import TerrainSettings
+from world_builder.terrain.vegetation import VegetationSettings
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ FORMAT_VERSION = 1
 #: The sections, in menu order: name -> settings class.
 SECTIONS: dict[str, type[QualitySettings]] = {
     "terrain": TerrainSettings,
+    "vegetation": VegetationSettings,
     "atmosphere": AtmosphereSettings,
     "sky": SkySettings,
     "clouds": CloudSettings,
@@ -76,6 +78,7 @@ class WorldSettings:
 
     level: QualityLevel = QualityLevel.HIGH
     terrain: TerrainSettings = field(default_factory=TerrainSettings)
+    vegetation: VegetationSettings = field(default_factory=VegetationSettings)
     atmosphere: AtmosphereSettings = field(default_factory=AtmosphereSettings)
     sky: SkySettings = field(default_factory=SkySettings)
     clouds: CloudSettings = field(default_factory=CloudSettings)
