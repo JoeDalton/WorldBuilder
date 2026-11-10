@@ -1,12 +1,14 @@
 #version 330
-// A planet's low clouds, raymarched (clouds.march): one depth range of the
-// view (the split cameras'), at a fraction of its resolution. The density
-// field, its lighting and the far field are the billboards' and the deck's
-// (cloud_field.glsl, cloud_shading.glsl); the march replaces their overdraw:
-// each pixel steps along its own ray through the slab, from the range's near
-// plane to the scene's depth, and stops once the cloud is opaque.
+// A planet's low clouds, raymarched (clouds.march): both depth ranges of the
+// view (the split cameras') in one march, at a fraction of its resolution. The
+// density field, its lighting and the far field are the billboards' and the
+// deck's (cloud_field.glsl, cloud_shading.glsl); the march replaces their
+// overdraw: each pixel steps along its own ray through the slab, from the near
+// range's near plane to the scene (the near range's depth where it holds
+// something, else the far range's), and stops once the cloud is opaque: a
+// cloud near the camera spares the march the clouds behind it.
 //
-// Each frame it traces one pixel of every uBlock x uBlock block of the view
+// Each frame it traces one pixel of every uBlock.x x uBlock.y block of the view
 // (uOffset, in turn), which cloud_resolve.frag gathers into the full
 // resolution over the frames. Out: the premultiplied cloud and its
 // (transmittance-weighted) distance in kilometres (a half float keeps it to
@@ -23,13 +25,20 @@ const int MAX_MARCH_LAYERS = 8;        // noise.MAX_LAYERS
 const float NOISE_FEATURE_UNITS = 4.0;  // noise.NOISE_FEATURE
 const float KM = 1000.0;                // the distance's unit out
 
-uniform sampler2D uSceneDepth;   // the range's depth, at the view's resolution
-uniform mat4  uClipToRender;     // the range's clip space -> the render frame
+// The scene's depth in each range, at the view's resolution. The near one is
+// read only while it is drawn (uNearDepthOn: the slab reaches the near range).
+uniform sampler2D uSceneDepthNear;
+uniform sampler2D uSceneDepthFar;
+uniform int   uNearDepthOn;
+uniform int   uDepthScale;       // view pixels per depth pixel, per axis (march.DEPTH_SCALE)
+uniform mat4  uClipToRender;     // the near range's clip space -> the render frame
+uniform mat4  uClipToRenderFar;  // the far range's
+uniform float uSplit;            // metres: where the near range ends (its step budget)
 uniform vec3  uCamRender;        // camera, render frame
 uniform vec3  camPos;            // camera, planet frame
 uniform float exposure;
 uniform int   uOwnAtmosphere;    // the planet's atmosphere (reddens sunlight), -1 none
-uniform float uPixelAngle;       // radians per pixel of the march
+uniform float uPixelAngle;       // radians per pixel of the march (a block's area's side)
 uniform int   uMarchSteps;       // the step budget per pixel
 uniform float uMinStep;          // metres: the shortest step, near the camera
 uniform float uStepGrowth;       // a step's length per metre of distance, farther
@@ -48,7 +57,13 @@ uniform float uDetailErosion;
 uniform float uBillowMean;
 uniform float uBillowGain;       // march.billow_stats: the blobs' spread, as the ridged noise's
 uniform float uBillowRawMean;    // the noise volume's own mean
-uniform int   uBlock;            // view pixels per march pixel, per axis
+// The billows bent by a curl noise (noise.curl_noise_volume, RGB as (c + 1) / 2):
+// by up to uCurlStrength of the billows' noise units, its features uCurlFrequency
+// times the noise volume's tile.
+uniform sampler3D uCurlNoise;
+uniform float uCurlStrength;
+uniform float uCurlFrequency;
+uniform ivec2 uBlock;            // view pixels per march pixel, across and up
 uniform ivec2 uOffset;           // the pixel traced in each block this frame
 uniform vec2  uViewSize;         // the view, pixels
 
@@ -63,10 +78,20 @@ const vec2 RESOLVED = vec2(2.0, 4.0);
 // A step is a sample along the ray as a pixel is across it: features finer than
 // about this share of the step's length (over RESOLVED) fade to their means as
 // the sub-pixel ones do, or they alias into the jitter (the shimmer of far
-// clouds, whatever the steps' count). It costs the clouds' detail at a distance
+// clouds, whatever the steps' count). The step's length by its distance alone
+// (k * max(dtMin, t * growth)), not the step taken: that one is cut at a
+// segment's end (and once lengthened as the ray lost its light, no more:
+// below), so the octaves a sample kept depended on where its ray entered the
+// cloud, which on a tower's face seen level changes with height: contours,
+// stacked horizontal bands. It costs the clouds' detail at a distance
 // (their lumps): march.STEP_FADES gives the least that keeps the shimmer down at
 // each march resolution.
 uniform float uStepFade;
+
+// Past this view footprint (a pixel's share of the clouds' feature, as
+// shading's) a sample takes its sunlight from the light volume alone, without
+// the sun march's local steps (cloud_field.glsl's cloudLightLocal).
+uniform float uLightLocalFootprint;
 
 // How much of a feature of this many metres a view pixel of footprint
 // metres resolves: 1 wholly, 0 not at all.
@@ -117,6 +142,12 @@ float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
     }
     vec3 coord = BILLOW_TURN * ((p * f.noiseScale + f.noiseOrigin)
                                 * (f.octaveScales.x * uDetailScale));
+    // Bent by the curl noise: the lumps swirl instead of sitting on the value
+    // noise's lattice (divergence-free, so their mean and spread hold).
+    if (uCurlStrength > 0.0) {
+        vec3 bend = texture(uCurlNoise, coord * (uCurlFrequency / noiseSize)).rgb;
+        coord += uCurlStrength * (2.0 * bend - 1.0);
+    }
     // Round lumps: two scales of the noise itself, carving where it is high.
     // (The ridged noise, 1 - |2n - 1|, carved along sheets, which show as
     // streaks across a cloud seen edge-on.) Its mean and spread are the ridged
@@ -134,9 +165,14 @@ float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
 const float SEGMENT_SAMPLES = 8.0;
 // The march stops at this transmittance, and counts the cloud opaque.
 const float OPAQUE = 0.04;
-// A step lengthens by this share of the transmittance already lost (march.STEP_DEEPENING):
-// in a dense cloud the light is spent in a few steps.
-const float STEP_DEEPENING = 1.5;
+// The steps do not lengthen as the light is spent (they did, by 1.5 times the
+// share lost): a step's length then depended on what the samples before it
+// found, so the steps' boundaries were no fixed comb the jitter shifts evenly
+// over the visits, and what the visits averaged kept the contours of where
+// the comb met a cloud's surface: bands across a tower's face, strongest
+// behind a veil (its light spent, every step after longer). Without, the
+// settled bands are gone, for 0.36 ms more over a stratus deck and nothing
+// in convective cloud at 2560 x 1440 (performance.md §29).
 // A cloudy column's alpha seen from afar: the deck's.
 const float FAR_ALPHA = 0.92;
 // The weather is read once this far along the ray, metres (uWeatherStretch):
@@ -147,6 +183,11 @@ uniform float uWeatherStretch;
 
 vec3 unproject(vec3 ndc) {
     vec4 p = uClipToRender * vec4(ndc, 1.0);
+    return p.xyz / p.w;
+}
+
+vec3 unprojectFar(vec3 ndc) {
+    vec4 p = uClipToRenderFar * vec4(ndc, 1.0);
     return p.xyz / p.w;
 }
 
@@ -201,11 +242,19 @@ void main() {
     }
     vec2 ndc = (vec2(pixel) + 0.5) / uViewSize * 2.0 - 1.0;
     vec3 nearPoint = unproject(vec3(ndc, -1.0));
-    vec3 farPoint = unproject(vec3(ndc, 1.0));
+    vec3 farPoint = unprojectFar(vec3(ndc, 1.0));
     vec3 dir = normalize(farPoint - nearPoint);
-    float depth = texelFetch(uSceneDepth, pixel, 0).r;
     float tStart = max(dot(nearPoint - uCamRender, dir), 0.0);
-    vec3 end = depth < 1.0 ? unproject(vec3(ndc, depth * 2.0 - 1.0)) : farPoint;
+    // The scene: the near range's surface where it has one, else the far
+    // range's, else the far plane (EVE's distance buffer of both cameras).
+    // The depth passes are drawn at half resolution (march.DEPTH_SCALE): a
+    // pixel reads its 2 x 2 block's depth.
+    ivec2 depthPixel = pixel / uDepthScale;
+    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, depthPixel, 0).r : 1.0;
+    float farDepth = texelFetch(uSceneDepthFar, depthPixel, 0).r;
+    vec3 end = nearDepth < 1.0 ? unproject(vec3(ndc, nearDepth * 2.0 - 1.0))
+             : farDepth < 1.0 ? unprojectFar(vec3(ndc, farDepth * 2.0 - 1.0))
+             : farPoint;
     float tEnd = length(end - uCamRender);
 
     // Each family's slab between two spheres, less the planet: up to two
@@ -265,20 +314,22 @@ void main() {
     }
 
     // Steps uMinStep long near the camera, a share of the distance farther,
-    // all lengthened alike when the ray would need more than the budget.
+    // all lengthened alike when the ray would need more than the budget. The
+    // near range (to uSplit) and the far range each have the budget (as when
+    // each range had a march of its own): one budget for the whole ray would
+    // stretch the near steps for far stretches the march seldom reaches (an
+    // opaque cloud near the camera stops it first).
     float dtMin = uMinStep;
     float growth = uStepGrowth;
-    float needed = 0.0;
+    vec2 needed = vec2(0.0);  // near, far
     for (int i = 0; i < 4; ++i) {
         if (i < count) {
-            needed += stepsOver(segments[i], dtMin, growth);
+            vec2 seg = segments[i];
+            needed.x += stepsOver(vec2(seg.x, min(seg.y, uSplit)), dtMin, growth);
+            needed.y += stepsOver(vec2(max(seg.x, uSplit), seg.y), dtMin, growth);
         }
     }
-    if (needed > float(uMarchSteps)) {
-        float k = needed / float(uMarchSteps);
-        dtMin *= k;
-        growth *= k;
-    }
+    vec2 stretch = max(needed / float(uMarchSteps), vec2(1.0));
     // Where in its step each sample lies: no banding, a fine noise instead,
     // moved on by the golden ratio each visit of this pixel (not each frame:
     // traced once a block's cycle, it would skip through the sequence), so
@@ -287,10 +338,31 @@ void main() {
     // view pixel's stride of uBlock aliased its diagonals into a lattice of
     // stripes), shifted by which pixel of the block this frame traces (the
     // block's pixels differ: R2 over the offset) and moved on by the visit, so
-    // a pixel's visits stratify the step.
+    // a pixel's visits stratify the step. (A space-time blue noise, a slice a
+    // visit or a frame as EVE-Redux reads it, measured the same: performance.md
+    // §24.)
     float jitter = fract(texelFetch(uBlueNoise, ivec2(gl_FragCoord.xy) & 63, 0).r
                          + dot(vec2(uOffset), vec2(0.7548776662, 0.5698402909))
                          + float(uFrame) * 0.618034);
+    // The light volumes' read jitter (cloud_field.glsl), three more draws
+    // of the blue noise, moved on each visit the same way.
+    ivec2 noiseAt = ivec2(gl_FragCoord.xy);
+    cloudLightJitter = fract(vec3(texelFetch(uBlueNoise, (noiseAt + ivec2(17, 41)) & 63, 0).r,
+                                  texelFetch(uBlueNoise, (noiseAt + ivec2(43, 9)) & 63, 0).r,
+                                  texelFetch(uBlueNoise, (noiseAt + ivec2(29, 53)) & 63, 0).r)
+                             + float(uFrame) * vec3(0.7548777, 0.5698403, 0.618034))
+                       - 0.5;
+    // Where the steps' boundaries fall: each segment's first step is this
+    // share of its length, so the boundaries after it move too, by a
+    // different amount each pixel and visit. The jitter above moves a sample
+    // within its step, not the steps: neighbouring pixels shared their
+    // boundaries (from the slab's entry, growing smoothly with distance),
+    // and a long step's light (not linear in its density) carries a bias
+    // that depends on where a cloud's surface falls between two boundaries:
+    // a sawtooth of bands up a tower's face seen level, where the steps are
+    // longest. Moved, the bias is noise the resolve averages.
+    float boundary = max(fract(texelFetch(uBlueNoise, (noiseAt + ivec2(7, 23)) & 63, 0).r
+                               + float(uFrame) * 0.4142136), 0.05);
 
     float transmittance = 1.0;
     vec3 light = vec3(0.0);
@@ -316,8 +388,14 @@ void main() {
         weatherUntil = -1.0;
         float a = seg.x;
         float least = (seg.y - seg.x) / SEGMENT_SAMPLES;  // the fewest a segment takes
-        while (a < seg.y && steps < uMarchSteps + 8 && transmittance > OPAQUE) {
-            float dt = min(min(max(dtMin, a * growth) * (1.0 + STEP_DEEPENING * (1.0 - transmittance)), least), seg.y - a);
+        bool first = true;  // its first step: shortened by boundary
+        while (a < seg.y && steps < 2 * uMarchSteps + 8 && transmittance > OPAQUE) {
+            float k = a < uSplit ? stretch.x : stretch.y;
+            float dt = min(min(k * max(dtMin, a * growth), least), seg.y - a);
+            if (first) {
+                dt *= boundary;
+                first = false;
+            }
             float t = a + dt * jitter;
             steps++;
             int layer = fam * uLayerCount + layerAt(t);
@@ -339,9 +417,13 @@ void main() {
             float footprint = t * uPixelAngle / feature;
             float detail = 1.0 - smoothstep(0.15, 0.6, footprint);
             float shading = 1.0 - smoothstep(0.04, 0.2, footprint);
+            // The light volume alone (no local sun steps) where a pixel spans
+            // this much of the clouds' feature (cloud_field.glsl).
+            cloudLightLocal = footprint < uLightLocalFootprint;
             float density = detail > 0.0
                           ? marchDensity(lf, p, weather,
-                                         max(t * uPixelAngle / float(uBlock), uStepFade * dt))
+                                         max(t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y)),
+                                             uStepFade * k * max(dtMin, t * growth)))
                           : 0.0;
             float farCoverage = 0.0;
             if (shading < 1.0) {

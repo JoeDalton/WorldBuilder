@@ -85,7 +85,11 @@ like:
   tileable octave the shader taps four times, as a `sampler3D`. It is not a
   baked fbm: the octaves are sampled at 1/2/7/16 with independent offsets,
   baking would freeze their relative phase, and resolving the 16x octave
-  would need 1024³.
+  would need 1024³. The two finest are also **turned** off the noise's axes
+  (`OCTAVE_TURNS`, the shader's `OCTAVE_3_TURN` / `OCTAVE_4_TURN`): value
+  noise carries its lattice's planes, flat spots and creases, which at their
+  few hundred metres drew interference lines across a tower's face seen at a
+  grazing angle (the billows are turned for the same reason).
 - **`density_on_sphere`** evaluates the field on the CPU *exactly* as the
   fragment shader does: the same trilinear half-texel addressing, the same
   8-bit quantisation. That equality is load-bearing, because placement is
@@ -152,6 +156,15 @@ The billboards follow the reference shader:
 - a short per-fragment march toward the sun through the field, which is what
   makes clouds shadow each other;
 - the "powder" dark-edge term and a multiple-scattering fill;
+- a second order of scattering (`CloudOptics.octave_gain`, 0.3, and
+  `octave_attenuation`, 0.5; Wrenninge's octaves, as EVE-Redux's clouds light
+  theirs with a multiple-scattering lobe of their own): 30 % of the sunlight
+  sees only half the sunward depth, with a phase half-way to isotropic. It is
+  a share taken out of the first order, so a side-lit cloud in full sun keeps
+  its brightness and only shadowed sides and anvil undersides open up; the far
+  clouds read its column mean from the deck table's fourth channel
+  (`noise.deck_light_table`). At 0.5 of the light and a quarter of the depth it
+  flattened towers;
 - the sky's display transform.
 
 All of these are live uniforms: `set_sun` moves the sun with no rebuild. These
@@ -170,6 +183,19 @@ when broken:
   cloud, not down a beam. Sun-tinted, dusk shadows go orange instead of
   blue-grey; phase-weighted, shadowed cloud toward the sun outshines side-lit
   cloud.
+- In the raymarch, the fill and the second order **fade with the cloud
+  above** (`DIFFUSE_FADE` in `cloud_shading.glsl`): times
+  `1 / (1 + 0.2 * depth)` of the column's optical depth straight up, from the
+  light volume, a diffusion's slow fall. The sun's depth a sample sees stops
+  at its window (640 m), so before this a cumulonimbus's base under
+  kilometres of tower was lit as if under 640 m of cloud: at noon its
+  anvil's underside was 0.74 of a lit cumulus's brightness (display levels),
+  0.57 now; thin cumulus are unchanged. The column up, not toward the sun:
+  toward a low sun it crosses tens of kilometres of other clouds, and towers
+  went brown at dusk. The sky's floor under the clouds (`skyOcclusion`) is
+  not faded: a tower's side sees the open sky around it, and without that
+  blue its dusk side browned too (the anvil's underside 0.48 with it).
+  `--cloud-debug 2048`: without (the old look).
 - The field is sampled **on the quad plane**, not offset to mid-chord. The
   offset moves the lookup by up to a particle radius (most of a noise
   feature), so overlapping billboards disagree about where the cloud is and
@@ -192,7 +218,8 @@ when broken:
 [`genera.py`](../../src/world_builder/clouds/genera.py) adds stratus, and the
 convective continuum from fair-weather cumulus through congestus to
 cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
-`--genera` in the demo, `terrain_shots.py` and `cloud_bench.py`). Its maps are
+`--genera` in the demo and the scripts sharing its options, on by default
+there, `--no-genera` for the plain field; opt-in in `cloud_bench.py`). Its maps are
 a **placeholder** for the weather (issue #8): features laid out around one
 point. Either renderer draws them: billboards (two `CloudVolume`s), or the
 raymarch (one `CloudMarch` of two families, below).
@@ -351,7 +378,8 @@ cloud). Here each pixel steps along its own ray:
 
 - **Through the slab**, between the spheres at its base and top, less the
   planet: up to two segments (a ray skimming under the slab leaves it and
-  comes back), from the depth range's near plane to the **scene's depth**.
+  comes back), from the near plane to the **scene's depth** (the near
+  range's surface where it has one, else the far range's).
   A game's model inside a cloud is hidden by just the cloud in front of it,
   and the camera inside a cloud sees it all around (the billboards fade out
   near the camera, which leaves a clear bubble).
@@ -360,7 +388,12 @@ cloud). Here each pixel steps along its own ray:
   alike when a ray needs more than `CloudSettings.march_steps`, and at
   least `SEGMENT_SAMPLES` (8) a stretch of the slab: a far ray crossing it
   steeply in a few steps longer than its clouds' edges are thick hits or
-  misses thin cloud by chance (the sparkle seen from 20 km up). Each sample
+  misses thin cloud by chance (the sparkle seen from 20 km up). A step's
+  length is its distance's alone: it no longer lengthens as the ray loses
+  its light in a cloud. That made the steps' grid depend on what the samples
+  found, and the visits' jitter no longer averaged out the contours where
+  the grid met a cloud's surface (bands across a tower's face, strongest
+  behind a thin veil). Each sample
   is jittered within its step by a **blue noise** (`blue_noise`, a 64 x 64
   tileable void-and-cluster texture) read at the *march's* pixel, shifted by
   which pixel of its block this frame traces (R2) and moved on by the golden
@@ -368,7 +401,12 @@ cloud). Here each pixel steps along its own ray:
   once a block's cycle, a per-frame jitter skipped half a step a visit and
   never stratified it. (The interleaved gradient noise at the view pixel, a
   stride of `uBlock` apart, aliased its own diagonals into a lattice of
-  stripes that showed in motion, worst at a quarter resolution.) The march stops once the cloud is opaque. The steps' geometry
+  stripes that showed in motion, worst at a quarter resolution.) The steps'
+  **boundaries** move too: each stretch's first step is a random share of its
+  length (another draw of the blue noise, moved on each visit), so neighbouring
+  pixels do not share them; a long step's light, not linear in its density,
+  carries a bias that depends on where a cloud's surface falls between two
+  boundaries, which drew bands up a tower's face seen level. The march stops once the cloud is opaque. The steps' geometry
   has a NumPy mirror that the tests run (`slab_segments`, `march_steps`,
   `march_transmittance`).
 - **No longer steps in clear air.** A step longer than the finest features
@@ -391,7 +429,11 @@ cloud). Here each pixel steps along its own ray:
   and softer): beyond a few
   kilometres the steps grow with the distance (1 %), and an octave they cannot
   sample aliases into the jitter however finely a pixel resolves it (the
-  shimmer of far clouds, which more steps did not remove). The weather's shift is read
+  shimmer of far clouds, which more steps did not remove). The step's length
+  there is its distance's alone (`k * max(dtMin, t * growth)`), not the step
+  taken, which is cut at a stretch's end: the octaves a sample kept then
+  depended on where its ray
+  entered the cloud, contours up a tower's face. The weather's shift is read
   once per kilometre of ray (`cloudDensityShifted`), not at every sample.
   Two departures, march-only, give back the billboards' look:
   - the view ray takes **twice the field's extinction**
@@ -409,9 +451,21 @@ cloud). Here each pixel steps along its own ray:
     noise `1 - |2n - 1|`, which carves along sheets: seen edge-on they showed
     as parallel streaks across every cloud. The first layer is also sampled
     through a rotation off the field's axes (`BILLOW_TURN`), which hides the
-    value noise's lattice planes.
+    value noise's lattice planes. Both layers are then **bent by a curl
+    noise** (`noise.curl_noise_volume`, 32³, the curl of three value-noise
+    potentials; `CURL_STRENGTH` 2 of the billows' noise units, features about
+    two billows across), as EVE-Redux bends its detail noise: wisps and small
+    fragments curl into tufts instead of round lumps. Curl noise has no
+    divergence, so the billows' mean and spread (and the coverage) hold. At 4
+    it stretched fragments into streaks.
 - **Lit** per sample exactly as the billboards are (`cloud_shading.glsl`,
-  which both renderers include). The air is applied once per pixel, at the
+  which both renderers include), but for where the sunward depth and the
+  sky's reach come from: the **light volume** around the camera
+  ([shadows](shadows.md#the-cloud-light-volume)) where it is whole, the
+  cloud shadow maps' levels without it, the sun march beyond both. Past a
+  view footprint of `march.LIGHT_LOCAL_FOOTPRINT` (0.04 of the clouds'
+  feature) a sample takes its sunlight from the volume alone, without the sun
+  march's two local steps. The air is applied once per pixel, at the
   cloud's transmittance-weighted distance, with the billboards' per-vertex
   sample count.
 - **Far away**, where a pixel spans more than the features, it samples the
@@ -419,17 +473,29 @@ cloud). Here each pixel steps along its own ray:
   takes the deck's alpha, lit by the deck's averages. The march reaches
   orbit with no deck, and nothing changes colour closing in.
 
-**The passes.** There is one set per depth range of `SplitDepthCameras`
+**The passes.** One march covers both depth ranges of `SplitDepthCameras`
 (`CloudMarch.attach`; `PlanetClouds.use_split_depth`, which a `World` calls
-from `use_split_depth`):
+from `use_split_depth`), as EVE-Redux marches once over KSP's two cameras'
+depths:
 
-1. a camera sharing the range's lens draws the **scene's depth** at the
-   view's resolution into a texture. Everything but the clouds and the sky
+1. a camera per range, sharing its lens, draws the **scene's depth** at half
+   the view's resolution per axis (`march.DEPTH_SCALE`) into a texture (the
+   march reads it at the pixels it traces; the cards, to tell the near range's
+   pixels; static shots differ from full resolution in a few pixels a frame). Everything but the clouds and the sky
    is drawn, the terrain through its depth-only stage, as for the
    half-resolution pass;
-2. a fullscreen card **marches** one pixel of every block (2 × 2 at a half resolution, 4 × 4 at a quarter)
-   (`march_resolution` ½; 4 × 4 at ¼), a different one each frame in a
-   Bayer order. It writes the premultiplied cloud and its distance;
+2. a fullscreen card **marches** one pixel of every block
+   (`CloudSettings.march_block`: 2 × 2 at a half resolution, 4 × 2 for an
+   eighth of the pixels, 3 × 3 for a ninth, 4 × 4 at a quarter), a different
+   one each frame (`march.block_order`: consecutive frames never trace
+   touching pixels, even across the blocks' edges; 4 × 4 is a Bayer order,
+   4 × 2 and 3 × 3 were found by an exhaustive search, as EVE-Redux's own
+   sequences for them trace touching pixels in turn), from the near range's near plane to the near range's
+   surface where its depth pass drew one, else to the far range's (EVE's
+   distance buffer of both cameras, read in the march itself). It stops once
+   the cloud is opaque, so a cloud near the camera spares the march the ones
+   behind it (two marches, one per range, could not: the far one did not know
+   the near one's cloud). It writes the premultiplied cloud and its distance;
 3. a **resolve** gathers them into the view's resolution over the frames.
    Every pixel blends this frame's samples around it (the four nearest,
    bilinearly) into the last frame's result, by the same share whatever
@@ -437,15 +503,32 @@ from `use_split_depth`):
    the traced pixels on the cloud). The history is reprojected along the
    view ray to the pixel's own cloud distance (this frame's first, then the
    history's there; float64 for the camera's move, float32 only near the
-   camera) and held within 1.25 standard deviations of the 3 × 3 samples
-   around. While the view is still (`uStill`, from the camera's move and
+   camera) and held within 1.25 standard deviations of the samples around.
+   While the view is still (`uStill`, from the camera's move and
    turn), that range is widened by a floor and a share of the mean, or the
    steps' own noise would clamp the history and start its count over; in
-   motion the floor is gone, or a cloud coming closer would keep the thin
-   look it had. The samples' mean and spread are Gaussian-weighted by their
-   distance to the pixel (`STATS_REACH`), not a box about the nearest sample
-   (whose centre moves every half block and puts the lattice into the clamp), and
-   so is the distance the history is moved by. A pixel that takes most of this
+   motion a quarter of it stays (`MOTION_FLOOR`): with none a cloud coming
+   closer kept less of the thin look it had, but where the samples agree the
+   range was their noisy mean, and a tower went grainy whenever the camera
+   moved. In motion this frame's samples are taken as their smooth mean, and
+   each frame takes at least about a cycle of the block (`MOVING_WEIGHTS`:
+   1/8 at 4 × 2): with the full count's `MIN_WEIGHT` alone, ~33 frames of
+   history lagged the view of a cloud whose look changes fast as the camera
+   flies (a lumpy anvil's base at a grazing angle from inside the slab), and
+   the clamp cut that lag into grain wherever its box of noisy samples
+   happened to be narrow. Unreal's clouds refresh each pixel once a cycle for
+   flying through them. `CloudSettings.march_refresh_moving` (off) traces
+   twice the pixels while moving (`MOVING_BLOCKS`, back after `MOVING_HOLD`
+   still frames): no less grain measured, each sample as noisy. The samples'
+   mean and spread are taken over the 4 × 4 about the pixel, each weighted by
+   a radial bump of its distance, (1 − (d / 2)²)², nothing from two samples
+   away (`STATS_REACH`; `march.stats_window` on the CPU): a sample enters and
+   leaves the window at no weight, so the statistics run on unbroken from one
+   of the block's cells to the next. The 3 × 3 about the nearest sample (a
+   Gaussian) jumped at each cell's edge, and where the clamp cut the history
+   its box printed the jumps: a mosaic of the block's cells in motion
+   (Karis' "3x3 box artifacts"; performance.md §30). The distance the history
+   is moved by takes the same weights. A pixel that takes most of this
    frame's samples (its history lost or short) takes their smooth mean instead
    of the bilinear mix of four, by `uSmooth` (`march.SMOOTHING`: all of it at a
    quarter resolution, half at a half, none at full): each sample's noise was a
@@ -453,18 +536,46 @@ from `use_split_depth`):
    target's second channel): this frame's share falls as 1 / (count + 1)
    down to `MIN_WEIGHT` (0.03), and what the clamp takes away takes the
    count down (to 4 at least, so a noisy sample is not taken
-   whole). Two results alternate, each frame's reading the other's;
-4. a card lays the result over the range's own pass, premultiplied "over",
-   at the **cloud's own depth**. The scene's depth test hides it pixel by
-   pixel at the view's resolution, behind anything nearer, which also
-   drops any stale history a moving model would leave behind it.
+   whole). The history's distance is held within the fresh samples' around
+   (their least and most): mixed like the colour it lagged them by up to
+   1 / `MIN_WEIGHT` frames, and flying forward (the clouds nearer every
+   frame) it moved the history from too far, where the clamp threw it away
+   (small clouds lost in a fast descent). The history is kept across a move of
+   `HISTORY_JUMP` (2 km) or `HISTORY_JUMP_SHARE` (2 %) of the camera's distance
+   to the slab, the more: from orbit a descent moves kilometres a frame. Clear
+   sky (no cloud in the samples around, none in the history) returns early.
+   Two results alternate, each frame's reading the other's;
+4. two cards lay the result over the view, premultiplied "over", at the
+   **cloud's own depth**: the near range's card over the pixels where the
+   near range's depth pass drew something (the near camera draws its
+   surfaces over the far pass afterwards, and the clouds in front of them
+   must come after), the far range's card over the rest, in the far pass's
+   clouds' slot (after the sky, before the cirrus). Each range's depth test
+   hides the cloud pixel by pixel at the view's resolution, behind anything
+   nearer, which also drops any stale history a moving model would leave
+   behind it. The depth is **no farther than the scene's** (each card's own
+   range's depth pass, `uSceneDepth`): the march stopped there, so all it
+   returned lies in front. The resolved distance alone lagged the fresh
+   samples, and flying forward it put the clouds behind the ground under them:
+   the depth test cut 90 % of a stratus and slid its edge against the
+   mountains, and a fast descent lost half its clouds (performance.md §28;
+   `CloudMarch` layers' `scene_cut` switches it off, to compare).
 
-The near range gathers as the far one does (it once traced the middle of
-each block every frame at the march's resolution, upsampled by the
-composite: at a quarter of the resolution, 4 × 4 squares). It runs only
-when the slab reaches into the near range.
+The near range's depth pass and card run only when the slab reaches into the
+near range; otherwise the march stops at the far range's scene, and what the
+near camera draws covers the clouds behind it. The history goes on across
+that switch.
 
-The sea's reflection sees the deck alone (the far layer is packed for it).
+**Their shadow on the ground** comes from one more pass of the march's
+(`_GroundShadow`, `ground_shadow.frag`): from the same two depth passes, at
+their resolution, the clouds' shadow at each texel's scene point
+(`planetCloudShadow`, as the terrain's per pixel), and the distance there.
+The terrain and the sea read it back by their distance (`groundShadowAt`) and
+shade it per pixel only where no texel agrees, and in the sea's reflection
+(shadows.md, "The clouds' shadow on the view's ground"; performance.md §33).
+The depth passes draw the terrain's coarse mesh (terrain.md, "LOD").
+
+The sea's reflection sees the deck alone (the far field's layer is packed for it).
 The textures may be padded to powers of two, so the shaders address them
 in pixels.
 

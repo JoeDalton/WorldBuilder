@@ -102,7 +102,10 @@ def test_every_field_is_a_described_knob(section):
         assert not (k.range and k.choices), f.name
 
 
-@pytest.mark.parametrize("section", list(SECTIONS))
+LEVELLED = [name for name, kind in SECTIONS.items() if kind.LEVELLED]
+
+
+@pytest.mark.parametrize("section", LEVELLED)
 def test_the_defaults_are_the_high_preset(section):
     kind = SECTIONS[section]
     assert kind() == kind.preset(QualityLevel.HIGH) == kind.preset("high")
@@ -123,7 +126,7 @@ def test_presets_are_within_their_knobs(section, level):
             assert value in k.choices.values(), name
 
 
-@pytest.mark.parametrize("section", list(SECTIONS))
+@pytest.mark.parametrize("section", LEVELLED)
 def test_presets_are_distinct(section):
     """A preset must be recognisable from its settings (a menu shows which
     one a part is at, and cycling must move on)."""
@@ -133,7 +136,7 @@ def test_presets_are_distinct(section):
     assert [kind.level_of(p) for p in presets] == LEVELS
 
 
-@pytest.mark.parametrize("section", list(SECTIONS))
+@pytest.mark.parametrize("section", LEVELLED)
 def test_presets_order_their_cost(section):
     presets = [SECTIONS[section].preset(level) for level in LEVELS]
     for name in COST_FIELDS[section]:
@@ -361,3 +364,70 @@ def test_a_preset_keeps_the_choices_that_are_not_quality():
     # A config file still remembers it
     data = march.to_dict()
     assert WorldSettings.from_dict(data).clouds.renderer == "march"
+
+
+def test_a_section_without_levels_is_kept_by_every_preset():
+    """The display's frame cap is a choice: every preset is the same, no
+    level is its own, and moving the world to a preset keeps it."""
+    from world_builder.display import DisplaySettings
+
+    assert not DisplaySettings.LEVELLED
+    assert all(k.kept for _, k in DisplaySettings.knobs())
+    assert len({DisplaySettings.preset(level) for level in LEVELS}) == 1
+    assert DisplaySettings.level_of(DisplaySettings()) is None
+    capped = WorldSettings().with_value("display", "frame_cap", 60)
+    assert capped.with_level("low").display.frame_cap == 60
+    assert not capped.is_custom()
+    assert WorldSettings.from_dict(capped.to_dict()).display.frame_cap == 60
+    schema = {s["id"]: s for s in WorldSettings.schema()["sections"]}
+    assert schema["display"]["levelled"] is False
+    assert schema["terrain"]["levelled"] is True
+
+
+def test_the_frame_cap_sets_the_clock():
+    """FrameCap puts a clock in its limited mode at the cap, and back to
+    normal at 0 (the default)."""
+    from dataclasses import replace
+
+    from panda3d.core import ClockObject
+
+    from world_builder.display import DisplaySettings, FrameCap
+
+    class Clock:  # Panda's clock has no getter for its limit
+        mode = rate = None
+
+        def set_mode(self, mode):
+            self.mode = mode
+
+        def set_frame_rate(self, rate):
+            self.rate = rate
+
+    clock = Clock()
+    assert DisplaySettings().frame_cap == 0  # off by default
+    cap = FrameCap(DisplaySettings(), clock)
+    assert clock.mode == ClockObject.M_normal
+    cap.set_settings(replace(DisplaySettings(), frame_cap=90))
+    assert clock.mode == ClockObject.M_limited
+    assert clock.rate == pytest.approx(90.0)
+    cap.set_settings(replace(DisplaySettings(), frame_cap=0))
+    assert clock.mode == ClockObject.M_normal
+
+
+def test_a_settings_class_resolves_its_type_hints_once(monkeypatch):
+    """Resolving the hints took ~0.3 ms a settings object: the demo's HUD,
+    naming every section's preset, stuttered 6 ms every 16 frames."""
+    import typing
+
+    from world_builder import quality
+
+    calls = []
+    real = typing.get_type_hints
+    monkeypatch.setattr(
+        typing, "get_type_hints", lambda cls: calls.append(cls) or real(cls)
+    )
+    quality._type_hints.cache_clear()
+    world = WorldSettings()
+    for _ in range(3):
+        for name in SECTIONS:
+            world.section_level(name)
+    assert len(calls) == len(set(calls))

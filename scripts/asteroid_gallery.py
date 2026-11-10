@@ -26,7 +26,6 @@ from panda3d.core import Filename, GeomNode, NodePath, Shader, Vec3
 sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import window_config  # noqa: E402
-
 from world_builder.asteroids.mesh import build_geom, normal_map_texture  # noqa: E402
 from world_builder.asteroids.prototype import (  # noqa: E402
     PrototypeJob,

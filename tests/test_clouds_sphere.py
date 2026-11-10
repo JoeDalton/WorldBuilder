@@ -251,7 +251,7 @@ def deck_light(field, table):
 def test_the_deck_light_is_a_shadowing(deck_light):
     """Shares of the sunlight: in [0, 1], the powder only darkens, and a
     clear sky is unshadowed."""
-    assert deck_light.shape == (17, 16, 2)
+    assert deck_light.shape == (17, 16, 3)
     assert np.all((deck_light >= 0.0) & (deck_light <= 1.0))
     assert np.all(deck_light[..., 0] <= deck_light[..., 1] + 1e-6)
     np.testing.assert_array_equal(deck_light[0], 1.0)
@@ -542,3 +542,26 @@ def test_deck_mesh_is_a_sphere():
     # Same corners as the terrain's cube-sphere.
     corner = face_dirs(0, np.array([1.0]), np.array([1.0]))[0] * (R + 2700.0)
     assert np.min(np.linalg.norm(data - corner, axis=1)) < 1.0
+
+
+def test_the_second_order_sees_less_of_the_sunward_depth(deck_light):
+    """The deck's second order of scattering (CloudOptics.octave_gain): the
+    sunward depth times octave_attenuation (< 1), so it is at least the sun
+    term's; a clear sky is unshadowed."""
+    assert np.all(deck_light[..., 2] >= deck_light[..., 0] - 1e-6)
+    assert np.all(deck_light[..., 2] <= 1.0)
+    np.testing.assert_array_equal(deck_light[0], 1.0)
+    covered = deck_light[8:, :, 2] - deck_light[8:, :, 0]
+    assert covered.mean() > 0.01
+
+
+def test_the_far_table_keeps_its_channels_in_order():
+    """RGBA: the sun term, the visibility, the ground's shadow, the second
+    order (the shaders read .r .g .b .a); Panda's RAM image is BGRA."""
+    from world_builder.clouds.noise import build_deck_light_texture
+
+    table = np.array([[[0.1, 0.2, 0.3, 0.4]]], dtype=np.float32)
+    texture = build_deck_light_texture(table)
+    assert texture.get_num_components() == 4
+    stored = np.frombuffer(texture.get_ram_image(), np.float32)
+    np.testing.assert_allclose(stored, [0.3, 0.2, 0.1, 0.4])

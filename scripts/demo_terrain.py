@@ -150,10 +150,12 @@ from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.half_res import HalfResClouds
+from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS, HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.display import FrameCap
 from world_builder.lights import TrackedLights
 from world_builder.objects import ModelLighting
 from world_builder.ocean import Sea
@@ -244,7 +246,15 @@ QUALITY_KEYS = (
     ("f7", "shadows"),
 )
 QUALITY_ALL_KEY = "f6"
-_DEBUG_VIEWS = ("shaded", "LOD", "biomes", "slope", "normals", "skirts")
+_DEBUG_VIEWS = (
+    "shaded",
+    "LOD",
+    "biomes",
+    "slope",
+    "normals",
+    "skirts",
+    "cloud shadow",
+)
 
 
 def window_config(
@@ -455,6 +465,8 @@ class TerrainDemo(ShowBase):
 
         world = settings or WorldSettings()
         self.world = world
+        # The frame-rate cap (WorldSettings.display: off by default).
+        self.frame_cap = FrameCap(world.display)
         self._clouds_on = clouds
         self._genera = genera
         print("starting terrain workers ...")
@@ -556,8 +568,16 @@ class TerrainDemo(ShowBase):
         self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
         self.shadows.bind(self.sky.node)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
+        self.sky.attach_view(self.win, self.shadows)
+        self.atmospheres.attach_aerial(
+            self.win, self.cam, self.camLens, self.sky.sun_input, self.shadows
+        )
+        # The god rays: the mountains' shadow on the air (the clouds' with them).
+        mountains = [self.home.shadow_map.bind] if self.home.shadow_map else []
+        self.atmospheres.bind_god_rays(0, mountains)
         self.clouds = None
         self.cloud_maps = None  # the clouds' shadow maps
+        self.cloud_light = None  # their light volumes
         self._cloud_debug = cloud_debug
         self._rebuild_clouds()
         # Built before the depth split changes the lens: the sea's reflection
@@ -778,6 +798,8 @@ class TerrainDemo(ShowBase):
             if self.cloud_maps is not None:
                 steps = self.shadows.settings.cloud_shadow_steps
                 self.cloud_maps.update(self.cam_world, self._sun, steps)
+            if self.cloud_light is not None:
+                self.cloud_light.update(self.cam_world, self._sun)
         self._place_test_balls()
         self._update_sun()
         self._shade_models()
@@ -1041,6 +1063,9 @@ class TerrainDemo(ShowBase):
             if self.cloud_maps is not None:
                 self.cloud_maps.destroy()
                 self.cloud_maps = None
+            if self.cloud_light is not None:
+                self.cloud_light.destroy()
+                self.cloud_light = None
             self.clouds = None
         if self.ring is not None:
             self.ring.haze.set_clouds_top(0.0)  # none: one pass, after them
@@ -1071,6 +1096,26 @@ class TerrainDemo(ShowBase):
         self.cloud_maps.bind(self.terrain.root)
         self.clouds.bind_maps(self.cloud_maps.bind)  # a raymarch's own light
         self.cloud_maps.bind(self.home.models.inputs)
+        self.cloud_light = CloudLightVolumes(
+            self.win,
+            self.clouds,
+            self.world.shadows.cloud_light_size,
+            per_frame=self.world.shadows.cloud_light_slices,
+        )
+        self.clouds.bind_maps(self.cloud_light.bind)
+        # Their shadow on the view's ground from the march's pass, not per pixel.
+        self.clouds.bind_ground_shadow(
+            self.terrain.root, [functools.partial(self.shadows.bind, body=0)]
+        )
+        # The god rays: their shadows (and the mountains') on the air's bake.
+        self.atmospheres.bind_god_rays(
+            0,
+            [
+                self.clouds.bind_shadow_inputs,
+                self.cloud_maps.bind,
+                self.cloud_light.bind,
+            ],
+        )
         if self.ring is not None:
             # Its haze split at their tops: what is beyond them drawn first.
             self.ring.haze.set_clouds_top(self.clouds.top_radius)
@@ -1139,10 +1184,18 @@ class TerrainDemo(ShowBase):
         terrain's texture size and workers) is logged and left as it is."""
         self.world = world
         world.apply(
-            *self._terrains(), self.atmospheres, self.shadows, self.sky, self.ocean
+            *self._terrains(),
+            self.atmospheres,
+            self.shadows,
+            self.sky,
+            self.ocean,
+            self.frame_cap,
         )
         if self.cloud_maps is not None:
             self.cloud_maps.set_size(world.shadows.cloud_map_size)
+        if self.cloud_light is not None:
+            self.cloud_light.set_tile(world.shadows.cloud_light_size)
+            self.cloud_light.per_frame = world.shadows.cloud_light_slices
         self.casters.set_size(world.shadows.caster_size)
         for body in self.bodies:
             body.shadow_map.set_size(world.shadows.terrain_map_size)
@@ -1156,7 +1209,8 @@ class TerrainDemo(ShowBase):
         self._sync_half_res()
 
     def set_debug_view(self, view: int) -> None:
-        """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts (all bodies)."""
+        """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts, 6 the
+        clouds' shadow (all bodies)."""
         self._debug = view
         for terrain in self._terrains():
             terrain.set_debug_mode(view)
@@ -1269,6 +1323,8 @@ class TerrainDemo(ShowBase):
             body.shadow_map.destroy()
         if self.cloud_maps is not None:
             self.cloud_maps.destroy()
+        if self.cloud_light is not None:
+            self.cloud_light.destroy()
         for terrain in self._terrains():
             terrain.destroy()
         self.executor.shutdown()
@@ -1399,6 +1455,12 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--no-clouds", action="store_true", help="no clouds")
     parser.add_argument(
+        "--frame-cap",
+        type=int,
+        default=None,
+        help="the most frames a second, 0 none (default: the settings', none)",
+    )
+    parser.add_argument(
         "--ring", action="store_true", help="a small ring around the planet"
     )
     parser.add_argument(
@@ -1408,9 +1470,11 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--genera",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="the low clouds by genus: cumulonimbus, congestus and stratus "
-        "around the start (clouds.genera's placeholder maps)",
+        "around the start (clouds.genera's placeholder maps); on by default, "
+        "--no-genera for the plain field",
     )
     parser.add_argument(
         "--cloud-renderer",
@@ -1434,6 +1498,8 @@ def settings_from_args(args: argparse.Namespace) -> WorldSettings:
         settings = settings.with_value("clouds", "half_resolution", True)
     if args.cloud_renderer is not None:
         settings = settings.with_value("clouds", "renderer", args.cloud_renderer)
+    if args.frame_cap is not None:
+        settings = settings.with_value("display", "frame_cap", args.frame_cap)
     return settings
 
 

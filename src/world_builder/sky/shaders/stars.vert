@@ -5,6 +5,7 @@
 // fragment can add exactly what the star adds once tonemapped.
 
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
+#pragma include "../../atmosphere/shaders/sky_view.glsl"
 #pragma include "sky_common.glsl"
 
 uniform mat4 p3d_ModelViewProjectionMatrix;  // the sky sphere's
@@ -25,7 +26,9 @@ void main() {
     gl_ClipDistance[0] = 1.0;
     gl_PointSize = 3.0;
     vec3 transmittance, inscatter;
-    atmosphereAlong(dir, 1e30, uSunDir, uAtmoVertexSteps, transmittance, inscatter);
+    if (!skyViewAlong(dir, uSunDir, transmittance, inscatter)) {
+        atmosphereAlong(dir, 1e30, uSunDir, uAtmoVertexSteps, transmittance, inscatter);
+    }
     float adapt = atmoHitsGround(dir) ? 0.0 : starAdaptation(inscatter);
     vec3 glow = skyBackground(textureLod(uStars, p3d_Vertex.xyz, 0.0).rgb);
     vBase = (glow * adapt * transmittance + inscatter) * uExposure;

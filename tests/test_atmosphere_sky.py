@@ -64,6 +64,8 @@ def test_sunlight_through_the_air():
         -(
             np.asarray(params.rayleigh) * params.rayleigh_height
             + params.mie_extinction * params.mie_height
+            # the ozone's tent straight up: its area, the half-width
+            + np.asarray(params.ozone) * params.ozone_width
         )
     )
     np.testing.assert_allclose(overhead, expected, rtol=0.02)
@@ -138,6 +140,9 @@ def test_defaults_bind_every_input():
         "uAtmoScatter",
         "uAtmoMie",
         "uAtmoExtra",
+        "uAtmoOzone",
+        "uAtmoTransmittance",
+        "uAtmoMultiple",
     ):
         # A missing input comes back blank: value type 0 (M_invalid).
         assert node.get_shader_input(name).get_value_type() != 0

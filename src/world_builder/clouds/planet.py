@@ -37,6 +37,7 @@ from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
 from world_builder.clouds.march import CloudMarch
 from world_builder.clouds.noise import DensityField
+from world_builder.clouds.shadow_defaults import ground_shadow_defaults
 from world_builder.clouds.sphere import CLOUD_BIN, CLOUD_TOP_MARGIN, CloudVolume
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS
@@ -238,6 +239,9 @@ class PlanetClouds:
         # new volume.
         self._binders: list[Callable[[NodePath], None]] = []
         self._map_binders: list[Callable[[NodePath], None]] = []
+        # The ground shadow pass's readers (the terrain) and its card's binders
+        self._ground_nodes: list[NodePath] = []
+        self._ground_binders: list[Callable[[NodePath], None]] = []
         # The nodes the clouds shade (bind_shadow_inputs), again for a new
         # volume.
         self._shadow_nodes: list[NodePath] = []
@@ -343,6 +347,7 @@ class PlanetClouds:
             if isinstance(self.volume, CloudMarch):
                 for bind in self._map_binders:
                     self.volume.bind_maps(bind)
+            self._bind_ground()
             if self._half_res is not None:
                 for volume in self._volumes():
                     if isinstance(volume, CloudVolume):
@@ -378,6 +383,31 @@ class PlanetClouds:
         self._map_binders.append(bind)
         if isinstance(self.volume, CloudMarch):
             self.volume.bind_maps(bind)
+
+    def bind_ground_shadow(
+        self, node: NodePath, binders: list[Callable[[NodePath], None]]
+    ) -> None:
+        """Let a node's shaders (the planet's terrain: terrain_frag.glsl's
+        ``uGroundShadow``) read the clouds' shadow on the view's scene from a
+        raymarch's pass (:meth:`march.CloudMarch.bind_ground_shadow`) instead of
+        shading it per pixel; kept across a change of renderer (the billboards
+        have none: per pixel again).
+
+        :param node: the node that reads it
+        :param binders: set the pass's own inputs beyond the clouds' (the
+            world's ``Shadows.bind``: the shadow's steps)
+        """
+        self._ground_nodes.append(node)
+        self._ground_binders.extend(binders)
+        self._bind_ground()
+
+    def _bind_ground(self) -> None:
+        self._ground_nodes = [n for n in self._ground_nodes if not n.is_empty()]
+        for node in self._ground_nodes:
+            if isinstance(self.volume, CloudMarch):
+                self.volume.bind_ground_shadow(node, self._ground_binders)
+            else:
+                ground_shadow_defaults(node)
 
     def _bind_layer(self, layer, binders=None) -> None:
         if isinstance(layer, CloudMarch):

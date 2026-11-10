@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -37,6 +37,7 @@ from panda3d.core import (
 )
 
 from world_builder.atmosphere import Atmospheres, bind_defaults
+from world_builder.atmosphere.sky_view import SkyView, bind_sky_view_defaults
 from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 from world_builder.shadows import SUN_ANGULAR_RADIUS
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
@@ -178,6 +179,10 @@ class Sky:
         self.node.set_two_sided(True)
         bind_defaults(self.node)
         bind_shadow_defaults(self.node)
+        bind_sky_view_defaults(self.node)
+        self._atmospheres = atmospheres
+        #: The sky-view table (:meth:`attach_view`), None: the sky marches.
+        self.view: SkyView | None = None
         if atmospheres is not None:
             atmospheres.bind(self.node)
         self._sun = PTA_LVecBase3f.empty_array(1)
@@ -302,9 +307,37 @@ class Sky:
         """
         self.node.set_pos(*camera_render)
         self.node.set_scale(0.9 * far)
+        if self.view is not None:
+            self.view.update()
+
+    @property
+    def sun_input(self) -> PTA_LVecBase3f:
+        """The sky's ``uSunDir`` input, shared live (:meth:`set_sun`): for
+        other bakes that follow the sun (the aerial-perspective cells)."""
+        return self._sun
+
+    def attach_view(self, output: Any, shadows: Any = None) -> None:
+        """Read the air from a sky-view table baked each frame
+        (:class:`~world_builder.atmosphere.sky_view.SkyView`) instead of
+        marching every pixel, inside an atmosphere. Nothing without
+        atmospheres.
+
+        :param output: the window (its GSG bakes the table)
+        :param shadows: the world's :class:`~world_builder.shadows.Shadows`
+            (the eclipses and rings in the table), None = none
+        """
+        if self._atmospheres is None or self.view is not None:
+            return
+        self.view = SkyView(output, self._atmospheres, self._sun)
+        if shadows is not None:
+            shadows.bind(self.view.root)
+        self.view.bind(self.node)
 
     def remove(self) -> None:
         """Take the sky (and its stars) off the scene."""
+        if self.view is not None:
+            self.view.destroy()
+            self.view = None
         self.node.remove_node()
 
 

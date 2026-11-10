@@ -14,10 +14,9 @@ optical depth toward the sun is analytic (Chapman function, erfcx form,
 share of the sample's stretch gets sun (the planet's shadow is found
 analytically along the ray, so its edge moves smoothly). That gives the sky
 colour, sunsets, the limb seen from space, aerial perspective and the
-reddened sunlight on the ground, with no precomputation. Light scattered more
-than once is only a flat share of the sunlight that fades through twilight
-(:attr:`AtmosphereParams.multiple_scattering`): see the docs for the
-precomputed alternative (Bruneton). :attr:`AtmosphereParams.sunset_radius`
+reddened sunlight on the ground. The sunlight's transmittance and the light
+scattered more than once (Hillaire 2020's approximation) come from tables
+precomputed per atmosphere (:mod:`.tables`). :attr:`AtmosphereParams.sunset_radius`
 lengthens grazing sunlight's path, so a small planet's sunsets are as red as
 Earth's.
 
@@ -33,17 +32,30 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import (
+    LMatrix4f,
     LVecBase4f,
     NodePath,
     PTA_int,
+    PTA_LMatrix4f,
     PTA_LVecBase4f,
+    SamplerState,
+    Texture,
 )
 
+from world_builder.atmosphere.tables import (
+    MULTIPLE_SIZE,
+    TRANSMITTANCE_SIZE,
+    multiple_table,
+    ozone_toward,
+    table_texture,
+    transmittance_table,
+    write_rows,
+)
 from world_builder.quality import QualityLevel, QualitySettings, knob
 
 SHADER_PATH = Path(__file__).parent / "shaders"
@@ -66,8 +78,9 @@ class AtmosphereSettings(QualitySettings):
         "Quality",
         unit="samples",
         range=(2, 16),
-        help="Samples along each pixel's view ray through the air: fewer band "
-        "the dusk sky and the haze; the cost is per pixel, everywhere.",
+        help="Samples along a view ray where the air is marched per pixel "
+        "(from space, far ground, the sea's reflection; the grids are baked "
+        "at 16): fewer band the dusk sky and the haze there.",
     )
     vertex_steps: int = knob(
         4,
@@ -77,11 +90,25 @@ class AtmosphereSettings(QualitySettings):
         advanced=True,
         help="The same, per vertex, for the stars and the cloud billboards.",
     )
+    aerial: bool = knob(
+        True,
+        "Air from a grid",
+        help="The air in front of the ground, sea and models from a grid "
+        "baked once a frame instead of marched per pixel (cheaper).",
+    )
+
+    god_rays: bool = knob(
+        True,
+        "God rays",
+        help="The clouds' and the mountains' shadows in the air in front of "
+        "the ground, sea and models: shafts of light under broken cloud and "
+        "down valleys at a low sun (with the air from a grid).",
+    )
 
     LABEL: ClassVar = "Air"
     PRESETS: ClassVar = {
-        QualityLevel.LOW: {"steps": 4, "vertex_steps": 2},
-        QualityLevel.MID: {"steps": 6, "vertex_steps": 3},
+        QualityLevel.LOW: {"steps": 4, "vertex_steps": 2, "god_rays": False},
+        QualityLevel.MID: {"steps": 6, "vertex_steps": 3, "god_rays": False},
         QualityLevel.ULTRA: {"steps": 12, "vertex_steps": 8},
     }
 
@@ -99,9 +126,18 @@ class AtmosphereParams:
     :ivar mie_g: Mie anisotropy (forward scattering, 0-1)
     :ivar sun_intensity: radiance scale of the scattered sunlight, in the
         renderer's linear units (the terrain's sun is ~2.6)
-    :ivar multiple_scattering: light scattered more than once, as a share of
-        direct sunlight, reaching air the sun does not (the planet's shadow
-        at dusk is blue-grey, not black); it fades out through twilight
+    :ivar multiple_scattering: scale of the light scattered more than once
+        (:mod:`.tables`' multiple-scattering table, Hillaire's
+        approximation): 1 physical; it lights air the sun does not (the
+        planet's shadow at dusk is blue-grey, not black)
+    :ivar ozone: the ozone layer's absorption (r, g, b) per metre at its peak:
+        absorbs orange and green, so the twilight sky stays blue (Hillaire
+        2020's Earth); (0, 0, 0) none
+    :ivar ozone_altitude: its peak's altitude
+    :ivar ozone_width: its half-width: a tent, 0 beyond the peak +- this
+    :ivar ground_albedo: the ground's reflectance, bouncing sunlight back
+        into the air (in the multiple scattering): brightens the low sky by
+        day
     :ivar sunset_radius: sunlight's slant through the air is taken as over a
         planet of this radius, if larger than the real one: as red near the
         terminator as there (a 600 km planet's grazing sunlight crosses ~11
@@ -116,12 +152,23 @@ class AtmosphereParams:
     mie_height: float = 1200.0
     mie_g: float = 0.8
     sun_intensity: float = 22.0
-    multiple_scattering: float = 0.12
+    multiple_scattering: float = 1.0
+    ground_albedo: float = 0.3
+    ozone: tuple[float, float, float] = (0.650e-6, 1.881e-6, 0.085e-6)
+    ozone_altitude: float = 25e3
+    ozone_width: float = 15e3
     sunset_radius: float | None = 6371e3
 
 
 #: The vec4 uniform arrays atmosphere.glsl reads, MAX_ATMOSPHERES each.
-_ARRAYS = ("uAtmoCam", "uAtmoShape", "uAtmoScatter", "uAtmoMie", "uAtmoExtra")
+_ARRAYS = (
+    "uAtmoCam",
+    "uAtmoShape",
+    "uAtmoScatter",
+    "uAtmoMie",
+    "uAtmoExtra",
+    "uAtmoOzone",
+)
 
 
 class Atmospheres:
@@ -154,6 +201,37 @@ class Atmospheres:
         self._arrays = {
             name: PTA_LVecBase4f.empty_array(MAX_ATMOSPHERES) for name in _ARRAYS
         }
+        #: The transmittance tables (:mod:`.tables`), every atmosphere's.
+        self.transmittance = table_texture(
+            "atmosphere_transmittance", TRANSMITTANCE_SIZE, MAX_ATMOSPHERES
+        )
+        #: The aerial-perspective cells' atlas (:mod:`.aerial`), baked by
+        #: :meth:`attach_aerial`; read by applyAtmospheres while on.
+        self.aerial_texture = Texture("aerial_perspective")
+        self.aerial_texture.setup_2d_texture(
+            256, 256, Texture.T_half_float, Texture.F_rgba16
+        )
+        self.aerial_texture.set_magfilter(SamplerState.FT_linear)
+        self.aerial_texture.set_minfilter(SamplerState.FT_linear)
+        self.aerial_texture.set_wrap_u(SamplerState.WM_clamp)
+        self.aerial_texture.set_wrap_v(SamplerState.WM_clamp)
+        self._aerial_on = PTA_int.empty_array(1)
+        self._aerial_to_clip = PTA_LMatrix4f.empty_array(1)
+        self._aerial_to_clip[0] = LMatrix4f.ident_mat()
+        self._aerial_range = PTA_LVecBase4f.empty_array(1)
+        self._aerial_range[0] = LVecBase4f(0.0, 1.0, 0.0, 0.0)
+        self.aerial = None
+        #: The god rays' switch and the atmosphere they shade (-1: none), the
+        #: aerial bake's (god_rays.glsl).
+        self._god_rays = PTA_int.empty_array(1)
+        self._god_rays_atmo = PTA_int.empty_array(1)
+        self._god_rays_atmo[0] = -1
+        self._god_ray_roots: list[NodePath] = []
+        self._god_ray_binders: list = []
+        #: The multiple-scattering tables, every atmosphere's.
+        self.multiple = table_texture(
+            "atmosphere_multiple", MULTIPLE_SIZE, MAX_ATMOSPHERES, fill=0.0
+        )
         self.set_settings(settings or AtmosphereSettings())
 
     @property
@@ -167,6 +245,7 @@ class Atmospheres:
         self._settings = settings
         self._steps[0] = settings.steps
         self._vertex_steps[0] = settings.vertex_steps
+        self._god_rays[0] = int(settings.god_rays)
 
     def add(
         self, radius: float, params: AtmosphereParams, position: ArrayLike = (0, 0, 0)
@@ -189,8 +268,11 @@ class Atmospheres:
         )
         self._arrays["uAtmoScatter"][index] = LVecBase4f(*p.rayleigh, p.mie)
         self._arrays["uAtmoExtra"][index] = LVecBase4f(
-            p.multiple_scattering, _curve(radius, p), 0.0, 0.0
+            p.multiple_scattering, _curve(radius, p), p.ozone_altitude, p.ozone_width
         )
+        self._arrays["uAtmoOzone"][index] = LVecBase4f(*p.ozone, 0.0)
+        write_rows(self.transmittance, index, transmittance_table(radius, params))
+        write_rows(self.multiple, index, multiple_table(float(radius), params))
         self._count[0] = len(self._bodies)
         return index
 
@@ -210,6 +292,12 @@ class Atmospheres:
         node.set_shader_input("uAtmoCount", self._count)
         node.set_shader_input("uAtmoSteps", self._steps)
         node.set_shader_input("uAtmoVertexSteps", self._vertex_steps)
+        node.set_shader_input("uAtmoTransmittance", self.transmittance)
+        node.set_shader_input("uAtmoMultiple", self.multiple)
+        node.set_shader_input("uAerial", self.aerial_texture)
+        node.set_shader_input("uAerialOn", self._aerial_on)
+        node.set_shader_input("uAerialToClip", self._aerial_to_clip)
+        node.set_shader_input("uAerialRange", self._aerial_range)
         for name, array in self._arrays.items():
             node.set_shader_input(name, array)
 
@@ -230,13 +318,82 @@ class Atmospheres:
                 params.sun_intensity,
                 rho2 - radius * radius,
             )
+        if self.aerial is not None:
+            self.aerial.update(
+                [
+                    (camera - position, radius, radius + params.height)
+                    for radius, params, position in self._bodies
+                ],
+                self._settings.aerial,
+            )
+
+    def attach_aerial(
+        self, output: Any, camera: NodePath, lens: Any, sun: Any, shadows: Any = None
+    ) -> None:
+        """Bake the aerial-perspective cells each frame (:mod:`.aerial`) for
+        applyAtmospheres to read instead of marching (while
+        :attr:`AtmosphereSettings.aerial`).
+
+        :param output: the window (its GSG bakes them)
+        :param camera: the main camera (the grid's view)
+        :param lens: its lens
+        :param sun: the sky's ``uSunDir`` input (``Sky.sun_input``)
+        :param shadows: the world's ``Shadows`` (eclipses, rings), None none
+        """
+        from world_builder.atmosphere.aerial import AerialPerspective
+
+        if self.aerial is not None:
+            return
+        self.aerial = AerialPerspective(output, self, camera, lens, sun)
+        if shadows is not None:
+            shadows.bind(self.aerial.root)
+
+    def god_ray_root(self, root: NodePath) -> None:
+        """A bake that takes the god rays (god_rays.glsl: the aerial cells,
+        the sky-view table): their switch and atmosphere now, and what
+        :meth:`bind_god_rays` gives, now and later."""
+        from world_builder.clouds.shadow_defaults import cloud_shadow_defaults
+
+        cloud_shadow_defaults(root)  # no clouds until bind_god_rays
+        root.set_shader_inputs(
+            uGodRays=self._god_rays, uGodRaysAtmo=self._god_rays_atmo
+        )
+        self._god_ray_roots.append(root)
+        for bind in self._god_ray_binders:
+            bind(root)
+
+    def bind_god_rays(self, atmosphere: int, binders: list) -> None:
+        """Give the bakes that take the god rays (:meth:`god_ray_root`) what
+        shades the air of one atmosphere's planet
+        (:attr:`AtmosphereSettings.god_rays`): each of *binders* sets its
+        inputs on a bake's root (the clouds' ``bind_shadow_inputs``, their
+        shadow maps' and light volumes' ``bind``, the mountains'
+        ``ShadowMap.bind``). Again with new clouds.
+
+        :param atmosphere: the planet's atmosphere index
+        """
+        self._god_rays_atmo[0] = int(atmosphere)
+        self._god_ray_binders.extend(binders)
+        self._god_ray_roots = [r for r in self._god_ray_roots if not r.is_empty()]
+        for root in self._god_ray_roots:
+            for bind in binders:
+                bind(root)
+
+    def camera_inside(self) -> int:
+        """:returns: the atmosphere the camera was in at the last
+        :meth:`update` (atmosphere.glsl's test: below its top), -1 none"""
+        for index in range(len(self._bodies)):
+            if self._arrays["uAtmoCam"][index][3] < 0.0:
+                return index
+        return -1
 
     def transmittance_to_sun(
         self, index: int, point_world: ArrayLike, sun_direction: ArrayLike
     ) -> np.ndarray:
         """Sunlight reaching points through atmosphere *index*: the GLSL's
         atmoSunlight on the CPU (the same formula, :func:`depth_toward`, with
-        the same ``sunset_radius`` scale).
+        the same ``sunset_radius`` scale; the ozone's depth from its table,
+        :func:`.tables.ozone_toward`).
 
         :param point_world: (..., 3) points in the world frame, metres
         :param sun_direction: toward the sun, world frame (any length)
@@ -258,10 +415,12 @@ class Atmospheres:
         depth = depth_toward(
             r[..., None], cos_sun[..., None], radius, heights, _curve(radius, params)
         )
+        ozone = ozone_toward(r, cos_sun, radius, params)
         through = np.exp(
             -(
                 np.asarray(params.rayleigh) * depth[..., :1]
                 + params.mie_extinction * depth[..., 1:]
+                + np.asarray(params.ozone) * ozone[..., None]
             )
         )
         through = np.where(depth[..., :1] >= 1e9, 0.0, through)  # planet in the way
@@ -283,8 +442,13 @@ class Atmospheres:
         depth_m = depth_toward(r, cos_sun, radius, params.mie_height, curve)
         if depth_r >= 1e9:
             return np.zeros(3)  # the planet is in the way
+        ozone = float(ozone_toward(r, cos_sun, radius, params))
         return np.exp(
-            -(np.asarray(params.rayleigh) * depth_r + params.mie_extinction * depth_m)
+            -(
+                np.asarray(params.rayleigh) * depth_r
+                + params.mie_extinction * depth_m
+                + np.asarray(params.ozone) * ozone
+            )
         )
 
     def light_at(
@@ -436,6 +600,12 @@ def bind_defaults(node: NodePath) -> None:
             "uAtmoCount": count,
             "uAtmoSteps": steps,
             "uAtmoVertexSteps": vertex_steps,
+            "uAtmoTransmittance": table_texture("no_atmosphere", (1, 1), 1),
+            "uAtmoMultiple": table_texture("no_atmosphere", (1, 1), 1, fill=0.0),
+            "uAerial": table_texture("no_atmosphere", (1, 1), 1, fill=0.0),
+            "uAerialOn": count,  # 0
+            "uAerialToClip": LMatrix4f.ident_mat(),
+            "uAerialRange": LVecBase4f(0.0, 1.0, 0.0, 0.0),
         }
         for name in _ARRAYS:
             array = PTA_LVecBase4f.empty_array(MAX_ATMOSPHERES)

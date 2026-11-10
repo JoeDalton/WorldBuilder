@@ -468,7 +468,7 @@ def test_clouds_shade_a_bound_node_once_ready_and_the_cpu_alike(showbase):
         assert clouds._shadow_layer[0] == clouds._deck_layer >= 0
         assert ground.get_shader_input("uCloudShadowLayer") == bound  # in place
         light = ground.get_shader_input("deckLight").get_texture()
-        assert light.get_num_components() == 3
+        assert light.get_num_components() == 4  # deck r g, ground b, octave a
         assert ground.get_shader_input("weatherMap").get_texture() is not None
 
         got = clouds.sun_visibility(points, sun, 8)

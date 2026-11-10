@@ -58,6 +58,7 @@ from world_builder.sky.starfield import (
     texel_directions,
 )
 from world_builder.terrain.chart import AzimuthalEquidistantChart, latlon
+from world_builder.utils import sun_moved
 
 #: The bake's step toward the sun, in texels at a face's centre (2 / n
 #: radians each, the widest): its nearest occluder (a texel's own ground
@@ -651,8 +652,7 @@ class ShadowMap:
             return False
         if not self.size:
             return True
-        drawn = self._drawn_sun is not None
-        return drawn and np.array_equal(self._drawn_sun, self._sun)
+        return not sun_moved(self._drawn_sun, self._sun)
 
     def bind(self, node: NodePath) -> None:
         """Give a node's shaders this body's map (shadows.glsl's
@@ -746,7 +746,7 @@ class ShadowMap:
             self._upload(self.cube)
             self._drawn_sun = self._baking_sun
             self._bake_job = None
-        if self._baking_sun is None or not np.array_equal(self._baking_sun, self._sun):
+        if sun_moved(self._baking_sun, self._sun):
             self._baking_sun = self._sun.copy()
             self._bake_started = time.perf_counter()
             self._bake_job = self._executor.submit_once(
@@ -772,7 +772,7 @@ class ShadowMap:
             if not self._tops_job.done():
                 return
             self._tops_texture = tops_texture(self._tops_job.result())
-        if self._drawn_sun is None or not np.array_equal(self._drawn_sun, self._sun):
+        if sun_moved(self._drawn_sun, self._sun):
             self._bake_started = time.perf_counter()
             self._gpu.bake(
                 self._heights_texture,

@@ -32,6 +32,7 @@ from world_builder.clouds.noise import (
     OCTAVE_OFFSETS,
     CloudOptics,
     DensityField,
+    _turned,
     build_noise_texture,
     density_on_sphere,
     fbm,
@@ -331,6 +332,26 @@ def test_fbm_octaves_are_offset_so_they_never_align(volume):
     assert len(set(OCTAVE_OFFSETS)) == 4
 
 
+def test_the_fine_octaves_are_turned_as_the_shader_turns_them():
+    """The two finest octaves are turned off the noise's axes (its lattice's
+    planes drew slices across towers): rotations, the first two octaves not
+    turned, the shader's OCTAVE_n_TURN the same columns."""
+    from world_builder.clouds.noise import OCTAVE_TURNS
+
+    assert OCTAVE_TURNS[0] is None and OCTAVE_TURNS[1] is None
+    source = (_SHADERS / "cloud_field.glsl").read_text()
+    for index in (2, 3):
+        turn = np.asarray(OCTAVE_TURNS[index])
+        np.testing.assert_allclose(turn @ turn.T, np.eye(3), atol=1e-12)
+        assert np.linalg.det(turn) == pytest.approx(1.0)
+        match = re.search(
+            rf"const mat3 OCTAVE_{index + 1}_TURN = mat3\(([^)]*)\);", source
+        )
+        assert match, f"OCTAVE_{index + 1}_TURN not found"
+        values = [float(v) for v in match.group(1).split(",")]
+        np.testing.assert_allclose(values, turn.ravel())
+
+
 def test_fbm_spans_the_threshold_window(volume):
     """The threshold window must sit inside the fbm's actual range, or the field
     is either everywhere or nowhere."""
@@ -361,7 +382,8 @@ def test_the_shadow_march_agrees_with_the_field_it_approximates(volume):
     def octave(index):
         return sample_volume(
             volume,
-            coords * spec.octave_scales[index] + np.asarray(OCTAVE_OFFSETS[index]),
+            _turned(coords * spec.octave_scales[index], index)
+            + np.asarray(OCTAVE_OFFSETS[index]),
         )
 
     full = sum(octave(i) * spec.octave_weights[i] for i in range(4))
@@ -593,7 +615,8 @@ def test_pack_layer_params_round_trips_the_field():
     # The two extinctions are DIFFERENT numbers on purpose: the per-billboard one
     # is scaled by 1/(volume fraction) for a sum over chords, while the sun march
     # is a continuous path integral and must use the field's own density.
-    np.testing.assert_allclose(rows[5], (0.09, 0.037, 0.0, 0.0))
+    # (view extinction, the field's, the second order's gain and attenuation)
+    np.testing.assert_allclose(rows[5], (0.09, 0.037, 0.3, 0.5))
     # Octaves evaluated and their mean (cloud_field.glsl's highOctaves): all
     # four by default.
     np.testing.assert_allclose(rows[9][2:], (4.0, 0.5))
@@ -851,3 +874,36 @@ def test_texture_carries_the_volume_contents():
 def test_feature_size_matches_the_lattice():
     assert NOISE_FEATURE == NOISE_SIZE / NOISE_LATTICE
     assert NOISE_SIZE % NOISE_LATTICE == 0
+
+
+def test_the_curl_noise_is_divergence_free_and_tiles():
+    """The billows' bend (noise.curl_noise_volume): the curl of three potentials,
+    so its divergence (by the same periodic differences) is nothing next to
+    its size; it spans [-1, 1] and wraps."""
+    from world_builder.clouds.noise import CURL_SIZE, curl_noise_volume
+
+    curl = curl_noise_volume()
+    assert curl.shape == (CURL_SIZE, CURL_SIZE, CURL_SIZE, 3)
+    assert np.abs(curl).max() == pytest.approx(1.0)
+
+    def d(field, axis):
+        return 0.5 * (np.roll(field, -1, axis) - np.roll(field, 1, axis))
+
+    divergence = d(curl[..., 0], 2) + d(curl[..., 1], 1) + d(curl[..., 2], 0)
+    gradient = np.abs(d(curl[..., 0], 2)).mean()
+    assert np.abs(divergence).max() < 1e-4 * max(gradient, 1e-9) + 1e-5
+    # Every component carries a bend, of zero mean (no drift of the billows)
+    for k in range(3):
+        assert np.std(curl[..., k]) > 0.1
+        assert abs(float(np.mean(curl[..., k]))) < 0.02
+
+
+def test_the_curl_texture_keeps_its_components_in_order():
+    from world_builder.clouds.noise import build_curl_texture
+
+    curl = np.zeros((2, 2, 2, 3), dtype=np.float32)
+    curl[..., 0], curl[..., 1], curl[..., 2] = -1.0, 0.0, 1.0
+    texture = build_curl_texture(curl)
+    assert texture.get_num_components() == 3
+    stored = np.frombuffer(texture.get_ram_image(), np.uint8)[:3]
+    assert list(stored) == [255, 128, 0]  # Panda's RAM image is BGR

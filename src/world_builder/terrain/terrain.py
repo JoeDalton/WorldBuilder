@@ -63,7 +63,10 @@ from panda3d.core import (
 
 from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
 from world_builder.atmosphere import Atmospheres, bind_defaults
-from world_builder.clouds.shadow_defaults import cloud_shadow_defaults
+from world_builder.clouds.shadow_defaults import (
+    cloud_shadow_defaults,
+    ground_shadow_defaults,
+)
 from world_builder.depth import PASS_TAG, REFLECTION_CAMERA_MASK
 from world_builder.ocean.ocean import bind_sea_defaults
 from world_builder.ocean.swell import Swell
@@ -415,6 +418,7 @@ class Terrain:
         bind_defaults(self.root)
         bind_shadow_defaults(self.root)
         cloud_shadow_defaults(self.root)  # no clouds overhead, until bound
+        ground_shadow_defaults(self.root)  # shaded per pixel, until bound
         if atmospheres is not None:
             atmospheres.bind(self.root)
         self.root.set_shader_input(
@@ -580,7 +584,7 @@ class Terrain:
         into_mask: BitMask32,
         name: str = "terrain",
         owner_tag: str = "owner",
-        max_distance: float = 100_000.0,
+        max_distance: float = 20_000.0,
         include_ocean: bool | None = None,
     ) -> TerrainCollision:
         """Make the drawn terrain solid to a game's ``CollisionTraverser``.
@@ -811,7 +815,8 @@ class Terrain:
 
     def set_debug_mode(self, mode: int) -> None:
         """Debug view: 0 shaded, 1 LOD level, 2 biomes (flat colours, lit),
-        3 slope, 4 normals, 5 skirts (magenta, over LOD-tinted shading)."""
+        3 slope, 4 normals, 5 skirts (magenta, over LOD-tinted shading), 6 the
+        clouds' shadow (white: none)."""
         self.root.set_shader_input("uDebugMode", int(mode))
 
     def set_blend_depth(self, depth: float) -> None:

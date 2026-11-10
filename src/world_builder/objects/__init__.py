@@ -116,6 +116,8 @@ class ModelLighting:
         # A mat3 input is given as a 4x4 (its upper-left 3x3 is taken).
         self._axes = PTA_LMatrix4f.empty_array(1)
         self._axes[0] = LMatrix4f.ident_mat()
+        # The body's rotation last given to the shader (see update)
+        self._rotation: np.ndarray | None = None
         self._scale = PTA_float.empty_array(1)
         self.inputs.set_shader_inputs(
             uPlanetAxes=self._axes,
@@ -146,17 +148,27 @@ class ModelLighting:
             *np.asarray(camera_render, dtype=np.float64)
         )
         if self.terrain is not None:
+            rotation = np.asarray(self.terrain.rotation)
+            # Only when it turned: most bodies never do
+            if self._rotation is not None and np.array_equal(rotation, self._rotation):
+                return
+            self._rotation = rotation.copy()
             # Panda's matrices act on row vectors: its rows are GLSL's
             # columns, so the world-from-planet rotation goes in transposed.
             axes = np.eye(4)
-            axes[:3, :3] = np.asarray(self.terrain.rotation).T
+            axes[:3, :3] = rotation.T
             self._axes[0] = LMatrix4f(*axes.ravel())
 
     def apply(self, node: NodePath) -> None:
         """Give a model (and its children) the shader and these inputs, in
         place of any shader state of its own: each frame, as the inputs'
         textures may have changed and its nearest body with them."""
-        node.set_attrib(self.inputs.get_attrib(ShaderAttrib))
+        attrib = self.inputs.get_attrib(ShaderAttrib)
+        # Setting the same attrib again still makes the node a new state,
+        # every frame (Panda's state cache churns, and its garbage
+        # collection with it)
+        if not node.has_attrib(ShaderAttrib) or node.get_attrib(ShaderAttrib) != attrib:
+            node.set_attrib(attrib)
 
     def destroy(self) -> None:
         self.inputs.remove_node()

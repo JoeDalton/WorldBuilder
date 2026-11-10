@@ -202,6 +202,65 @@ def aces_tonemap(color: ArrayLike, exposure: float = DEFAULT_EXPOSURE) -> np.nda
     return np.clip(_ACES_M2 @ (a / b), 0.0, 1.0) ** (1.0 / 2.2)
 
 
+#: display.glsl's KEEP_HUE_FROM and KEEP_HUE_TO: where displayColour starts
+#: keeping a colour's hue, and keeps it fully (its brightest channel, after
+#: exposure).
+KEEP_HUE_FROM = 0.4
+KEEP_HUE_TO = 5.0
+
+_ACES_M1_INV = np.linalg.inv(_ACES_M1)
+_ACES_M2_INV = np.linalg.inv(_ACES_M2)
+
+
+def _smoothstep(edge0: float, edge1: float, x: float) -> float:
+    t = min(max((x - edge0) / (edge1 - edge0), 0.0), 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def display_colour(color: ArrayLike) -> np.ndarray:
+    """display.glsl's ``displayColour`` (after exposure): the tonemap per
+    channel, fading to the colour's hue kept at its brightest channel's
+    level between :data:`KEEP_HUE_FROM` and :data:`KEEP_HUE_TO`."""
+    c = np.asarray(color, dtype=np.float64)
+    peak = max(float(c.max()), 1e-6)
+    display = aces_tonemap(c, 1.0)
+    keep = _smoothstep(KEEP_HUE_FROM, KEEP_HUE_TO, peak)
+    if keep <= 0.0:
+        return display
+    kept = (c / peak) ** (1.0 / 2.2) * aces_tonemap(np.full(3, peak), 1.0)[1]
+    return (1.0 - keep) * display + keep * kept
+
+
+def aces_inverse(display: ArrayLike) -> np.ndarray:
+    """sea.glsl's ``aces_inverse``: display colour to the linear light (after
+    exposure) :func:`aces_tonemap` takes to it."""
+    d = np.clip(np.asarray(display, dtype=np.float64), 0.0, 1.0)
+    w = np.minimum(_ACES_M2_INV @ d**2.2, 1.0)
+    qa = 1.0 - 0.983729 * w
+    qb = 0.0245786 - 0.4329510 * w
+    qc = -(0.000090537 + 0.238081 * w)
+    v = (-qb + np.sqrt(np.maximum(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa)
+    return np.maximum(_ACES_M1_INV @ v, 0.0)
+
+
+def display_inverse(display: ArrayLike) -> np.ndarray:
+    """sea.glsl's ``displayInverse``: a display colour written by
+    :func:`display_colour` back to linear light (after exposure), as the sea
+    decodes its reflection."""
+    d = np.asarray(display, dtype=np.float64)
+    linear = aces_inverse(d)
+    top = float(d.max())
+    if top <= 0.0:
+        return linear
+    peak = float(aces_inverse(np.full(3, top))[1])
+    keep = _smoothstep(KEEP_HUE_FROM, KEEP_HUE_TO, peak)
+    if keep <= 0.0:
+        return linear
+    linear = (1.0 - keep) * linear + keep * peak * (d / top) ** 2.2
+    again = display_colour(linear)
+    return linear * (np.maximum(d, 1e-4) / np.maximum(again, 1e-4)) ** 2.2
+
+
 def compute_wave_dirs(wind_dir: LVecBase2f, wind_strength: float) -> PTA_LVecBase2f:
     """Precompute the per-iteration wave directions the fragment shader uses.
 

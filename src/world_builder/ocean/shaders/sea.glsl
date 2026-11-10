@@ -283,6 +283,33 @@ vec3 aces_inverse(vec3 display) {
     return max(m1i * v, vec3(0.0));
 }
 
+// The inverse of display.glsl's displayColour, which the reflection's clouds
+// and sky are written by (the sky's keeps its hue the same way): display
+// colour back to linear light (after exposure). Per channel (aces_inverse)
+// where the brightest channel decodes below KEEP_HUE_FROM; above, the hue
+// kept, the colour's peak from its brightest channel (grey maps to grey) and
+// its ratios from the display's; between, mixed as the encoder mixes, then
+// one correction by the colour encoded again. Per channel throughout, a lit
+// cloud's slight warmth (display red 0.95 against blue 0.85) came back as a
+// red twice its blue, near 1 where that curve is steep: the clouds'
+// reflection orange at noon. Worst error a few percent (ocean.display_inverse
+// on the CPU).
+vec3 displayInverse(vec3 display) {
+    vec3 linear = aces_inverse(display);
+    float top = max(max(display.r, display.g), display.b);
+    if (top <= 0.0) {
+        return linear;
+    }
+    float peak = aces_inverse(vec3(top)).g;
+    float keep = smoothstep(KEEP_HUE_FROM, KEEP_HUE_TO, peak);
+    if (keep <= 0.0) {
+        return linear;
+    }
+    linear = mix(linear, peak * pow(display / top, vec3(2.2)), keep);
+    vec3 again = displayColour(linear);
+    return linear * pow(max(display, vec3(1e-4)) / max(again, vec3(1e-4)), vec3(2.2));
+}
+
 // ---------------------------------------------------------------------------
 // The sea's colour at a water fragment, in linear light before the
 // atmospheres and the tonemap (or, with a debug view, the view's display
@@ -419,7 +446,7 @@ vec3 seaShade(vec3 P, vec4 swell, vec3 Vr, float dist, float depth, float spacin
     vec3 reflSample = textureLod(iReflectionTex,
                                  clamp(perturbedUV, vec2(0.0), uReflUVScale), reflLod).rgb;
     // The reflection holds display colours: decode them to linear light.
-    vec3 reflected = aces_inverse(reflSample) / uExposure;
+    vec3 reflected = displayInverse(reflSample) / uExposure;
     vec3 waterColor = iWaterColor;
     if (uDepthColourOn == 1) {
         waterColor = mix(uShallowWater, iWaterColor,

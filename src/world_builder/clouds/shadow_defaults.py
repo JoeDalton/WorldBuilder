@@ -27,7 +27,7 @@ def _no_weather() -> Texture:
 @functools.cache
 def _no_deck_light() -> Texture:
     """A 1-texel deck lighting table, for shaders that never read it."""
-    return build_deck_light_texture(np.ones((1, 1, 3), dtype=np.float32))
+    return build_deck_light_texture(np.ones((1, 1, 4), dtype=np.float32))
 
 
 @functools.cache
@@ -71,6 +71,12 @@ def cloud_shadow_defaults(node: NodePath) -> None:
         otherNearChart=PTA_LVecBase4f.empty_array(4),
         otherFarChart=PTA_LVecBase4f.empty_array(4),
         otherShadowMapOn=0,
+        cloudLight=_no_cloud_map(),
+        cloudLightChart=PTA_LVecBase4f.empty_array(4),
+        cloudLightOn=0,
+        otherLight=_no_cloud_map(),
+        otherLightChart=PTA_LVecBase4f.empty_array(4),
+        otherLightOn=0,
     )
 
 
@@ -81,3 +87,13 @@ def _no_cloud_map() -> Texture:
     tex.setup_2d_texture(1, 1, Texture.T_float, Texture.F_rgba32)
     tex.set_ram_image(bytes(16))
     return tex
+
+
+def ground_shadow_defaults(node: NodePath) -> None:
+    """Give a node (the terrain's) "no ground shadow pass" inputs
+    (terrain_frag.glsl's ``uGroundShadow``: off, the clouds' shadow shaded
+    per pixel), until :meth:`march.CloudMarch.bind_ground_shadow` binds one.
+    """
+    node.set_shader_inputs(
+        uGroundShadow=_no_cloud_map(), uGroundShadowOn=0, uGroundShadowScale=1
+    )

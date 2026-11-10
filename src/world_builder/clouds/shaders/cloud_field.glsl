@@ -26,7 +26,10 @@ uniform samplerCube weatherMap;
 // atmosphere, 4 two octaves only, 8 flat colour after the density; the
 // raymarch's: 16 its steps per pixel, red over the budget, 32 no billows, 64 the
 // clouds' light from the sun march, not the shadow maps, 128 where the steps go
-// (red empty air, green cloud, blue the budget), 256 no lighting.
+// (red empty air, green cloud, blue the budget), 256 no lighting, 512 the
+// clouds' light from the shadow maps and the sky's by the height ramp, not
+// the light volume, 1024 the light volume's whole chord toward the sun, not
+// the sun march's window.
 uniform int   uCloudDebug;
 // The far clouds' averages, by the sun's cosine (x, from deckLightCosMin to
 // 1) and the weather's coverage (y): the deck's lighting
@@ -100,6 +103,10 @@ struct Field {
     float phaseBackward;
     float phaseIsotropic;
     float forwardAnisotropy;
+    // A second order of scattering (noise.CloudOptics.octave_gain): its share
+    // of the sunlight, and the share of the sunward depth it sees.
+    float octaveGain;
+    float octaveAttenuation;
     // A convective field's growth with depth (noise.DensityField), neutral
     // by default: its top at depth 0 as a share of the slab, its anvil (and
     // shelf), its cell octave's weight, the shelf's fbm shift
@@ -135,6 +142,8 @@ Field getField(int layer) {
     f.topErosion      = v4.w;
     f.extinction      = v5.x;
     f.fieldExtinction = v5.y;
+    f.octaveGain      = v5.z;
+    f.octaveAttenuation = v5.w;
     f.topExponent     = v6.x;
     f.shadowGain      = v6.y;
     f.shadowBias      = v6.z;
@@ -172,6 +181,11 @@ float sampleNoise(vec3 coord) {
 const vec3 OCTAVE_2_OFFSET = vec3( 0.31,  0.73,  0.19);
 const vec3 OCTAVE_3_OFFSET = vec3(-0.57,  0.11,  0.83);
 const vec3 OCTAVE_4_OFFSET = vec3( 0.67, -0.29,  0.41);
+// The two finest octaves turned off the noise's axes (its lattice's planes
+// drew slices and interference lines on a tower's face). MUST match
+// OCTAVE_TURNS in noise.py (columns listed; a test reads this file).
+const mat3 OCTAVE_3_TURN = mat3(0.36, 0.48, -0.8, -0.8, 0.6, 0.0, 0.48, 0.64, 0.6);
+const mat3 OCTAVE_4_TURN = mat3(0.6, 0.0, 0.8, 0.64, 0.6, -0.48, -0.48, 0.8, 0.36);
 // A convective field's cell octave: MUST match noise.CELL_SCALE / CELL_OFFSET.
 const float CELL_SCALE = 0.25;
 const vec3 CELL_OFFSET = vec3(0.13, 0.59, 0.37);
@@ -185,9 +199,11 @@ float lowOctaves(Field f, vec3 coord) {
 // it keeps the coverage (noise.fbm's octaves).
 float highOctaves(Field f, vec3 coord) {
     float third = f.octaves >= 3
-        ? sampleNoise(coord * f.octaveScales.z + OCTAVE_3_OFFSET) : f.octaveMean;
+        ? sampleNoise(OCTAVE_3_TURN * (coord * f.octaveScales.z) + OCTAVE_3_OFFSET)
+        : f.octaveMean;
     float fourth = f.octaves >= 4
-        ? sampleNoise(coord * f.octaveScales.w + OCTAVE_4_OFFSET) : f.octaveMean;
+        ? sampleNoise(OCTAVE_4_TURN * (coord * f.octaveScales.w) + OCTAVE_4_OFFSET)
+        : f.octaveMean;
     return third * f.octaveWeights.z + fourth * f.octaveWeights.w;
 }
 
@@ -774,20 +790,188 @@ float cloudMapSunDepth(Field f, samplerCube weatherCube, int on, sampler2D nearM
     return held;
 }
 
+// The clouds' light volume's chart (clouds.light_volume; RENDERING_PLAN.md
+// C.1): voxels of a field's slab around the camera, an atlas of slices.
+//
+// Horizontally the cloud shadow maps' azimuthal equidistant chart on the
+// slab base's sphere (its centre's up, east, north), warped radially: a
+// texel's node at t in [-1, 1]^2 (from its tile's centre) lies |t|^2 * reach
+// metres from the centre along t, finer near the camera (EVE-Redux's light
+// volume is a paraboloid). Vertically `slices` shells through the slab, the
+// voxels at their middles. Tile k (a slice, 0 the lowest) sits at column
+// k % columns, row k / columns of the atlas.
+//
+// uLightChart-style arrays: [0] the centre's up, the base's radius; [1] east,
+// the reach; [2] north, the tile's texels; [3] the slab's thickness, the
+// slices, the atlas's columns, 0.
+
+// The planet-frame position of the voxel at a pixel of the atlas.
+vec3 lightVoxelAt(vec4 chart[4], vec2 pixel, out int slice) {
+    float tile = chart[2].w;
+    int columns = int(chart[3].z + 0.5);
+    ivec2 at = ivec2(floor(pixel / tile));
+    slice = at.y * columns + at.x;
+    vec2 t = (pixel - vec2(at) * tile) / tile * 2.0 - 1.0;
+    float rho = length(t);
+    float distance = rho * rho * chart[1].w;
+    float angle = distance / chart[0].w;
+    vec2 toward = rho > 0.0 ? t / rho : vec2(0.0);
+    vec3 dir = cos(angle) * chart[0].xyz
+             + sin(angle) * (toward.x * chart[1].xyz + toward.y * chart[2].xyz);
+    float height = (float(slice) + 0.5) / chart[3].y * chart[3].x;
+    return dir * (chart[0].w + height);
+}
+
+// A point's place in the chart: its tile coordinates t ([-1, 1]^2 inside
+// the volume) and its slice coordinate s (0 at the lowest shell's middle,
+// slices - 1 at the highest's).
+void lightChartCoords(vec4 chart[4], vec3 p, out vec2 t, out float s) {
+    float r = length(p);
+    vec3 dir = p / r;
+    vec2 across = vec2(dot(dir, chart[1].xyz), dot(dir, chart[2].xyz));
+    float sine = length(across);
+    float angle = atan(sine, dot(dir, chart[0].xyz));
+    float distance = angle * chart[0].w;
+    float rho = sqrt(distance / chart[1].w);
+    t = sine > 1e-9 ? across / sine * rho : vec2(0.0);
+    s = (r - chart[0].w) / chart[3].x * chart[3].y - 0.5;
+}
+
+#ifdef CLOUD_MAP_LIGHTING
+// The raymarch's light volumes (clouds.light_volume), a family's each: the
+// atlas, its chart, on once whole.
+uniform sampler2D cloudLight;
+uniform vec4  cloudLightChart[4];
+uniform int   cloudLightOn;
+uniform sampler2D otherLight;
+uniform vec4  otherLightChart[4];
+uniform int   otherLightOn;
+// Where in its texel and slice a sample reads the volumes, in [-0.5, 0.5]
+// of each, per pixel and visit (the raymarch sets it from its blue noise),
+// moved on at each sample along the ray (cloudSunDepthIn):
+// read at their nodes, the depths' linear interpolation between texels
+// hundreds of metres wide drew their grid on a tower's face, a few tens of
+// pixels whatever the distance; jittered, it is noise the resolve averages.
+// The same for both of a sample's reads (their difference is the light).
+vec3 cloudLightJitter = vec3(0.0);
+// The jitter's reach, texels and slices either way per unit of it: a full
+// one. At half (the first choice) the volume's coarse texels at a distance
+// showed as dark specks on far towers and silhouettes in motion, where the
+// history no longer averages them (2.7 % of the cloud more than 10 levels off
+// its still look, against 0.94 % now; 5.3 % with none). The grid stays gone.
+const float LIGHT_JITTER = 2.0;
+// Whether the sample takes the sun march's local steps before the volume
+// (the raymarch clears it for samples too far for a pixel to show the
+// nearby clouds' shape, RENDERING_PLAN.md C.3's alternate path: the volume
+// alone, from the sample itself).
+bool cloudLightLocal = true;
+
+// A light volume's depths at p (r: toward the sun, g: up), linear between
+// its texels and its slices; keep: how much the volume holds p (1 inside,
+// fading over the last eighth of its tiles' half-width, 0 beyond). Above the
+// slab's top 0 (no cloud above), fading to it from the highest slice's
+// middle; below the lowest slice's middle, the lowest's.
+vec2 cloudLightAt(sampler2D atlas, vec4 chart[4], vec3 p, out float keep) {
+    vec2 t;
+    float s;
+    lightChartCoords(chart, p, t, s);
+    float tile = chart[2].w;
+    t += cloudLightJitter.xy * (LIGHT_JITTER * 2.0 / tile);
+    s += cloudLightJitter.z * LIGHT_JITTER;
+    keep = 1.0 - smoothstep(0.875, 1.0 - 1.0 / tile, max(abs(t.x), abs(t.y)));
+    float slices = chart[3].y;
+    if (keep <= 0.0 || s >= slices - 0.5) {
+        return vec2(0.0);
+    }
+    float top = clamp((slices - 0.5 - s) / 0.5, 0.0, 1.0);
+    s = clamp(s, 0.0, slices - 1.0);
+    float k0 = min(floor(s), slices - 2.0);
+    float k1 = k0 + 1.0;
+    float columns = chart[3].z;
+    vec2 size = vec2(columns, slices / columns) * tile;
+    vec2 local = clamp((t * 0.5 + 0.5) * tile, 0.5, tile - 0.5);
+    vec2 a0 = vec2(mod(k0, columns), floor(k0 / columns)) * tile + local;
+    vec2 a1 = vec2(mod(k1, columns), floor(k1 / columns)) * tile + local;
+    vec2 lower = texture(atlas, a0 / size).rg;
+    vec2 upper = texture(atlas, a1 / size).rg;
+    return mix(lower, upper, s - k0) * (s > slices - 1.0 ? top : 1.0);
+}
+
+// The optical depth toward the sun (unit dir) from a point p of the slab, by
+// a light volume: the sun march's first localSteps steps through the field
+// itself (the nearby clouds' shape), then the volume's depth between where
+// they ended and where the sun march would have (its steps: the window
+// cloudMapSunDepth keeps, a tower's lit face lit), the difference of the two
+// points' depths to the top (along one ray: linear). Debug bit 1024: to the
+// top, the whole chord. Returns how much the volume holds both points (the
+// sun march fills in the rest).
+float cloudLightSunDepth(Field f, sampler2D atlas, vec4 chart[4], vec3 p, vec3 dir,
+                         vec3 weather, int localSteps, out float depth) {
+    depth = 0.0;
+    if (!cloudLightLocal) {
+        localSteps = 0;
+    }
+    float reach = float(localSteps) * f.sunStepLength;
+    float keepNear;
+    float near = cloudLightAt(atlas, chart, p + dir * reach, keepNear).r;
+    float far = 0.0;
+    float keepFar = 1.0;
+    if ((uCloudDebug & 1024) == 0) {
+        float window = float(max(f.sunSteps - localSteps, 0)) * f.sunStepLength;
+        far = cloudLightAt(atlas, chart, p + dir * (reach + window), keepFar).r;
+    }
+    float held = min(keepNear, keepFar);
+    if (held <= 0.0) {
+        return 0.0;
+    }
+    depth = max(near - far, 0.0);
+    if (localSteps > 0) {
+        depth += slabOpticalDepthAt(f, p, dir, f.sunStepLength, localSteps, weather);
+    }
+    return held;
+}
+#endif
+
+// The clouds' optical depth straight up from the sample being lit, from a
+// light volume (its g), and how much the volume holds the sample (0: none,
+// the sky's light by the height ramp, cloud_shading.glsl's skyReach): set by
+// cloudSunDepthIn with the sun's depth, read and cleared by cloudRadianceFrom.
+float cloudSkyDepth = 0.0;
+float cloudSkyHeld = 0.0;
+
 // The optical depth toward the sun from a cloud at p: from the shadow maps
 // where the shader takes its light from them (CLOUD_MAP_LIGHTING: the
 // raymarch's, whose nodes the maps are bound to) and they hold it, else the
 // sun march's own.
 #ifdef CLOUD_MAP_LIGHTING
 float cloudSunDepthIn(Field f, samplerCube weatherCube, int on, sampler2D nearMap,
-                      vec4 nearChart[4], sampler2D farMap, vec4 farChart[4], vec3 p,
+                      vec4 nearChart[4], sampler2D farMap, vec4 farChart[4],
+                      int lightOn, sampler2D light, vec4 lightChart[4], vec3 p,
                       vec3 weather) {
     float depth = 0.0;
     float held = 0.0;
     if (f.sunSteps > 0 && (uCloudDebug & 64) == 0) {
-        held = cloudMapSunDepth(f, weatherCube, on, nearMap, nearChart, farMap, farChart,
-                                p, sunDir, weather, min(f.sunSteps, MAP_LOCAL_STEPS),
-                                depth);
+        int localSteps = min(f.sunSteps, MAP_LOCAL_STEPS);
+        // The light volume where it is whole (debug bit 512: the maps').
+        if (lightOn != 0 && (uCloudDebug & 512) == 0) {
+            held = cloudLightSunDepth(f, light, lightChart, p, sunDir, weather,
+                                      localSteps, depth);
+            cloudSkyDepth = cloudLightAt(light, lightChart, p, cloudSkyHeld).g;
+            // Moved on for the ray's next sample (R3, low discrepancy): one
+            // draw for the whole ray put all its reads off the same way, and
+            // the pixel's light with them; moved on, they average along it
+            // (the error over grey clouds in motion 1.55 to 1.41 levels,
+            // performance.md §28). The step: Roberts' R3, (1/g, 1/g^2, 1/g^3)
+            // with g = 1.2207440846 the real root of x^4 = x + 1, which
+            // spreads its successive points over the cube most evenly (not
+            // cloud_march.frag's per-frame R2 step: sharing a direction, the
+            // offsets would repeat); the +- 0.5 keeps them in [-0.5, 0.5].
+            cloudLightJitter = fract(cloudLightJitter + 0.5
+                                     + vec3(0.8191725, 0.6710436, 0.5497005)) - 0.5;
+        } else {
+            held = cloudMapSunDepth(f, weatherCube, on, nearMap, nearChart, farMap,
+                                    farChart, p, sunDir, weather, localSteps, depth);
+        }
     }
     if (held >= 1.0) {
         return depth;
@@ -798,7 +982,8 @@ float cloudSunDepthIn(Field f, samplerCube weatherCube, int on, sampler2D nearMa
 
 float cloudSunDepth(Field f, vec3 p, vec3 weather) {
     return cloudSunDepthIn(f, weatherMap, cloudShadowMapOn, cloudShadowNear,
-                           cloudNearChart, cloudShadowFar, cloudFarChart, p, weather);
+                           cloudNearChart, cloudShadowFar, cloudFarChart, cloudLightOn,
+                           cloudLight, cloudLightChart, p, weather);
 }
 
 // The same for a cloud of the second family (the stratus, under the first's
@@ -807,8 +992,8 @@ float cloudSunDepth(Field f, vec3 p, vec3 weather) {
 // theirs where the ray enters their base, which shades it.
 float cloudSunDepthOther(Field f, Field above, vec3 p, vec3 weather) {
     float depth = cloudSunDepthIn(f, otherWeather, otherShadowMapOn, otherShadowNear,
-                                  otherNearChart, otherShadowFar, otherFarChart, p,
-                                  weather);
+                                  otherNearChart, otherShadowFar, otherFarChart,
+                                  otherLightOn, otherLight, otherLightChart, p, weather);
     vec3 start;
     float chord;
     if (cloudShadowChord(above, p, sunDir, start, chord)) {

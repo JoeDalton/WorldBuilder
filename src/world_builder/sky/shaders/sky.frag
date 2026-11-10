@@ -6,6 +6,7 @@
 // terrain. Procedural stars are points drawn just after it (stars.vert).
 
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
+#pragma include "../../atmosphere/shaders/sky_view.glsl"
 #pragma include "sky_common.glsl"
 
 in vec3 vDir;
@@ -31,7 +32,10 @@ void main() {
     float edge = (1.0 - uSunCos) * 0.15;
     float disc = smoothstep(uSunCos - edge, uSunCos + edge, cosSun);
     vec3 transmittance, inscatter;
-    atmosphereAlong(dir, 1e30, uSunDir, transmittance, inscatter);
+    // From the sky-view table inside an atmosphere, marched from space.
+    if (!skyViewAlong(dir, uSunDir, transmittance, inscatter)) {
+        atmosphereAlong(dir, 1e30, uSunDir, transmittance, inscatter);
+    }
     background *= starAdaptation(inscatter);
     // The sun as it reaches the camera along this ray. Low, its light is
     // no brighter than the glow around it on screen (both past white, see

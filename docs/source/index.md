@@ -33,7 +33,8 @@ it works.
   presets, and how a game's settings menu reads and saves them.
 - [Performance](performance.md): where the time goes, measured, and what was
   done about it; the [performance backlog](performance_backlog.md) lists the
-  savings found but not yet made.
+  savings found but not yet made; the [frame profile](frame_profile.md) is
+  where a frame goes now, per part, and the biggest culprits.
 
 The per-class API is in the auto-generated [code reference](apidocs/index.rst).
 
@@ -53,6 +54,7 @@ shadows
 quality
 performance
 performance_backlog
+frame_profile
 object_lighting
 apidocs/index
 ```

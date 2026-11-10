@@ -3,8 +3,11 @@ Chunk data to Panda geometry.
 
 The vertex bytes arrive pre-packed from the worker in :data:`VERTEX_DTYPE`
 layout, so building a chunk is one memory copy. All chunks share one index
-buffer. Each GeomNode gets the chunk's precomputed bounding box, so Panda
-never walks the vertices to compute one.
+buffer, and a coarse one over the same vertices (every other one: a quarter
+of the triangles) that the passes wanting the ground's shape but not its
+detail draw instead (the clouds' depth passes, the sea's reflection:
+:data:`COARSE_PASSES`). Each node gets the chunk's precomputed bounding box,
+so Panda never walks the vertices to compute one.
 
 Chunk nodes are not collision targets: Panda would otherwise collide
 colliders whose from-mask has GeomNode's default bit with every drawn
@@ -28,11 +31,26 @@ from panda3d.core import (
     GeomVertexData,
     GeomVertexFormat,
     InternalName,
+    NodePath,
+    PandaNode,
     Point3,
 )
 
-from world_builder.terrain.chunkgen import VERTEX_DTYPE, ChunkData, triangle_indices
+from world_builder.depth import HIDE_FROM_CLOUD_PASS, REFLECTION_CAMERA_MASK
+from world_builder.terrain.chunkgen import (
+    COARSE_STRIDE,
+    VERTEX_DTYPE,
+    ChunkData,
+    triangle_indices,
+)
 from world_builder.terrain.cubesphere import VERTS
+
+#: The cameras that draw a chunk's coarse mesh, and no other one, its fine
+#: mesh being hidden from them: the clouds' depth passes (half the view's
+#: resolution, the march's stop and the ground shadow's scene) and the sea's
+#: reflection (blurred, at a fraction of the view's resolution). Their share
+#: of the ground's vertices was 0.4-1.3 ms a frame (performance.md §34).
+COARSE_PASSES = HIDE_FROM_CLOUD_PASS | REFLECTION_CAMERA_MASK
 
 
 @functools.cache
@@ -55,10 +73,15 @@ def vertex_format() -> GeomVertexFormat:
     return GeomVertexFormat.register_format(GeomVertexFormat(array))
 
 
+def shared_triangles(stride: int = 1) -> GeomTriangles:
+    """:returns: the one index buffer all chunks draw with (*stride* 1), or
+    the coarse one (:data:`COARSE_STRIDE`)"""
+    return _shared_triangles(stride)
+
+
 @functools.cache
-def shared_triangles() -> GeomTriangles:
-    """:returns: the one index buffer all chunks draw with"""
-    indices = triangle_indices()
+def _shared_triangles(stride: int) -> GeomTriangles:
+    indices = triangle_indices(stride)
     tris = GeomTriangles(Geom.UH_static)
     tris.set_index_type(GeomEnums.NT_uint16)
     tris.add_next_vertices(indices.size)
@@ -68,8 +91,10 @@ def shared_triangles() -> GeomTriangles:
 
 def build_chunk_node(
     chunk: ChunkData, margin: float = 0.0, slot: int | None = None
-) -> GeomNode:
-    """A GeomNode for one chunk, relative to its centre (:attr:`ChunkData.centre`).
+) -> PandaNode:
+    """A node for one chunk, relative to its centre (:attr:`ChunkData.centre`):
+    its fine mesh, and its coarse one over the same vertices for
+    :data:`COARSE_PASSES` (each GeomNode shown to its own cameras).
 
     :param chunk: generated chunk data
     :param margin: metres to widen its bounds by on every side (what the
@@ -77,7 +102,8 @@ def build_chunk_node(
     :param slot: the chunk's slot in its terrain's chunk table, written into
         every vertex (``biome_b``'s last two bytes: the slot's low byte, then
         its high bits under the skirt flag); None leaves them as generated
-    :returns: the node, bounds final
+    :returns: the node (its children the fine mesh, then the coarse one),
+        bounds final
     """
     vdata = GeomVertexData(f"terrain{chunk.key}", vertex_format(), Geom.UH_static)
     rows = len(chunk.vertex_bytes) // VERTEX_DTYPE.itemsize
@@ -97,13 +123,25 @@ def build_chunk_node(
     bounds = BoundingBox(
         Point3(*(chunk.aabb_min - margin)), Point3(*(chunk.aabb_max + margin))
     )
-    geom = Geom(vdata)
-    geom.add_primitive(shared_triangles())
-    # On the Geom too, in case the cull tests Geoms individually.
-    geom.set_bounds(bounds)
-    node = GeomNode(f"chunk{chunk.key}")
-    node.add_geom(geom)
+    node = PandaNode(f"chunk{chunk.key}")
     node.set_bounds(bounds)
     node.set_final(True)
     node.set_into_collide_mask(BitMask32.all_off())
+    parent = NodePath(node)
+    for stride, name in ((1, "fine"), (COARSE_STRIDE, "coarse")):
+        geom = Geom(vdata)
+        geom.add_primitive(shared_triangles(stride))
+        # On the Geom too, in case the cull tests Geoms individually.
+        geom.set_bounds(bounds)
+        mesh = GeomNode(name)
+        mesh.add_geom(geom)
+        mesh.set_bounds(bounds)
+        mesh.set_final(True)
+        mesh.set_into_collide_mask(BitMask32.all_off())
+        child = parent.attach_new_node(mesh)
+        if stride == 1:
+            child.hide(COARSE_PASSES)
+        else:
+            child.hide(BitMask32.all_on())
+            child.show(COARSE_PASSES)
     return node

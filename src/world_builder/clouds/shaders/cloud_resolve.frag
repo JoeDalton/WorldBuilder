@@ -1,6 +1,6 @@
 #version 330
 // The raymarch's full resolution (clouds.march), gathered over the frames:
-// cloud_march.frag traces one pixel of every uBlock x uBlock block a frame;
+// cloud_march.frag traces one pixel of every uBlock.x x uBlock.y block a frame;
 // every pixel here blends this frame's samples around it (reconstructed
 // bilinearly from the four nearest) into the last frame's result, moved to
 // where the camera now sees it (reprojected along the view ray to the pixel's
@@ -9,7 +9,8 @@
 // noise would clamp it), so a change shows at once rather than trailing
 // behind. How much a pixel takes from this frame falls
 // with how many samples it has gathered (its count), down to uMinWeight:
-// still, the steps' jitter averages away over many visits. Every pixel of a
+// still, the steps' jitter averages away over many visits; in motion down to
+// uMovingWeight only, about a cycle of the block. Every pixel of a
 // block takes the same share, whatever its distance to a traced one, or the
 // traced pixels would show as a grid.
 //
@@ -24,13 +25,14 @@ uniform sampler2D uHistory;          // the last frame's result, full resolution
 uniform sampler2D uHistoryDistance;  // r: distance, km; g: samples gathered
 uniform mat4  uClipToRel;            // clip space -> relative to the camera (world axes)
 uniform mat4  uPrevRelToClip;        // relative to the camera -> the last frame's clip space
-uniform int   uBlock;
+uniform ivec2 uBlock;
 uniform ivec2 uOffset;
 uniform vec2  uViewSize;
 uniform int   uHistoryValid;         // 0: no usable last frame (first, resized, jumped)
 uniform float uStill;               // 1: the camera still, 0: moving (the clamp's floor)
 uniform float uSmooth;               // how far a pixel on fresh samples takes their smooth mean (0 to 1)
 uniform float uMinWeight;            // this frame's least share, with a full count
+uniform float uMovingWeight;         // the same while the camera moves (by uStill): march.MOVING_WEIGHTS
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragDistance;
@@ -40,8 +42,9 @@ const float NO_CLOUD = 1.0e7;
 // The history is held within this many standard deviations of this frame's
 // samples around the pixel.
 const float CLAMP_SIGMA = 1.25;
-// The reach of the samples' statistics, in samples (a Gaussian's sigma).
-const float STATS_REACH = 0.9;
+// The reach of the samples' statistics, in samples: their weight falls to
+// nothing this far from the pixel (a radial bump, (1 - (d / reach)^2)^2).
+const float STATS_REACH = 2.0;
 // The share a pixel takes from the frame (uSmooth's ramp): none below the first,
 // all of uSmooth at the second.
 const float SMOOTH_FROM = 0.08;
@@ -55,6 +58,14 @@ const float CLAMP_SHARE = 0.15;
 // The count a clamp may take a pixel's history down to, at most: a change
 // still starts it over, but a pixel does not take a whole noisy sample.
 const float COUNT_KEPT = 4.0;
+// The share of the clamp's floor kept in motion (1 still). With none, the
+// clamp's range in motion was the samples' own spread: where they
+// agree it was their noisy mean, which moved every frame and the history
+// with it: a tower grainy in motion, smooth still (motion_shots.py's grain,
+// 1.47 to 1.11 rising past a tower). A floor keeps a little of what a cloud
+// was as it comes closer: a little more lag (the error over the clouds 2.2
+// to 2.6 levels there), traded for the grain (performance.md §28).
+const float MOTION_FLOOR = 0.25;
 
 vec3 rayDir(vec2 ndc) {
     vec4 near = uClipToRel * vec4(ndc, -1.0, 1.0);
@@ -75,35 +86,68 @@ bool reproject(vec3 dir, float km, out vec2 at) {
 
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    ivec2 last = ivec2(ceil(uViewSize / float(uBlock))) - 1;
-    float block = float(uBlock);
+    ivec2 last = ivec2(ceil(uViewSize / vec2(uBlock))) - 1;
+    vec2 block = vec2(uBlock);
 
     // The march's samples around: sample k sits at view pixel k * block +
-    // uOffset. The four nearest, bilinearly; the 3 x 3 around, for the clamp.
+    // uOffset. The four nearest, bilinearly (read with the window below,
+    // which holds them); the 4 x 4 around, for the clamp.
     vec2 f = (vec2(pixel) - vec2(uOffset)) / block;
     ivec2 base = ivec2(floor(f));
     vec2 w = f - vec2(base);
     vec4 reconstructed = vec4(0.0);
-    float reconstructedKm = 0.0;
-    float kmWeight = 0.0;
-    for (int i = 0; i < 4; ++i) {
-        ivec2 corner = ivec2(i & 1, i >> 1);
-        ivec2 at = clamp(base + corner, ivec2(0), last);
-        vec4 v = texelFetch(uMarch, at, 0);
-        float km = texelFetch(uMarchDistance, at, 0).r;
-        vec2 bw = mix(vec2(1.0) - w, w, vec2(corner));
-        float weight = bw.x * bw.y;
-        reconstructed += weight * v;
-        if (km > 0.0) {
-            reconstructedKm += weight * v.a * km;
-            kmWeight += weight * v.a;
+    // The samples' mean and spread around this pixel, for the clamp: the 4 x 4
+    // about it, each weighted by a bump of its distance that falls to nothing,
+    // flat, STATS_REACH samples away. A sample enters and leaves the window at
+    // no weight, so the statistics run on unbroken from one of the block's
+    // cells to the next. The 3 x 3 about the nearest sample (a Gaussian, wider
+    // in motion) jumped at each cell's edge, a quarter of its weight swapped
+    // in motion; where the clamp cut the history, its box printed the jumps:
+    // a mosaic of the block's cells over a cloud's shaded side whenever the
+    // camera moved (Karis' "3x3 box artifacts", performance.md §30). The
+    // corners beyond the reach weigh nothing and are not read.
+    vec4 mean = vec4(0.0);
+    vec4 square = vec4(0.0);
+    float total = 0.0;
+    float kmSum = 0.0;
+    float kmTotal = 0.0;
+    // The fresh samples' distances' range: what the history's may be.
+    float kmLo = 1e9;
+    float kmHi = 0.0;
+    for (int y = -1; y <= 2; ++y) {
+        for (int x = -1; x <= 2; ++x) {
+            ivec2 tap = base + ivec2(x, y);
+            vec2 d = vec2(tap) - f;
+            float bump = 1.0 - dot(d, d) / (STATS_REACH * STATS_REACH);
+            if (bump <= 0.0) {
+                continue;
+            }
+            float g = bump * bump;
+            vec4 v = texelFetch(uMarch, clamp(tap, ivec2(0), last), 0);
+            if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {  // one of the four nearest
+                vec2 bw = mix(vec2(1.0) - w, w, vec2(x, y));
+                reconstructed += bw.x * bw.y * v;
+            }
+            mean += g * v;
+            square += g * v * v;
+            total += g;
+            if (v.a > 0.0) {
+                float tapKm = texelFetch(uMarchDistance, clamp(tap, ivec2(0), last), 0).r;
+                if (tapKm > 0.0) {
+                    kmSum += g * v.a * tapKm;
+                    kmTotal += g * v.a;
+                    kmLo = min(kmLo, tapKm);
+                    kmHi = max(kmHi, tapKm);
+                }
+            }
         }
     }
-    reconstructedKm = kmWeight > 0.0 ? reconstructedKm / kmWeight : 0.0;
-    // Clear sky is most of the view: no cloud in the four nearest samples and
-    // none where the history was (at the sky's distance) is no cloud, without the
-    // statistics and the rest.
-    if (reconstructed.a <= 0.0 && uHistoryValid != 0) {
+    // Clear sky is most of the view: no cloud in the samples around
+    // and none where the history was (at the sky's distance) is no cloud,
+    // without the rest. (With the four nearest only, a pixel at a cloud's edge
+    // flipped between that and the full resolve as the samples' offset moved:
+    // its count zeroed, a blink in motion.)
+    if (mean.a <= 0.0 && uHistoryValid != 0) {
         vec2 clearAt;
         vec3 clearDir = rayDir((vec2(pixel) + 0.5) / uViewSize * 2.0 - 1.0);
         if (reproject(clearDir, 0.0, clearAt)
@@ -113,38 +157,13 @@ void main() {
             return;
         }
     }
-    ivec2 centre = clamp(ivec2(floor(f + 0.5)), ivec2(0), last);
-    // The samples' mean and spread around this pixel, Gaussian-weighted by their
-    // distance to it (not a box about the nearest sample: that moves its centre
-    // every half block and puts the lattice into the clamp).
-    vec4 mean = vec4(0.0);
-    vec4 square = vec4(0.0);
-    float total = 0.0;
-    float kmSum = 0.0;
-    float kmTotal = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            ivec2 tap = centre + ivec2(x, y);
-            vec4 v = texelFetch(uMarch, clamp(tap, ivec2(0), last), 0);
-            vec2 d = vec2(tap) - f;
-            float g = exp(-dot(d, d) / (2.0 * STATS_REACH * STATS_REACH));
-            mean += g * v;
-            square += g * v * v;
-            total += g;
-            float tapKm = texelFetch(uMarchDistance, clamp(tap, ivec2(0), last), 0).r;
-            if (tapKm > 0.0) {
-                kmSum += g * v.a * tapKm;
-                kmTotal += g * v.a;
-            }
-        }
-    }
     // The distance the history is moved by, from the same smooth weights: a
     // bilinear mix of four samples changes with the pixel's place in its block
     // where an edge is, and the reprojection with it (a lattice of offsets).
-    reconstructedKm = kmTotal > 0.0 ? kmSum / kmTotal : 0.0;
+    float reconstructedKm = kmTotal > 0.0 ? kmSum / kmTotal : 0.0;
     mean /= total;
     vec4 sigma = sqrt(max(square / total - mean * mean, vec4(0.0)))
-               + uStill * (CLAMP_FLOOR + CLAMP_SHARE * mean);
+               + max(uStill, MOTION_FLOOR) * (CLAMP_FLOOR + CLAMP_SHARE * mean);
     vec4 lo = mean - CLAMP_SIGMA * sigma;
     vec4 hi = mean + CLAMP_SIGMA * sigma;
 
@@ -157,9 +176,20 @@ void main() {
     vec2 historyKm = vec2(0.0);
     if (valid) {
         historyKm = texelFetch(uHistoryDistance, ivec2(at), 0).rg;
+        // The history's distance no farther or nearer than this frame's
+        // samples around: mixed like the colour, it lags them by up to
+        // 1 / uMinWeight frames, and flying forward (the clouds nearer each
+        // frame) it moved the history from too far, where the clamp threw it
+        // away (small clouds lost in a descent).
+        if (historyKm.r > 0.0 && kmHi > 0.0) {
+            historyKm.r = clamp(historyKm.r, kmLo, kmHi);
+        }
         if (historyKm.r > 0.0) {
             valid = reproject(dir, historyKm.r, at);
             historyKm = valid ? texelFetch(uHistoryDistance, ivec2(at), 0).rg : historyKm;
+            if (historyKm.r > 0.0 && kmHi > 0.0) {
+                historyKm.r = clamp(historyKm.r, kmLo, kmHi);
+            }
         }
     }
 
@@ -179,11 +209,22 @@ void main() {
         float moved = length(held - history) / max(length(history), 0.05);
         count = historyKm.g * clamp(1.0 - 2.0 * moved, 0.0, 1.0);
         count = max(count, min(historyKm.g, COUNT_KEPT));
-        float weight = max(1.0 / (count + 1.0), uMinWeight);
+        // In motion at least about a cycle of the block's share (each pixel's
+        // own sample once): a history of 1 / uMinWeight frames lagged the view
+        // of a cloud whose look changes fast as the camera flies (a lumpy
+        // anvil's base seen at a grazing angle from inside the slab), and the
+        // clamp cut that lag wherever its box of noisy samples happened to be
+        // narrow: grain over the cloud's shaded side (performance.md §30).
+        float least = mix(max(uMovingWeight, uMinWeight), uMinWeight, uStill);
+        float weight = max(1.0 / (count + 1.0), least);
         // The bilinear mix of four samples shows each one's noise as a dot of
         // its own: where the pixel takes most of this frame's (its history lost
         // or short) it takes their smooth mean instead.
-        vec4 fresh = mix(reconstructed, mean, uSmooth * smoothstep(SMOOTH_FROM, SMOOTH_TO, weight));
+        // In motion, wholly the smooth mean: the bilinear mix of four samples
+        // printed each one's noise as a speck as the view moved.
+        vec4 fresh = mix(reconstructed, mean,
+                         uSmooth * max(smoothstep(SMOOTH_FROM, SMOOTH_TO, weight),
+                                       1.0 - uStill));
         colour = mix(held, fresh, weight);
         km = historyKm.r > 0.0 && reconstructedKm > 0.0
            ? mix(historyKm.r, reconstructedKm, weight)

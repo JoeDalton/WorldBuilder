@@ -98,6 +98,10 @@ class ShadowSettings(QualitySettings):
     :ivar cloud_map_size: the clouds' shadow maps, the near one's texels per
         side (:class:`~world_builder.clouds.shadow_map.CloudShadowMaps`); 0 =
         none (the march per pixel)
+    :ivar cloud_light_size: the clouds' light volume, a slice's texels per
+        side (:class:`~world_builder.clouds.light_volume.CloudLightVolumes`);
+        0 = none (the raymarch lights its clouds by the shadow maps)
+    :ivar cloud_light_slices: its slices baked a frame while it is redrawn
     :ivar cloud_far_reach: how far along the sun's ray each cloud billboard
         looks for the clouds that shade it, past its own march, metres
         (cloud_field.glsl's ``cloudFarDepth``); 0 = no farther
@@ -161,6 +165,29 @@ class ShadowSettings(QualitySettings):
         "the sun still. Wider reaches farther before the march per pixel.",
     )
 
+    cloud_light_size: int = knob(
+        256,
+        "Cloud light volume",
+        REBUILD,
+        unit="px",
+        choices={"off": 0, "128": 128, "256": 256},
+        help="The light reaching every point of the clouds around the camera, "
+        "baked a few slices a frame when the sun turns or the camera moves "
+        "far: the raymarched clouds' light by it rather than by the shadow "
+        "maps. Wider is finer near the camera.",
+    )
+
+    cloud_light_slices: int = knob(
+        1,
+        "Cloud light volume's pace",
+        unit="slices",
+        range=(1, 8),
+        advanced=True,
+        help="Slices of the cloud light volume baked a frame while it is "
+        "redrawn (the sun turning, the camera far moved): more is a quicker "
+        "redraw (32 slices) at more cost a frame meanwhile.",
+    )
+
     cloud_far_reach: float = knob(
         4000.0,
         "Clouds' long shadows",
@@ -194,6 +221,7 @@ class ShadowSettings(QualitySettings):
             "terrain_map_size": 256,
             "local_map_size": 0,
             "cloud_map_size": 0,
+            "cloud_light_size": 0,
             "cloud_far_reach": 0.0,
             "object_shadows": False,
             "caster_map_size": 512,
@@ -203,6 +231,8 @@ class ShadowSettings(QualitySettings):
             "terrain_map_size": 512,
             "local_map_size": 512,
             "cloud_map_size": 512,
+            "cloud_light_size": 128,
+            "cloud_light_slices": 2,
             "cloud_far_reach": 2000.0,
             "caster_map_size": 1024,
         },
@@ -212,6 +242,7 @@ class ShadowSettings(QualitySettings):
             "local_map_size": 2048,
             "cloud_map_size": 2048,
             "cloud_far_reach": 8000.0,
+            "cloud_light_slices": 2,
             "caster_map_size": 4096,
         },
     }

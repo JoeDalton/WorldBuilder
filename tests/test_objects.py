@@ -20,6 +20,8 @@ from panda3d.core import (
     GeomVertexData,
     GeomVertexFormat,
     GeomVertexWriter,
+    LMatrix4f,
+    LVecBase3f,
     NodePath,
     OmniBoundingVolume,
     Shader,
@@ -306,3 +308,32 @@ def test_the_model_shader_lights_and_tonemaps_as_the_terrain(window):
     expected = aces_tonemap(linear, 0.9)
     assert linear.max() > 1.0  # what Panda's lighting would clip
     np.testing.assert_allclose(got, expected, atol=2.5 / 255.0)
+
+
+def test_apply_leaves_a_node_with_the_inputs_already_alone():
+    """Setting the same shader attrib again would make the node a new state
+    every frame: apply only sets it when it differs."""
+    lighting = ModelLighting()
+    ship = NodePath("ship")
+    lighting.apply(ship)
+    state = ship.get_state()
+    lighting.apply(ship)
+    assert ship.get_state() == state
+    # The inputs' attrib changed (e.g. a texture bound again): set again
+    lighting.inputs.set_shader_input("uExposure", 0.5)
+    lighting.apply(ship)
+    assert ship.get_attrib(ShaderAttrib) == lighting.inputs.get_attrib(ShaderAttrib)
+
+
+def test_the_planet_axes_follow_its_rotation_only_when_it_turns():
+    """update gives the shader the body's rotation once, then again only when
+    it changed."""
+    terrain = SimpleNamespace(rotation=np.eye(3))
+    lighting = ModelLighting(terrain=terrain)
+    lighting.update((0.0, 0.0, 0.0))
+    assert LMatrix4f(lighting._axes[0]) == LMatrix4f.ident_mat()
+    turned = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    terrain.rotation = turned
+    lighting.update((0.0, 0.0, 0.0))
+    # Transposed: Panda's rows are GLSL's columns
+    assert LMatrix4f(lighting._axes[0]).get_row3(0) == LVecBase3f(*turned.T[0])

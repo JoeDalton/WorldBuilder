@@ -1397,6 +1397,690 @@ between_towers 6.9, under_anvil 7.9, stratus_above 6.1 ms.
   17-22 %, four octaves), and the passes (about 1.1 ms a frame).
 - The far detail (`STEP_FADE`) was the shape regression of 4.1: `march.STEP_FADES`.
 
+## 24. Salvaging EVE-Redux: one march over both depth ranges
+
+EVE-Redux (LGhassen's raymarched clouds for KSP) marches once over KSP's two
+cameras, whose depths it merges into one distance buffer. The march here had a
+layer per range of `SplitDepthCameras`: a depth pass, a march (64 steps), two
+resolves and a composite each, so the far march went on behind a cloud the near
+one had already made opaque. Now one march runs from the near range's near plane to
+the near range's surface, else the far range's (both depth passes are kept and read
+in the march), with one history and a card per range
+([clouds.md](clouds.md), "The raymarch").
+
+RTX 3070, 2560 x 1440, HIGH (half resolution, 64 steps), `cloud_bench.py
+--passes`, the clouds' cost (ms over the frame without them):
+
+| Pose | Two layers | One march, one budget | One march, a budget per range |
+|---|---|---|---|
+| start | 3.71 | 3.34 | 2.96 |
+| inside | 4.31 | 3.07 | 3.55 |
+| model_in_cloud | 4.36 | 3.10 | 3.54 |
+| sunset | 2.41 | 2.17 | 2.19 |
+| genera cb_far | 2.81 | 2.29 | 2.47 |
+| genera anvil_top | 2.78 | 2.26 | 2.39 |
+| genera between_towers | 5.70 | 3.52 | 5.47 |
+| genera under_anvil | 6.79 | 4.05 | 6.64 |
+| genera in_congestus | 5.65 | 3.23 | 5.44 |
+| genera stratus_above | 5.73 | 4.39 | 4.41 |
+| genera stratus_below | 3.77 | 1.82 | 2.02 |
+
+- **One step budget for the whole ray** was cheapest, but it lengthened the near
+  range's steps for far stretches that an opaque cloud near the camera never lets the
+  march reach. `--jitter`'s error against the full-resolution reference rose where the
+  camera is in or near cloud: inside 1.74 -> 2.51, under_anvil 4.65 -> 8.30,
+  in_congestus 4.42 -> 6.72, still p99 3.2 -> 4.1 in congestus.
+- **A budget per range** (`uSplit`, `march.step_scales`) gives the near range its own
+  64 steps, as when it had a march of its own. Every `--jitter` and `--stability` column
+  is back at the two layers' values (within 0.1-0.3), and the still shots differ by
+  0.0-1.0 levels on average (jitter noise, no seam at the split). Kept.
+- Where the gain comes from: the far part of a ray is no longer marched behind an
+  opaque near cloud (inside, model_in_cloud, stratus), and the fixed passes are fewer
+  (one march's set-up, one resolve pair). Inside the towers the near range's own 64
+  fine steps are the cost, unchanged: tracing fewer pixels (non-square blocks, next)
+  is the lever there.
+- SpaceFlight's Mission 3 (still pose, 2560 x 1440, 3 runs each, alternated): mean
+  14.66 -> 14.46 ms, p95 16.6 -> 16.2 ms, within the run-to-run noise (0.5 ms). The
+  camera is 900 m under the slab, where little lies behind an opaque near cloud.
+
+### Non-square blocks: an eighth (4 x 2) and a ninth (3 x 3)
+
+EVE-Redux traces one pixel in 8 or 9 a frame by default (`TemporalUpscaling` x8,
+x9); the march had only a half (2 x 2) and a quarter (4 x 4) per axis, so one in 4
+or one in 16, with nothing between (§23 "Phase 4.2": a half too dear, a quarter
+too soft). `CloudSettings.march_block` now takes (bx, by): 1 x 1, 2 x 2, 4 x 2,
+3 x 3, 4 x 4. EVE's own 4 x 2 and 3 x 3 orders trace touching pixels on consecutive
+frames; ours (`march.block_order`, an exhaustive search) keep consecutive pixels a
+diagonal apart even across the blocks' edges.
+
+RTX 3070, 2560 x 1440, HIGH (64 steps, the one march of the section above): clouds'
+cost (`--passes`, ms) and `--jitter` (moving error against full resolution, edge
+sharpness against it, still p99):
+
+| Pose | 2 x 2 | 4 x 2 | 3 x 3 | 4 x 4 |
+|---|---|---|---|---|
+| start: cost / err / sharp | 2.96 / 1.36 / 0.96 | 1.91 / 1.98 / 0.93 | 1.82 / 2.04 / 0.91 | 1.41 / 3.49 / 0.87 |
+| inside | 3.55 / 1.73 / 0.97 | 2.14 / 2.19 / 0.94 | 2.31 / 2.19 / 0.93 | 1.47 / 3.34 / 0.90 |
+| high (20 km) | 1.52 / 2.29 / 0.91 | 1.11 / 4.37 / 0.84 | 1.09 / 4.40 / 0.82 | 0.99 / 6.80 / 0.75 |
+| sunset | 2.19 / 0.84 / 0.95 | 1.41 / 1.40 / 0.92 | 1.44 / 1.40 / 0.91 | 1.15 / 2.62 / 0.88 |
+| genera cb_far | 2.47 / 3.83 / 0.87 | 1.54 / 5.74 / 0.77 | 1.53 / 5.74 / 0.76 | 1.16 / 9.36 / 0.67 |
+| genera between_towers | 5.47 / 8.37 / 0.84 | 3.13 / 10.68 / 0.75 | 2.94 / 10.68 / 0.73 | 2.03 / 16.37 / 0.62 |
+| genera under_anvil | 6.64 / 4.95 / 0.94 | 3.75 / 8.67 / 0.83 | 3.47 / 8.67 / 0.81 | 2.34 / 16.98 / 0.74 |
+| genera stratus_above | 4.41 / 2.00 / 0.96 | 2.67 / 2.26 / 0.93 | 2.57 / 2.28 / 0.89 | 1.85 / 2.91 / 0.84 |
+
+- An eighth or a ninth costs about 60 % of a half (0.4-2.9 ms less), and its error
+  against the reference is 1.1-1.9 times a half's, against 1.5-3.4 times for a
+  quarter. The still shimmer (p99) is no worse than a half's (2.2-5.9 against
+  2.6-6.4 levels); the moving grid is lower than a half's in the genera's towers.
+- 4 x 2 and 3 x 3 cost the same; 4 x 2 is slightly sharper (0.01-0.04) with a lower
+  grid on the plain poses. `STEP_FADES` and `SMOOTHING` for both are between a
+  half's and a quarter's (0.15, 0.75), not tuned further.
+- What an eighth loses is edge sharpness in motion (0.92-0.94 plain, 0.75-0.85 in
+  towers, against 0.95-0.97 and 0.84-0.94): the reconstruction's bilinear mix of the
+  fresh samples, which the exact-pixel reconstruction (next) aims at.
+- **HIGH now traces 4 x 2** (ULTRA keeps 2 x 2, LOW and MID 4 x 4). SpaceFlight's
+  Mission 3 (still pose, 2560 x 1440, 3 runs each against the tree before §24,
+  alternated): mean 14.88 -> 12.44 ms, median 14.57 -> 11.83, p95 16.64 -> 14.43,
+  p99 20.65 -> 17.86 (runs within 0.2 ms of each other).
+
+### Tried and dropped: EVE's jitter and reconstruction, a sharper history
+
+Three experiments aimed at the eighth's and the quarter's softness in motion
+(`cloud_bench.py --jitter`, RTX 3070, 2560 x 1440, HIGH at 4 x 2 and LOW at 4 x 4,
+plain and genera, each against the current march). None was kept; the code is in the
+history of this session only.
+
+- **A space-time blue noise for the steps' jitter** (Wolfe et al. 2022, scalar, as
+  EVE-Redux reads NVIDIA's): 64 slices of 64 x 64, each slice blue in space and each
+  pixel's sequence blue in time (void and cluster with the energy counted within a
+  slice and within a pixel's column; low-frequency power 0.0001 in space and 0.015 in
+  time, against 0.06 and 0.28 for white noise; a 21 s bake). Read a slice per visit
+  (shifted by the block's R2 offset) or a slice per frame (EVE's): **no change**. Every
+  column within 0.0-0.2 of the 2D blue noise moved on by the golden ratio, LOW with
+  genera included (still p99 5.69 against 5.67); a slice per frame was slightly worse
+  still (p99 +0.3-0.5). The jitter's residue is not where the steadiness goes.
+- **EVE's reconstruction** (as far as its renderer's buffers show: the pixel traced
+  this frame takes its own ray, the others keep their reprojected history unless the
+  clamp finds it changed): **worse**. HIGH still p99 2.2 -> 3.7-8.3, still grid 3-6
+  times, moving grid up to 10 times (20 km: 0.023 -> 0.248), for +0.01 of sharpness and
+  the same error. Each pixel gathers a sample every 8 (or 16) frames, and the clamp's
+  statistics change with the block's pixel traced: the traced pixels show as a grid.
+  At LOW with genera it was sharper (0.71 -> 0.79) with a strong grid (0.37).
+- **A Catmull-Rom history read** (five bilinear taps, held within the four texels
+  around against its overshoot): **worse**. Cost +0-0.06 ms, but sharpness in motion
+  0.02-0.08 lower and flicker 5-20 % higher (orbit +20 %), the moving grid a little
+  lower. The repeated bilinear read is not what softens the clouds in motion either.
+
+So the eighth's softness in motion (sharpness 0.92-0.94 plain against 0.95-0.97 at a
+half) is not the jitter's, the bilinear mix's or the history filter's. Not yet tried:
+the history's lag (its minimum weight and the clamp in motion), and more samples a
+frame where the view moves (a half while turning, an eighth when still).
+
+### The look: a second order of scattering, curled billows
+
+RTX 3070, 2560 x 1440, HIGH (4 x 2):
+
+- **A second order of scattering** (`CloudOptics.octave_gain` 0.3,
+  `octave_attenuation` 0.5; EVE-Redux's multiple-scattering lobe, in
+  Wrenninge's form): a few operations a cloudy sample and a fourth channel in
+  the far table. `--passes` with genera, gain 0 against 0.3: cb_far 2.04 /
+  2.07, between_towers 4.30 / 4.24, under_anvil 5.01 / 4.98, stratus_above 3.41 /
+  3.38 ms: nothing measurable. At 0.5 of the light and a quarter of the depth it
+  flattened the towers.
+- **Curled billows** (`CURL_STRENGTH` 2): one more fetch of a 32³ RGB8 volume
+  per cloudy sample with billows. Clouds' cost, straight against curled: below
+  1.54 / 1.69, start 2.30 / 2.33, inside 2.80 / 2.89, above 2.42 / 2.52,
+  model_in_cloud 2.66 / 2.58 ms; still spread and grid unchanged.
+- **A zenith sky-occlusion map: not built** (BACKLOG.md): the twin's vertical
+  optical depths make towers thinner than an overcast cumulus deck, so one scale
+  would have lightened tower bases.
+
+### Half-resolution depth passes
+
+The two scene-depth passes the march stops at (one per depth range) are drawn at
+half the view's resolution per axis (`march.DEPTH_SCALE` 2); the march and the
+composite cards read a pixel's 2 x 2 block. SpaceFlight's Mission 3 (2560 x 1440,
+HIGH, 3 runs each, alternated, two sessions): mean 14.45 -> 13.90 and 14.43 -> 13.99
+ms, p95 16.65 -> 15.82 ms. In cloud_bench its scenes hold almost no geometry and the
+passes cost ~0.1 ms, so the gain is the game's drawing of the scene twice more, at
+full resolution. `terrain_shots` (ball_noon, in_clouds, mountains_low, ground_up,
+clouds_low) at 2560 x 1440, full against half: mean 0.05-0.19 levels, at most 5
+pixels a frame over 32 levels (the HUD aside).
+
+In the same sessions, the Phase 4 look items (second order of scattering, curled
+billows) cost 0.3-0.8 ms in Mission 3 against "Tuned march" (13.65 ms), where
+cloud_bench showed ~0.1: the curl's share is nil (curl off: 13.93 against 13.89),
+the rest in the second order's always-run code or the noise of a busy desktop
+(single runs move by 0.4 ms). To measure on an idle machine.
+
+### Where a frame goes now
+
+The reference profile after this section's work is
+[frame_profile.md](frame_profile.md) (`scripts/frame_profile.py`): at 2560 x 1440,
+HIGH, 7.0-8.1 ms a frame (genera 7.8-10.1), GPU-bound by 3-4 ms over a 3.5-4.0 ms
+CPU step. It also settles this section's open question: compiled out, the second
+order of scattering saves 0.7-0.85 ms with genera.
+
+## 25. The atmosphere's tables (RENDERING_PLAN.md part B)
+
+Hillaire 2020's tables in place of parts of the per-pixel march
+([atmosphere.md, "The tables"](atmosphere.md#the-tables)). RTX 3070, 2560 x
+1440, HIGH, `scripts/frame_profile.py`, two runs each, against the tree
+before (HEAD 2417e7a, alternated in one session; ±0.3-0.4 ms run to run):
+
+- **B.1, transmittance table** (the march's sunlight read, not computed):
+  even, within noise (coast 7.73 / 7.67 against 7.65 / 7.68 ms; 20 km 5.77 /
+  5.72 against 5.99 / 5.85).
+- **B.2, multiple-scattering table and the ozone layer** (a fetch and a
+  density more a sample, the look's change): +0.2 (coast), +0.7 (in clouds),
+  +0.2 (20 km), ~0 (sunset) ms.
+- **B.3, sky-view table** (the sky, its reflection in the sea and the stars
+  read a 256 x 128 table baked each frame instead of marching): **-0.27 to
+  -0.43 ms** against the sky's march with everything else the same
+  (`frame_profile`'s `skyview` column: ground -0.28, coast -0.43, in clouds
+  -0.31, 20 km -0.15, sunset -0.39; most where the sea reflects the sky), its
+  bake included; 0 from orbit (no bake outside the air). The sky's own cost
+  at the ground pose: 0.50 ms before, 0.20 after.
+
+B.1-B.3 together against the tree before: ground +0.24, coast +0.13, in
+clouds +0.12, 20 km +0.38, sunset 0, orbit +0.27 ms (the terrain's per-pixel
+march carries B.2's fetch and ozone, from orbit too: the aerial-perspective
+cells, B.4, are what take it off).
+
+- **B.4, aerial-perspective cells** (the terrain, sea and models read a
+  32 x 32 x 32 grid baked each frame instead of marching per pixel, within
+  128 km with the camera in the air): **-0.3 to -1.1 ms** against their
+  march (`frame_profile`'s `aerial` column, its bake included: ground -0.63,
+  coast -1.12, in clouds -0.94, 20 km -0.98, sunset -0.31; 0 from orbit,
+  where it is off).
+
+**B.1-B.4 against the tree before** (frame, ms; the same session's HEAD
+runs): ground 7.23 to 6.80, coast 7.62 to 6.69, in clouds 7.85 to 7.04, 20 km
+5.72 to 5.12, sunset 7.95 to 7.68, orbit 3.33 to 3.57. The per-pixel
+atmosphere's share (`atmo`, steps 8 against 2) went from 0.4-1.2 ms to ~0
+wherever the camera is in the air. From orbit the march stays, with B.2's
+extra fetch and ozone (+0.24 ms), on the cheapest frame: left (B.5).
+
+- **B.5, presets.** Do the tables pay at LOW and MID, where the march has 4
+  and 6 samples? Yes (two runs each; `aerial` and `skyview` columns, ms):
+  LOW cells -0.37 to -0.77, sky view 0 to -0.25; MID cells -0.40 to -0.96,
+  sky view -0.21 to -0.43. Both stay on at every preset.
+
+  LOW had to be measured `--offscreen`: in a window its frames (~4.3 ms)
+  sat at 5.53 ms, the display's refresh, with every part reading 0, though
+  vsync was off (the compositor holds the swap). A windowed profile below
+  ~5.6 ms measures the display, not the frame.
+
+## 26. The clouds' light volume (RENDERING_PLAN.md part C)
+
+The raymarch lit by a baked volume of the clouds' depths toward the sun and up
+([shadows.md](shadows.md#the-cloud-light-volume)). RTX 3070, 2560 x 1440, HIGH,
+the demo's poses, medians of 120 frames, alternated in one session:
+
+- **The bake, re-baking every frame** (the sun turned 0.2 degrees a frame, the
+  worst case: a day's sun re-bakes it every ~12 s), with genera (two volumes),
+  frame on against off: at four slices a frame 128² +0.6, 256² +0.9 to +1.5,
+  512² +3.2 to +3.4 ms; at 256² two slices +0.8 to +1.0, **one slice +0.3 to
+  +0.4** (HIGH's), 512² one slice +1.1 to +1.2. Reading the weather at every
+  step (the towers' streaks' fix) is what made it dearer than its first version
+  (+0.1 to +0.45 ms at four slices). With the sun and the camera still: 0.
+- **Lighting by it against the shadow maps**, still: as the maps within noise
+  for the sun's depth alone; +0.1 to +0.2 ms with the sky's reach read from it
+  too (two more fetches a lit sample).
+- **The volume alone far away** (no local sun steps past a view footprint): with
+  genera -0.1 ms at 0.04 (HIGH), up to -0.2 at 0.02, nothing measurable without
+  genera; at 0.02 far towers 2.3 levels softer on average (p99 22).
+- **The second order of scattering**, compiled out against in, alternated, with
+  genera (ground, in clouds, clouds low): within noise. Part A's 0.7-0.85 ms is
+  gone from the current tree, so it was not folded into the volume.
+- **God rays** (C.5; `frame_profile.py`'s `godrays`, on against off): ground
+  +0.09, in clouds +0.11, clouds low ~0, sunset +0.17 ms; with genera, ground
+  +0.31 (the sky-view bake's share in it: `skyview` went from -0.30 to ~0).
+- **Part C against the end of part B** (1315226, a scratch worktree,
+  alternated, two runs): ground 8.45 / 8.30 against 8.70 / 8.73 ms, in clouds
+  8.26 / 8.40 against 8.50 / 8.53: +0.25 to +0.35 ms (the volume's sky read,
+  the god rays). The end-of-B tree itself ran 8.3-8.45 ms in this session
+  against 6.80 / 7.04 when §25 measured it: the machine's state, not the code.
+
+## 27. Stutter while turning: frame pacing, and a frame cap
+
+Reported: turning on the spot (A held) at dusk, genera on, shadows ULTRA
+(`flight_bench.py --flight turn --at 17.70233 26.91499 6882 -113.2 -11.6 --sun
+270 0.5 --genera --shadows-quality ultra`), stutter with a passable mean and
+an awful p99. RTX 3070, 2560 x 1440, a 180 Hz display.
+
+- **Not the renderer.** Each frame synced to the GPU, offscreen: 8.8-8.9 ms
+  at every heading, sun at 3 or 0.5 degrees (p99 9.6-9.9, the readback ~2 ms
+  of it); facing the sun costs no more. `--trace`: the Python side flat in the
+  slow frames, the excess all in `renderFrame`. No offscreen bake draws in the
+  slow frames more than in the others (the light volume, the cloud maps and
+  the mountains' shadow do not re-bake on a turn).
+- **The presentation.** In a window the frames are 5.5 ms or 11.0 ms (median
+  5.9, p95 11.0, p99 11.3): one refresh or two. The compositor shows a
+  window's frames on the display's refresh whatever `sync-video` says (vsync
+  on or off measured the same). At ~6.9 ms a frame, three in four make the
+  5.5 ms refresh and the fourth is held for a second: uneven motion, worst
+  while the whole view turns.
+- **The fix: a frame cap** at a divisor of the refresh the frame rate holds
+  (`WorldSettings.display.frame_cap`, `world_builder.display.FrameCap`: Panda's
+  clock in its limited mode; off by default, 90 on a 180 Hz display). The same turn at 90:
+  median, p95 and p99 all 11.1 ms (max 22.2), against 6.1 / 10.2 / 11.1 (max
+  168) uncapped. The benchmarks run uncapped (`--frame-cap` 0 by default in
+  `flight_bench.py`, `frame_profile.py`, `terrain_shots.py`).
+- Other ways out: a variable-refresh display (FreeSync, G-Sync) or a
+  fullscreen window the compositor leaves alone; or a frame under the refresh
+  (5.5 ms here: ~1.4 ms off at this pose).
+
+## 28. The clouds in motion: the composite's depth and the history's distance
+
+`scripts/motion_shots.py` flies the demo from a pose with its speed rule at a
+fixed 120 fps frame time, saves frames, then holds each position still until
+the clouds converge: the moving frame against its converged twin, over the
+clouds (lost: cloud pixels missing while moving; found: extra). 2560 x 1440,
+HIGH, genera. The user's poses: stratus in mountains
+(`--at 19.24143 30.08032 2093 113.1 -30`, flying forward from 2 km), descent
+from 200 km (`--at 28.89450 30.39999 199852 180 -88.7`, forward).
+
+| | stratus fwd: lost / err | stratus back | descent: lost / err |
+|---|---|---|---|
+| before (3015db2) | 94.4 % / 77.2 | 2.0 % / 2.72 | 50.4 % / 37.0 |
+| depth no farther than the scene | 1.2 % / 2.57 | 2.0 % / 2.64 | 13.5 % / 13.2 |
+| + the history's distance clamped | **0.3 % / 1.25** | | **1.6 % / 2.96** |
+
+- **Cause**: the composite wrote the cloud's depth from the resolved distance,
+  mixed over up to ~33 frames like the colour. Flying forward the clouds come
+  nearer each frame, the lagged distance is too far, the depth landed behind
+  the ground under them and the depth test cut them (backward the error errs
+  nearer: nothing cut, the asymmetry reported). Confirmed by a composite
+  writing depth 0: lost 1.1 %. The same lag moved the history from too far,
+  where the clamp threw it away (the descent's small clouds).
+- **Kept, cost ~0** (`cloud_bench --passes` with genera, full frame 2.07 / 4.54
+  / 4.41 against 2.11 / 4.46 / 4.35 ms; `--jitter` identical to two decimals):
+  the scene cut, the distance clamp, the jump limit relative to the slab's
+  distance (2 %: 10 % measured the same on a boosted descent), the clear-sky
+  test over the 3 x 3.
+- **Grain in motion** (the user: a tower grainy moving, smooth still; flying up
+  past one, `--at 20.56659 30.40000 4194 0 -8 --vertical up`). The harness's
+  grain: the moving frame's fine detail (luminance against its 5 x 5 mean)
+  where the converged clouds are smooth, over the converged's (1: as smooth).
+  Tower up / stratus fwd / descent: err over the clouds and grain:
+
+  | | tower | stratus | descent |
+  |---|---|---|---|
+  | above | 2.22, 1.47 | 1.25, 1.11 | 2.86, 1.72 |
+  | fresh samples wholly the smooth mean in motion (A) | 2.24, 1.39 | 1.30, 1.06 | 3.22, 1.63 |
+  | A + count kept 8 after a clamp | 2.26, 1.38 | 1.30, 1.06 | 3.20, 1.62 |
+  | **A + a quarter of the clamp's floor in motion** | **2.63, 1.11** | **1.57, 1.03** | **3.56, 1.40** |
+  | A + half the floor | 2.81, 1.04 | 1.57, 1.03 | 3.89, 1.30 |
+
+  The grain was the clamp's range in motion: the 3 x 3 samples' own spread,
+  nothing where they agree, so the history followed their noisy mean every
+  frame (not the count: keeping 8 changed nothing). Kept: A and a quarter of
+  the floor (`MOTION_FLOOR`), most of the grain gone for a little lag (extra
+  cloud in the descent 5.6 to 7.2 %). Earlier, without A and measured by
+  flicker alone, the quarter floor had looked not worth its lag.
+- **The user still saw grain; more pixels in motion** (asked for). A 2 x 2
+  block while moving (4 x 2 still; `CloudSettings.march_refresh_moving`,
+  `march.MOVING_BLOCKS`): tower up err 2.72, grain **1.31** (worse than 1.11
+  at 4 x 2), stratus 1.51 / 1.06, descent 3.42 / 1.62. Each fresh sample is
+  as noisy, and the 3 x 3 the resolve smooths over is half as wide: no gain.
+  Left opt-in (off), for the user's own flights. Not the light volume's or the
+  step boundaries' jitter either (both off: tower grain 1.18).
+- **The resolve's spread wider in motion** (`STATS_REACH_MOVING` 1.5 samples
+  against 0.9): tower 2.69 / 1.09, stratus 1.62 / 1.03, descent 3.68 / 1.36.
+  Kept. Over the user's own range (4 to 8 km, 84 frames at 120 fps), original
+  against now: grain 1.45 against **0.99** at every sample (0.97-1.01), error
+  over the clouds 1.68 against 1.70: by this measure as smooth moving as
+  still.
+- **What the user still saw: dark specks** on a tower's silhouette and a far
+  small tower, blocks of the march's size (their screenshot,
+  `--at 21.8847 30.40000 4559 0 -7 --vertical up`). The harness's speck: a
+  cloud pixel more than 10 levels off its converged twin. 2.70 % of the cloud,
+  and 2.43-3.18 % with each resolve change of this section undone, 2.49 % with
+  the original resolve: not the resolve. With the shadow maps' light instead
+  of the light volume (`--cloud-debug 512`) 0.74 %: the volume's reads. Its
+  read jitter at none 5.30 %, a quarter of a texel 5.01 %, half (as built)
+  2.70 %, **one 0.94 %**, one and a half 1.04 %: the coarse texels of a far
+  tower made dark samples, which the jitter spreads and the history averages
+  when still. Kept at a texel (`LIGHT_JITTER`): specks 1.07 %, error over the
+  clouds 2.31 to 1.78; the grid stays gone (`in_clouds`). The rest (dark
+  blocks on silhouettes) is there with the maps' light too.
+- **Still seen: specks on a far tower's shaded side** (the user's second
+  screenshot, `--at 22.4116 30.4 3356 0 -6 --vertical up`, 2 samples): 1.39 %,
+  0.68 % with the maps' light. Not the jitter's draw shared along a ray (a new
+  draw each step: 1.40 %), not the far path (local steps everywhere: 1.05 %
+  against 1.02 on one sample), barely the sky's reach (off: 0.92 %). The bake
+  samples the field at each voxel's centre: far out a feature a texel across
+  is one deep voxel among shallow ones, and a jittered read across it a dark
+  sample. **Smoothed** once a bake is whole (a [1, 2, 1] tent along the three
+  axes, `cloud_light_smooth.frag`, 12 bilinear reads a texel over the
+  2048 x 1024 atlas, one frame a bake): specks 1.39 to **1.25 %**, error over
+  the clouds 1.66 to 1.42, the tower clean in the shots (the rest on the deck's
+  edges, there with the maps' light too); at the first pose specks 1.07 to
+  **0.71 %**, error 1.78 to 1.40. With the smoothing the jitter's reach no
+  longer matters (a texel 1.25 %, half 1.28, a quarter 1.28): kept at a texel.
+- **Grain on grey clouds in motion after the base's fade** (clouds.md
+  "Lighting", `DIFFUSE_FADE`; the user's screenshot, `--at 29.7159 29.8232
+  2067 -175 4`, forward, 2 samples). Error over the clouds / specks: without
+  the fade (`--cloud-debug 2048`) 1.34 / 0.20 %, with it (0.2) 1.55 / 0.38 %,
+  at 0.1 1.46 / 0.30 %, a uniform 0.3 instead 1.80 / 0.55 %. The fade itself
+  is not noisy (its up read unjittered: 0.39 %; the sky's reach by the ramp:
+  0.35 %; in motion wholly the samples' smooth mean: 0.38 %): darker cloud
+  shows the march's own sampling noise, which the fill washed out. Kept: the
+  volume reads' jitter **moved on at each sample along the ray** (R3), not one
+  draw for the whole ray: 1.41 / 0.36 % (1.18 / 0.19 % without the fade).
+  Open: the sun term's own noise (more local steps, a smoother read).
+- **Not built**: depth-aware (bilateral) reconstruction and exact-pixel
+  history: no edge halo seen in converged shots, the motion errors already
+  near converged.
+- A boosted descent into the slab (5x, ~10 km a frame at 100 fps) still ghosts
+  at 9-12 km: 27-52 % extra cloud, clouds passed kept by the history.
+
+## 29. Bands on a tower's face: the steps' lengthening
+
+The user's poses, reproduced only with their start (`--start 29.7159
+29.8232`: the genera's towers are laid out around it; `motion_shots.py` and
+`frame_profile.py` had ignored `--start`, and `motion_shots.py` took the sun
+from the level's reference). 2560 x 1440, HIGH, march.
+
+- **What was seen**: settled, bands and contours across a cumulonimbus's
+  face, strongest behind a thin veil of cumulus
+  (`--at 31.60402 28.72949 2438 -24.5 6.3`), and on the tower at
+  `--at 29.74164 29.82320 2358 0 -8`.
+- **Attribution** (settled shots with one input frozen at a time): the
+  samples' jitter and the steps' boundaries frozen, strong contour bands; the
+  light volume's jitter frozen or the shadow maps' light instead, the bands
+  stay; the noise volume as 32-bit float instead of 8-bit, no change. The
+  steps' grid, then. Without the steps' lengthening by the light already
+  spent (1.5 times the share lost), frozen gives regular bands (the grid
+  alone) and the jitter averages them away: settled, **the bands are gone**.
+  With it, a step's length depended on what the samples before it found, the
+  grid moved with the cloud, and the visits' average kept its contours (a
+  veil's spent light lengthened every step behind it).
+- **Cost** (`cloud_bench --passes`, genera poses, the full clouds' ms): with
+  the lengthening against without, within 0.06 ms at the convective poses
+  (between towers 4.24 / 4.30, under the anvil 5.06 / 5.07); over a stratus
+  deck **+0.36 ms** (above 3.58 / 3.94, below 1.82 / 2.18). Kept: without.
+- **In motion** (`motion_shots.py`, forward, 2 samples, err over the clouds,
+  grain, specks): the tower 4.18, 1.24, 13.0 % against 4.10, 1.18, 12.9 %;
+  the veil 4.97, 1.01, 17.0 % against 4.97, 0.96, 17.1 %. The specks in motion
+  (blocky edges where clouds overlap, grain) are another matter, still open.
+- **Tried and dropped**:
+  - re-marching a step that would take much of the pixel's light, in
+    sub-steps of a fifth of it each: five effective samples on a dense
+    cloud's face, but the bands stayed, and backing up into the step before
+    when it found air ran rays out of steps (the tower turned transparent);
+  - a depth-aware resolve at depth steps (a pixel's history moved by one of
+    the two clouds' distances, the one where the history agrees, and the
+    clamp from that cloud's samples): no change in the specks (13.0 %), a
+    little more grain. Read back in motion, the history on depth steps is
+    kept as anywhere else (this frame's weight 3 %, the clamp moving it by
+    nothing): there was no rejection to correct.
+
+## 30. Grain and blocks on clouds in motion: the resolve's window and history
+
+The user's poses with their start (`--start 29.7159 29.8232`): the tower
+`--at 29.74164 29.82320 2358 0 -8`, the veil `--at 31.60402 28.72949 2438
+-24.5 6.3`; flown forward by the demo's speed rule (a fixed 120 fps: ~19 m a
+frame at 2.3 km); 2560 x 1440, HIGH (4 x 2). Measured on the resolve's own
+output, read back (the premultiplied cloud over the bare scene): moving
+against converged at each sample's pose, the cloud layer alone (`motion_shots`'
+mask also takes in the sea's reflections and shadows), with the light
+volume's and the shadow maps' bakes frozen from the flight's start. Unfrozen,
+a bake started mid-flight landed while the twin settled, lit otherwise (up to
+25 levels on the anvil's shaded base).
+
+- **What `motion_shots`' 13 % specks were**: mostly a smooth bias (moving
+  brighter on the shaded cloud, the anvil's base and the tower under it; the
+  error's autocorrelation 0.95 eight pixels away), gone with the history off
+  (fresh samples alone: no bias). The history lagging: the shaded base, seen
+  at a grazing angle from inside the slab, changes fast as the camera flies
+  (lumps 25 km away uncover base 34 km away: those pixels' converged look
+  186 to 149 levels over 36 frames), and ~33 frames of history trail it.
+- **What the user saw**: in the moving frame a mosaic of the block's cells
+  (4 x 2 rectangles; the stored distance too, its runs 4, 8, 12 pixels long)
+  and dark specks, over that shaded cloud. Without the clamp: none, a smooth
+  smear instead (the lag twice as large). The clamp drew both. Its box (mean
+  +- 1.25 sigma of the 3 x 3 samples about the nearest one, a Gaussian of 1.5
+  samples in motion) jumped at each cell's edge, a quarter of its weight
+  swapped, and where it cut the lagging history it printed the jumps. And a
+  box from a few noisy samples (a sample's spread ~13 levels there: chiefly
+  its place within its long step) let the lag through where it was wide and
+  cut it where it happened to be narrow: grain (the dark specks clamped 4-5
+  times as often as the rest).
+- **Elsewhere** (a literature review): Unreal, Unity and Frostbite reproject
+  clouds by the same transmittance-weighted distance; Epic's help for
+  `r.VolumetricRenderTarget.MinimumDistanceKmToEnableReprojection` names this
+  failure ("imperfect approximation of cloud depth as a single front surface,
+  especially visible when flying through the cloud layer"). None fixes the
+  depth: they shorten the history (Unreal's cloud buffer replaces a pixel
+  once a cycle, its docs recommend that mode for flying through clouds;
+  Guerrilla's Nubis does not amortize near clouds over frames). Karis
+  (SIGGRAPH 2014): a min/max box "results in 3x3 box artifacts", like low
+  resolution pixels.
+- **Kept**: the statistics' window seamless (the 4 x 4 samples about the
+  pixel weighted by a radial bump, (1 - (d / 2)^2)^2, nothing from two
+  samples away: a sample enters and leaves at no weight), and in motion each
+  frame at least about a cycle of the block's share (`MOVING_WEIGHTS`: 1/8 at
+  4 x 2, 1/16 at 4 x 4, 1/4 at 2 x 2 and 1 x 1; still, as before).
+
+  | | specks | err | smooth err | fine > 5 levels |
+  |---|---|---|---|---|
+  | tower, before | 12.9 % | 4.03 | 3.6 / 3.9 | 0.82 / 1.48 % |
+  | window alone | 12.9 % | 4.01 | 3.6 / 3.9 | 0.57 / 1.11 % (blocks gone) |
+  | weight 1/8 alone | 7.0 % | 2.87 | 2.5 / 2.7 | 0.47 / 0.92 % (blocks stay) |
+  | **both** | **6.8 %** | **2.80** | 2.4 / 2.6 | **0.33 / 0.71 %** |
+  | veil, before / both | 17.0 / **6.4 %** | 4.93 / **3.11** | | |
+
+  The weight's trade (with the window, the tower): 0.08 fine 0.70 %, 0.15
+  0.60 %, 0.25 1.02 % (the samples' noise past it); the moving frame no finer
+  than the converged one at 1/8 (0.63-0.67 against 0.68-0.73).
+- **The references** (`motion_shots`, before and after: error over the
+  clouds, specks, grain): the tower rising 1.57 / 1.09 % / 0.93 to 1.21 /
+  0.24 % / 1.07; the stratus forward 1.39 / 0.16 % / 1.07 to 0.89 / 0.02 % /
+  1.11; the descent 4.63 / 13.2 % / 1.74 to 3.45 / 6.3 % / 1.86 (extra cloud
+  6.1 to 6.9 %).
+- **Cost** (`cloud_bench --passes`, genera, the clouds' ms, two runs each):
+  +0.05 to +0.13 ms (far 2.09 to 2.15, under the anvil 5.02 to 5.11, a stratus
+  deck from above 3.92 to 4.05): ~12 samples and their distances against 9,
+  the four nearest read once with the window. A product of two axes' bumps
+  instead, all 16: +0.16 to +0.20 ms. Still, the window changes nothing
+  (`cloud_bench --stability 30`, genera, 1600 x 900: spread, p99 and grid
+  the same at every pose, p99 a little lower at three: 3.6 to 3.3, 3.8 to
+  3.4, 2.7 to 2.4).
+- **Tried and dropped**: re-marching a step that would take much of the
+  light (sub-steps of a fifth of it): noisier on the anvil, whose rays spend
+  ~125 of their 136 steps before it; choosing the history's distance at depth
+  steps (the near or far cloud's, by where the history agrees), or the front
+  distance (where the opacity passes 0.2): no change (the history on depth
+  steps is not rejected: this frame's weight 3 %, the clamp still); throwing
+  the history away when its distance disagrees with the samples' by 20 %:
+  specks 12.9 to 10.2 %, left out; four times the steps: 11.3 %, the blocks
+  stay; no clamp: the lag doubles; motion taken as still: worse.
+- **Open**: from inside the convective slab, rays toward an anvil 30 km away
+  spend 89-95 % of their steps in clear air, 5-13 in it (RENDERING_PLAN.md's
+  lead: skipping where the weather says no cloud can be, §31: it clears
+  under a third of those steps there); and the light volume
+  re-baked mid-flight (a descent changes its reach by 3 %) swaps a differently
+  lit volume in at once (BACKLOG.md).
+
+## 31. Skipping clear air by the weather: measured, not built
+
+The lead of §30's open item: a step whose weather (its shift, convective depth
+and anvil spread, read every step with genera) leaves no cloud at its height
+even with every octave, the cell octave and the billows at their most needs no
+noise, and a run of them could be crossed in one step. Probed in the march
+(2026-11-09), `terrain_shots --at`, genera, HIGH, 1600 x 900, the user's
+`--start 29.7159 29.8232`:
+
+| pose | steps in clear air | of them, cleared by the weather |
+|---|---|---|
+| tower (`29.74164 29.82320 2358 0 -8`) | 90 % | 18 % |
+| veil (`31.60402 28.72949 2438 -24.5 6.3`) | 75 % | 23 % |
+| stripes (`22.46569 30.31014 2831 0 -1`) | 92 % | 29 % |
+| grain (`29.54261 29.82320 4912 0 -8.2`) | 99 % | 89 % |
+
+The bound held (no step it cleared found cloud, the far coverage's blend
+aside). The clear air at the low poses is between fair-weather cumulus whose
+weather allows cloud almost everywhere: only the noise tells it clear. The
+ceiling of the time saved, a cleared step taken as eight (unsafe, cloud
+jumped), frame ms, two runs each: tower 8.05 / 8.48 to 9.25 / 8.61, veil
+7.14 / 7.48 to 7.21 / 7.35, stripes 8.24 / 8.08 to 7.95 / 8.21 (no gain: the
+rays then reach and shade farther cloud), grain 6.79 / 7.02 to 5.56 / 5.65
+(-1.3 ms, above the cumulus tops). Not built at the low poses' expense; worth
+it above the convective tops only, where the weather's local top clears most
+of the ray.
+
+## 32. The frame again, per part on the GPU (2026-11-09)
+
+At 2560 x 1440, HIGH, genera (now the default), the march, the user's
+`--start 29.7159 29.8232`, after the light volume, god rays and §28-30.
+
+**How.** PStats with `pstats-gpu-timing 1` (Panda's GPU timer queries) into
+`text-stats`, the demo settled at a pose, then segments of 150 frames each
+with one part off (frame_profile.py's parts, a terrain debug view, or the
+terrain drawn with its depth-only fragment stage); a part's cost is the
+whole GPU frame's drop. Not the passes' own timers: NVIDIA writes a
+timestamp when the commands reach it, so a short pass's time leaks into the
+next collector ("Set State" on the GPU, 0.7-1.4 ms, follows the terrain's
+draws, 0.2 without them). Lessons kept:
+
+- Offscreen and free-running, nothing holds the CPU back: 4.3 ms a frame at
+  `ground` is the CPU alone. Windowed, the same pose takes 6.85 ms, the GPU
+  frame (7.0 under the timers); the GPU is at 100 % throughout at full clock
+  (`nvidia-smi dmon`), and `auto-flip` or a threaded pipeline (`Cull/Draw`,
+  `/Draw`) change nothing: **the frame is GPU-bound**, every GPU millisecond
+  counts.
+- At 1280 x 720 the CPU is the limit (~4.4-5 ms), the GPU waits and the
+  timers count its waits: no use there.
+- The p95 at still poses (16-18 ms against medians of 9-11 in frame_profile)
+  was the demo's HUD: a 6 ms stutter every 16 frames, fixed (CHANGELOG).
+
+**The GPU frame and what each part takes off it, ms:**
+
+| pose | GPU | clouds | terrain | of it: shading / geometry | sea refl. | cloud shadows on the ground | textures |
+|---|---|---|---|---|---|---|---|
+| ground | 7.0 | 2.6 | 4.1 | 2.1 / 2.0 | 1.1 | 0.8 | 1.1 |
+| coast | 7.0 | 3.2 | 3.0 | 2.1 / 0.9 | 0.9 | 0.9 | 0.1 |
+| open sea | 4.9 | 2.4 | 1.9 | (sea shading ~0.9) | 0.45 | 0.45 | - |
+| tower (`29.74164 29.82320 2358 0 -8`) | 9.2 | 6.1 | 2.5 | 1.9 / 0.6 | 0.8 | 0.8 | 0.1 |
+
+- **Clouds**: the march 1.1 (ground, open sea), 2.1 (coast), 4.2-4.6 (tower,
+  veil `31.60402 28.72949 2438 -24.5 6.3`); the two resolves 0.3-0.4; the
+  rest their depth passes, composite and cirrus (0.1-0.4).
+- **Terrain**: its fragment stage (main view and reflection) ~2 ms: the
+  layered textures 1.1 at ground, the clouds' shadow (`cloudShade`: maps and
+  weather per pixel, both families) 0.8-0.9 everywhere, the air
+  (`applyAtmospheres`, `atmoSunlight`) 0.4, the mountains', objects' and
+  rings' shadows 0.4; the near sea's shading ~0.9 at sea. Its geometry, drawn
+  by five passes (the near and far ranges, the sea's reflection, the clouds'
+  two depth passes; ~3.4 M triangles, ~420 draws a frame), 0.6-2.0. Not
+  overdraw (front to back already) nor the resolution (the same at 720p
+  shaded flat); `split_factor` 1.25 instead of 2 takes 30 % of the triangles
+  and 0.9 ms (1.5: 0.3).
+- **Others**: the sky 0.2-0.3, the cirrus 0.1-0.4, god rays 0.2-0.4, the
+  sky-view and aerial tables save 0.4 and 1.2-1.4 against their marches.
+- **The CPU**: 3.5-4.5 ms a frame (the demo's update 1.6-2.5, cull 0.7, draw
+  submission ~2); not the limit at 1440p, but the floor once the GPU is down
+  to ~4.5 ms. A threaded `Cull/Draw` pipeline takes it to 1.9 ms offscreen
+  (the App alone), unmeasured for correctness.
+
+## 33. The clouds' shadow on the ground from one pass
+
+§32's first lever: the terrain's and the sea's `cloudShade` (0.8-0.9 ms at
+every pose). Split by switching its parts off (GPU frame, ms): the march where
+the maps miss costs nothing measurable; the stratus family 0.3-0.45; reading
+the near map first and the far one only where the near does not hold the
+point 0.1-0.15. The lookup itself is the cost, run for every pixel of the 2 x
+2 quads of the ground's small triangles. Now a pass at the depth passes'
+resolution computes it once per texel from the scene the march's depth passes
+drew, and the ground reads it back by distance (shadows.md, "The clouds'
+shadow on the view's ground"). GPU frame, per pixel against the pass (the
+same run, 2560 x 1440, HIGH, genera, `--start 29.7159 29.8232`):
+
+| pose | per pixel | pass | saved |
+|---|---|---|---|
+| ground | 7.45 | 7.01 | 0.44 |
+| coast | 7.56 | 6.85 | 0.70 |
+| open sea | 5.20 | 4.84 | 0.36 |
+| tower (`29.74164 29.82320 2358 0 -8`) | 9.26 | 8.83 | 0.43 |
+
+What remains of the 0.8-0.9: the pass, the four fetches, and the sea's
+reflection, still per pixel. The shade alone (terrain debug view 6, clouds
+hidden, 1600 x 900): the same but at far shadows' edges near the horizon (a
+pixel: half the resolution), over 2 levels on 1.1-2.2 % of pixels.
+
+## 34. The terrain's geometry: a coarse mesh for the passes that need no detail
+
+§32 put the terrain's geometry at 0.6-2.0 ms (its fragment stage emptied in
+the main view and the reflection: the GPU frame against the terrain hidden).
+Hidden from one camera at a time, that empty-shaded run, ms off the GPU frame:
+
+| pose | all of it | the clouds' depth passes | the reflection | main, far | main, near |
+|---|---|---|---|---|---|
+| ground | 2.0 | 0.75 | 0.55 | 0.57 | 0.36 |
+| coast | 0.85 | 0.41 | 0.22 | 0.14 | ~0 |
+| tower | 0.57 | 0.34 | 0.13 | 0.09 | ~0 |
+
+(The depth passes' share includes what the march and the ground shadow pass
+change without the ground's depth.) The depth passes draw as many vertices as
+the view, the reflection about as many again: ~10 M indices a frame at
+`ground`, a third each. Now each chunk has a coarse mesh over its own vertices
+(every other one: a quarter of the triangles; terrain.md, "LOD"), which those
+passes draw instead. Same run, fine mesh everywhere against the coarse one in
+those passes (GPU frame, ms):
+
+| pose | fine everywhere | coarse passes | indices a frame |
+|---|---|---|---|
+| ground | 6.65 | 6.34 | 10.0 M to 5.7 M |
+| coast | 6.34 | 6.27 | 8.3 M to 4.8 M |
+| open sea | 4.55 | 4.55 | 3.7 M to 2.8 M |
+| tower | 8.48 | 8.41 | 6.0 M to 3.9 M |
+
+Less than the vertex counts promised: what those passes cost was only partly
+their vertices. The CPU: +0.03 to 0.11 ms a frame (offscreen, free-running:
+4.10 to 4.13-4.21 at `ground`), a node more per chunk to cull. The look: the
+reflection differs on 0.18 % of pixels at `coast` (two shots of one: 0.08 %),
+along the shore; the clouds against the hills at the tower and veil poses
+within two shots' own noise (1.3 % against 1.7 %, 2.7 % against 3.8 % over 2
+levels). What remains of the terrain's geometry is the view's own (0.4-0.9 ms
+at `ground`), at its level of detail: §32's `split_factor` 1.25 took 0.9 ms
+and 30 % of the triangles.
+
+## 35. The march at the user's tower pose: where its 4.5 ms go
+
+2560 x 1440, HIGH, genera, `--start 29.7159 29.8232`, GPU frame (PStats GPU
+timers, segments of one run): what each switch takes off the march pass.
+
+| switched off | tower (`29.74164 29.82320 2358 0 -8`) | veil (`31.60402 28.72949 2438 -24.5 6.3`) | coast |
+|---|---|---|---|
+| (the march) | 4.6 | 4.2 | 2.1 |
+| lighting (`--cloud-debug 256`) | 1.0 | 0.95 | 0.2 |
+| the sun's depth (1) | 0.85 | 0.8 | 0.2 |
+| billows (32) | 0.75 | 0.5 | 0.07 |
+| two octaves only (4) | 0.4 | - | 0.15 |
+| half the step budget (32) | 1.75 | 1.8 | 0.7 |
+| half the near range's budget only | 1.16 | 1.25 | 0.06 |
+| half the far range's budget only | 0.51 | 0.50 | 0.67 |
+
+(`in_clouds`: 1.05 and 0.54.) From inside the slab the first 2 km cost twice
+the 28 beyond: each range has 64 steps, the near one needs 100-170 at its
+shortest step (~30 m as stretched), and there every cloudy step takes the
+whole detail (billows, the fine octaves, the sun march's two local steps).
+
+**Tried and dropped (no change, exact):** the billows and the fine octaves
+skipped where the column is whole however deep the billows carve (a bound:
+1.47 of their window); the light volume read once, not twice, where a sample
+has no local steps (its sun read and its sky read at the same point). Taking
+work out of the loop's body without taking iterations away buys nothing:
+the time follows the iterations, the cloudy ones dear.
+
+**A trade, not taken:** the near range's budget halved (32): settled stills
+within two shots' own noise (tower 3.2 % against 2.6 % of pixels over 2
+levels, veil 4.9 against 4.4, in_clouds 0.6 against 0.7); in motion
+(`motion_shots`, tower, forward) error 2.36 to 2.41, grain 1.23 to 1.27,
+specks 3.79 to 3.95 %.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

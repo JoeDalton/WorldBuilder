@@ -25,16 +25,24 @@ For a view ray, `atmosphere.glsl` marches `uAtmoSteps` samples (8 at HIGH:
 `AtmosphereSettings.steps`, live through `Atmospheres.set_settings`; the
 stars and the cloud billboards march `vertex_steps`, 4, per vertex) through
 each atmosphere the ray crosses (a ray that meets the ground stops there).
-At each sample:
+With the camera in the air most pixels read the sky-view table and the
+aerial-perspective cells ([the tables](#the-tables)), baked at 16 samples
+whatever the preset; `steps` sets the march that remains: from space, past
+the cells' reach, the sea's reflection rays, and everything with the tables
+off. At each sample:
 
 - the density of both media, for the optical depth back to the camera;
-- the optical depth toward the sun, **analytically**: the Chapman function in
+- the sunlight reaching it, from the **transmittance table**
+  (`atmoTransmittance`, [the tables](#the-tables)), whose values are the
+  optical depth toward the sun taken analytically: the Chapman function in
   its erfcx form, `Ch(x, χ) = √(πx/2) · erfcx(√(x/2) cos χ)`, with a fitted
   `erfcx` within 0.33 %. Against a numerical integral it is within ~1.5 % at
   every altitude and angle; below the horizon it goes through the tangent
-  point (`atmoDepthToward`);
-- the sunlight reaching it, times the density, times the transmittance back
-  to the camera.
+  point (`atmoDepthToward`, still used directly by `atmoSunlight`);
+- that sunlight times the density, times the transmittance back to the
+  camera; and the light scattered more than once, from the
+  **multiple-scattering table** (`atmoMultiple`), times the sample's
+  scattering.
 
 **The planet's shadow** is found analytically along the ray (a cylinder of
 the planet's radius behind it, away from the sun), and each sample counts
@@ -53,14 +61,17 @@ and leaves the sun overhead as it was (within a few tenths of a percent).
 `None` is the physical path. It applies everywhere the sun's depth is
 taken: the sky, the ground, the clouds, and the CPU's `depth_toward`.
 
-**Twilight fill.** A flat share of the sunlight (`multiple_scattering`,
-0.12, uniform `uAtmoExtra.x`) stands in for light scattered more than once:
-it reaches every sample, lit or not, dimmed only by the air back to the
-camera, and fades out as the sun goes from 6° above the sample's horizon to
-17° below. Without it
-the planet's shadow on the air at dusk (the band below the pink "Belt of
-Venus" opposite the sun) was black, with stars showing through; with it, it
-is blue-grey. By day it lifts the sky by a few percent.
+**Multiple scattering.** Light scattered more than once comes from a table
+(Hillaire 2020's approximation, [the tables](#the-tables)): per unit of
+scattering, what reaches a sample from the air all around it and the ground
+below, at its altitude and with the sun at its own elevation, so it is lit
+in the planet's shadow (the band below the pink "Belt of Venus" opposite the
+sun is blue-grey, not black) and fades with the sky above through twilight.
+It is isotropic (no phase function), dimmed by other bodies' eclipses as the
+sky light is, and scaled by `multiple_scattering` (1, physical; uniform
+`uAtmoExtra.x`). It replaced a flat share of the sunlight (0.12, faded by a
+guessed twilight curve): by day the new light is brighter near the horizon
+(the ground's bounce, `ground_albedo` 0.3) and bluer overhead.
 
 The phase functions (Rayleigh, and Cornette-Shanks for Mie) then give the
 light scattered toward the eye. The result for anything at distance `d` along
@@ -116,24 +127,151 @@ The demo uses them each frame for:
 - **an ambient scale** (F9 / F10) applied to the terrain's sky light, the
   clouds' (`PlanetClouds.set_sky_light`), the sea's and Panda3D's.
 
-### Left out: true multiple scattering (the Bruneton option)
+### The tables
 
-Light scattered more than once is only the flat twilight fill above: its
-colour and its fading are guesses. Clouds
-in the planet's shadow follow the same twilight curve for their sky light,
-plus a stand-in for the light of the still-lit air above them
-([the terminator on the clouds](#the-terminator-on-the-clouds)).
+`world_builder.atmosphere.tables` (RENDERING_PLAN.md part B; Hillaire 2020,
+"A Scalable and Production Ready Sky and Atmosphere Rendering Technique",
+rather than Bruneton's 4D tables, which are dearer to build and fixed per
+atmosphere). Per atmosphere, both atmospheres stacked in one RGBA16F texture
+per table, bound by `Atmospheres.bind` (`uAtmoTransmittance`,
+`uAtmoMultiple`; `bind_defaults` gives 1 x 1 stand-ins):
 
-The reference fix is **precomputed atmospheric scattering**, Bruneton &
-Neyret 2008 (revised by Bruneton in 2017): transmittance, multiple-scattering
-and irradiance tables computed once per atmosphere (a 4D scattering table
-packed in a 3D texture, plus two 2D tables), then a handful of texture reads
-per pixel instead of the march. It costs a precomputation step (on the GPU,
-or offline with numpy and saved), a table layout to get right, and new
-shaders; it gives correct twilight, deep-blue upper skies and ground
-irradiance, and makes the per-pixel cost constant. The shader interface here
-(`applyAtmospheres`, `atmosphereAlong`, `atmoSunlight`) is what such tables
-would plug into.
+| Table | Texels | Over | Values |
+|---|---|---|---|
+| Transmittance | 256 x 64 | (mu, r), Bruneton's mapping (texels crowd toward the horizon) | the sunlight through the air, `transmittance_to_sun`'s formula with the `sunset_radius` curvature; 0 into the ground |
+| Multiple scattering | 32 x 32 | (mu_s, altitude), linear | Psi_ms: the second order gathered from 64 directions (40 steps each, the ground's Lambertian bounce with them), the higher orders as `1 / (1 - f_ms)`, f_ms the share the air scatters back |
+
+They depend on the atmosphere's parameters only, fixed once added, so they
+are computed on the CPU from the twin's own formulas when an atmosphere is
+added (`Atmospheres.add`: ~0.5 s for the multiple scattering, cached per
+planet and air) and uploaded: no window needed, and the transmittance table
+is the twin by construction. Filtered as GL does, it holds
+`transmittance_to_sun` within 2 % or 0.005 everywhere, 99 % of rays within
+1.2 % (the worst: grazing rays a few metres over a small planet, whose
+curvature x10.6 makes the horizon's tail steepest).
+
+The CPU reference for a view ray is `tables.inscatter_reference` (a fine
+march of single scattering plus the table's multiple scattering). The
+shader's 16-sample march is within 3 % of it from the ground at noon, a low
+sun and in twilight (1 %), except within ~10° of the sun's disc, where Mie's
+forward peak at 16 midpoint samples is up to 15 % low
+(`tests/test_atmosphere_tables.py`).
+
+Cost: reading the transmittance table instead of the Chapman function is
+even (within run-to-run noise at 2560 x 1440, HIGH); the multiple-scattering
+read (one more fetch a sample) and the ozone (its density a sample) cost
+together ~0.2-0.7 ms a frame at 2560 x 1440, HIGH (coast +0.2, in clouds
++0.7, 20 km +0.2, sunset ~0; means of two alternated runs, +-0.4 noise),
+until the sky-view table and the aerial-perspective cells (below) took the
+march off the sky and the ground wherever the camera is in the air.
+
+**The sky-view table** (B.3, `atmosphere.sky_view`, `shaders/sky_view.glsl`):
+the air between the camera and space for 256 x 128 directions, baked on the
+GPU every frame while the camera is inside an atmosphere, read by the sky
+(`sky.frag`, and so the sea's reflection, which draws the sky) and the stars
+(`stars.vert`) in place of their march; from space they march as before.
+Hillaire's layout: the camera's vertical and the sun's azimuth (so a sun
+turning in azimuth alone turns the table, not its content), texels crowded
+toward the horizon (square roots either side of it, the dip below the
+horizontal from `|cam|^2 - R^2` in float64) and toward the sun (its Mie glow);
+in-scatter in the lower half, transmittance in the upper (the sun's disc and
+the stars are dimmed by it). Each texel is the sky's own `atmosphereAlong` at
+16 samples, so the eclipses, the rings' shadow and the planet's shadow are in
+it. Against that march per pixel: within 4 % or 1 % of the noon zenith (5 %
+within 10° of the sun), the transmittance within 3 %
+(`tests/test_atmosphere_tables.py`). Baked each frame rather than on change:
+it depends on the camera's altitude and the sun's elevation, but also on the
+eclipses, the rings and a second atmosphere, and the bake is cheap
+(performance.md). `Sky.attach_view(window, shadows)` turns it on (World, the
+demo and cloud_bench do); without it the sky marches. Its size is a power of
+two: Panda pads a render target's texture up to one, the content in a
+corner (192 x 108 read back garbled).
+
+**The aerial-perspective cells** (B.4, `atmosphere.aerial`): the air between
+the camera and every cell of a 32 x 32 x 32 grid over the main camera's view,
+baked on the GPU each frame while the camera is inside an atmosphere, read
+by `applyAtmospheres` (`aerialAlong`: the terrain, the near sea, the models)
+in place of their per-pixel march. Each cell is `atmosphereAlong` from the
+camera to its slice's end at 16 samples (eclipses, rings, the planet's shadow
+with it); the slices reach past the horizon or 128 km
+(`aerial.AERIAL_REACH`), the nearer, spaced as the square of their index;
+the reader interpolates linearly between cells and slices (an atlas of 8 x 4
+tiles a half, in-scatter and transmittance; `uAerialToClip` maps a direction
+into the grid). Two things the first version got wrong:
+
+- **The ground.** A cell's march stopped at the planet's ground like any
+  view ray's, so the slice past a point on the ground held the ground's
+  value, and the point, between two slices, was interpolated toward it: up
+  to ~10 % low near the camera. The bake goes on through the ground, the air
+  held at the ground's density (`atmoThroughGround`), and the cells past a
+  surface continue its value smoothly.
+- **From high up.** The air a ray crosses lies in a thin shell at its far end
+  when the ground is far below; slices from the camera over the longest path
+  the air allows (300 km and more) were ~16 km apart there, and the haze of
+  a ground seen from orbit was up to 38 % off. Hence the 128 km reach, and no
+  cells from space.
+
+A point outside the main camera's view (the sea's reflection), past the
+reach, or with the camera in space is marched as before. Against the march
+(`tests/test_atmosphere_tables.py`), in front of the ground: within 6 % or 1 %
+of the noon zenith (8 % for the ground 45 km below), the transmittance within
+3 %. `AtmosphereSettings.aerial` turns it off (the march everywhere).
+
+**Presets** (B.5). Both tables stay on at every preset, LOW included: at
+LOW's 4 samples a pixel the march is cheaper, but the cells still save
+0.2-0.8 ms a frame and the sky-view table up to 0.25 ms at 2560 x 1440
+(performance.md §25), and their 16-sample bakes look better than the
+march's 4. Their sizes are the same at every preset. From space the march stays, with the multiple-scattering
+fetch and the ozone a sample: +0.24 ms on the orbit pose, the cheapest frame
+(3.6 ms), left as it is.
+
+**God rays** (RENDERING_PLAN.md C.5, `AtmosphereSettings.god_rays`: off at
+LOW and MID). The two bakes that march the air per texel, the aerial cells
+and the sky-view table, take the shadows of the clouds and the mountains on
+it: each sample's direct sunlight times `atmoGodRays` (`god_rays.glsl`,
+compiled into those bakes only, `ATMO_GOD_RAYS`). The light scattered more
+than once stays, as the sky's fill does under a cloud.
+
+- **The mountains**: `shadows.glsl`'s `terrainShadow(planetDir, altitude)`,
+  which answers for any point, not only the ground (its altitude against the
+  ceiling the ridges set toward the sun there: the global cube map, the
+  local map's finer one near the camera). At a low sun the valleys' air
+  behind a ridge goes dark and shafts fan from the gaps, across the ground
+  and up the sky.
+- **The clouds**, each family's optical depth toward the sun: the light
+  volume's ([shadows](shadows.md#the-cloud-light-volume)) at the point, or
+  where the sun's ray enters the slab's base for a point under it; the cloud
+  shadow maps' total there beyond the volume; nothing above the slab.
+- **Binding.** A bake registers with `Atmospheres.god_ray_root`;
+  `Atmospheres.bind_god_rays(atmosphere, binders)` hands it, now and later,
+  the planet's inputs (its `ShadowMap.bind`, the clouds'
+  `bind_shadow_inputs`, their maps' and light volume's `bind`). `World` binds
+  the first body with air; the demo its planet.
+- **Resolution.** The shafts are as fine as the bakes: the aerial cells'
+  32 x 32 x 32 (soft vertical banding in a shaft, no blocks at 2560 x 1440)
+  and the sky-view table's 256 x 128. The plan's finer grid is not built.
+- **Cost** (RTX 3070, 2560 x 1440, HIGH; `frame_profile.py`'s `godrays`):
+  0.09-0.17 ms, 0.31 ms with genera (both bakes).
+- **Test**: under a ceiling over every point the cells lose their direct
+  sunlight and keep the fill; off, they are B's whatever is bound
+  (`tests/test_atmosphere_tables.py`). Not tested on the GPU: the clouds'
+  part (the readers it uses are, in `test_cloud_light_volume.py`).
+
+**The ozone layer.** Without it the twilight sky went olive-green near the
+zenith and the horizon (green and blue scattered about equally once the sun's
+light has crossed the whole air). Ozone absorbs orange and green (the
+Chappuis band; Hillaire's Earth values, `AtmosphereParams.ozone`), in a tent
+peaking at 25 km, 15 km half-width (`ozone_altitude`, `ozone_width`): with
+the sun 4° down, the zenith's green over blue goes from ~1 to ~0.6. It only
+absorbs: it is in the view ray's extinction (per sample, `atmoOzone`), in the
+multiple-scattering table's, and on the sunlight's path. The Chapman function
+has no form for a tent, so the ozone's depth toward the sun is marched per
+texel of the transmittance table (512 steps, over the same curved planet
+`sunset_radius` takes) and kept in its alpha (km): `atmoSunlight` multiplies
+it in with the analytic Rayleigh and Mie, the CPU twin reads it back
+(`tables.ozone_toward`). Overhead it takes ~3 % of the sun's green, more at a
+low sun (a slightly pinker sunset light on the ground). `ozone=(0, 0, 0)`
+turns it off.
 
 ## Sky
 

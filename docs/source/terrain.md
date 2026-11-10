@@ -200,6 +200,14 @@ Chunk keys are `(level, face, i, j)`.
   flat chart. Near a seam, the two faces' grids don't align and both
   contribute partial rings.
 - A parent is never replaced before all its children are ready.
+- **Two meshes per chunk.** A chunk's node holds its full grid (64 x 64
+  quads, `triangle_indices()`) and a coarse one over the same vertices: every
+  other one, a quarter of the triangles (`triangle_indices(COARSE_STRIDE)`,
+  the skirt from every other edge vertex). Both index buffers are shared by
+  every chunk. The passes that want the ground's shape but not its detail draw
+  the coarse mesh alone (`mesh.COARSE_PASSES`): the clouds' two depth passes
+  (half the view's resolution) and the sea's reflection (blurred, at a
+  fraction of it). The view's cameras draw the full one (performance.md §34).
 
 ## Other bodies
 
@@ -408,7 +416,7 @@ The ambientCG and Poly Haven naming schemes both work, and a DirectX normal map 
 
 ## Collision
 
-`Terrain.enable_collision(into_mask, name="terrain", owner_tag="owner", max_distance=100_000)` makes the drawn terrain solid to a game's own `CollisionTraverser` (traversing `render`). It adds one into-only `CollisionNode` holding a native `CollisionTerrain` solid (`terrain/native/terrain_collision.cpp`).
+`Terrain.enable_collision(into_mask, name="terrain", owner_tag="owner", max_distance=20_000)` makes the drawn terrain solid to a game's own `CollisionTraverser` (traversing `render`). It adds one into-only `CollisionNode` holding a native `CollisionTerrain` solid (`terrain/native/terrain_collision.cpp`).
 
 The solid answers for every drawn chunk within `max_distance` of the camera. Chunks are registered as the LOD selection shows them and dropped as it hides them.
 

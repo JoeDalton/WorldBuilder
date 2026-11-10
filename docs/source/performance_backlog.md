@@ -25,6 +25,79 @@ are here. The history of what was done is in [performance](performance.md).
   the resolution is: the low flight takes the same time at 1600×900 and
   2560×1440, so it is CPU-bound.
 
+## A game's frame: SpaceFlight's Mission 3 (November 2026)
+
+The heaviest scene a game draws with `World`: the earth-like planet (terrain,
+raymarched clouds with genera and cirrus, the swell sea, every shadow), its
+moon, and some 25 ships tracked with the model shader and casting shadows. It
+was measured with SpaceFlight's `scripts/bench_mission3.py`: the game
+offscreen at 2560×1440 on an RTX 3070, high, each frame waiting for the GPU,
+with PStats (`--pstats`, `text-stats`) for the parts. About 16 ms a frame,
+still. Two runs of the same tree differ by up to 0.8 ms.
+
+### Where it goes
+
+| Part | ms a frame |
+|---|---|
+| GPU: the clouds' far march / near march (camera 900 m under the slab) | 2.5 / 1.5 |
+| GPU: the clouds' depth passes (near, far) and resolves | 0.75 + 0.2 |
+| GPU: the main view (far range 2.1, near 0.65) | 2.8 |
+| GPU: the sea's reflection / the caster map / the game's mirror | 0.55 / 0.15 / 0.1 |
+| CPU: Panda's draw (set state 3.0, of which shader inputs 0.95, textures 0.7) | 5.3 |
+| CPU: Panda's cull (about ten cameras) | 1.5 |
+| CPU: `World.update` (the light at the ships and the camera, mostly) | ~2 |
+| CPU: the game (bots' flight model and thinking, collisions) | ~3 |
+
+The frame is GPU-bound at this size: at 1280×720 it takes ~11 ms. The
+clouds' resolution is their cost: a quarter of the view instead of a half
+takes ~3.5 ms off, 32 steps instead of 64 ~1.4 ms (both lower the clouds:
+left to the presets).
+
+### Done (no visible change)
+
+- **The light at the camera and the tracked nodes every N frames**
+  (`World(light_period=N)`; SpaceFlight uses 3), at once when the sun moves
+  or the tracked nodes change: `lights_at` (the CPU's march through the
+  clouds' shadow) was ~1 ms a frame with a score of nodes.
+- **No new render state per frame for the tracked models**: the model
+  shader's attrib is set on a node only when it differs
+  (`ModelLighting.apply`), and the body's rotation given to the shader only
+  when it turned (`ModelLighting.update`).
+- **The cloud march's per-frame inputs bound once**: its matrices, offsets
+  and flags are PTAs written in place, and the composite switches between
+  its two states made once (`_MarchLayer.update`): no new shader attrib on
+  five cards every frame.
+- **`World.update`** reads the tracked nodes' positions once and keeps the
+  bodies' centres and radii; the caster map compares its casters by key (it
+  scanned a list per caster).
+- **A sun tolerance** for the cloud shadow maps and the terrain's shadow
+  bake (`utils.sun_moved`, 0.05°): a slowly turning sun no longer redraws
+  them every frame.
+- **The terrain's collision range** defaults to 20 km (it was 100 km): each
+  drawn chunk within it is checked every frame (SpaceFlight's planet uses
+  10 km).
+
+Measured and not worth it here: `transform-cache false` (the game's frame
+did not change, within the noise), the game's mirror (under 0.5 ms), the
+ships' shadows (~0.4 ms), the cirrus (no change).
+
+### Remaining
+
+- **The near march when the camera is under the slab** (1.5 ms of GPU at
+  900 m under it): the near range is marched over the whole view, though
+  most rays leave it (2 km) before they reach the slab. Marching only the
+  pixels whose near segment meets the slab (a coarse test of the segment
+  against the slab's shell, before the march) would leave the clouds as
+  they are.
+- **Panda's state changes in the draw** (3 ms): shader inputs and textures
+  set per draw. Fewer distinct states (the ships share their materials'
+  textures; the terrain's chunks share one state) would cut them.
+- **The game's bots' flight model** (SpaceFlight, ~1.5 ms): every ship's
+  physics in Python, one at a time (`Ship.move`: `compute_derivatives`,
+  `set_inputs`, the low-pass filters, ~230k small numpy arrays per 900
+  frames). One vectorised integration of every ship's state per frame (an
+  (n, 10) array) is the lever; see SpaceFlight's docs/source/performance.md.
+
 ## The low flight now (after performance.md §19)
 
 Mean 8.5-8.8 ms, median 8.5, p95 12-12.7, max ~22 (it was 13.5 / 18-19 /

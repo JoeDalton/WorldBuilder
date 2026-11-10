@@ -7,6 +7,218 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/frame_profile.py --at LAT LON ALT HEADING PITCH` (repeatable):
+  more poses, from the demo's printed camera line.
+
+- `World(light_period=N)`: the light at the camera and the tracked nodes
+  (`lights_at`, the CPU's march through the clouds' shadow) reckoned every N
+  frames, at once when the sun moves or the tracked nodes change. 1 (the
+  default) is every frame, as before.
+- `world_builder.atmosphere.tables`: the atmospheres' precomputed tables
+  (Hillaire 2020): the sunlight's transmittance (256 x 64, read by
+  `atmoTransmittance`) and the light scattered more than once (32 x 32,
+  `atmoMultiple`), built on the CPU when an atmosphere is added;
+  `inscatter_reference`, a CPU reference for a view ray.
+- The sky-view table (`world_builder.atmosphere.sky_view.SkyView`,
+  `Sky.attach_view`): the air from the camera to space for every direction,
+  baked each frame inside an atmosphere; the sky, the sea's reflection of it
+  and the stars read it instead of marching (from space they still march).
+- The aerial-perspective cells (`world_builder.atmosphere.aerial`,
+  `Atmospheres.attach_aerial`, `AtmosphereSettings.aerial`): the air in front
+  of the terrain, sea and models from a 32 x 32 x 32 grid over the view baked
+  each frame, instead of a march per pixel (within 128 km, the camera inside
+  an atmosphere; marched elsewhere, as before).
+- `AtmosphereParams.ground_albedo` (0.3): the ground's bounce in the
+  multiple scattering.
+- An ozone layer in the air (`AtmosphereParams.ozone`, `ozone_altitude`,
+  `ozone_width`; Hillaire's Earth values): it absorbs orange and green, so
+  the twilight sky stays blue instead of olive. In the view rays, the
+  multiple scattering and the sunlight (its depth toward the sun marched
+  into the transmittance table's alpha; `transmittance_to_sun` includes it).
+- The clouds' light volume (`world_builder.clouds.light_volume`,
+  `ShadowSettings.cloud_light_size` and `cloud_light_slices`; RENDERING_PLAN.md
+  part C): the clouds' optical depth toward the sun and up for every voxel of
+  their slab around the camera, baked a slice or two a frame when the sun turns
+  or the camera moves far. The raymarch lights its clouds by it in place of the
+  shadow maps' levels, takes the sky's reach from its depth up in place of the
+  height ramp, and far away (`march.LIGHT_LOCAL_FOOTPRINT`) its sunlight from it
+  alone, without the sun march's local steps (`uCloudDebug` 512 back to the maps
+  and the ramp, 1024 the whole chord). Off at LOW, 128 at MID, 256 at HIGH and
+  ULTRA.
+- God rays (`AtmosphereSettings.god_rays`, on at HIGH and ULTRA): the clouds'
+  and the mountains' shadows in the air of the aerial cells and the sky-view
+  table (`god_rays.glsl`; `Atmospheres.god_ray_root`, `bind_god_rays`):
+  shafts under broken cloud and down valleys at a low sun, across the sky too.
+  `frame_profile.py` has a `godrays` column.
+- A frame-rate cap (`world_builder.display`: `DisplaySettings.frame_cap`,
+  off (0) by default, 90 on a 180 Hz display; `FrameCap`, which `World` and the demo make): the
+  `display` section of `WorldSettings`, a choice kept by every preset
+  (`QualitySettings.LEVELLED` False; the schema's sections say `levelled`).
+  Capped at a divisor of the display's refresh, every frame shows for the
+  same time: a compositor held a 6.9 ms frame for one 5.5 ms refresh or two,
+  and turning stuttered (performance.md §27). The demos and benchmarks take
+  `--frame-cap N` (the benchmarks 0 by default).
+- `flight_bench.py --flight turn --at LAT LON ALT HEADING PITCH --sun AZ EL`:
+  turning on the spot; the trace times the light volume, the cloud maps, the
+  atmospheres, the sky and the shadow maps too, and the report has p99.
+
+### Changed
+
+- Each terrain chunk carries a coarse mesh over its own vertices (every
+  other one: `chunkgen.triangle_indices(COARSE_STRIDE)`, a quarter of the
+  triangles), drawn instead of the full one by the clouds' depth passes and
+  the sea's reflection (`mesh.COARSE_PASSES`); `build_chunk_node` returns a
+  node holding the two. Up to 0.3 ms less a frame at 2560 x 1440.
+
+- The clouds' shadow on the terrain and the sea, with the raymarch, from one
+  pass at the depth passes' resolution (`clouds.march._GroundShadow`,
+  `PlanetClouds.bind_ground_shadow`, which `World` and the demo call): the
+  ground reads it back by distance, per pixel where none agrees and in the
+  sea's reflection. 0.36-0.70 ms less a frame at 2560 x 1440. The terrain's
+  debug view 6 shows the clouds' shadow alone.
+
+- The raymarch's resolve in motion: each frame takes at least about a cycle
+  of the block (`march.MOVING_WEIGHTS`: 1/8 at 4 x 2), and the clamp's
+  statistics come from a seamless window (the 4 x 4 samples about a pixel,
+  weighted by a radial bump that vanishes two samples away;
+  `march.stats_window` mirrors it). The 33-frame history had lagged clouds
+  whose look changes fast in flight, and the clamp had cut that lag along its
+  box's jumps between the block's cells: a mosaic of 4 x 2 blocks and grain on
+  shaded cloud. Specks in motion 12.9 to 6.8 % and 17.0 to 6.4 % at the
+  user's poses, +0.05 to 0.13 ms (performance.md §30). `STATS_REACH_MOVING`
+  is gone.
+
+- The raymarch's steps no longer lengthen as a ray's light is spent in a
+  cloud. That made the steps' grid follow what the samples found, and the
+  visits' jitter left its contours: bands across a tower's face, strongest
+  behind a thin veil. 0.36 ms more over a stratus deck at 2560 x 1440
+  (performance.md §29). `march.STEP_DEEPENING` is gone.
+
+- The demo and the scripts sharing its options (`terrain_shots.py`,
+  `motion_shots.py`, `flight_bench.py`, `frame_profile.py`) draw the clouds by
+  genus by default: `--genera` is on, `--no-genera` for the plain field
+  (`cloud_bench.py` keeps its own opt-in `--genera` and pose sets).
+  `motion_shots.py` and `frame_profile.py` now honour `--start` (they
+  ignored it), and `motion_shots.py` takes the sun from the start pose as
+  the demo does.
+
+- The raymarched clouds' multiple-scattering fill and second order fade with
+  the cloud above (`1 / (1 + 0.2 * depth)` of the light volume's column up):
+  a cumulonimbus's base and its anvil's underside are dark grey at noon (0.57
+  of a lit cumulus's brightness, was 0.74); thin cumulus and dusk unchanged.
+  `--cloud-debug 2048` for the old look.
+- The sea decodes its reflection with the inverse of `displayColour`
+  (`displayInverse`), not of the per-channel tonemap: the sky and the clouds
+  keep a bright colour's hue, and decoded per channel a lit cloud's slight
+  warmth came back far redder (red up to 2.9 times its blue for a true 1.11).
+- The light volume's read jitter moves on at each sample along a ray (was one
+  draw a ray): the error over grey clouds in motion 1.55 to 1.41 levels.
+- The raymarched clouds in motion: the composite's depth is no farther than
+  the scene's (the march stops there), the history's distance is held within
+  the fresh samples', and the history survives a jump small against the
+  clouds' distance (`march.HISTORY_JUMP_SHARE`). Flying forward the lagging
+  distance put the clouds behind the ground: 90 % of a stratus cut, its edge
+  sliding against the mountains, half a descent's clouds missing; now 0.3 % and
+  1.6 % (performance.md §28). The clear-sky early-out tests the 3 × 3 samples.
+  In motion the resolve keeps a quarter of the clamp's floor and takes this
+  frame's samples as their smooth mean: a tower is no longer grainy while the
+  camera moves (the grain 1.47 to 1.11 of the still look's), and spreads its
+  samples' statistics wider in motion (`STATS_REACH_MOVING`).
+- The light volume's reads are jittered by a texel and a slice either way
+  (`LIGHT_JITTER`), not half: the dark specks on far towers in motion (2.7 %
+  of the cloud off its still look, 1.07 % now).
+- The light volume is smoothed once baked (`cloud_light_smooth.frag`, a
+  [1, 2, 1] tent along its three axes, one frame a bake, into a third atlas):
+  the remaining specks on far towers' shaded sides gone (0.71 % of the cloud
+  off its still look at the first pose, 1.25 % at the second, the rest on the
+  deck's edges).
+- `CloudSettings.march_refresh_moving` (advanced, off): the raymarch traces
+  twice the pixels while the camera moves (`march.MOVING_BLOCKS`).
+- `scripts/motion_shots.py`: the clouds in motion against converged, flown from
+  a pose with the demo's speed rule at a fixed frame time (`--flicker` too).
+- The frame cap is off by default (`DisplaySettings.frame_cap` 0).
+- The raymarch's steps: each stretch's first step is a random share of its
+  length (per pixel and visit), and the field's fine octaves fade by the step's
+  length from its distance alone, not the step deepened in a cloud: both drew
+  bands up a tower's face seen level (weaker now; the rest is the step budget,
+  RENDERING_PLAN.md "After C").
+- The clouds' two finest fbm octaves are turned off the noise's axes
+  (`noise.OCTAVE_TURNS`, `OCTAVE_3_TURN` / `OCTAVE_4_TURN` in
+  cloud_field.glsl), as the billows already were: the value noise's lattice
+  planes drew stacked slices and interference lines across a tower's face seen
+  at a grazing angle. The clouds' fine detail is a different pattern; their
+  coverage is unchanged (the calibration follows `noise.fbm`).
+- The air's light scattered more than once comes from the multiple-scattering
+  table instead of a flat share of the sunlight: the planet's shadow at dusk
+  is lit by the sky above it, and the low sky by day is brighter (the
+  ground's bounce). `AtmosphereParams.multiple_scattering` is now that
+  light's scale (1, physical), no longer a share (0.12). The per-pixel march
+  reads the sunlight's transmittance from its table (cost even); the
+  multiple-scattering read and the ozone cost ~0.2-0.7 ms at 2560 x 1440,
+  HIGH, until the sky-view and aerial-perspective tables take the march off.
+
+- The raymarch's two scene-depth passes are drawn at half the view's
+  resolution per axis (`march.DEPTH_SCALE` 2): about 0.45-0.55 ms less a
+  frame in SpaceFlight's Mission 3 at 2560 x 1440; static shots identical
+  but for a few pixels.
+- The raymarch's billows are bent by a tileable curl noise
+  (`march.CURL_STRENGTH` 2, `noise.curl_noise_volume`): wisps and small
+  fragments curl into tufts. +0.0-0.15 ms at 2560 x 1440, HIGH; steadiness
+  unchanged.
+- The clouds take a second order of scattering (`CloudOptics.octave_gain`
+  0.3, `octave_attenuation` 0.5, every cloud type): sunlight that scattered
+  once more sees half the sunward depth, its phase half-way to isotropic, as
+  EVE-Redux's multiple-scattering lobe. A share of the first order's light,
+  so lit tops keep their brightness and shadowed sides open up. The far
+  clouds' table (`deckLight`) is RGBA: the second order's column mean in
+  alpha. `octave_gain` 0 is the old look.
+- `CloudSettings.march_resolution` (per axis: 0.25, 0.5, 1.0) is now
+  `march_block` (bx, by): the march traces one pixel of each block a frame.
+  Besides 4 x 4, 2 x 2 and 1 x 1 (a quarter, a half, full) it takes 4 x 2 (one
+  pixel in 8) and 3 x 3 (one in 9), EVE-Redux's default range, in orders where
+  consecutive frames never trace touching pixels (`march.block_order`).
+  **HIGH now traces 4 x 2** (it was 2 x 2, which ULTRA keeps): its clouds cost
+  about 60 % of what they did (0.4-2.9 ms less at 2560 x 1440), a little softer
+  in motion (performance.md §24). Saved settings keep their block
+  (`RENAMED`; "Quarter", "Half" and "Full" are the same choices).
+  `cloud_bench.py --march-block 4x2` (`--march-resolution` still takes 1, 0.5
+  or 0.25).
+- The raymarched clouds march once over both depth ranges of the split
+  cameras (EVE-Redux's single march), not once per range: a ray runs from the
+  near range's near plane to its surface, else the far range's, and stops
+  once opaque, so a cloud near the camera spares the march what lies behind
+  it. Each range keeps its own step budget. Two cards lay the one result over
+  the view (the near range's over the pixels its depth pass drew). Clouds cost
+  0.3-1.8 ms less at 2560 x 1440, HIGH, where the camera is in or near cloud
+  (performance.md §24); the look is unchanged. `cloud_bench.py --passes` has a
+  `-near` column in place of `far` and `near`.
+- Fewer render states made per frame for the tracked models: the model
+  shader's attrib is only set on a node when it differs (`ModelLighting.apply`).
+- The cloud shadow maps and the terrain's shadow bake are not drawn again for
+  a sun that moved less than 0.05° since they were (`utils.SUN_TOLERANCE`,
+  `sun_moved`): a slowly turning sun redraws them every few frames, not
+  every frame.
+- The terrain's collision range (`Terrain.enable_collision(max_distance=)`)
+  defaults to 20 km, not 100 km: every drawn chunk within it is checked each
+  frame.
+- The cloud march's per-frame inputs (its matrices, offsets, history flags)
+  are bound once and written in place, and `ModelLighting.update` gives the
+  shader the body's rotation only when it turned: fewer render states made
+  each frame.
+- `World.update` reads the tracked nodes' positions once, keeps the bodies'
+  centres and radii, and the caster map compares its casters by key (no
+  quadratic list scan).
+
+### Fixed
+
+- A stutter every 16 frames in the demo: its HUD, naming each settings
+  section's preset, built every preset anew, and each settings object
+  resolved its class's type hints (~0.3 ms each, ~6 ms a refresh). The hints
+  are now resolved once per class (`quality._type_hints`); the frame's p95 at
+  a still pose fell from 17.7 to 14.3 ms.
+
 ## [0.3.0] 2026-11-04
 
 ### Added

@@ -82,10 +82,12 @@ from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.half_res import HalfResClouds
+from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.display import FrameCap
 from world_builder.gravity import Gravity
 from world_builder.lights import TrackedLights
 from world_builder.objects import ModelLighting
@@ -284,6 +286,7 @@ class Body:
         :meth:`World._light_ocean`); set on the first update
     :ivar shadow_map: its mountains' shadow (one per body)
     :ivar cloud_maps: its clouds' shadow maps, or None
+    :ivar cloud_light: its clouds' light volumes, or None
     :ivar models: the model shader's inputs near it (``track_light(...,
         shader=True)``)
     """
@@ -296,6 +299,7 @@ class Body:
     ocean_reference: np.ndarray | None = None
     shadow_map: ShadowMap | None = None
     cloud_maps: CloudShadowMaps | None = None
+    cloud_light: CloudLightVolumes | None = None
     models: ModelLighting | None = None
 
     @property
@@ -362,6 +366,7 @@ class World:
         backend: str = "process",
         space_ambient: ArrayLike = (0.025, 0.025, 0.03),
         fields: Sequence[FieldLook] = (),
+        light_period: int = 1,
     ) -> None:
         """
         :param app: the ShowBase: its render, camera, lens and window
@@ -384,6 +389,12 @@ class World:
         :param space_ambient: the sky light where there is no body (open
             space), linear
         :param fields: the asteroid fields and rings
+        :param light_period: frames between two reckonings of the light at
+            the camera and at the tracked nodes (:meth:`lights_at`, mostly
+            the CPU's march through the clouds' shadow, ~1 ms with a score of
+            nodes): the lights keep their last values in between. They are
+            reckoned again at once when the sun moves or the tracked nodes
+            change. 1 = every frame
         :raises ValueError: two bodies (or fields) of one name, clouds
             without air, cirrus not above the clouds or not inside the air,
             or an ocean on a dry planet
@@ -414,7 +425,19 @@ class World:
                 raise ValueError(f"{look.name}: an ocean needs spec.has_ocean")
 
         self.app = app
+        self.light_period = max(1, int(light_period))
+        # Frames since the lights were last reckoned, and what they were
+        # reckoned for (the sun, the tracked nodes)
+        self._light_age = 0
+        self._light_key: tuple | None = None
+        # The bodies' centres and radii (they do not move), for
+        # _nearest_indices
+        self._body_centres: np.ndarray | None = None
+        self._body_radii: np.ndarray | None = None
         self.settings = settings or WorldSettings()
+        #: The frame-rate cap (``WorldSettings.display``, off by default):
+        #: Panda3D's global clock, process-wide.
+        self.frame_cap = FrameCap(self.settings.display)
         self._sun = self._unit(sun.direction)
         self._sun_color = np.asarray(sun.color, dtype=np.float64)
         self._space_ambient = np.asarray(space_ambient, dtype=np.float64)
@@ -507,6 +530,19 @@ class World:
                     )
                     body.cloud_maps.bind(terrain.root)
                     body.clouds.bind_maps(body.cloud_maps.bind)  # their own light
+                    body.cloud_light = CloudLightVolumes(
+                        output,
+                        body.clouds,
+                        self.settings.shadows.cloud_light_size,
+                        per_frame=self.settings.shadows.cloud_light_slices,
+                    )
+                    body.clouds.bind_maps(body.cloud_light.bind)
+                # Their shadow on the view's ground from the march's pass, not
+                # per pixel (the shadow's steps from the world's Shadows).
+                body.clouds.bind_ground_shadow(
+                    terrain.root,
+                    [functools.partial(self.shadows.bind, body=len(self.bodies))],
+                )
             body.models = self._model_lighting(
                 look.exposure, index, terrain, len(self.bodies), light_scale
             )
@@ -594,6 +630,12 @@ class World:
             )
             self.shadows.bind(self.sky.node)
             self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it
+            if getattr(app, "win", None) is not None:
+                self.sky.attach_view(app.win, self.shadows)
+                self.atmospheres.attach_aerial(
+                    app.win, app.cam, app.camLens, self.sky.sun_input, self.shadows
+                )
+                self._bind_god_rays()
             self.sky.set_sun(self._sun)
 
         self.light_scale = float(light_scale)
@@ -831,8 +873,10 @@ class World:
     def _nearest_indices(self, points: np.ndarray) -> np.ndarray:
         """:returns: (n,) each point's nearest body (by sea level), an index
         into :attr:`bodies`"""
-        centres = np.array([body.position for body in self.bodies])
-        radii = np.array([body.radius for body in self.bodies])
+        if self._body_centres is None:
+            self._body_centres = np.array([body.position for body in self.bodies])
+            self._body_radii = np.array([body.radius for body in self.bodies])
+        centres, radii = self._body_centres, self._body_radii
         gaps = np.linalg.norm(points[:, None, :] - centres[None], axis=-1) - radii
         return np.argmin(gaps, axis=1)
 
@@ -934,7 +978,7 @@ class World:
     def set_settings(self, settings: WorldSettings) -> None:
         """Change what every part costs (see :meth:`WorldSettings.apply`)."""
         self.settings = settings
-        parts: list = [self.atmospheres, self.shadows]
+        parts: list = [self.atmospheres, self.shadows, self.frame_cap]
         if self.sky is not None:
             parts.append(self.sky)
         for body in self.bodies:
@@ -949,9 +993,30 @@ class World:
                 )
             if body.cloud_maps is not None:
                 body.cloud_maps.set_size(settings.shadows.cloud_map_size)
+            if body.cloud_light is not None:
+                body.cloud_light.set_tile(settings.shadows.cloud_light_size)
+                body.cloud_light.per_frame = settings.shadows.cloud_light_slices
         if self.casters is not None:
             self.casters.set_size(settings.shadows.caster_size)
         self._sync_half_res()
+
+    def _bind_god_rays(self) -> None:
+        """The god rays (``AtmosphereSettings.god_rays``) of the first body
+        with air: its mountains' and its clouds' shadows on the aerial
+        bake."""
+        for body in self.bodies:
+            if body.atmosphere is None:
+                continue
+            binders = []
+            if body.shadow_map is not None:
+                binders.append(body.shadow_map.bind)
+            if body.clouds is not None:
+                binders.append(body.clouds.bind_shadow_inputs)
+            for part in (body.cloud_maps, body.cloud_light):
+                if part is not None:
+                    binders.append(part.bind)
+            self.atmospheres.bind_god_rays(body.atmosphere, binders)
+            return
 
     def use_split_depth(self, depth: SplitDepthCameras) -> None:
         """The split cameras the game built after the world: the clouds'
@@ -1051,15 +1116,32 @@ class World:
                 if body.cloud_maps is not None:
                     steps = self.shadows.settings.cloud_shadow_steps
                     body.cloud_maps.update(camera, self._sun, steps)
+                if body.cloud_light is not None:
+                    body.cloud_light.update(camera, self._sun)
         for body in self.bodies:
             if body.ocean is not None:
                 body.ocean.update(camera)
-        self._light(camera, np.asarray(origin_world, dtype=np.float64))
-        self._shade_models(camera_render, np.asarray(origin_world, dtype=np.float64))
+        origin = np.asarray(origin_world, dtype=np.float64)
+        tracked = origin + self.tracked.positions()
+        if self._lights_due():
+            self._light(camera, tracked)
+        self._shade_models(camera_render, tracked)
         if self.casters is not None:
             self.casters.update(
-                self.tracked.casting, self._sun, camera_render, self._pixel_angle()
+                self.tracked.casting, self._sun, camera_render, pixel_angle
             )
+
+    def _lights_due(self) -> bool:
+        """:returns: whether the lights are reckoned this frame (see
+        ``light_period``): every ``light_period`` frames, and at once when
+        the sun or the tracked nodes changed"""
+        key = (tuple(self._sun), tuple(node.get_key() for node in self.tracked.nodes))
+        self._light_age += 1
+        if key != self._light_key or self._light_age >= self.light_period:
+            self._light_key = key
+            self._light_age = 0
+            return True
+        return False
 
     def _pixel_angle(self) -> float | None:
         """:returns: the angle one pixel of the camera's output spans
@@ -1071,7 +1153,7 @@ class World:
         height = cam.node().get_display_region(0).get_pixel_height()
         return math.radians(lens.get_fov()[1]) / max(height, 1)
 
-    def _light(self, camera: np.ndarray, origin_world: np.ndarray) -> None:
+    def _light(self, camera: np.ndarray, tracked: np.ndarray) -> None:
         """Panda3D's sun and ambient lights as they are at the camera, each
         tracked node's as they are where it is, and each near sea's look as
         the sea under the camera: one :meth:`lights_at` for them all (each
@@ -1084,7 +1166,6 @@ class World:
         ups = [
             (camera - b.position) / np.linalg.norm(camera - b.position) for b in seas
         ]
-        tracked = origin_world + self.tracked.positions()
         if self.sun_light is None and not seas and not len(tracked):
             return
         points = [camera[None, :], tracked]
@@ -1107,11 +1188,11 @@ class World:
         for i, (body, up) in enumerate(zip(seas, ups), start=1 + count):
             self._light_ocean(body, up, direct[i], ambient[i])
 
-    def _shade_models(
-        self, camera_render: np.ndarray, origin_world: np.ndarray
-    ) -> None:
+    def _shade_models(self, camera_render: np.ndarray, tracked: np.ndarray) -> None:
         """The tracked nodes drawn by the model shader: each given the inputs
-        of the body nearest it (open space's without a body), this frame's."""
+        of the body nearest it (open space's without a body), this frame's.
+
+        :param tracked: (n, 3) the tracked nodes' world positions"""
         shaded = self.tracked.shaded
         if not any(shaded):
             return
@@ -1121,8 +1202,7 @@ class World:
             lighting.update(camera_render)
         nearest = np.zeros(len(shaded), dtype=int)
         if self.bodies:
-            points = origin_world + self.tracked.positions()
-            nearest = self._nearest_indices(points)
+            nearest = self._nearest_indices(tracked)
         for node, shader, index in zip(self.tracked.nodes, shaded, nearest):
             if shader:
                 lightings[index].apply(node)
@@ -1184,6 +1264,8 @@ class World:
                 body.ocean.destroy()
             if body.cloud_maps is not None:
                 body.cloud_maps.destroy()
+            if body.cloud_light is not None:
+                body.cloud_light.destroy()
             if body.models is not None:
                 body.models.destroy()
             if body.shadow_map is not None:

@@ -47,6 +47,29 @@ OCTAVE_OFFSETS = (
     (-0.57, 0.11, 0.83),
     (0.67, -0.29, 0.41),
 )
+# The two finest octaves are turned off the noise's axes (rotations, columns
+# listed, applied to the scaled coords before the offset). Value noise has its
+# lattice's planes in it, flat spots and creases; at their few hundred metres
+# they drew stacked slices and interference lines across a tower's face seen
+# at a grazing angle (the billows are turned for the same reason). MUST match
+# OCTAVE_n_TURN in cloud_field.glsl (a test reads the shader).
+OCTAVE_TURNS = (
+    None,
+    None,
+    ((0.36, 0.48, -0.8), (-0.8, 0.6, 0.0), (0.48, 0.64, 0.6)),
+    ((0.6, 0.0, 0.8), (0.64, 0.6, -0.48), (-0.48, 0.8, 0.36)),
+)
+
+
+def _turned(coords: np.ndarray, index: int) -> np.ndarray:
+    """An octave's coords turned (:data:`OCTAVE_TURNS`): the shader's
+    ``mat3(columns) * coord``."""
+    turn = OCTAVE_TURNS[index] if index < len(OCTAVE_TURNS) else None
+    if turn is None:
+        return coords
+    return np.asarray(coords, dtype=np.float64) @ np.asarray(turn)
+
+
 #: One octave of weight 1 at scale 1, unshifted: :func:`sample_volume` through
 #: the native fbm (``x * 1.0 + 0.0`` is ``x``: the same samples).
 _ONE = (1.0,)
@@ -151,6 +174,13 @@ class CloudOptics:
     backward_gain       brightness with the sun behind you, relative to side-on
     forward_anisotropy  forward lobe's Henyey-Greenstein g: the falloff SHAPE only;
                         the gains are pinned by :func:`phase_weights`
+    octave_gain         a second order of scattering (Wrenninge's octaves, the
+                        multiple-scattering lobe EVE-Redux's clouds add): the
+                        share of the sunlight it takes from the first order
+                        (0 = none; side-lit in full sun keeps its brightness)
+    octave_attenuation  the share of the sunward optical depth the second order
+                        sees (light scattered on its way goes deeper); its
+                        phase is half-way to isotropic
     """
 
     sun_steps: int = 4
@@ -163,6 +193,8 @@ class CloudOptics:
     forward_gain: float = 4.72
     backward_gain: float = 1.52
     forward_anisotropy: float = 0.4
+    octave_gain: float = 0.3
+    octave_attenuation: float = 0.5
 
 
 #: Anisotropy of the phase function's fixed backward lobe.
@@ -306,6 +338,50 @@ def value_noise_volume(
     return ((volume - lo) / max(hi - lo, 1e-9)).astype(np.float32)
 
 
+#: The curl noise's texels per side, and its value-noise lattice per side.
+CURL_SIZE = 32
+CURL_LATTICE = 4
+
+
+def curl_noise_volume(
+    size: int = CURL_SIZE, lattice: int = CURL_LATTICE, seed: int = 11
+) -> np.ndarray:
+    """A tileable 3D curl noise: the curl of three value-noise potentials
+    (periodic central differences), each component scaled by the largest
+    so it spans [-1, 1]. Divergence-free, so the billows it bends swirl
+    without bunching or thinning: their mean and spread hold (EVE-Redux bends
+    its detail noise by one).
+
+    :returns: (size, size, size, 3) float32 (x, y, z), indexed [z, y, x]
+    """
+    potential = [value_noise_volume(size, lattice, seed + k) for k in range(3)]
+
+    def d(field: np.ndarray, axis: int) -> np.ndarray:
+        return 0.5 * (np.roll(field, -1, axis) - np.roll(field, 1, axis))
+
+    # Axes of a volume [z, y, x]: x is 2, y 1, z 0.
+    px, py, pz = potential
+    curl = np.stack(
+        [d(pz, 1) - d(py, 0), d(px, 0) - d(pz, 2), d(py, 2) - d(px, 1)], axis=-1
+    )
+    return (curl / max(float(np.abs(curl).max()), 1e-9)).astype(np.float32)
+
+
+def build_curl_texture(curl: np.ndarray) -> Texture:
+    """A :func:`curl_noise_volume` as a repeat-wrapped, linearly filtered RGB8 3D
+    texture: each component as ``(c + 1) / 2``."""
+    size = curl.shape[0]
+    texture = Texture("cloud_curl")
+    texture.setup_3d_texture(size, size, size, Texture.T_unsigned_byte, Texture.F_rgb)
+    texels = np.round((curl[..., ::-1] + 1.0) * 127.5).clip(0, 255)  # RAM is BGR
+    texture.set_ram_image(np.ascontiguousarray(texels, np.uint8).tobytes())
+    for set_wrap in (texture.set_wrap_u, texture.set_wrap_v, texture.set_wrap_w):
+        set_wrap(Texture.WM_repeat)
+    texture.set_magfilter(SamplerState.FT_linear)
+    texture.set_minfilter(SamplerState.FT_linear)
+    return texture
+
+
 def quantise(volume: np.ndarray) -> np.ndarray:
     """:returns: *volume* rounded to the 8 bits per texel the GPU copy stores, so
     CPU placement and GPU drawing cannot drift apart at the silhouette."""
@@ -393,27 +469,44 @@ def fbm(
     """
     if octave_mean is None:
         octave_mean = float(volume.mean())
+    # zip() below: as many octaves as the shortest of the three
+    count = min(len(spec.octave_scales), len(spec.octave_weights), len(OCTAVE_OFFSETS))
     native = native_library()
     if native is not None and volume.dtype == np.float32:
-        # zip() below: as many octaves as the shortest of the three
-        count = min(
-            len(spec.octave_scales), len(spec.octave_weights), len(OCTAVE_OFFSETS)
-        )
-        return native.volume_fbm(
+        # The unturned octaves in one call, each turned one in its own, on
+        # its turned coords (a rotation commutes with the scale).
+        plain = min(count, 2)
+        total = native.volume_fbm(
             volume,
             coords,
-            spec.octave_scales[:count],
-            spec.octave_weights[:count],
-            OCTAVE_OFFSETS[:count],
-            min(octaves, count),
+            spec.octave_scales[:plain],
+            spec.octave_weights[:plain],
+            OCTAVE_OFFSETS[:plain],
+            min(octaves, plain),
             octave_mean,
         )
+        for index in range(plain, count):
+            weight = spec.octave_weights[index]
+            if index >= octaves:
+                total = total + octave_mean * weight
+                continue
+            total = total + native.volume_fbm(
+                volume,
+                _turned(coords, index),
+                spec.octave_scales[index : index + 1],
+                (weight,),
+                OCTAVE_OFFSETS[index : index + 1],
+                1,
+                octave_mean,
+            )
+        return total
     total = np.zeros(np.shape(coords)[:-1], dtype=np.float64)
     for index, (scale, weight, offset) in enumerate(
         zip(spec.octave_scales, spec.octave_weights, OCTAVE_OFFSETS)
     ):
         if index < octaves:
-            sample = sample_volume(volume, coords * scale + np.asarray(offset))
+            turned = _turned(coords, index) * scale
+            sample = sample_volume(volume, turned + np.asarray(offset))
             total += sample * weight
         else:
             total += octave_mean * weight
@@ -728,7 +821,7 @@ def pack_layer_params(
             (spec.slab[0], spec.slab[1], spec.base_ramp, spec.top_erosion),
             # Two extinctions: the billboard sum's, and the FIELD's for the sun
             # march, a continuous integral that must not be scaled by 1/phi.
-            (extinction, spec.density, 0.0, 0.0),
+            (extinction, spec.density, o.octave_gain, o.octave_attenuation),
             (spec.top_exponent, gain, bias, o.max_optical_depth),
             (o.sun_steps, o.sun_step_length, o.shadow_strength, o.multiple_scattering),
             (o.powder_strength, o.powder_length, forward, backward),
@@ -1470,9 +1563,11 @@ def deck_light_table(
     :param coverages: weather coverages, evenly over [0, 1]
     :param columns: columns averaged, spread over the planet
     :param seed: the sun's azimuth at each column
-    :returns: (coverages, cosines, 2) float32: the mean of ``vis * powder
-        term`` (the sun term's) and of ``vis`` (the multiple-scattering
-        fill's); 1 where there is no cloud
+    :returns: (coverages, cosines, 3) float32: the mean of ``vis * powder
+        term`` (the sun term's), of ``vis`` (the multiple-scattering
+        fill's) and of ``vis ** octave_attenuation * powder term`` (the
+        second order of scattering's, ``CloudOptics.octave_gain``); 1 where
+        there is no cloud
     """
     from world_builder.clouds.weather import coverage_to_shift
 
@@ -1505,7 +1600,7 @@ def deck_light_table(
     if optics.sun_steps > 0:
         march = _sun_march_samples(volume, spec, optics, mid[None], sun, radius)
 
-    table = np.ones((coverages, cosines, 2), dtype=np.float32)
+    table = np.ones((coverages, cosines, 3), dtype=np.float32)
     shifts = coverage_to_shift(
         np.linspace(0.0, 1.0, coverages), np.asarray(shift_table)
     )
@@ -1528,19 +1623,26 @@ def deck_light_table(
         powder_term = 1.0 + optics.powder_strength * (powder - 1.0)
         table[row, :, 0] = ((vis * (alpha * powder_term)).sum(axis=1) + 1.0) / total
         table[row, :, 1] = ((vis * alpha).sum(axis=1) + 1.0) / total
+        octave = vis**optics.octave_attenuation
+        table[row, :, 2] = ((octave * (alpha * powder_term)).sum(axis=1) + 1.0) / total
     return table
 
 
 def build_deck_light_texture(table: np.ndarray) -> Texture:
-    """A :func:`deck_light_table` as an RG32F 2D texture (x: the sun's
-    cosine, y: the coverage), linearly filtered and clamped; with a third
-    channel (the ground's shadow, :func:`ground_shadow_table`), RGB32F."""
+    """The far clouds' averages as a 2D float texture (x: the sun's cosine, y:
+    the coverage), linearly filtered and clamped: RG32F for a
+    :func:`deck_light_table`'s first two channels, RGB32F with the ground's
+    shadow (:func:`ground_shadow_table`) third, RGBA32F with the second order
+    of scattering's mean fourth (sphere's ``_deck_light``)."""
     coverages, cosines, channels = table.shape
     tex = Texture("cloud_deck_light")
-    layout = Texture.F_rgb32 if channels == 3 else Texture.F_rg32
+    layout = {2: Texture.F_rg32, 3: Texture.F_rgb32, 4: Texture.F_rgba32}[channels]
     tex.setup_2d_texture(cosines, coverages, Texture.T_float, layout)
+    # Panda keeps an RGB(A) texture's RAM image as BGR(A)
     if channels == 3:
-        table = table[..., ::-1]  # Panda keeps an RGB texture's RAM image as BGR
+        table = table[..., ::-1]
+    elif channels == 4:
+        table = table[..., [2, 1, 0, 3]]
     tex.set_ram_image(np.ascontiguousarray(table, dtype=np.float32).tobytes())
     tex.set_magfilter(SamplerState.FT_linear)
     tex.set_minfilter(SamplerState.FT_linear)

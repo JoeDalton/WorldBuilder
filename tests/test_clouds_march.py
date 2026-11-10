@@ -17,15 +17,16 @@ import pytest
 
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.march import (
+    BLOCKS,
     MIN_STEP_FEATURE,
     OPAQUE,
     SEGMENT_SAMPLES,
-    STEP_DEEPENING,
     STEP_GROWTH,
     VIEW_EXTINCTION_SCALE,
     CloudMarch,
     bayer_offset,
     block_of,
+    block_order,
     march_ray,
     march_steps,
     march_transmittance,
@@ -33,6 +34,7 @@ from world_builder.clouds.march import (
     slab_segments,
     sphere_interval,
     step_scale,
+    step_scales,
     visit_of,
 )
 from world_builder.clouds.noise import (
@@ -170,6 +172,24 @@ def test_a_ray_that_fits_is_not_stretched():
     assert step_scale(segments, 50.0, 0.01, 10) > 1.0
 
 
+def test_each_depth_range_has_the_budget():
+    """One march over both ranges: a long far stretch does not lengthen the
+    near range's steps (each range fits its own budget, as when each had a
+    march of its own)."""
+    split = 2000.0
+    segments = np.array([[0.0, 150e3], [1.0, -1.0]])
+    near, far = step_scales(segments, 50.0, 0.01, 64, split)
+    assert near == 1.0  # 2 km of 50 m steps fit 64
+    assert far > 1.0
+    # One budget for the whole ray would stretch the near steps too
+    assert step_scale(segments, 50.0, 0.01, 64) > 1.0
+    t, dt = march_steps(segments, 50.0, 0.01, 64, split=split)
+    assert dt[t < split - 50.0] == pytest.approx(50.0)
+    assert np.sum(t < split) <= 64 + 1
+    assert np.sum(t >= split) <= 64 + 8
+    assert len(t) <= 2 * 64 + 8
+
+
 def test_a_short_segment_still_takes_its_fewest_samples():
     # From orbit, the slab is a sliver of a ray thousands of km long
     origin, d = _ray(2 * R, -90.0)
@@ -231,14 +251,33 @@ def test_stopping_at_opaque_and_the_longer_steps_keep_the_integral():
         assert abs((1.0 - mean) - (1.0 - reference)) < 0.06
 
 
-def test_the_shader_shares_the_opaque_cutoff_and_the_step_deepening():
+def test_the_shader_shares_the_opaque_cutoff():
     text = SHADER.read_text()
     assert float(re.search(r"OPAQUE = ([\d.]+);", text).group(1)) == OPAQUE
-    assert (
-        float(re.search(r"STEP_DEEPENING = ([\d.]+);", text).group(1)) == STEP_DEEPENING
-    )
-    assert "STEP_DEEPENING * (1.0 - transmittance)" in text
     assert "transmittance > OPAQUE" in text
+
+
+def test_the_steps_do_not_lengthen_as_the_light_is_spent():
+    # A step's length from the light already spent made the steps' grid
+    # depend on what the samples found: the visits' jitter no longer averaged
+    # its contours away (bands on a tower's face, behind a veil most).
+    text = SHADER.read_text()
+    step = re.search(r"float dt = (.*);", text).group(1)
+    assert "transmittance" not in step
+    # The CPU twin: a medium that thickens past 2 km takes the same steps
+    # up to there as clear air (a step's length is its distance's alone).
+    segments = np.array([[0.0, 6000.0]])
+    taken = {}
+    for name, sigma in (("clear", 0.0), ("veil", 0.0003)):
+        seen = []
+
+        def extinction(t, sigma=sigma, seen=seen):
+            seen.append(t)
+            return sigma if t < 2000.0 else 0.0
+
+        march_ray(segments, 50.0, STEP_GROWTH, 64, extinction)
+        taken[name] = [t for t in seen if t < 2000.0]
+    assert taken["veil"] == taken["clear"]
 
 
 @pytest.mark.parametrize(
@@ -272,14 +311,31 @@ def test_the_billows_share_the_columns_noise_in_one_evaluation():
 
 
 def test_the_resolve_leaves_clear_sky_alone():
-    # The resolve returns early where the march and the history hold no cloud
-    # (before the history's and the neighbourhood's reads)
+    # The resolve returns early where the 3 x 3 samples around and the history
+    # hold no cloud: after the taps (the four nearest alone flipped a cloud's
+    # edge between this and the full resolve as the offset moved), before the
+    # history's reprojection and the clamp.
     text = (SHADER.parent / "cloud_resolve.frag").read_text()
     main = text[text.index("void main") :]
-    clear = main.index("<= 0.0) {")  # the history's alpha, the early-out's test
-    assert "return;" in main[clear : clear + 400]
-    # ... before the 3 x 3's taps for the clamp
-    assert clear < main.index("tapKm")
+    clear = main.index("if (mean.a <= 0.0 && uHistoryValid != 0)")
+    assert "return;" in main[clear : clear + 500]
+    assert main.index("tapKm") < clear < main.index("vec4 sigma")
+
+
+def test_the_history_distance_keeps_within_the_fresh_samples():
+    # Mixed like the colour, the distance lagged the samples: flying forward
+    # it moved the history from too far (small clouds lost in a descent).
+    text = (SHADER.parent / "cloud_resolve.frag").read_text()
+    assert text.count("historyKm.r = clamp(historyKm.r, kmLo, kmHi)") == 2
+
+
+def test_the_composite_is_no_farther_than_the_scene():
+    # The march stops at the scene: the composite's depth is cut there, not
+    # left at the lagging resolved distance (flying forward it put the clouds
+    # behind the ground under them, and the depth test cut them).
+    text = (SHADER.parent / "cloud_composite.frag").read_text()
+    assert "depth = min(depth, scene - 1e-6);" in text
+    assert "uSceneDepthCut != 0" in text
 
 
 @pytest.fixture(scope="module")
@@ -497,35 +553,105 @@ def test_the_jitters_blue_noise_has_every_rank_once_and_no_low_frequencies():
 def test_the_far_detail_fades_more_the_fewer_pixels_a_frame_is_traced():
     from world_builder.clouds.march import step_fade_of
 
-    assert step_fade_of(1) == 0.0
-    assert 0.0 <= step_fade_of(2) < step_fade_of(4) < 0.4
+    assert step_fade_of((1, 1)) == 0.0
+    fades = [step_fade_of(b) for b in ((2, 2), (4, 2), (3, 3), (4, 4))]
+    assert 0.0 <= fades[0] < fades[1] <= fades[2] < fades[3] < 0.4
 
 
 def test_the_resolve_smooths_more_the_fewer_pixels_a_frame_is_traced():
     from world_builder.clouds.march import smoothing_of
 
-    assert smoothing_of(1) == 0.0
-    assert 0.0 < smoothing_of(2) < smoothing_of(4) == 1.0
+    assert smoothing_of((1, 1)) == 0.0
+    smooth = [smoothing_of(b) for b in ((2, 2), (4, 2), (3, 3), (4, 4))]
+    assert 0.0 < smooth[0] < smooth[1] <= smooth[2] < smooth[3] == 1.0
+
+
+def test_in_motion_the_history_spans_about_a_cycle_of_the_block():
+    # ~33 frames of history lagged the view of a cloud whose look changes fast
+    # as the camera flies, and the clamp cut the lag into grain: in motion
+    # each frame takes at least a cycle's share (each pixel's own sample
+    # once), a quarter at most (a 1 x 1 march's samples alone are raw noise).
+    from world_builder.clouds.march import (
+        BLOCKS,
+        MIN_WEIGHT,
+        moving_weight_of,
+        pixels_of,
+    )
+
+    for block in BLOCKS:
+        cycle = min(1.0 / pixels_of(block), 0.25)
+        assert moving_weight_of(block) == pytest.approx(cycle)
+        assert MIN_WEIGHT < moving_weight_of(block) <= 0.25
+    text = (SHADER.parent / "cloud_resolve.frag").read_text()
+    # Mixed by the stillness: still, the full count's uMinWeight as before.
+    assert "mix(max(uMovingWeight, uMinWeight), uMinWeight, uStill)" in text
+
+
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("edge", [3.0, 3.5])
+def test_the_resolve_statistics_run_on_unbroken_across_the_cells(axis, edge):
+    # The 3 x 3 samples about the nearest one jumped at each cell's edge (a
+    # quarter of the weight swapped in motion), and where the clamp cut the
+    # history, its box printed the jumps: a mosaic of the block's cells.
+    # Either side of where the window moves on (a whole sample) or the
+    # nearest sample changed (half), each sample weighs the same.
+    from world_builder.clouds.march import stats_window
+
+    before, after = [1.3, 1.3], [1.3, 1.3]
+    before[axis], after[axis] = edge - 1e-6, edge + 1e-6
+    a, b = stats_window(tuple(before)), stats_window(tuple(after))
+    for tap in set(a) | set(b):
+        assert a.get(tap, 0.0) == pytest.approx(b.get(tap, 0.0), abs=1e-4)
+    # Nothing from beyond the reach; the shader weighs the same.
+    assert all(0.0 < w <= 1.0 for w in a.values())
+    text = (SHADER.parent / "cloud_resolve.frag").read_text()
+    assert "float bump = 1.0 - dot(d, d) / (STATS_REACH * STATS_REACH);" in text
+    assert "for (int y = -1; y <= 2; ++y)" in text
+    assert "for (int x = -1; x <= 2; ++x)" in text
 
 
 # ── Gathering over the frames ────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("resolution,block", [(1.0, 1), (0.5, 2), (0.25, 4)])
-def test_each_frame_traces_one_pixel_of_a_block_and_a_cycle_all(resolution, block):
-    assert block_of(resolution) == block
-    cycle = [bayer_offset(block, frame) for frame in range(block * block)]
-    assert sorted(cycle) == [(x, y) for x in range(block) for y in range(block)]
+def test_the_settings_name_a_block():
+    assert block_of((4, 2)) == (4, 2)
+    assert block_of([3, 3]) == (3, 3)
+    assert block_of("4x2") == (4, 2)
+    # The old march_resolution, per axis
+    assert [block_of(r) for r in (1.0, 0.5, 0.25)] == [(1, 1), (2, 2), (4, 4)]
+    with pytest.raises(ValueError):
+        block_of((5, 2))
+    assert set(BLOCKS) == {(1, 1), (2, 2), (4, 2), (3, 3), (4, 4)}
+    choices = dict(CloudSettings.knobs())["march_block"].choices
+    assert set(choices.values()) == set(BLOCKS)
+
+
+def test_a_saved_march_resolution_keeps_its_block():
+    saved = {"march_resolution": "Quarter"}
+    settings = CloudSettings.from_overrides(CloudSettings(), saved)
+    assert settings.march_block == (4, 4)
+    assert CloudSettings.preset(QualityLevel.LOW).march_block == (4, 4)
+    # HIGH traces an eighth (4 x 2), ULTRA a quarter (2 x 2), MID a sixteenth
+    assert CloudSettings().march_block == (4, 2)
+    assert CloudSettings.preset(QualityLevel.ULTRA).march_block == (2, 2)
+    assert CloudSettings.preset(QualityLevel.MID).march_block == (4, 4)
+
+
+@pytest.mark.parametrize("block", BLOCKS)
+def test_each_frame_traces_one_pixel_of_a_block_and_a_cycle_all(block):
+    bx, by = block
+    cycle = [bayer_offset(block, frame) for frame in range(bx * by)]
+    assert sorted(cycle) == sorted((x, y) for x in range(bx) for y in range(by))
     # And then again, in the same order
-    assert bayer_offset(block, block * block) == cycle[0]
+    assert bayer_offset(block, bx * by) == cycle[0]
 
 
-@pytest.mark.parametrize("block", [1, 2, 4])
+@pytest.mark.parametrize("block", BLOCKS)
 def test_each_visit_moves_the_jitter_on_once(block):
-    """A pixel traced once a cycle of block x block frames runs through the
+    """A pixel traced once a cycle of the block's frames runs through the
     jitter's sequence one step a visit, not one a frame (it would skip
     through it, its visits half a step apart and never stratified)."""
-    cycle = block * block
+    cycle = block[0] * block[1]
     traced = [f for f in range(8 * cycle) if bayer_offset(block, f) == (0, 0)]
     assert [visit_of(block, f) for f in traced] == list(range(8))
     golden = 0.618034
@@ -534,8 +660,13 @@ def test_each_visit_moves_the_jitter_on_once(block):
     assert visit_of(block, 7, gather=False) == 7
 
 
+def _torus(a, b, block):
+    dx, dy = abs(a[0] - b[0]), abs(a[1] - b[1])
+    return math.hypot(min(dx, block[0] - dx), min(dy, block[1] - dy))
+
+
 def test_neighbours_come_far_apart_in_time():
-    cycle = [bayer_offset(4, frame) for frame in range(16)]
+    cycle = [bayer_offset((4, 4), frame) for frame in range(16)]
     for a, b in zip(cycle, cycle[1:]):
         assert max(abs(a[0] - b[0]), abs(a[1] - b[1])) >= 1
         assert a != b
@@ -543,6 +674,160 @@ def test_neighbours_come_far_apart_in_time():
     assert all(
         abs(a[0] - b[0]) + abs(a[1] - b[1]) > 1 for a, b in zip(cycle, cycle[1:])
     )
+
+
+@pytest.mark.parametrize("block", [(4, 2), (3, 3)])
+def test_the_eighth_and_the_ninth_never_trace_touching_pixels_in_turn(block):
+    """Consecutive frames trace pixels at least a diagonal apart, even across
+    the blocks' edges (the blocks tile the view), the cycle's last to its
+    first too; the cycle's first frames spread over the block."""
+    order = block_order(block)
+    n = len(order)
+    assert all(
+        _torus(order[k], order[(k + 1) % n], block) >= math.sqrt(2) - 1e-9
+        for k in range(n)
+    )
+    # A row's worth of the cycle's first frames: no two of them touch side by
+    # side (4 x 2: a checkerboard; 3 x 3: a diagonal)
+    first = order[: block[0]]
+    for i, p in enumerate(first):
+        for q in first[i + 1 :]:
+            assert _torus(p, q, block) > 1.0
+
+
+@pytest.fixture
+def window(showbase):
+    """The session's ShowBase with an offscreen window; skipped where none
+    can be opened."""
+    if showbase.win is None:
+        try:
+            showbase.openMainWindow(type="offscreen", size=(64, 64))
+        except Exception as error:  # no GL context here
+            pytest.skip(f"no offscreen window: {error}")
+    if showbase.win is None:
+        pytest.skip("no offscreen window")
+    return showbase
+
+
+def test_one_march_covers_both_depth_ranges(window, executor):
+    """EVE's single march over the split cameras: a depth pass per range, one
+    march and one resolve pair, a composite card per range; the near range's
+    depth pass and card follow the slab, and the history goes on."""
+    from world_builder.depth import (
+        FAR_CAMERA_MASK,
+        NEAR_CAMERA_MASK,
+        SplitDepthCameras,
+    )
+
+    clouds = _clouds(window, executor, "march")
+    depth = SplitDepthCameras(window, near=1.0)
+    try:
+        clouds.use_split_depth(window, depth)
+        march = clouds.volume
+        (layer,) = march._layers
+        far_card, near_card = layer.composites
+        assert layer.lens is window.camLens and layer.far_lens is depth.far_lens
+        # The depth passes at half the view's resolution (march.DEPTH_SCALE)
+        from world_builder.clouds.march import DEPTH_SCALE, depth_size
+
+        assert DEPTH_SCALE == 2
+        half = depth_size(march._size)
+        for buffer in layer.depth_buffers:
+            assert (buffer.get_x_size(), buffer.get_y_size()) == half
+        march._finish()  # the weather in: the passes run
+        assert layer.active
+        assert not far_card.is_hidden(FAR_CAMERA_MASK)
+        assert far_card.is_hidden(NEAR_CAMERA_MASK)
+        assert not near_card.is_hidden(NEAR_CAMERA_MASK)
+        assert near_card.is_hidden(FAR_CAMERA_MASK)
+        for _ in range(2):
+            depth.update(*SplitDepthCameras.planet_ranges(R, R + 3000.0))
+            march.update((0.0, 0.0, R + 3000.0))
+            window.graphicsEngine.render_frame()
+        assert layer._previous is not None
+        # Each card cuts at its own range's depth pass (its lens's depth space)
+        assert far_card.get_shader_input("uSceneDepth").get_texture() == (
+            layer.far_depth.depth
+        )
+        assert near_card.get_shader_input("uSceneDepth").get_texture() == (
+            layer.near_depth.depth
+        )
+        assert layer.scene_cut[0] == 1
+        # The history survives a jump that is small against the clouds'
+        # distance (a fast descent from orbit), not one that is not.
+        from world_builder.clouds.march import HISTORY_JUMP, HISTORY_JUMP_SHARE
+
+        here = np.array([0.0, 0.0, R + 3000.0])
+        step = 3.0 * HISTORY_JUMP
+        frame = march._frame[0]
+        far_off = step / HISTORY_JUMP_SHARE * 2.0
+        layer.update(window, frame + 1, here + [0.0, 0.0, step], far_off)
+        assert layer._resolve_inputs[(frame + 1) % 2].valid[0] == 1
+        layer.update(window, frame + 2, here + [0.0, 0.0, 2 * step], 1000.0)
+        assert layer._resolve_inputs[(frame + 2) % 2].valid[0] == 0
+        layer.set_near(False)
+        assert layer.near_on[0] == 0
+        assert not layer.near_depth.buffer.is_active()
+        assert near_card.is_hidden()
+        assert layer.far_depth.buffer.is_active() and not far_card.is_hidden()
+        assert layer._previous is not None  # the history goes on
+        layer.set_near(True)
+        assert layer.near_on[0] == 1 and layer.near_depth.buffer.is_active()
+        assert not near_card.is_hidden()
+        layer.set_active(False)
+        assert near_card.is_hidden() and far_card.is_hidden()
+        assert not layer.near_depth.buffer.is_active()
+    finally:
+        clouds.remove()
+        depth.destroy()
+
+
+def test_the_march_traces_more_pixels_while_moving_when_asked(window, executor):
+    """CloudSettings.march_refresh_moving: the moving block (MOVING_BLOCKS)
+    while the camera moves, its buffer room for it, the still block again
+    after MOVING_HOLD still frames; without it, one block."""
+    from dataclasses import replace
+
+    from world_builder.clouds.march import MOVING_BLOCKS, MOVING_HOLD
+    from world_builder.depth import SplitDepthCameras
+
+    clouds = _clouds(window, executor, "march")
+    depth = SplitDepthCameras(window, near=1.0)
+    try:
+        clouds.use_split_depth(window, depth)
+        march = clouds.volume
+        (layer,) = march._layers
+        assert layer.blocks[0] == layer.blocks[1]
+        march.set_settings(replace(march.settings, march_refresh_moving=True))
+        (layer,) = march._layers
+        still = layer.blocks[0]
+        assert layer.blocks[1] == MOVING_BLOCKS[still]
+        here = np.array([0.0, 0.0, R + 3000.0])
+        depth.update(*SplitDepthCameras.planet_ranges(R, R + 3000.0))
+        for k in range(3):
+            layer.update(window, k, here + [0.0, 0.0, 50.0 * k])
+        assert layer.block == MOVING_BLOCKS[still]
+        used = tuple(-(-v // b) for v, b in zip(layer._view, layer.block))
+        assert layer._march_size(layer._view) == used  # room for the moving block
+        for k in range(MOVING_HOLD + 1):
+            layer.update(window, 3 + k, here + [0.0, 0.0, 100.0])
+        assert layer.block == still
+    finally:
+        clouds.remove()
+        depth.destroy()
+
+
+def test_the_march_ends_at_either_range_and_the_cards_split_the_pixels():
+    march = SHADER.read_text()
+    # The near range's surface first, then the far range's, then the far plane.
+    assert re.search(
+        r"nearDepth < 1\.0 \? unproject\(.*\)\s*:\s*farDepth < 1\.0 \? unprojectFar\(",
+        march,
+        re.S,
+    )
+    assert "uNearDepthOn != 0 ? texelFetch(uSceneDepthNear" in march
+    composite = (SHADER.parent / "cloud_composite.frag").read_text()
+    assert "if (nearSurface != (uNearCard != 0))" in composite
 
 
 def test_the_view_ray_takes_its_own_extinction(showbase, executor):
@@ -569,3 +854,75 @@ def test_a_forgotten_half_res_pass_is_not_given_the_next_volume(showbase, execut
         assert half_res.add.call_count == 1
     finally:
         clouds.remove()
+
+
+def test_the_ground_reads_the_clouds_shadow_from_a_pass(window, executor):
+    """The clouds' shadow on the view's ground from the march's pass at the
+    depth passes' resolution (performance.md §33): its readers bind one
+    texture, on while the passes draw; its card takes the clouds' inputs and
+    the binders given, again on a rebuild; per pixel again with billboards."""
+    from panda3d.core import NodePath
+
+    from world_builder.clouds.march import depth_size
+    from world_builder.depth import SplitDepthCameras
+
+    clouds = _clouds(window, executor, "march")
+    depth = SplitDepthCameras(window, near=1.0)
+    ground = NodePath("ground")
+    bound = []
+    try:
+        clouds.bind_ground_shadow(ground, [bound.append])
+        march = clouds.volume
+        assert march._ground_on[0] == 0  # no passes yet: per pixel
+        texture = ground.get_shader_input("uGroundShadow").get_texture()
+        clouds.use_split_depth(window, depth)
+        (layer,) = march._layers
+        assert layer.ground.texture == texture
+        assert bound == [layer.ground.card]
+        buffer = layer.ground.buffer
+        assert (buffer.get_x_size(), buffer.get_y_size()) == depth_size(march._size)
+        card = layer.ground.card
+        assert card.get_shader_input("uSceneDepthNear").get_texture() == (
+            layer.near_depth.depth
+        )
+        assert card.get_shader_input("uSceneDepthFar").get_texture() == (
+            layer.far_depth.depth
+        )
+        march._finish()
+        depth.update(*SplitDepthCameras.planet_ranges(R, R + 3000.0))
+        march.update((0.0, 0.0, R + 3000.0))
+        window.graphicsEngine.render_frame()
+        assert march._ground_on[0] == 1 and buffer.is_active()
+        march.set_visible(False)
+        assert march._ground_on[0] == 0 and not buffer.is_active()
+        march.set_visible(True)
+        # A rebuild (the march's resolution): a new card, the same texture
+        clouds.set_settings(replace(clouds.settings, march_block=(2, 2)))
+        (layer,) = march._layers
+        assert layer.ground.texture == texture and bound[-1] == layer.ground.card
+        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
+        # The defaults' (off): not the march's texture any more
+        assert ground.get_shader_input("uGroundShadow").get_texture() != texture
+    finally:
+        clouds.remove()
+        depth.destroy()
+
+
+def test_the_ground_takes_the_pass_where_its_distance_agrees():
+    """terrain_frag.glsl: the pass's four texels around a pixel, bilinear,
+    those at another distance (a silhouette's far side, a model in front)
+    left out; per pixel where none agrees, and in the sea's reflection
+    (terrain.vert's vMirror, from its clip plane)."""
+    terrain = Path(__file__).parent.parent / "src/world_builder/terrain/shaders"
+    frag = (terrain / "terrain_frag.glsl").read_text()
+    assert "const float GROUND_SHADOW_AGREE = 0.08;" in frag
+    assert "abs(texel.g - km) <= GROUND_SHADOW_AGREE * km" in frag
+    assert (
+        "uGroundShadowOn != 0 && vMirror == 0 && groundShadowAt(length(vRelPos), shade)"
+        in frag
+    )
+    assert "vMirror = int(mirror);" in (terrain / "terrain.vert").read_text()
+    shadow = (SHADER.parent / "ground_shadow.frag").read_text()
+    # The same shadow as the ground's per pixel, at the scene the march stops at
+    assert "planetCloudShadow(planet, normalize(sunDir), uCloudShadowSteps," in shadow
+    assert "fragColor = vec4(1.0, -1.0, 0.0, 1.0);  // the sky" in shadow

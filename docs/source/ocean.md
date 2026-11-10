@@ -151,8 +151,16 @@ and no look gets the far look only.
   region (`uReflUVScale`, measured once the buffer is realized).
 - **Decoding.** The buffer holds display colours (the sky and terrain
   tonemap themselves), so the sample is decoded back to linear light
-  (`aces_inverse`) before the blend. A full mirror then shows exactly the
-  sky's own colour.
+  (`displayInverse`) before the blend. A full mirror then shows exactly the
+  sky's own colour. The sky and the clouds are written by `displayColour`,
+  which keeps a bright colour's hue (its channels scaled by the brightest);
+  decoded per channel (`aces_inverse`, the terrain's tonemap's inverse), a
+  lit cloud's slight warmth came back far redder near white, where that
+  curve is steep (red 1.3 to 2.9 times its blue for a true 1.11). The
+  inverse decodes the brightest channel per channel (grey maps to grey) and
+  the hue from the display's ratios, mixes as the encoder does, then corrects
+  once by the colour encoded again: a few percent at worst
+  (`ocean.display_inverse` on the CPU).
 - **Its limit.** The mirror is a plane: far reflections drift by the planet's
   curvature (about 80 m at 10 km on a 600 km planet), where the normal is
   already flattened toward a mirror. A sphere-correct reflection would be

@@ -35,7 +35,6 @@ from panda3d.core import ClockObject, TextNode, Vec3
 sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import describe_window, window_config  # noqa: E402
-
 from world_builder.asteroids.spec import PRESETS  # noqa: E402
 from world_builder.depth import SplitDepthCameras  # noqa: E402
 from world_builder.quality import QualityLevel  # noqa: E402

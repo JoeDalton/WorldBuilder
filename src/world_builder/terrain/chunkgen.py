@@ -100,26 +100,40 @@ def skirt_ring() -> np.ndarray:
     return np.array([r * VERTS + c for r, c in south + east + north + west])
 
 
+#: The coarse mesh's stride (:func:`triangle_indices`): the cloud passes' depth
+#: and the sea's reflection draw a quarter of the ground's triangles
+#: (performance.md §34).
+COARSE_STRIDE = 2
+
+
 @functools.cache
-def triangle_indices() -> np.ndarray:
+def triangle_indices(stride: int = 1) -> np.ndarray:
     """The index buffer every chunk shares: grid, then skirt.
 
     Each quad is cut along its (i, j)-(i+1, j+1) diagonal; :mod:`query`
     interpolates on the same triangles.
 
+    :param stride: grid steps per quad: 1 all the vertices; 2 every other
+        one, a quarter of the triangles over the same vertices (the passes
+        that want the ground's shape but not its detail: :data:`COARSE_STRIDE`),
+        its skirt hanging from every other edge vertex
     :returns: uint16 indices, counter-clockwise seen from outside the planet
     """
-    r, c = np.meshgrid(np.arange(QUADS), np.arange(QUADS), indexing="ij")
+    if QUADS % stride:
+        raise ValueError(f"stride {stride} does not divide {QUADS} quads")
+    r, c = np.meshgrid(
+        np.arange(0, QUADS, stride), np.arange(0, QUADS, stride), indexing="ij"
+    )
     v00 = (r * VERTS + c).ravel()
-    v01 = v00 + 1  # +u
-    v10 = v00 + VERTS  # +v
-    v11 = v10 + 1
+    v01 = v00 + stride  # +u
+    v10 = v00 + stride * VERTS  # +v
+    v11 = v10 + stride
     grid = np.stack([v00, v01, v11, v00, v11, v10], axis=1).ravel()
 
-    ring = skirt_ring()
+    ring = skirt_ring()[::stride]
     top_a = ring
     top_b = np.roll(ring, -1)
-    bottom_a = VERTS * VERTS + np.arange(len(ring))
+    bottom_a = VERTS * VERTS + np.arange(0, 4 * QUADS, stride)
     bottom_b = np.roll(bottom_a, -1)
     # The ring runs counter-clockwise seen from outside, so outward faces wind
     # (top_a, bottom_a, bottom_b), (top_a, bottom_b, top_b). A crack can be

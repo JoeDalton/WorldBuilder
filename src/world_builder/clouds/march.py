@@ -9,7 +9,7 @@ shaded and blended, so their cost grows with the cloud's volume on screen
 own ray instead (``shaders/cloud_march.frag``):
 
 * through the **slab** between two spheres, less the planet: up to two
-  segments, from the range's near plane to the scene's depth, so the ground
+  segments, from the near plane to the scene's depth, so the ground
   and a game's models inside a cloud are hidden by just the cloud in front
   of them, and the camera inside a cloud sees it all around;
 * in **steps** :data:`MIN_STEP_FEATURE` of the finest feature long near the
@@ -29,16 +29,21 @@ own ray instead (``shaders/cloud_march.frag``):
   expected coverage as a homogeneous slab, lit by the deck's averages: the
   march reaches orbit with no deck.
 
-**The passes.** One per depth range of
-:class:`~world_builder.depth.SplitDepthCameras`, each at a fraction of the
-view's resolution (``CloudSettings.march_resolution``): a camera sharing the
-range's lens draws the scene's depth into a texture (everything but the
-clouds and the sky, the terrain through its depth-only stage, as
-:mod:`half_res` does); a fullscreen card marches into a second buffer; a
-card lays that over the range's own pass in the clouds' slot. The far
-range's layer goes on in the far pass, the near range's in the near pass:
-along a ray the near march's cloud lies in front of the far one's, which is
-what premultiplied "over" composes.
+**The passes.** One march over both depth ranges of
+:class:`~world_builder.depth.SplitDepthCameras` (as EVE-Redux marches over
+KSP's two cameras' depths), at a fraction of the view's resolution
+(``CloudSettings.march_block``): a camera per range, sharing its lens,
+draws the scene's depth into a texture (everything but the clouds and the
+sky, the terrain through its depth-only stage, as :mod:`half_res` does); a
+fullscreen card marches from the near range's near plane to the near
+range's surface where there is one, else the far range's, into a second
+buffer, and stops once opaque (a near cloud spares the march what lies
+behind it). The result is gathered at full resolution, then laid over the
+view by two cards: the near range's over the pixels its depth pass drew
+(after the near camera's own surfaces, which the clouds may be in front
+of), the far range's over the rest in the far pass's clouds' slot (after
+the sky, before the cirrus). The near range's depth pass and card run only
+while the slab reaches into it.
 
 The sea's reflection sees the deck alone (:func:`sphere.deck_mesh`, the
 billboards' far field), the far layer packed for it.
@@ -75,11 +80,14 @@ from panda3d.core import (
     OrthographicLens,
     PTA_float,
     PTA_int,
+    PTA_LMatrix4f,
+    PTA_LVecBase2i,
     PTA_LVecBase3f,
     PTA_LVecBase4f,
     RenderState,
     SamplerState,
     Shader,
+    ShaderAttrib,
     Texture,
     TransparencyAttrib,
     Vec3,
@@ -102,8 +110,10 @@ from world_builder.clouds.noise import (
     NOISE_FEATURE,
     NOISE_SIZE,
     DensityField,
+    build_curl_texture,
     build_deck_light_texture,
     build_noise_texture,
+    curl_noise_volume,
     pack_layer_params,
 )
 from world_builder.clouds.shadow_defaults import (
@@ -163,9 +173,6 @@ SEGMENT_SAMPLES = 8
 #: The march stops at this transmittance and counts the cloud opaque
 #: (cloud_march.frag's OPAQUE).
 OPAQUE = 0.04
-#: A step lengthens by this share of the transmittance already lost
-#: (cloud_march.frag's STEP_DEEPENING).
-STEP_DEEPENING = 1.5
 #: The view ray's extinction over the field's (the sun march keeps the
 #: field's own). The billboards' look: each of their quads carries its
 #: sample's density over a whole chord, which keeps a cloud's edge crisp;
@@ -178,6 +185,23 @@ DETAIL_SCALE = 24.0
 #: ...moving the threshold by up to this share of its window about its mean
 #: (the coverage holds). 1 breaks the edges into rags.
 DETAIL_EROSION = 0.5
+#: The billows bent by a curl noise (EVE-Redux bends its detail noise so):
+#: how far, in the billows' noise units (a billow is NOISE_FEATURE of them,
+#: about 4), and the curl's frequency over the billows' (its features some
+#: two billows across). 0 = straight billows.
+CURL_STRENGTH = 2.0
+CURL_FREQUENCY = 2.0
+#: The view's pixels per pixel of the depth passes, per axis: 2 draws the
+#: scene's depth for the march at half resolution (the march reads it at
+#: the pixels it traces, the composites to tell the near range's pixels).
+DEPTH_SCALE = 2
+
+
+def depth_size(view: tuple[int, int], scale: int = DEPTH_SCALE) -> tuple[int, int]:
+    """:returns: the depth passes' size for a view of *view* pixels"""
+    return tuple(max(1, math.ceil(v / scale)) for v in view)
+
+
 #: How far along a ray the weather is read once, metres (cloud_march.frag's
 #: ``uWeatherStretch``): the fair-weather shift varies over kilometres; with
 #: genera, a tower's depth over tens of metres, so every sample reads it.
@@ -293,30 +317,54 @@ def step_scale(
     return max(1.0, needed / budget)
 
 
+def step_scales(
+    segments: ArrayLike, min_step: float, growth: float, budget: int, split: float
+) -> tuple[float, float]:
+    """:func:`step_scale` for the near range (to *split* metres) and the far
+    range apart: each has the budget (``cloud_march.frag``'s ``stretch``).
+
+    :returns: (near, far), 1 when their steps fit
+    """
+    near = sum(
+        steps_over((t0, min(t1, split)), min_step, growth) for t0, t1 in segments
+    )
+    far = sum(steps_over((max(t0, split), t1), min_step, growth) for t0, t1 in segments)
+    return max(1.0, near / budget), max(1.0, far / budget)
+
+
+def _step_cap(budget: int, split: float) -> int:
+    """The most samples a ray takes: the budget per range, and a margin."""
+    return (budget if math.isinf(split) else 2 * budget) + 8
+
+
 def march_steps(
     segments: ArrayLike,
     min_step: float,
     growth: float,
     budget: int,
     jitter: float = 0.5,
+    split: float = math.inf,
 ) -> tuple[np.ndarray, np.ndarray]:
     """The samples the march takes along a ray, as the shader takes them
     (before it stops at an opaque cloud).
 
     :param segments: (n, 2) the ray's stretches in the slab
     :param jitter: where in its step each sample lies, [0, 1)
+    :param split: where the near range ends, metres: each range has the
+        budget (:func:`step_scales`)
     :returns: (t, dt): each sample's distance and the length it stands for
     """
-    k = step_scale(segments, min_step, growth, budget)
-    min_step, growth = min_step * k, growth * k
+    scales = step_scales(segments, min_step, growth, budget, split)
+    cap = _step_cap(budget, split)
     ts, dts = [], []
     for t0, t1 in segments:
         if t1 <= t0:
             continue
         least = (t1 - t0) / SEGMENT_SAMPLES
         a = t0
-        while a < t1 and len(ts) < budget + 8:
-            dt = min(max(min_step, a * growth), least, t1 - a)
+        while a < t1 and len(ts) < cap:
+            k = scales[0] if a < split else scales[1]
+            dt = min(k * max(min_step, a * growth), least, t1 - a)
             ts.append(a + dt * jitter)
             dts.append(dt)
             a += dt
@@ -346,30 +394,28 @@ def march_ray(
     budget: int,
     extinction_at: Callable[[float], float],
     jitter: float = 0.5,
+    split: float = math.inf,
 ) -> tuple[float, int]:
-    """One ray's march as the shader runs it: the steps of :func:`march_steps`
-    that lengthen as the light is spent (:data:`STEP_DEEPENING`), stopping at
-    :data:`OPAQUE`.
+    """One ray's march as the shader runs it: the steps of :func:`march_steps`,
+    whatever the light already spent (a step lengthened by it made the steps'
+    grid depend on the samples, and the visits' jitter no longer averaged its
+    contours away: bands on a tower's face), stopping at :data:`OPAQUE`.
 
     :param extinction_at: the optical depth per metre at a distance along the ray
     :returns: the transmittance left (0 once the cloud is counted opaque), and
         the samples taken
     """
-    k = step_scale(segments, min_step, growth, budget)
-    min_step, growth = min_step * k, growth * k
+    scales = step_scales(segments, min_step, growth, budget, split)
+    cap = _step_cap(budget, split)
     transmittance, samples = 1.0, 0
     for t0, t1 in segments:
         if t1 <= t0:
             continue
         least = (t1 - t0) / SEGMENT_SAMPLES
         a = t0
-        while a < t1 and samples < budget + 8 and transmittance > OPAQUE:
-            dt = min(
-                max(min_step, a * growth)
-                * (1.0 + STEP_DEEPENING * (1.0 - transmittance)),
-                least,
-                t1 - a,
-            )
+        while a < t1 and samples < cap and transmittance > OPAQUE:
+            k = scales[0] if a < split else scales[1]
+            dt = min(k * max(min_step, a * growth), least, t1 - a)
             samples += 1
             alpha = 1.0 - 2.0 ** (-extinction_at(a + dt * jitter) * dt)
             transmittance *= 1.0 - alpha
@@ -387,25 +433,50 @@ def min_step(field: DensityField) -> float:
 # ── Drawing ────────────────────────────────────────────────────────────────
 
 
-#: Which pixel of each block the march traces, frame after frame, by block
-#: size: Bayer orders, so neighbours come far apart in time.
-_BAYER = {
-    1: ((0, 0),),
-    2: ((0, 0), (1, 1), (1, 0), (0, 1)),
-    4: tuple(
+#: Which pixel (x, y) of each block the march traces, frame after frame, by
+#: block (across, up): consecutive frames never trace touching pixels, even
+#: across the blocks' edges, and each cycle's first frames spread over the
+#: block. 4 x 4: a Bayer order (EVE-Redux's ``samplingSequence16`` read as
+#: ranks). 4 x 2 and 3 x 3 (the eighth and the ninth, EVE's default range):
+#: found by an exhaustive search over the orders (consecutive pixels at least
+#: a diagonal apart on the torus, then the spread of every prefix), as EVE's own
+#: 4 x 2 and 3 x 3 sequences trace touching pixels on consecutive frames.
+_ORDERS = {
+    (1, 1): ((0, 0),),
+    (2, 2): ((0, 0), (1, 1), (1, 0), (0, 1)),
+    (4, 2): ((0, 0), (2, 0), (1, 1), (3, 1), (1, 0), (3, 0), (0, 1), (2, 1)),
+    (3, 3): (
+        (0, 0),
+        (1, 1),
+        (2, 2),
+        (1, 0),
+        (0, 1),
+        (2, 0),
+        (0, 2),
+        (2, 1),
+        (1, 2),
+    ),
+    (4, 4): tuple(
         divmod(int(v), 4)[::-1]
         for v in np.argsort(
             [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5], kind="stable"
         )
     ),
 }
+#: The march's block shapes (``CloudSettings.march_block``'s choices).
+BLOCKS = tuple(_ORDERS)
 #: This frame's least share in a pixel that has gathered its full count of
 #: samples (cloud_resolve.frag): it averages the steps' jitter over about
 #: this many of its visits' inverse.
 MIN_WEIGHT = 0.03
 #: The camera may move this far between frames and keep its history, metres
-#: (more is a jump: a new pose, a teleport).
+#: (more is a jump: a new pose, a teleport), or :data:`HISTORY_JUMP_SHARE` of
+#: its distance to the clouds' slab if more: from orbit a fast descent moves
+#: kilometres a frame, a small change to clouds hundreds of kilometres away,
+#: and with its history thrown away every frame the clouds were this frame's
+#: few samples, smoothed (the small ones faded out).
 HISTORY_JUMP = 2000.0
+HISTORY_JUMP_SHARE = 0.02
 #: The camera's motion (metres, plus :data:`TURN_METRES` per unit of its
 #: rotation matrix's change) that takes the clamp's noise floor to nothing
 #: (cloud_resolve.frag's uStill): a floor holds a still view steady, but in
@@ -486,6 +557,11 @@ def blue_noise(size: int = BLUE_NOISE_SIZE, sigma: float = 1.9) -> np.ndarray:
 
 
 @functools.cache
+def _curl_texture() -> Texture:
+    return build_curl_texture(curl_noise_volume())
+
+
+@functools.cache
 def _blue_noise_texture() -> Texture:
     texture = Texture("march_blue_noise")
     texture.setup_2d_texture(
@@ -504,12 +580,58 @@ def _blue_noise_texture() -> Texture:
 #: How far a pixel on fresh samples takes their smooth mean instead of their
 #: bilinear mix (cloud_resolve.frag's uSmooth), by the march's block: all of it
 #: at a sixteenth of the pixels a frame, half at a quarter, none at all of them.
-SMOOTHING = {1: 0.0, 2: 0.5, 4: 1.0}
+SMOOTHING = {(1, 1): 0.0, (2, 2): 0.5, (4, 2): 0.75, (3, 3): 0.75, (4, 4): 1.0}
 
 
-def smoothing_of(block: int) -> float:
-    """:returns: ``uSmooth`` for a march block of *block* pixels a side"""
-    return SMOOTHING.get(block, 1.0 if block > 4 else 0.0)
+def smoothing_of(block: tuple[int, int]) -> float:
+    """:returns: ``uSmooth`` for a march block (across, up)"""
+    return SMOOTHING[block]
+
+
+#: This frame's least share in a pixel while the camera moves
+#: (cloud_resolve.frag's uMovingWeight, by its uStill), by the block the
+#: resolve gathers: about one cycle of the block's pixels (each pixel's own
+#: sample once), a quarter at most (a 1 x 1 march's samples alone would be raw
+#: noise). With :data:`MIN_WEIGHT` alone, ~33 frames of history lagged the
+#: view of a cloud whose look changes fast as the camera flies (a lumpy
+#: anvil's base seen at a grazing angle from inside the slab), and the clamp
+#: cut the lag wherever its box of noisy samples happened to be narrow: grain
+#: on the cloud's shaded side in motion (performance.md §30; Unreal's clouds
+#: refresh each pixel once a cycle for flying through them, their docs).
+MOVING_WEIGHTS = {
+    (1, 1): 0.25,
+    (2, 2): 0.25,
+    (4, 2): 0.125,
+    (3, 3): 1.0 / 9.0,
+    (4, 4): 0.0625,
+}
+
+
+def moving_weight_of(block: tuple[int, int]) -> float:
+    """:returns: ``uMovingWeight`` for the block a resolve gathers (across, up)"""
+    return MOVING_WEIGHTS[block]
+
+
+#: The reach of the resolve's statistics, samples (cloud_resolve.frag's
+#: STATS_REACH): each sample's weight a bump of its distance to the pixel,
+#: falling to nothing this far.
+STATS_REACH = 2.0
+
+
+def stats_window(f: tuple[float, float]) -> dict[tuple[int, int], float]:
+    """cloud_resolve.frag's statistics window, mirrored: each sample's
+    weight (by its place in the march's grid) for a pixel at *f* (the
+    pixel's place in that grid): the 4 x 4 samples from ``floor(f) - 1``,
+    each ``(1 - (d / STATS_REACH)^2)^2`` of its distance d, none beyond."""
+    base = (math.floor(f[0]), math.floor(f[1]))
+    weights = {}
+    for y in range(-1, 3):
+        for x in range(-1, 3):
+            tap = (base[0] + x, base[1] + y)
+            bump = 1.0 - ((tap[0] - f[0]) ** 2 + (tap[1] - f[1]) ** 2) / STATS_REACH**2
+            if bump > 0.0:
+                weights[tap] = bump * bump
+    return weights
 
 
 #: What share of a step's length fades the field's finer features to their means
@@ -517,32 +639,75 @@ def smoothing_of(block: int) -> float:
 #: frame has, the more shimmer, the more it must fade. It is the clouds' detail
 #: at a distance against their steadiness: Phase 4.1 had 0.4 everywhere, which
 #: made far clouds soft lumps at every preset.
-STEP_FADES = {1: 0.0, 2: 0.1, 4: 0.25}
+STEP_FADES = {(1, 1): 0.0, (2, 2): 0.1, (4, 2): 0.15, (3, 3): 0.15, (4, 4): 0.25}
 
 
-def step_fade_of(block: int) -> float:
-    """:returns: ``uStepFade`` for a march block of *block* pixels a side"""
-    return STEP_FADES.get(block, 0.25 if block > 4 else 0.0)
+#: Past this view footprint (a pixel's share of the clouds' feature, as the
+#: march's shading measures it) a sample takes its sunlight from the light
+#: volume alone, without the sun march's two local steps (cloud_march.frag's
+#: uLightLocalFootprint; RENDERING_PLAN.md C.3's alternate path).
+LIGHT_LOCAL_FOOTPRINT = 0.04
 
 
-def block_of(resolution: float) -> int:
-    """:returns: the view's pixels per march pixel, per axis, for
-    ``CloudSettings.march_resolution``"""
-    return max(1, round(1.0 / resolution))
+#: The block the march takes while the camera moves, by the still one's: a
+#: pixel traced twice as often (its history's grain in motion is the clamp
+#: on fewer, noisier samples), back to the still block once the view has
+#: been still :data:`MOVING_HOLD` frames. Costs the march's share per traced
+#: pixel while moving (performance.md §28).
+MOVING_BLOCKS = {(4, 4): (4, 2), (4, 2): (2, 2), (3, 3): (2, 2)}
+MOVING_HOLD = 8
+#: The camera's motion (cloud_resolve.frag's uStill below this) that counts as
+#: moving for :data:`MOVING_BLOCKS`.
+MOVING_STILL = 0.5
 
 
-def visit_of(block: int, frame: int, gather: bool = True) -> int:
+def step_fade_of(block: tuple[int, int]) -> float:
+    """:returns: ``uStepFade`` for a march block (across, up)"""
+    return STEP_FADES[block]
+
+
+#: The old ``CloudSettings.march_resolution`` (per axis) as a block.
+_RESOLUTIONS = {1.0: (1, 1), 0.5: (2, 2), 0.25: (4, 4)}
+
+
+def block_of(value: Any) -> tuple[int, int]:
+    """:returns: the march's block (across, up) for ``CloudSettings.march_block``
+    (a block), or an old ``march_resolution`` (0.25, 0.5 or 1.0) or "BXxBY"
+    (the bench's command line)
+
+    :raises ValueError: not a block of :data:`BLOCKS`
+    """
+    if isinstance(value, str):
+        value = tuple(int(v) for v in value.lower().split("x"))
+    elif isinstance(value, (int, float)):
+        value = _RESOLUTIONS.get(float(value), value)
+    block = tuple(int(v) for v in value) if isinstance(value, (tuple, list)) else None
+    if block not in _ORDERS:
+        raise ValueError(f"not a march block: {value!r} (one of {list(BLOCKS)})")
+    return block
+
+
+def pixels_of(block: tuple[int, int]) -> int:
+    """:returns: the view's pixels per march pixel (a block's area)"""
+    return block[0] * block[1]
+
+
+def visit_of(block: tuple[int, int], frame: int, gather: bool = True) -> int:
     """:returns: how many times the pixel traced on *frame* has been traced
-    before (once a cycle of *block* x *block* frames when gathering, every
+    before (once a cycle of the block's pixels' frames when gathering, every
     frame otherwise): what moves its steps' jitter on, so that each pixel's
     visits, not the frames, run through the jitter's sequence"""
-    return frame // (block * block) if gather else frame
+    return frame // pixels_of(block) if gather else frame
 
 
-def bayer_offset(block: int, frame: int) -> tuple[int, int]:
-    """:returns: the pixel of each *block* x *block* block the march traces
-    on *frame*"""
-    order = _BAYER[block]
+def block_order(block: tuple[int, int]) -> tuple[tuple[int, int], ...]:
+    """:returns: the pixels (x, y) of a block, in the order the march traces them"""
+    return _ORDERS[block]
+
+
+def bayer_offset(block: tuple[int, int], frame: int) -> tuple[int, int]:
+    """:returns: the pixel (x, y) of each block the march traces on *frame*"""
+    order = _ORDERS[block]
     return order[frame % len(order)]
 
 
@@ -644,16 +809,22 @@ class _Resolve:
         )
 
 
-class _MarchLayer:
-    """One depth range's march: its depth pass, its march, its two
-    alternating results and the card that lays them over the range's pass.
+class _ResolveInputs:
+    """A resolve card's per-frame inputs, written in place
+    (:meth:`_MarchLayer.update`)."""
 
-    A *gathering* layer (both ranges') traces a different pixel of each
-    block every frame and gathers them into the view's resolution; the
-    other traces the same one and only averages its jitter over the frames,
-    at the march's own resolution, upsampled by the composite (a
-    full-resolution pass less, but 4 x 4 squares at a quarter resolution).
-    """
+    def __init__(self) -> None:
+        self.clip_to_rel = PTA_LMatrix4f.empty_array(1)
+        self.previous = PTA_LMatrix4f.empty_array(1)
+        self.offset = PTA_LVecBase2i.empty_array(1)
+        self.valid = PTA_int.empty_array(1)
+        self.still = PTA_float.empty_array(1)
+
+
+class _DepthPass:
+    """The scene's depth in one depth range, at the view's resolution, for
+    the march to stop at (and, the near range's, for the composites to tell
+    whose pixel it is)."""
 
     def __init__(
         self,
@@ -662,19 +833,13 @@ class _MarchLayer:
         name: str,
         lens: Lens,
         bit: int,
-        shown_to: int,
         view: tuple[int, int],
-        block: int,
         sort: int,
         states: tuple[RenderState, RenderState],
-        gather: bool = True,
     ) -> None:
         self.lens = lens
-        self.block = block
-        self.gather = gather
-        # The scene's depth, at the view's resolution, for the march to stop at.
         self.depth = _target(f"{name}_depth")
-        self.depth_buffer = _buffer(
+        self.buffer = _buffer(
             app,
             output,
             f"{name}_depth",
@@ -682,10 +847,125 @@ class _MarchLayer:
             sort,
             {GraphicsOutput.RTP_depth: self.depth},
         )
-        self.depth_buffer.set_clear_color_active(False)
-        self.depth_buffer.set_clear_depth_active(True)
+        self.buffer.set_clear_color_active(False)
+        self.buffer.set_clear_depth_active(True)
         self.camera = pass_camera(app, f"{name}_depth", lens, bit, *states)
-        self.depth_buffer.make_display_region().set_camera(self.camera)
+        self.buffer.make_display_region().set_camera(self.camera)
+
+
+class _GroundShadow:
+    """The clouds' shadow on the view's scene, at the depth passes'
+    resolution (ground_shadow.frag): what the terrain and the sea read back
+    by their distance instead of shading it per pixel, where the ground's
+    small triangles had every 2 x 2 quad run it (0.8-0.9 ms a frame at 2560
+    x 1440, performance.md §33). Its texture is the march's, kept across
+    rebuilds, so the readers bind it once."""
+
+    def __init__(
+        self,
+        app: Any,
+        output: Any,
+        name: str,
+        size: tuple[int, int],
+        sort: int,
+        texture: Texture,
+    ) -> None:
+        self.texture = texture
+        self.buffer = _buffer(
+            app, output, name, size, sort, {GraphicsOutput.RTP_color: texture}
+        )
+        self.buffer.set_clear_color_active(False)
+        self.card = _fullscreen(
+            self.buffer, name, _shader("cloud_march.vert", "ground_shadow.frag")
+        )
+
+
+class _MarchLayer:
+    """The march over both depth ranges (EVE-Redux's single march over the
+    split cameras' depths): a depth pass per range, one march, its two
+    alternating results, and a card per range laying them over that range's
+    pass (cloud_composite.frag: the near range's where its depth pass drew
+    something, the far range's elsewhere).
+
+    The near range's depth pass and card run only while the slab reaches
+    into the near range (:meth:`set_near`); the march then stops at the far
+    range's scene, and whatever the near camera draws covers the clouds
+    behind it.
+
+    A *gathering* layer traces a different pixel of each block every frame
+    and gathers them into the view's resolution; the other traces the same
+    one and only averages its jitter over the frames, at the march's own
+    resolution, upsampled by the composite (a full-resolution pass less, but
+    4 x 4 squares at a quarter resolution).
+    """
+
+    def __init__(
+        self,
+        app: Any,
+        output: Any,
+        name: str,
+        near_lens: Lens,
+        far_lens: Lens,
+        view: tuple[int, int],
+        block: tuple[int, int],
+        sort: int,
+        states: tuple[RenderState, RenderState],
+        gather: bool = True,
+        moving_block: tuple[int, int] | None = None,
+        ground: Texture | None = None,
+    ) -> None:
+        self.lens = near_lens
+        self.far_lens = far_lens
+        self.block = block
+        self.gather = gather
+        #: (still, moving): the block traced still and while moving
+        self.blocks = (block, moving_block if gather and moving_block else block)
+        self._still_frames = MOVING_HOLD
+        # The block's inputs, written in place as it changes (no new render
+        # state a frame): uBlock (march, resolves), uStepFade, uSmooth.
+        self._block_input = PTA_LVecBase2i.empty_array(1)
+        self._resolve_block = PTA_LVecBase2i.empty_array(1)
+        self._step_fade = PTA_float.empty_array(1)
+        self._smooth = PTA_float.empty_array(1)
+        self._moving_weight = PTA_float.empty_array(1)
+        self.far_depth = _DepthPass(
+            app,
+            output,
+            f"{name}_far",
+            far_lens,
+            CLOUD_FAR_BIT,
+            depth_size(view),
+            sort,
+            states,
+        )
+        self.near_depth = _DepthPass(
+            app,
+            output,
+            f"{name}_near",
+            near_lens,
+            CLOUD_NEAR_BIT,
+            depth_size(view),
+            sort + 1,
+            states,
+        )
+        self.camera = self.near_depth.camera  # both follow the app's camera
+        # Whether the near range's depth pass runs (the march and the cards
+        # read it only then).
+        self.near_on = PTA_int.empty_array(1)
+        self.near_on[0] = 1
+        self.near = True
+        #: 1: the composite's depth no farther than the scene's (A/B: 0, the
+        #: resolved distance's alone; cloud_composite.frag)
+        self.scene_cut = PTA_int.empty_array(1)
+        self.scene_cut[0] = 1
+        #: The clouds' shadow on the scene (None: its readers shade it per pixel)
+        self.ground = (
+            None
+            if ground is None
+            else _GroundShadow(
+                app, output, f"{name}_ground", depth_size(view), sort + 2, ground
+            )
+        )
 
         # The march: one pixel of every block.
         self.colour = _target(f"{name}_colour")
@@ -695,7 +975,7 @@ class _MarchLayer:
             output,
             name,
             self._march_size(view),
-            sort + 1,
+            sort + 2,
             {
                 GraphicsOutput.RTP_color: self.colour,
                 GraphicsOutput.RTP_aux_hrgba_0: self.distance,
@@ -710,8 +990,16 @@ class _MarchLayer:
         self.card = _fullscreen(
             self.buffer, name, _shader("cloud_march.vert", "cloud_march.frag")
         )
+        #: The march's region: the corner of its buffer this frame's block fills
+        self.march_region = self.buffer.get_display_region(
+            self.buffer.get_num_display_regions() - 1
+        )
         self.card.set_shader_inputs(
-            uSceneDepth=self.depth, uBlueNoise=_blue_noise_texture()
+            uSceneDepthNear=self.near_depth.depth,
+            uSceneDepthFar=self.far_depth.depth,
+            uNearDepthOn=self.near_on,
+            uDepthScale=DEPTH_SCALE,
+            uBlueNoise=_blue_noise_texture(),
         )
         # The jitter's index: this layer's visits (visit_of).
         self.visit = PTA_int.empty_array(1)
@@ -720,7 +1008,7 @@ class _MarchLayer:
         # The result, gathered over the frames.
         self.resolves = [
             _Resolve(
-                app, output, f"{name}_resolve{i}", self._resolve_size(view), sort + 2
+                app, output, f"{name}_resolve{i}", self._resolve_size(view), sort + 3
             )
             for i in (0, 1)
         ]
@@ -731,34 +1019,80 @@ class _MarchLayer:
                 uHistory=history.colour,
                 uHistoryDistance=history.distance,
                 uMinWeight=MIN_WEIGHT,
-                uSmooth=smoothing_of(self.block),
+                uMovingWeight=self._moving_weight,
+                uSmooth=self._smooth,
             )
 
-        # Laid over the range's pass at the cloud's depth.
-        self.composite = composite_card(app, f"{name}_composite", self.colour, shown_to)
-        self.composite.set_shader(
-            _shader("cloud_composite.vert", "cloud_composite.frag")
-        )
-        self.composite.set_depth_test(True)
-        # Until the first update: inputs every shader reads must be set.
-        identity = LMatrix4f.ident_mat()
-        self.card.set_shader_inputs(uClipToRender=identity, uOffset=LVecBase2i(0, 0))
-        for resolve in self.resolves:
-            resolve.card.set_shader_inputs(
-                uClipToRel=identity,
-                uPrevRelToClip=identity,
-                uOffset=LVecBase2i(0, 0),
-                uHistoryValid=0,
-                uStill=0.0,
+        # Laid over each range's pass at the cloud's depth: (far, near).
+        self.composites = []
+        for side, shown_to in (("far", FAR_BIT), ("near", NEAR_BIT)):
+            card = composite_card(
+                app, f"{name}_composite_{side}", self.colour, shown_to
             )
-        self.composite.set_shader_input("uDistance", self.distance)
+            card.set_shader(_shader("cloud_composite.vert", "cloud_composite.frag"))
+            card.set_depth_test(True)
+            own = self.near_depth if side == "near" else self.far_depth
+            card.set_shader_inputs(
+                uNearDepth=self.near_depth.depth,
+                uNearDepthOn=self.near_on,
+                uDepthScale=DEPTH_SCALE,
+                uNearCard=int(side == "near"),
+                uSceneDepth=own.depth,
+                uSceneDepthCut=self.scene_cut,
+            )
+            self.composites.append(card)
+        # The per-frame inputs, bound once and written in place by update:
+        # new values given as inputs would make each card a new render state
+        # every frame. Until the first update they hold neutral values.
+        identity = LMatrix4f.ident_mat()
+        self._clip_to_render = PTA_LMatrix4f.empty_array(1)
+        self._clip_to_render[0] = identity
+        self._clip_to_render_far = PTA_LMatrix4f.empty_array(1)
+        self._clip_to_render_far[0] = identity
+        self._march_offset = PTA_LVecBase2i.empty_array(1)
+        self.card.set_shader_inputs(
+            uClipToRender=self._clip_to_render,
+            uClipToRenderFar=self._clip_to_render_far,
+            uOffset=self._march_offset,
+        )
+        if self.ground is not None:
+            self.ground.card.set_shader_inputs(
+                uSceneDepthNear=self.near_depth.depth,
+                uSceneDepthFar=self.far_depth.depth,
+                uNearDepthOn=self.near_on,
+                uDepthScale=DEPTH_SCALE,
+                uClipToRender=self._clip_to_render,
+                uClipToRenderFar=self._clip_to_render_far,
+            )
+        self._resolve_inputs = []
+        for resolve in self.resolves:
+            inputs = _ResolveInputs()
+            inputs.clip_to_rel[0] = identity
+            inputs.previous[0] = identity
+            resolve.card.set_shader_inputs(
+                uClipToRel=inputs.clip_to_rel,
+                uPrevRelToClip=inputs.previous,
+                uOffset=inputs.offset,
+                uHistoryValid=inputs.valid,
+                uStill=inputs.still,
+            )
+            self._resolve_inputs.append(inputs)
+        for card in self.composites:
+            card.set_shader_input("uDistance", self.distance)
+        # Each composite's two states (showing one resolve or the other)
+        self._composite_attribs: list[list[ShaderAttrib]] = []
         self._view = view
         self.active = True
         self._previous: tuple[Any, np.ndarray, Any] | None = None
         self._set_sizes(view)
 
     def _march_size(self, view: tuple[int, int]) -> tuple[int, int]:
-        return tuple(max(1, math.ceil(v / self.block)) for v in view)
+        """The march's buffer: room for the block with the most pixels
+        (the moving one's), the still one's drawn in a corner of it."""
+        return tuple(
+            max(max(1, math.ceil(v / block[k])) for block in self.blocks)
+            for k, v in enumerate(view)
+        )
 
     def _resolve_size(self, view: tuple[int, int]) -> tuple[int, int]:
         return view if self.gather else self._march_size(view)
@@ -768,26 +1102,65 @@ class _MarchLayer:
         gathering, else its middle"""
         if self.gather:
             return bayer_offset(self.block, frame)
-        return (self.block // 2, self.block // 2)
+        return (self.block[0] // 2, self.block[1] // 2)
+
+    def _set_block(self, block: tuple[int, int]) -> None:
+        """Trace this block from this frame: its inputs, and the march's
+        region the corner of its buffer the block fills."""
+        self.block = block
+        self._block_input[0] = LVecBase2i(*block)
+        self._resolve_block[0] = LVecBase2i(*block) if self.gather else LVecBase2i(1, 1)
+        self._step_fade[0] = step_fade_of(block)
+        self._smooth[0] = smoothing_of(block)
+        self._moving_weight[0] = moving_weight_of(block if self.gather else (1, 1))
+        used = [max(1, math.ceil(v / b)) for v, b in zip(self._view, block)]
+        size = self._march_size(self._view)
+        self.march_region.set_dimensions(0.0, used[0] / size[0], 0.0, used[1] / size[1])
 
     def _set_sizes(self, view: tuple[int, int]) -> None:
+        if self.ground is not None:
+            self.ground.card.set_shader_input(
+                "uViewSize", LVecBase2f(*depth_size(view))
+            )
         self.card.set_shader_inputs(
-            uBlock=self.block,
+            uBlock=self._block_input,
             uViewSize=LVecBase2f(*view),
-            uStepFade=step_fade_of(self.block),
+            uStepFade=self._step_fade,
+            uLightLocalFootprint=LIGHT_LOCAL_FOOTPRINT,
         )
         size = self._resolve_size(view)
         for resolve in self.resolves:
             resolve.card.set_shader_inputs(
-                uBlock=self.block if self.gather else 1, uViewSize=LVecBase2f(*size)
+                uBlock=self._resolve_block,
+                uViewSize=LVecBase2f(*size),
             )
-        self.composite.set_shader_input(
-            "uDownscale", 1.0 if self.gather else float(self.block)
-        )
+        self._set_block(self.block)
+        # Made once (again after a resize): update switches between them
+        self._composite_attribs = []
+        for card in self.composites:
+            card.set_shader_input(
+                "uDownscale",
+                LVecBase2f(1.0, 1.0) if self.gather else LVecBase2f(*self.block),
+            )
+            attribs = []
+            for resolve in self.resolves:
+                card.set_shader_inputs(
+                    uClouds=resolve.colour, uDistance=resolve.distance
+                )
+                attribs.append(card.get_attrib(ShaderAttrib))
+            self._composite_attribs.append(attribs)
+
+    @property
+    def depth_buffers(self) -> list[GraphicsOutput]:
+        """The two ranges' depth passes' buffers: (far, near)."""
+        return [self.far_depth.buffer, self.near_depth.buffer]
 
     def resize(self, view: tuple[int, int]) -> None:
         self._view = view
-        self.depth_buffer.set_size(*view)
+        for buffer in self.depth_buffers:
+            buffer.set_size(*depth_size(view))
+        if self.ground is not None:
+            self.ground.buffer.set_size(*depth_size(view))
         self.buffer.set_size(*self._march_size(view))
         for resolve in self.resolves:
             resolve.buffer.set_size(*self._resolve_size(view))
@@ -795,30 +1168,51 @@ class _MarchLayer:
         self._previous = None
 
     def set_active(self, active: bool) -> None:
-        """Run the passes or stop them (and hide the composite); the history
+        """Run the passes or stop them (and hide the composites); the history
         starts over."""
         self.active = active
-        for buffer in (self.depth_buffer, self.buffer):
+        for buffer in (self.far_depth.buffer, self.buffer):
             buffer.set_active(active)
+        if self.ground is not None:
+            self.ground.buffer.set_active(active)
         for resolve in self.resolves:
             resolve.buffer.set_active(active)
+        self._show_near()
         if active:
-            self.composite.show()
+            self.composites[0].show()
         else:
-            self.composite.hide()
+            self.composites[0].hide()
         self._previous = None
 
-    def update(self, app: Any, frame: int, camera: np.ndarray) -> None:
-        """Per frame: this frame's pixel of each block, the range's clip
-        space to the render frame (the march) and to the camera's
-        surroundings now and a frame ago (the reprojection), and which
-        result is written.
+    def set_near(self, near: bool) -> None:
+        """Draw the near range's depth pass and lay its card, or not (when the
+        slab is out of the near range: nothing of the clouds can be in front
+        of what the near camera draws). The history goes on."""
+        self.near = near
+        self._show_near()
+
+    def _show_near(self) -> None:
+        on = self.active and self.near
+        self.near_on[0] = int(on)
+        self.near_depth.buffer.set_active(on)
+        if on:
+            self.composites[1].show()
+        else:
+            self.composites[1].hide()
+
+    def update(
+        self, app: Any, frame: int, camera: np.ndarray, slab_distance: float = 0.0
+    ) -> None:
+        """Per frame: this frame's pixel of each block, the ranges' clip
+        spaces to the render frame (the march) and the near range's to the
+        camera's surroundings now and a frame ago (the reprojection: both
+        lenses look the same way), and which result is written.
 
         :param frame: the march's frame count
         :param camera: the camera in the planet frame, float64
+        :param slab_distance: how far the clouds' slab is, metres (the
+            history's jump limit grows with it)
         """
-        offset = self._offset(frame)
-        self.visit[0] = visit_of(self.block, frame, self.gather)
         projection = self.lens.get_projection_mat()
         unproject = self.lens.get_projection_mat_inv()
         placed = self.camera.get_mat(app.render)
@@ -827,9 +1221,8 @@ class _MarchLayer:
         rel_to_clip = LMatrix4f(turned)
         rel_to_clip.invert_in_place()
         rel_to_clip = rel_to_clip * projection
-        self.card.set_shader_inputs(
-            uClipToRender=unproject * placed, uOffset=LVecBase2i(*offset)
-        )
+        self._clip_to_render[0] = unproject * placed
+        self._clip_to_render_far[0] = self.far_lens.get_projection_mat_inv() * placed
 
         valid = self._previous is not None
         previous = rel_to_clip
@@ -844,33 +1237,50 @@ class _MarchLayer:
             )
             motion = (float(np.linalg.norm(moved)) + turn * TURN_METRES) / STILL_METRES
             still = 1.0 - min(motion, 1.0)
-            valid = float(np.linalg.norm(moved)) <= HISTORY_JUMP
+            valid = float(np.linalg.norm(moved)) <= max(
+                HISTORY_JUMP, HISTORY_JUMP_SHARE * slab_distance
+            )
             # A point relative to the camera now, as it was relative to the
             # camera then (float64 for the move, float32 only near the camera).
             previous = LMatrix4f.translate_mat(LVecBase3f(*moved)) * last_rel_to_clip
         self._previous = (rel_to_clip, camera.copy(), LMatrix4f(turned))
 
+        # The block: the moving one as soon as the view moves, the still one
+        # once it has been still MOVING_HOLD frames.
+        self._still_frames = self._still_frames + 1 if still >= MOVING_STILL else 0
+        block = self.blocks[1] if self._still_frames < MOVING_HOLD else self.blocks[0]
+        if block != self.block:
+            self._set_block(block)
+        offset = self._offset(frame)
+        self.visit[0] = visit_of(self.block, frame, self.gather)
+        self._march_offset[0] = LVecBase2i(*offset)
+
         write = self.resolves[frame % 2]
         read = self.resolves[1 - frame % 2]
         write.buffer.set_active(True)
         read.buffer.set_active(False)
-        write.card.set_shader_inputs(
-            uClipToRel=unproject * turned,
-            uPrevRelToClip=previous,
-            uOffset=LVecBase2i(*offset) if self.gather else LVecBase2i(0, 0),
-            uHistoryValid=int(valid),
-            uStill=still,
-        )
-        self.composite.set_shader_inputs(uClouds=write.colour, uDistance=write.distance)
+        inputs = self._resolve_inputs[frame % 2]
+        inputs.clip_to_rel[0] = unproject * turned
+        inputs.previous[0] = previous
+        inputs.offset[0] = LVecBase2i(*offset) if self.gather else LVecBase2i(0, 0)
+        inputs.valid[0] = int(valid)
+        inputs.still[0] = still
+        for card, attribs in zip(self.composites, self._composite_attribs):
+            card.set_attrib(attribs[frame % 2])
 
     def destroy(self, app: Any) -> None:
-        self.composite.remove_node()
-        self.camera.remove_node()
-        for card in [self.card] + [r.card for r in self.resolves]:
+        for card in self.composites:
+            card.remove_node()
+        for depth in (self.far_depth, self.near_depth):
+            depth.camera.remove_node()
+        ground = [] if self.ground is None else [self.ground]
+        for card in [self.card] + [p.card for p in self.resolves + ground]:
             card.get_top().remove_node()
-        for buffer in [self.depth_buffer, self.buffer] + [
-            r.buffer for r in self.resolves
-        ]:
+        for buffer in (
+            self.depth_buffers
+            + [self.buffer]
+            + [p.buffer for p in self.resolves + ground]
+        ):
             app.graphicsEngine.remove_window(buffer)
 
 
@@ -1085,6 +1495,7 @@ class CloudMarch:
         self._sun = PTA_LVecBase3f.empty_array(1)
         self._sun[0] = LVecBase3f(0.0, 0.0, 1.0)
         self._steps = PTA_int.empty_array(1)
+        self._split = PTA_float.empty_array(1)  # the near range's end (uSplit)
         self._frame = PTA_int.empty_array(1)
         self._layer_count = PTA_int.empty_array(1)
         self._layer_count[0] = self._layers_used
@@ -1110,6 +1521,7 @@ class CloudMarch:
             "uPixelAngle": 0.001,
             "uCloudDebug": 0,
             "uMarchSteps": self._steps,
+            "uSplit": self._split,
             "uMinStep": min(min_step(f.field) for f in self._families),
             "uStepGrowth": STEP_GROWTH,
             "uLayerFar": self._layer_far,
@@ -1123,12 +1535,20 @@ class CloudMarch:
             "uBillowMean": float(np.mean(1.0 - np.abs(2.0 * volume - 1.0))),
             "uBillowGain": billow_gain(volume),
             "uBillowRawMean": float(np.mean(volume)),
+            "uCurlNoise": _curl_texture(),
+            "uCurlStrength": CURL_STRENGTH,
+            "uCurlFrequency": CURL_FREQUENCY,
             # The deck's (cloud_deck.vert, cloud.frag)
             "uDeck": 1,
             "uDeckLayer": self._layers_used - 1,
         }
         self._nodes: list[NodePath] = []
         self._bind(self.root)
+        # The clouds' shadow on the scene (bind_ground_shadow): its texture
+        # kept across the passes' rebuilds, on while a pass draws it.
+        self._ground_texture = _target("cloud_ground_shadow")
+        self._ground_on = PTA_int.empty_array(1)
+        self._ground_binders: list[Any] = []
         self._app: Any = None
         self._depth: SplitDepthCameras | None = None
         self._layers: list[_MarchLayer] = []
@@ -1167,13 +1587,37 @@ class CloudMarch:
         for node in self._nodes:
             bind(node)
 
+    def bind_ground_shadow(self, node: NodePath, binders: list[Any]) -> None:
+        """Let a node's shaders (the terrain's: terrain_frag.glsl's
+        ``uGroundShadow``) read the clouds' shadow on the view's scene from
+        the march's pass (:class:`_GroundShadow`) while it draws, and shade it
+        per pixel otherwise.
+
+        :param node: the node that reads it
+        :param binders: set the pass's own inputs beyond the clouds' (the
+            world's ``Shadows.bind``: the shadow's steps), now and on the
+            passes' rebuilds
+        """
+        node.set_shader_inputs(
+            uGroundShadow=self._ground_texture,
+            uGroundShadowOn=self._ground_on,
+            uGroundShadowScale=DEPTH_SCALE,
+        )
+        self._ground_binders = list(binders)
+        for layer in self._layers:
+            self._bind_ground_pass(layer)
+
+    def _bind_ground_pass(self, layer: _MarchLayer) -> None:
+        for bind in self._ground_binders:
+            bind(layer.ground.card)
+
     def _set_inputs(self, **inputs: Any) -> None:
         self._inputs.update(inputs)
         for node in self._nodes:
             node.set_shader_inputs(**inputs)
 
     def attach(self, app: Any, depth: SplitDepthCameras) -> None:
-        """Build the march's passes, one per depth range of *depth* (see the
+        """Build the march's passes, over both depth ranges of *depth* (see the
         module). Build the split cameras first; call again after a new set.
 
         :param app: the ShowBase (``camera``, ``render``, ``graphicsEngine``,
@@ -1188,37 +1632,40 @@ class CloudMarch:
         """Remove the march's passes (it draws nothing until :meth:`attach`)."""
         for layer in self._layers:
             self._nodes.remove(layer.card)
+            self._nodes.remove(layer.ground.card)
             layer.destroy(self._app)
         self._layers = []
+        self._ground_on[0] = 0
 
     def _build_layers(self) -> None:
         app, depth = self._app, self._depth
         self._size = self._view_size()
-        block = block_of(self._settings.march_resolution)
-        states = pass_states()
-        sort = _FIRST_SORT
-        for name, lens, bit, shown_to in (
-            ("cloud_march_far", depth.far_lens, CLOUD_FAR_BIT, FAR_BIT),
-            ("cloud_march_near", app.camLens, CLOUD_NEAR_BIT, NEAR_BIT),
-        ):
-            layer = _MarchLayer(
-                app,
-                depth.output,
-                name,
-                lens,
-                bit,
-                shown_to,
-                self._size,
-                block,
-                sort,
-                states,
-                gather=True,
-            )
-            self._bind(layer.card)
-            # Nothing to march until the weather is in (_finish).
-            layer.set_active(self._visible and self.weather is not None)
-            self._layers.append(layer)
-            sort += 4
+        block = block_of(self._settings.march_block)
+        layer = _MarchLayer(
+            app,
+            depth.output,
+            "cloud_march",
+            app.camLens,
+            depth.far_lens,
+            self._size,
+            block,
+            _FIRST_SORT,
+            pass_states(),
+            gather=True,
+            moving_block=(
+                MOVING_BLOCKS.get(block)
+                if self._settings.march_refresh_moving
+                else None
+            ),
+            ground=self._ground_texture,
+        )
+        self._bind(layer.card)
+        self._bind(layer.ground.card)
+        self.bind_shadow_inputs(layer.ground.card)
+        self._bind_ground_pass(layer)
+        # Nothing to march until the weather is in (_finish).
+        layer.set_active(self._visible and self.weather is not None)
+        self._layers.append(layer)
 
     def _view_size(self) -> tuple[int, int]:
         region = self._depth.near_region
@@ -1255,7 +1702,10 @@ class CloudMarch:
                     weather = self._family_textures[index][0]
                     self._family_textures[index] = (weather, light)
         self._update_shadow_nodes()
-        if old.march_resolution != settings.march_resolution:
+        if (
+            old.march_block != settings.march_block
+            or old.march_refresh_moving != settings.march_refresh_moving
+        ):
             self.set_pixel_angle(self._pixel_angle)
             if self._layers:
                 self.attach(self._app, self._depth)
@@ -1452,7 +1902,9 @@ class CloudMarch:
         :param radians: the angle per pixel of the view
         """
         self._pixel_angle = radians
-        value = float(radians / self._settings.march_resolution)
+        value = float(
+            radians * math.sqrt(pixels_of(block_of(self._settings.march_block)))
+        )
         if value != self._inputs["uPixelAngle"]:
             self._set_inputs(uPixelAngle=value)
 
@@ -1471,6 +1923,8 @@ class CloudMarch:
         self.root.hide(HIDE_FROM_NEAR | HIDE_FROM_FAR | HIDE_FROM_CLOUD_PASS)
         for layer in self._layers:
             layer.set_active(visible and self.weather is not None)
+        if not visible:
+            self._ground_on[0] = 0
 
     def update(
         self, camera_world: ArrayLike, camera_render: ArrayLike = (0.0, 0.0, 0.0)
@@ -1501,14 +1955,20 @@ class CloudMarch:
                 for layer in self._layers:
                     layer.resize(size)
             self._frame[0] += 1
-            far, near = self._layers
-            # The near range marches only when the slab reaches into it.
-            near_wanted = self._slab_distance(cam) <= self._depth.split * 1.01
-            if near_wanted != near.active:
-                near.set_active(near_wanted)
+            # The near range's depth pass and card run only when the slab
+            # reaches into it.
+            slab_distance = self._slab_distance(cam)
+            near_wanted = slab_distance <= self._depth.split * 1.01
+            self._split[0] = self._depth.split
+            for layer in self._layers:
+                if near_wanted != layer.near:
+                    layer.set_near(near_wanted)
             for layer in self._layers:
                 if layer.active:
-                    layer.update(self._app, self._frame[0], cam)
+                    layer.update(self._app, self._frame[0], cam, slab_distance)
+        self._ground_on[0] = int(
+            self._visible and any(layer.active for layer in self._layers)
+        )
 
     def _slab_distance(self, camera: np.ndarray) -> float:
         """:returns: how far the slab's nearest point is from *camera*
