@@ -21,11 +21,15 @@ uniform float uPlanetRadius;
 uniform float uMeshRange;         // the impostors start over its dithered band
 uniform float uTreeRange;         // and end here (another band)
 uniform float uPixelScale[1];     // pixels per radian
+uniform float uPointScale;        // the target's pixels per view pixel (1 in
+                                  // the view; the clouds' depth passes: theirs)
 uniform vec4 uImpostors[32];      // per asset: layer (-1 none), diameter, centre z
 uniform int uFrames;
 
 flat out int vLayer;
 flat out vec2 vTile;      // its view's tile, in tiles
+flat out float vFadeIn;   // the meshes' band: 0 meshes, 1 impostor
+flat out float vFadeOut;  // the far band: 1 impostor, 0 the ground's look
 flat out vec3 vT1;        // its frame, render frame
 flat out vec3 vT2;
 flat out vec3 vUp;
@@ -34,8 +38,6 @@ flat out vec3 vSky;
 flat out vec3 vAirT;
 flat out vec3 vAirS;
 flat out float vTint;
-flat out float vFadeIn;   // the meshes' band: 0 meshes, 1 impostor
-flat out float vFadeOut;  // the far band: 1 impostor, 0 the ground's look
 
 vec2 hemiOct(vec3 d) {
     vec2 p = d.xy / (abs(d.x) + abs(d.y) + d.z);
@@ -57,7 +59,12 @@ void main() {
     if (info.x < 0.0 || dist < 0.85 * uMeshRange || dist > uTreeRange) {
         gl_Position = vec4(0.0, 0.0, 0.0, -1.0);  // the meshes' or none
     }
-    gl_PointSize = max(info.y * scale / max(dist, 1.0) * uPixelScale[0], 1.0);
+    // In a coarser target (the clouds' depth passes) one pixel wider: it
+    // covers every view pixel the tree does (the clouds' near and far cards
+    // are told apart by it: a tree it missed stood unfogged over the far
+    // card), and at most a pixel more (more, a halo of the tree's depth).
+    float size = info.y * scale / max(dist, 1.0) * uPixelScale[0];
+    gl_PointSize = max(size * uPointScale + (uPointScale < 1.0 ? 1.0 : 0.0), 1.0);
     vFadeIn = smoothstep(0.85 * uMeshRange, uMeshRange, dist);
     vFadeOut = 1.0 - smoothstep(0.8 * uTreeRange, uTreeRange, dist);
 
@@ -67,15 +74,15 @@ void main() {
     float c = cos(plant.x), s = sin(plant.x);
     vec3 t1 = c * east + s * north;
     vec3 t2 = -s * east + c * north;
-    vT1 = t1;
-    vT2 = t2;
-    vUp = up;
     // The view's direction (toward the camera) in its frame, over the horizon.
     vec3 V = -relPos / max(dist, 1e-3);
     vec3 d = vec3(dot(V, t1), dot(V, t2), max(dot(V, up), 0.02));
     vec2 o = hemiOct(normalize(d));
     vTile = clamp(floor((o * 0.5 + 0.5) * float(uFrames)), 0.0, float(uFrames - 1));
     vLayer = int(info.x + 0.5);
+    vT1 = t1;
+    vT2 = t2;
+    vUp = up;
     vTint = plant.w;
 
     vec3 L = normalize(uSunDir);

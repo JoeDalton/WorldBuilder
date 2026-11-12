@@ -4,8 +4,8 @@
 // trees: the meshes): each instance's base (from the terrain root's origin,
 // its frame), turn about the local vertical and scale from uPlants. The
 // model stands on its base, z up; here up is the planet's vertical there.
-// The light is reckoned per vertex (terrain_light.glsl's treeLight, and the air to
-// the camera).
+// The light is reckoned per vertex (terrain_light.glsl's treeLight, and the
+// air to the camera).
 
 #define TERRAIN_LIGHT_VERTEX
 #pragma include "terrain_light.glsl"
@@ -22,13 +22,13 @@ uniform float uMeshRange;         // the meshes end here (a dithered band)
 uniform samplerBuffer uPlants;    // per plant: (base, turn), (scale, tint, 0, 0)
 
 out vec2 vUv;
+out float vFade;      // 1 within the meshes' range, 0 past it
 out vec3 vNormal;     // render frame
 out vec3 vUp;
 out vec3 vSun;
 out vec3 vSky;
 out vec3 vAirT;
 out vec3 vAirS;
-out float vFade;      // 1 within the meshes' range, 0 past it
 out float vTint;
 out float vHeight;    // the vertex's height in the model, metres
 
@@ -46,7 +46,6 @@ void main() {
     vec3 t2 = -s * east + c * north;
     float scale = b.x;
     vec3 world = base + (t1 * p3d_Vertex.x + t2 * p3d_Vertex.y + up * p3d_Vertex.z) * scale;
-    vec3 relPos = world - uCamPos;
     float dist = length(base - uCamPos);
     vFade = 1.0 - smoothstep(0.85 * uMeshRange, uMeshRange, dist);
     // Back to the root's frame for its projection.
@@ -55,13 +54,13 @@ void main() {
     if (dist > uMeshRange) {
         gl_Position = vec4(0.0, 0.0, 0.0, -1.0);  // the impostors' (clipped whole)
     }
-    vec3 n = t1 * p3d_Normal.x + t2 * p3d_Normal.y + up * p3d_Normal.z;
-    vNormal = n;
-    vUp = up;
     vUv = p3d_MultiTexCoord0;
+    vNormal = t1 * p3d_Normal.x + t2 * p3d_Normal.y + up * p3d_Normal.z;
+    vUp = up;
     vTint = b.y;
     vHeight = p3d_Vertex.z * scale;
 
+    vec3 relPos = world - uCamPos;
     vec3 L = normalize(uSunDir);
     vec3 planetPos = transpose(rotation) * (world - uPlanetCentre);
     float height = length(planetPos) - uPlanetRadius;

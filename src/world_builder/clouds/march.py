@@ -849,7 +849,9 @@ class _DepthPass:
         )
         self.buffer.set_clear_color_active(False)
         self.buffer.set_clear_depth_active(True)
-        self.camera = pass_camera(app, f"{name}_depth", lens, bit, *states)
+        self.camera = pass_camera(
+            app, f"{name}_depth", lens, bit, *states, 1.0 / DEPTH_SCALE
+        )
         self.buffer.make_display_region().set_camera(self.camera)
 
 
@@ -1075,6 +1077,13 @@ class _MarchLayer:
                 uOffset=inputs.offset,
                 uHistoryValid=inputs.valid,
                 uStill=inputs.still,
+                # Depth-aware: the scene each sample stopped at.
+                uSceneDepthNear=self.near_depth.depth,
+                uSceneDepthFar=self.far_depth.depth,
+                uNearDepthOn=self.near_on,
+                uDepthScale=DEPTH_SCALE,
+                uClipToRender=self._clip_to_render,
+                uClipToRenderFar=self._clip_to_render_far,
             )
             self._resolve_inputs.append(inputs)
         for card in self.composites:

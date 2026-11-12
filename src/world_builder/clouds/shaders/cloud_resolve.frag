@@ -14,6 +14,13 @@
 // block takes the same share, whatever its distance to a traced one, or the
 // traced pixels would show as a grid.
 //
+// Depth-aware: each sample weighs by how near its scene (where its march
+// stopped: the depth passes at its own pixel) is to this pixel's own. A
+// sample that stopped at a thin thing in front (a tree, a ridge's rim) holds
+// only the air before it: blended into the pixels around, it showed as a halo
+// of sky round the tree in a cloud; those pixels now take the samples that
+// went on behind it, and the tree's own pixels the one that stopped at it.
+//
 // The cloud is premultiplied; its distance (kilometres, 0: none) and its
 // count go on with it (r and g), for the next frame and for the composite's
 // depth test. The textures may be larger than what is drawn in them (padded
@@ -33,6 +40,14 @@ uniform float uStill;               // 1: the camera still, 0: moving (the clamp
 uniform float uSmooth;               // how far a pixel on fresh samples takes their smooth mean (0 to 1)
 uniform float uMinWeight;            // this frame's least share, with a full count
 uniform float uMovingWeight;         // the same while the camera moves (by uStill): march.MOVING_WEIGHTS
+// The scene's depth in each range (the march's: cloud_march.frag), and each
+// range's clip space -> the render frame.
+uniform sampler2D uSceneDepthNear;
+uniform sampler2D uSceneDepthFar;
+uniform int   uNearDepthOn;
+uniform int   uDepthScale;           // view pixels per depth pixel, per axis
+uniform mat4  uClipToRender;
+uniform mat4  uClipToRenderFar;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragDistance;
@@ -66,6 +81,39 @@ const float COUNT_KEPT = 4.0;
 // was as it comes closer: a little more lag (the error over the clouds 2.2
 // to 2.6 levels there), traded for the grain (performance.md §28).
 const float MOTION_FLOOR = 0.25;
+// A sample's weight by its scene's distance against the pixel's own:
+// exp(-DEPTH_SHARPNESS |ln(ratio)|): 10 % off weighs 0.56, 30 % off 0.2;
+// the sky (no scene) against any surface, nothing. And the least a sample of
+// the statistics keeps (a window all of other scenes still has a mean).
+const float DEPTH_SHARPNESS = 6.0;
+const float DEPTH_FLOOR = 1e-3;
+// The distance of a pixel with no scene (the sky), metres.
+const float SKY_DISTANCE = 1.0e9;
+
+// The distance of the scene at a view pixel, metres, as the march stopped at
+// it (the near range's surface, else the far range's, else none): from the
+// near range's near plane, the same for both ranges.
+float sceneDistance(ivec2 viewPixel) {
+    ivec2 depthPixel = viewPixel / uDepthScale;
+    vec2 ndc = (vec2(viewPixel) + 0.5) / uViewSize * 2.0 - 1.0;
+    vec4 near = uClipToRender * vec4(ndc, -1.0, 1.0);
+    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, depthPixel, 0).r : 1.0;
+    vec4 p;
+    if (nearDepth < 1.0) {
+        p = uClipToRender * vec4(ndc, nearDepth * 2.0 - 1.0, 1.0);
+    } else {
+        float farDepth = texelFetch(uSceneDepthFar, depthPixel, 0).r;
+        if (farDepth >= 1.0) {
+            return SKY_DISTANCE;
+        }
+        p = uClipToRenderFar * vec4(ndc, farDepth * 2.0 - 1.0, 1.0);
+    }
+    return length(p.xyz / p.w - near.xyz / near.w);
+}
+
+float depthWeight(float other, float own) {
+    return exp(-DEPTH_SHARPNESS * abs(log(max(other, 0.1) / max(own, 0.1))));
+}
 
 vec3 rayDir(vec2 ndc) {
     vec4 near = uClipToRel * vec4(ndc, -1.0, 1.0);
@@ -96,6 +144,12 @@ void main() {
     ivec2 base = ivec2(floor(f));
     vec2 w = f - vec2(base);
     vec4 reconstructed = vec4(0.0);
+    float reconstructedWeight = 0.0;
+    float own = sceneDistance(pixel);
+    // The sample of the window whose scene is nearest this pixel's: what the
+    // pixel takes when none of the four nearest shares its scene.
+    vec4 closest = vec4(0.0);
+    float closestWeight = -1.0;
     // The samples' mean and spread around this pixel, for the clamp: the 4 x 4
     // about it, each weighted by a bump of its distance that falls to nothing,
     // flat, STATS_REACH samples away. A sample enters and leaves the window at
@@ -122,11 +176,18 @@ void main() {
             if (bump <= 0.0) {
                 continue;
             }
-            float g = bump * bump;
-            vec4 v = texelFetch(uMarch, clamp(tap, ivec2(0), last), 0);
+            ivec2 clamped = clamp(tap, ivec2(0), last);
+            vec4 v = texelFetch(uMarch, clamped, 0);
+            float dw = depthWeight(sceneDistance(clamped * uBlock + uOffset), own);
+            float g = bump * bump * max(dw, DEPTH_FLOOR);
+            if (dw > closestWeight) {
+                closestWeight = dw;
+                closest = v;
+            }
             if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {  // one of the four nearest
                 vec2 bw = mix(vec2(1.0) - w, w, vec2(x, y));
-                reconstructed += bw.x * bw.y * v;
+                reconstructed += bw.x * bw.y * dw * v;
+                reconstructedWeight += bw.x * bw.y * dw;
             }
             mean += g * v;
             square += g * v * v;
@@ -161,6 +222,7 @@ void main() {
     // bilinear mix of four samples changes with the pixel's place in its block
     // where an edge is, and the reprojection with it (a lattice of offsets).
     float reconstructedKm = kmTotal > 0.0 ? kmSum / kmTotal : 0.0;
+    reconstructed = reconstructedWeight > 1e-4 ? reconstructed / reconstructedWeight : closest;
     mean /= total;
     vec4 sigma = sqrt(max(square / total - mean * mean, vec4(0.0)))
                + max(uStill, MOTION_FLOOR) * (CLAMP_FLOOR + CLAMP_SHARE * mean);
