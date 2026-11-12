@@ -135,7 +135,9 @@ class Group:
     altitude: Ramp | None = None
 
 
-#: What grows, by biome (instances per hectare: a dense conifer forest
+#: What grows, by biome
+# The order is forest, grass, desert, rock, snow:
+# (instances per hectare: a dense conifer forest
 #: ~400; the packs' crowns are sparse cards, ~15 m^2 seen from above).
 SPECIES: tuple[Group, ...] = (
     Group(
@@ -157,7 +159,7 @@ SPECIES: tuple[Group, ...] = (
         # far_3, far_6 and near_0 are autumn-yellow to orange: a few.
         (0.6, 0.6, 1.0, 0.25, 1.0, 0.8, 0.15, 1.0, 0.1, 1.2, 1.2, 1.2),
         (0.75, 1.15),
-        (420.0, 5.0, 0.0, 6.0, 0.0),
+        (420.0, 0.0, 0.0, 0.2, 0.0),
         far=True,
         clumped=0.6,
         # Thinner on sharp crests (wind, thin soil).
@@ -168,7 +170,7 @@ SPECIES: tuple[Group, ...] = (
         ("birch_tree_0", "birch_tree_1", "birch_tree_2"),
         (1.0, 1.0, 1.0),
         (0.7, 1.05),
-        (30.0, 12.0, 0.0, 0.0, 0.0),
+        (50.0, 1.0, 0.0, 0.0, 0.0),
         far=True,
         clumped=1.6,
         # In the hollows (wetter), not on the crests.
@@ -179,7 +181,7 @@ SPECIES: tuple[Group, ...] = (
         ("snowy_tree_0", "snowy_tree_1", "snowy_tree_2"),
         (1.0, 1.0, 1.0),
         (0.8, 1.2),
-        (0.0, 0.0, 0.0, 4.0, 90.0),
+        (0.0, 0.0, 0.0, 0.0, 6.0),
         far=True,
         slope=(36.0, 24.0),
     ),
@@ -188,7 +190,7 @@ SPECIES: tuple[Group, ...] = (
         ("forest_plant_0", "forest_plant_1", "forest_plant_2", "forest_plant_3"),
         (1.0, 1.0, 1.0, 0.5),
         (0.6, 1.1),
-        (60.0, 140.0, 0.0, 30.0, 0.0),
+        (0.0, 10.0, 0.0, 5.0, 0.0),
         grid="small",
         clumped=0.5,
         slope=(45.0, 30.0),
@@ -199,7 +201,7 @@ SPECIES: tuple[Group, ...] = (
         ("forest_plant_0", "forest_plant_2"),
         (1.0, 1.0),
         (0.35, 0.7),
-        (0.0, 0.0, 20.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0, 0.0, 0.0),
         grid="small",
         clumped=0.3,
         dry=True,
@@ -209,7 +211,7 @@ SPECIES: tuple[Group, ...] = (
         tuple(f"forest_rock_{k}" for k in range(9)),
         (1.0,) * 9,
         (0.8, 2.2),
-        (0.0, 4.0, 6.0, 60.0, 4.0),
+        (0.0, 4.0, 6.0, 60.0, 0.0),
         grid="small",
         clumped=0.2,
         # Scree and outcrops: more on slopes and crests.
