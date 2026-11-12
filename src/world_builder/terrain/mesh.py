@@ -63,6 +63,7 @@ def vertex_format() -> GeomVertexFormat:
     # C_color makes Panda pass the bytes normalised to [0, 1].
     array.add_column(InternalName.make("biome_a"), 4, Geom.NT_uint8, Geom.C_color)
     array.add_column(InternalName.make("biome_b"), 4, Geom.NT_uint8, Geom.C_color)
+    array.add_column(InternalName.make("forest"), 4, Geom.NT_uint8, Geom.C_color)
     for name in VERTEX_DTYPE.names:
         column = array.get_column(name)
         expected = VERTEX_DTYPE.fields[name][1]

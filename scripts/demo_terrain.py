@@ -790,6 +790,10 @@ class TerrainDemo(ShowBase):
         for body in self.bodies:
             body.shadow_map.update(self.cam_world)  # the local map follows it
         self.sky.update((0.0, 0.0, 0.0), far)
+        fov_y = math.radians(self.camLens.get_fov()[1])
+        for terrain in self._terrains():
+            if terrain.trees is not None:
+                terrain.trees.set_pixel_angle(fov_y / max(self.win.get_y_size(), 1))
         if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
             scale = self.half_res.pixel_scale if self.half_res is not None else 1.0
@@ -1187,7 +1191,7 @@ class TerrainDemo(ShowBase):
         self.world = world
         world.apply(
             *self._terrains(),
-            *(terrain.canopy for terrain in self._terrains()),
+            *(terrain.vegetation for terrain in self._terrains()),
             self.atmospheres,
             self.shadows,
             self.sky,

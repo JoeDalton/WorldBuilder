@@ -116,17 +116,22 @@ static int64_t ring_index(int64_t k) {
   return (QUADS - t) * VERTS;                           /* west */
 }
 
-/* chunkgen.VERTEX_DTYPE: 36 bytes. */
+/* chunkgen.VERTEX_DTYPE: 40 bytes. */
 typedef struct {
   float vertex[3];
   float normal[3];
   float height;
   uint8_t biome_a[4];
   uint8_t biome_b[4];
+  uint8_t forest[4];
 } Vertex;
 
+/* Bytes per vertex of the weights given: six biome bytes, then the far
+ * forest's four (forest.FOREST_BYTES). */
+#define WEIGHT_BYTES 10
+
 /* dirs, elevation, normals: the inner grid's ((VERTS^2, 3), (VERTS^2,),
- * (VERTS^2, 3)); weights: (VERTS^2, 6) bytes; centre: (3,). out: VERTS^2 +
+ * (VERTS^2, 3)); weights: (VERTS^2, WEIGHT_BYTES) bytes; centre: (3,). out: VERTS^2 +
  * 4 QUADS vertices, grid then skirt. box_min, box_max: (3,) the drawn
  * vertices' box, centre-relative; with sea, grid vertices under sea level
  * are lifted to it and the skirts hang from their lifted edge. */
@@ -139,7 +144,7 @@ WB_API void wb_chunk_pack(const double *dirs, const double *elevation, const dou
   int64_t k;
   int a;
   float lo[3] = {INFINITY, INFINITY, INFINITY}, hi[3] = {-INFINITY, -INFINITY, -INFINITY};
-  if (sizeof(Vertex) != 36) return; /* never: no padding in this layout */
+  if (sizeof(Vertex) != 40) return; /* never: no padding in this layout */
   for (k = 0; k < count; k++) {
     const double *d = dirs + 3 * k;
     double h = radius + elevation[k];
@@ -149,8 +154,10 @@ WB_API void wb_chunk_pack(const double *dirs, const double *elevation, const dou
       v[k].normal[a] = (float)normals[3 * k + a];
     }
     v[k].height = (float)elevation[k];
-    memcpy(v[k].biome_a, weights + 6 * k, 4);
-    v[k].biome_b[0] = weights[6 * k + 4], v[k].biome_b[1] = weights[6 * k + 5];
+    memcpy(v[k].biome_a, weights + WEIGHT_BYTES * k, 4);
+    v[k].biome_b[0] = weights[WEIGHT_BYTES * k + 4];
+    v[k].biome_b[1] = weights[WEIGHT_BYTES * k + 5];
+    memcpy(v[k].forest, weights + WEIGHT_BYTES * k + 6, 4);
     v[k].biome_b[2] = 0, v[k].biome_b[3] = 0;
     for (a = 0; a < 3; a++)
       drawn[a] = sea && elevation[k] < 0.0 ? (float)(d[a] * radius - centre[a]) : v[k].vertex[a];

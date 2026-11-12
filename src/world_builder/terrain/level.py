@@ -29,6 +29,13 @@ Level files: a planet preset with overrides, plus hand-made stamps and paints.
         falloff: 80
         strength: 1.0
         tolerance: 0.12                   # colour distance that matches
+    density:                              # vegetation density paints
+      - mask: stamps/forest_density.png   # grayscale: black bare, white full
+                                          # (alpha, if any: where it paints)
+        center: {x: 3000, y: 9000}        # or stamp: N, as a paint
+        size: 4000
+        falloff: 150
+        strength: 1.0
     camera: {lat: 42.0, lon: 10.0, alt: 600, heading: 0, pitch: -8}
                                           # demo start pose: alt in metres
                                           # above sea level, heading in
@@ -38,8 +45,9 @@ Level files: a planet preset with overrides, plus hand-made stamps and paints.
 
 Every key is optional except a stamp's ``heightmap``, ``center`` and ``size``
 and a paint's ``mask`` and ``colors`` (and ``center`` and ``size`` unless it
-reuses a stamp's); the defaults are those of :class:`Stamp` and
-:class:`Paint`. Unknown ``elevation`` or ``climate`` fields are an error.
+reuses a stamp's), and a density paint's ``mask`` (the same); the defaults
+are those of :class:`Stamp`, :class:`Paint` and :class:`DensityPaint`.
+Unknown ``elevation`` or ``climate`` fields are an error.
 
 Positions in chart metres (east, north of the reference point, on an
 azimuthal-equidistant chart) are converted to latitude/longitude at load: the
@@ -66,7 +74,7 @@ from world_builder.terrain.planet import (
     PlanetSpec,
 )
 from world_builder.terrain.pngio import write_png
-from world_builder.terrain.stamps import Paint, Placement, Stamp
+from world_builder.terrain.stamps import DensityPaint, Paint, Placement, Stamp
 
 LEVELS_PATH = Path(__file__).parent / "levels"
 DEMO_LEVEL = LEVELS_PATH / "demo.yaml"
@@ -155,7 +163,24 @@ def load_level(
                 tolerance=float(entry.get("tolerance", 0.12)),
             )
         )
-    spec = replace(spec, stamps=tuple(stamps), paints=tuple(paints)).resolved()
+    density = []
+    for entry in data.get("density", []) or []:
+        placement = (
+            stamps[int(entry["stamp"])].placement
+            if "stamp" in entry
+            else _placement(entry, chart)
+        )
+        density.append(
+            DensityPaint(
+                mask=str((folder / entry["mask"]).resolve()),
+                placement=placement,
+                falloff=float(entry.get("falloff", 0.0)),
+                strength=float(entry.get("strength", 1.0)),
+            )
+        )
+    spec = replace(
+        spec, stamps=tuple(stamps), paints=tuple(paints), density_paints=tuple(density)
+    ).resolved()
     return spec, _camera_pose(data.get("camera"), chart)
 
 

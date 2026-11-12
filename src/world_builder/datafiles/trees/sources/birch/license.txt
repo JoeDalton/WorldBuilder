@@ -1,0 +1,11 @@
+Model Information:
+* title:	Birch Trees Pack | PS1 Low Poly
+* source:	https://sketchfab.com/3d-models/birch-trees-pack-ps1-low-poly-5f9aa7c0a3cf4298a4cac9d4cea59643
+* author:	Vova Truskov (https://sketchfab.com/FlowOff)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Birch Trees Pack | PS1 Low Poly" (https://sketchfab.com/3d-models/birch-trees-pack-ps1-low-poly-5f9aa7c0a3cf4298a4cac9d4cea59643) by Vova Truskov (https://sketchfab.com/FlowOff) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

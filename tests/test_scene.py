@@ -613,9 +613,14 @@ def test_the_gpu_reads_each_chunks_values(window, terrain):
             fine = terrain.nodes[key].get_child(0).node()  # (fine, coarse) share it
             vdata = fine.get_geom(0).get_vertex_data()
             rows = np.frombuffer(memoryview(vdata.get_array(0)).cast("B"), np.uint8)
-            rows = rows.reshape(-1, 36).astype(np.int64)
-            assert np.all(rows[:, 34] + 256 * (rows[:, 35] & 127) == slot)
-            assert np.all(rows[-256:, 35] >= 128) and np.all(rows[:-256, 35] < 128)
+            from world_builder.terrain.chunkgen import VERTEX_DTYPE
+
+            rows = rows.reshape(-1, VERTEX_DTYPE.itemsize).astype(np.int64)
+            b = VERTEX_DTYPE.fields["biome_b"][1]
+            assert np.all(rows[:, b + 2] + 256 * (rows[:, b + 3] & 127) == slot)
+            assert np.all(rows[-256:, b + 3] >= 128) and np.all(
+                rows[:-256, b + 3] < 128
+            )
     finally:
         window.graphicsEngine.remove_window(buffer)
 

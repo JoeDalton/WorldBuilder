@@ -1,5 +1,5 @@
-// The light on the terrain's surfaces, shared by the ground (terrain_frag.glsl)
-// and what grows on it (canopy.frag): the sun through the planet's own air
+// The light on the terrain's surfaces, shared by the ground (terrain_frag.glsl):
+// the sun through the planet's own air
 // and every shadow on it (other bodies, the clouds, the mountains, the
 // game's objects, the rings), the sky light, the aerial perspective and the
 // display encoding. Include once per shader with #pragma include, before
@@ -133,6 +133,25 @@ void surfaceLight(vec3 relPos, vec3 planetPos, float height, vec3 N, vec3 surfac
     skylight = (uRadialLight == 1 ? uAmbient * smoothstep(-0.2, 0.2, dot(up, L))
                                   : uAmbient)
              * mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
+}
+
+// The light on a tree, per vertex or per impostor (world_builder.terrain.
+// trees): surfaceLight's, lighter: the sun through the planet's air, the
+// mountains' shadow and the clouds' (their mean over a wide footprint), the
+// sky light through twilight. No eclipse, no objects' or rings' shadow.
+void treeLight(vec3 relPos, vec3 planetPos, float height, vec3 up, vec3 L,
+               out vec3 sunlight, out vec3 skylight) {
+    float shade = terrainShadow(normalize(planetPos), height);
+    if (dot(up, L) > -0.05) {
+        shade *= cloudShade(L, 200.0, relPos, true);
+    }
+    sunlight = uSunColor * shade;
+    if (uOwnAtmosphere >= 0) {
+        sunlight *= atmoSunlight(uOwnAtmosphere, uAtmoCam[uOwnAtmosphere].xyz + relPos, L);
+    } else if (uRadialLight == 1) {
+        sunlight *= smoothstep(-0.12, 0.08, dot(up, L));
+    }
+    skylight = uRadialLight == 1 ? uAmbient * smoothstep(-0.2, 0.2, dot(up, L)) : uAmbient;
 }
 
 // The air between the camera and a point: C becomes C * transmittance +

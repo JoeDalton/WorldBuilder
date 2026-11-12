@@ -599,11 +599,13 @@ class _NativeNoise:
         :param dirs: (VERTS^2, 3) the inner grid's directions
         :param elevation: (VERTS^2,) its heights
         :param normals: (VERTS^2, 3)
-        :param weights: (VERTS^2, 6) uint8 biome weights
+        :param weights: (VERTS^2, 10) uint8: the six biome bytes, then the
+            far forest's four
         :param sea: the box holds the water the shader lifts the seabed to
         :returns: the drawn vertices' box (min, max), centre-relative float32
         """
-        assert out.dtype.itemsize == 36 and out.flags.c_contiguous
+        assert out.dtype.itemsize == 40 and out.flags.c_contiguous
+        assert weights.shape[1] == 10
         dirs = np.ascontiguousarray(dirs, dtype=np.float64)
         elevation = np.ascontiguousarray(elevation, dtype=np.float64)
         normals = np.ascontiguousarray(normals, dtype=np.float64)

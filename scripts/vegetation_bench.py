@@ -20,10 +20,9 @@ JSON, or compares them with a saved run::
 
 Poses (altitudes above the ground under the camera; the sun at azimuth 210,
 35 degrees up unless said): forest_edge (2 m up in the grassland, looking
-east into the forest 230 m away: the camera inside the canopy's shell),
-forest_low (150 m over the forest, 10 degrees down: grazing rays through the
-canopy), mixed_mid (800 m up, 30 degrees down, looking south over desert,
-grassland and forest), high (4 km up, 60 degrees down: the far look only),
+east into the forest 230 m away), forest_low (150 m over the forest, 10
+degrees down: grazing views), mixed_mid (800 m up, 30 degrees down, looking
+south over desert, grassland and forest), high (4 km up, 60 degrees down),
 desert (20 m over the desert's sparse bushes), forest_dusk (forest_low with
 the sun 6 degrees up behind the camera).
 
@@ -125,15 +124,13 @@ def main() -> None:
         demo._place_camera(lat, lon, alt, heading, pitch)
         demo.set_local_sun(*sun)
         settled = _settle(demo, args.timeout)
-        canopy = demo.terrain.canopy
-        on = canopy.settings
+        vegetation = demo.terrain.vegetation
+        on = vegetation.settings
         off = dataclasses.replace(on, enabled=False)
 
         def timed(veg) -> np.ndarray:
-            canopy.set_settings(veg)
-            demo.terrain._select(demo.terrain._camera)  # the shells now
-            while canopy.waiting:
-                demo.terrain._select(demo.terrain._camera)
+            vegetation.set_settings(veg)
+            demo.terrain._select(demo.terrain._camera)  # the trees now
             for _ in range(3):
                 demo.taskMgr.step()
             times = []
@@ -162,7 +159,7 @@ def main() -> None:
         path = args.out / f"{name}.png"
         demo.win.save_screenshot(Filename.from_os_specific(str(path)))
         s = demo.terrain.stats
-        c = canopy.stats
+        t = demo.terrain.trees.stats
         diff = ""
         if args.ab:
             diff = f"  {median - reference:+.2f} ms vs off ({reference:.2f})"
@@ -170,8 +167,10 @@ def main() -> None:
             diff = f"  {median - baseline[name]:+.2f} ms vs baseline"
         print(
             f"{name:<12} {'settled' if settled else 'TIMEOUT'}  {s['shown']} chunks, "
-            f"finest {s['finest']}, {c['shells']} shells ({c['inside']} inside, "
-            f"{c['update_ms']:.1f} ms), median {median:.2f} ms"
+            f"finest {s['finest']}, {t['meshes']} meshes, {t['impostors']} impostors"
+            f" ({t['chunks']} chunks; pass: points {t['points_ms']:.1f} ms"
+            f" for {t['made']},"
+            f" fill {t['fill_ms']:.1f} ms), median {median:.2f} ms"
             f"({1e3 / median:.0f} fps), "
             f"p90 {p90:.2f} ms{diff} -> {path}"
         )

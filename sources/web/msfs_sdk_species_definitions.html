@@ -1,0 +1,531 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"><head>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=3, user-scalable=yes"/>
+  <meta name="version" content="2020.0.0"/>
+  <link rel="StyleSheet" href="../../../template/styles/topic.min.css" type="text/css"/>
+  <link rel="StyleSheet" data-skin="true" type="text/css" href="../../../template/Frameless-MSFS-Dark/layout.css"/>
+  <link rel="StyleSheet" data-skin="true" href="../../../template/Frameless-MSFS-Dark/userstyles.css" type="text/css"/>
+  
+    <link rel="shortcut icon" type="image/png" href="../../../Favicon.png"/>
+    
+<meta http-equiv="Cache-control" content="no-cache, no-store, must-revalidate"/><meta http-equiv="Pragma" content="no-cache"/><meta http-equiv="Expires" content="0"/><link rel="stylesheet" type="text/css" href="../../../assets/css/Prism/prism.css?version=20_4"/><link rel="stylesheet" type="text/css" href="../../../assets/css/default.css?version=20_4"/><link rel="stylesheet" type="text/css" href="../../../assets/css/extra_symbols.css?version=20_4"/><link rel="stylesheet" type="text/css" href="../../../assets/css/mathjax/mathjax.css?version=20_4"/><script src="../../../assets/css/Prism/prism.js?version=20_4"></script><script src="../../../assets/css/mathjax/es5/tex-chtml.js?version=20_4" type="text/javascript"></script><script src="../../../assets/css/mathjax/es5/input/tex/extensions/boldsymbol.js?version=20_4" charset="UTF-8"></script><script type="text/x-mathjax-config">
+    <![CDATA[
+        MathJax.Hub.Config({"HTML-CSS": { preferredFont: "TeX", availableFonts: ["STIX","TeX"], linebreaks: { automatic:true }, EqnChunk: (MathJax.Hub.Browser.isMobile ? 10 : 50) },
+            tex2jax: { inlineMath: [ ["$", "$"], ["\\(", "\\)"] ], displayMath: [ ["$$","$$"], ["\\[", "\\]"] ], processEscapes: true, ignoreClass: "tex2jax_ignore|dno" },
+            TeX: {  noUndefined: { attributes: { mathcolor: "red", mathbackground: "#FFEEEE", mathsize: "90%" } } },
+            messageStyle: "none"
+    svg: {
+        scale: 1,                      // global scaling factor for all expressions
+        minScale: .5,                  // smallest scaling factor to use
+        mtextInheritFont: false,       // true to make mtext elements use surrounding font
+        merrorInheritFont: true,       // true to make merror text use surrounding font
+        mathmlSpacing: false,          // true for MathML spacing rules, false for TeX rules
+        skipAttributes: {},            // RFDa and other attributes NOT to copy to the output
+        exFactor: .5,                  // default size of ex in em units
+        displayAlign: 'center',        // default for indentalign when set to 'auto'
+        displayIndent: '0',            // default for indentshift when set to 'auto'
+        fontCache: 'local',            // or 'global' or 'none'
+        localID: null,                 // ID to use for local font cache (for single equation processing)
+        internalSpeechTitles: true,    // insert <title> tags with speech content
+        titleID: 0                     // initial id number to use for aria-labeledby titles
+      }
+        });
+      ]]>
+  </script>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+  <meta name="generator" content="Adobe RoboHelp 2026"/>
+  <title>Species Definitions</title>
+  
+  
+  
+  <meta name="rh-index-keywords" content="Environment:Biomes And Vegetation,Biomes,XML Files"/>
+  <meta name="rh-authors" content="Mark Alexander"/>
+  <script src="../../../assets/css/Prism/prism.js"></script>
+<meta name="rh-version" content="2026.01.11"/><meta http-equiv="Cache-control" content="no-cache, no-store, must-revalidate"/><meta http-equiv="Pragma" content="no-cache"/><meta http-equiv="Expires" content="0"/><link rel="stylesheet" type="text/css" href="../../../assets/css/Prism/prism.css?version=20_4"/><link rel="stylesheet" type="text/css" href="../../../assets/css/default.css?version=20_4"/><link rel="stylesheet" type="text/css" href="../../../assets/css/extra_symbols.css?version=20_4"/><link rel="stylesheet" type="text/css" href="../../../assets/css/mathjax/mathjax.css?version=20_4"/><script src="../../../assets/css/Prism/prism.js?version=20_4"></script><script src="../../../assets/css/mathjax/es5/tex-chtml.js?version=20_4" type="text/javascript"></script><script src="../../../assets/css/mathjax/es5/input/tex/extensions/boldsymbol.js?version=20_4" charset="UTF-8"></script><script type="text/x-mathjax-config">
+    <![CDATA[
+        MathJax.Hub.Config({"HTML-CSS": { preferredFont: "TeX", availableFonts: ["STIX","TeX"], linebreaks: { automatic:true }, EqnChunk: (MathJax.Hub.Browser.isMobile ? 10 : 50) },
+            tex2jax: { inlineMath: [ ["$", "$"], ["\\(", "\\)"] ], displayMath: [ ["$$","$$"], ["\\[", "\\]"] ], processEscapes: true, ignoreClass: "tex2jax_ignore|dno" },
+            TeX: {  noUndefined: { attributes: { mathcolor: "red", mathbackground: "#FFEEEE", mathsize: "90%" } } },
+            messageStyle: "none"
+    svg: {
+        scale: 1,                      // global scaling factor for all expressions
+        minScale: .5,                  // smallest scaling factor to use
+        mtextInheritFont: false,       // true to make mtext elements use surrounding font
+        merrorInheritFont: true,       // true to make merror text use surrounding font
+        mathmlSpacing: false,          // true for MathML spacing rules, false for TeX rules
+        skipAttributes: {},            // RFDa and other attributes NOT to copy to the output
+        exFactor: .5,                  // default size of ex in em units
+        displayAlign: 'center',        // default for indentalign when set to 'auto'
+        displayIndent: '0',            // default for indentshift when set to 'auto'
+        fontCache: 'local',            // or 'global' or 'none'
+        localID: null,                 // ID to use for local font cache (for single equation processing)
+        internalSpeechTitles: true,    // insert <title> tags with speech content
+        titleID: 0                     // initial id number to use for aria-labeledby titles
+      }
+        });
+      ]]>
+  </script>
+  
+  <meta charset="utf-8"/>
+  
+  
+  <meta name="rh-authors" content="Mark Alexander"/>
+<meta name="rh-version" content="2026.01.11"/></head>
+
+<body class="rh-BODY-wrapper">
+  <div class="cookie-widget-holder" id="cookie-status-widget-holder"></div>
+  <div class="RH-LAYOUT-HEADER-skip-content-container" id="skip-to-content"></div>
+  <header class="RH-LAYOUT-HEADER-container" role="banner">
+    <div class="RH-LAYOUT-HEADER-logo-box  ">
+      <div class="RH-LAYOUT-HEADER-logo" id="logo-holder"></div>
+      <div class="RH-LAYOUT-HEADER-title" id="topic-title-holder"></div>
+    </div>
+    <div class="RH-LAYOUT-HEADERMENU-container" id="header-menu"></div>
+    <div class="search-placeholder-class" id="search-with-help"></div>
+  </header>
+  <main role="main" class="RH-LAYOUT-BODY-container">
+    <div class="RH-LAYOUT-SEARCHRESULTS" id="rh-searchresults"></div>
+    <div class="RH-LAYOUT-LEFTPANEL-container" id="rh-leftpanel"></div>
+    <div class="rh-layout-BODY-main" id="rh-layout-main">
+      <div class="RH-LAYOUT-TOOLBAR-toolbar-box" id="rh-toolbar"></div>
+      <div class="rh-layout-BODY-body">
+        <div class="RH-LAYOUT-CENTERPANEL-container">
+          <div class="rh-layout-selectdetails" id="rh-selectdetails"></div>
+          <div class="RH-LAYOUT-CENTERPANEL-topic-box" id="rh-topic">
+		  
+  <div><br/>
+    
+  </div>
+  <div>
+  <h2>SPECIES DEFINITIONS</h2>
+  <p>The <code class="inline">&lt;species&gt;.xml</code> file goes in the <code class="inline">vegetation</code> folder beside the other files for the vegetation and should be formatted as follows:</p>
+  <pre class="language-xml"><code class="language-xml">&lt;?xml version=&quot;1.0&quot; encoding=&quot;utf-8&quot;?&gt;
+&lt;SpeciesList&gt;
+    &lt;!-- Define a species --&gt;
+    &lt;Species name=&quot;[SPECIES NAME]&quot;&gt;
+        &lt;!-- Define variations within the species --&gt;
+        &lt;Variations&gt;
+            &lt;Variation spawnRatio=&quot;0.75&quot;&gt;
+                &lt;Size min=&quot;5&quot; max=&quot;7&quot;/&gt;
+                &lt;Imposter stiffness=&quot;0.9&quot; frames=&quot;8&quot; textureIndex=&quot;0&quot;/&gt;
+            &lt;/Variation&gt;
+            &lt;!-- Further variations here --&gt;
+        &lt;/Variations&gt;
+        &lt;!-- The material used for any imposters in this species --&gt;
+        &lt;Material name=&quot;[MATERIAL NAME]&quot;/&gt;
+    &lt;/Species&gt;
+    &lt;!-- Further species here --&gt;
+&lt;/SpeciesList&gt;</code></pre>
+  <p>Here you <em>must</em> include the <code class="inline"><a href="Species_Definitions.htm#SpeciesList">&lt;SpeciesList&gt;</a></code> element, and the rest of the XML is comprised of the elements listed on this page. You can find a complete example of a species file here:</p>
+  <ul>
+    <li><a href="Biome_And_Species_Examples.htm#Species">Species Example</a></li>
+  </ul>
+  <p> </p>
+  <p> </p>
+  <h3><code class="inline">&lt;GrassMaterial /&gt;</code></h3>
+  <p>This element defines a material to be used on the ground as a &quot;grass&quot; texture for the biome that the all the defined species will be used in. This is an <em>optional</em>, self-closing element and has the following attribute:</p>
+  <p> </p>
+  <table style="table-layout:auto;">
+    <tbody>
+      <tr>
+        <th>Attribute</th>
+        <th>Description</th>
+        <th>Type</th>
+        <th>Required</th>
+      </tr>
+      <tr>
+        <td><code class="inline">guid</code></td>
+        <td>
+          <p>This GUID of the grass texture to use for the species.</p>
+        </td>
+        <td>String</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+    </tbody>
+  </table>
+  <p> </p>
+  <p> </p>
+  <h3 id="SpeciesList"><code class="inline">&lt;SpeciesList&gt;</code></h3>
+  <p>This element is a container element for one or more <code class="inline"><a href="Species_Definitions.htm#Species">&lt;Species&gt;</a></code> elements. It has no attributes.</p>
+  <p> </p>
+  <p> </p>
+  <h3 id="Species"><code class="inline">&lt;Species&gt;</code></h3>
+  <p>This element defines a single species that can then be used to populate a biome. Each species can have one or more <code class="inline"><a href="Species_Definitions.htm#Variation">&lt;Variation&gt;</a></code> elements and requires a <code class="inline"><a href="Species_Definitions.htm#Material">&lt;Material&gt;</a></code> element too. It has the following attribute:</p>
+  <p> </p>
+  <table style="table-layout:auto;">
+    <tbody>
+      <tr>
+        <th>Attribute</th>
+        <th>Description</th>
+        <th>Type</th>
+        <th>Required</th>
+      </tr>
+      <tr>
+        <td><code class="inline">name</code></td>
+        <td>
+          <p>This is the name of the species. This will be used to set a biome <code class="inline"><a href="Biome_Definitions.htm#Species">&lt;Species&gt;</a></code> element.</p>
+          <p><span class="note"><strong>IMPORTANT!</strong> If the species name is not unique, it will override any previously loaded species of the same name.</span></p>
+        </td>
+        <td>String</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+    </tbody>
+  </table>
+  <p> </p>
+  <p> </p>
+  <h3 id="Variations"><code class="inline">&lt;Variations&gt;</code></h3>
+  <p>This element is a container element for one or more <code class="inline"><a href="#Variation">&lt;Variation&gt;</a></code> elements. It has no attributes.</p>
+  <p> </p>
+  <p> </p>
+  <h4 id="Variation"><code class="inline">&lt;Variation&gt;</code></h4>
+  <p>This element defines a variation on the species being defined. Each <code class="inline"><a href="#Species">&lt;Species&gt;</a></code> requires at least one variation but can have more. It can have the <code class="inline"><a href="Species_Definitions.htm#Size">&lt;Size /&gt;</a></code>, <code class="inline"><a href="Species_Definitions.htm#Impostor">&lt;Impostor /&gt;</a></code>, and <code class="inline"><a href="Species_Definitions.htm#MaskColor">&lt;MaskColor /&gt;</a></code> sub elements, and has the following attribute:</p>
+  <p> </p>
+  <table style="table-layout:auto;">
+    <tbody>
+      <tr>
+        <th>Attribute</th>
+        <th>Description</th>
+        <th>Type</th>
+        <th>Required</th>
+      </tr>
+      <tr>
+        <td><code class="inline">spawnRatio</code></td>
+        <td>This defines the rate at which the variation is picked over other variations of the same species. If the attribute is not set then it will default to 1.</td>
+        <td>Float</td>
+        <td style="text-align: center">No</td>
+      </tr>
+    </tbody>
+  </table>
+  <p> </p>
+  <p> </p>
+  <h5 id="Size"><code class="inline">&lt;Size /&gt;</code></h5>
+  <p>This is a required sub-element for a <code class="inline"><a href="#Variation">&lt;Variation&gt;</a></code> and is a self-closing. It is used to define the size range (in meters) of the variation, and has the following attributes:</p>
+  <p> </p>
+  <table style="table-layout:auto;">
+    <tbody>
+      <tr>
+        <th>Attribute</th>
+        <th>Description</th>
+        <th>Type</th>
+        <th>Required</th>
+      </tr>
+      <tr>
+        <td><code class="inline">min</code></td>
+        <td>The minimum size for the variation (in meters).</td>
+        <td>Float</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+      <tr>
+        <td><code class="inline">max</code></td>
+        <td>The maximum size for the variation (in meters).</td>
+        <td>Float</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+    </tbody>
+  </table>
+  <p> </p>
+  <p> </p>
+  <h5 id="Impostor"><code class="inline">&lt;Impostor /&gt;</code></h5>
+  <p>This is a required sub-element for a <code class="inline"><a href="#Variation">&lt;Variation&gt;</a></code> element and tells <span data-keyref="game_name">Microsoft Flight Simulator 2020</span> information about how the vegetation impostors should be rendered (vegetation is rendered using <a href="https://shaderbits.com/blog/octahedral-impostors/" target="_blank">octahedral impostors</a>, which is a low-cost method used to render a lot of similar items - like trees, bushes, etc... - using a combination of billboards, texture atlas and shaders). This element is a self-closing element, and has the following parameters:</p>
+  <p> </p>
+  <table style="table-layout:auto;">
+    <tbody>
+      <tr>
+        <th>Attribute</th>
+        <th>Description</th>
+        <th>Type</th>
+        <th>Required</th>
+      </tr>
+      <tr>
+        <td><code class="inline">stiffness</code></td>
+        <td>Defines the resistance to the wind of the species. A value from 0 to 1.</td>
+        <td>Float</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+      <tr>
+        <td><code class="inline">frames</code></td>
+        <td>The number of frames along one edge of the texture atlas. The texture atlas <em>must</em> be square and have the same number of frames along the width and the height. For an example, please see here: <a href="../../../Developer_Mode/Material_Editor/The_Material_Inspector.htm#TextureArrays">Texture Arrays</a></td>
+        <td>Integer</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+      <tr>
+        <td><code class="inline">textureIndex</code></td>
+        <td>The index into the texture array that is being used to generate variations for the species. If no texture array is being used then this should be set to 0. Please see here for more information: <a href="../../../Developer_Mode/Material_Editor/The_Material_Inspector.htm#TextureArrays">Texture Arrays</a></td>
+        <td>Integer</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+      <tr>
+        <td><code class="inline">relativeOffsetY</code></td>
+        <td>This value can be used to set a relative offset from the ground for the impostor used to render the vegetation. Value is in meteres.</td>
+        <td>Float</td>
+        <td style="text-align: center">No</td>
+      </tr>
+    </tbody>
+  </table>
+  <p> </p>
+  <p> </p>
+  <h5 id="MaskColor"><code class="inline">&lt;MaskColor /&gt;</code></h5>
+  <p>By default, all vegetation will be colored to suit the aerial photogram of the terrain on which is placed. However, this colouring is done over the full texture, which may not be what is required. For example, if you have a tree texture, you wouldn&#39;t want the trunk to be colored the same as the foliage, which is when you would use this element. This element sets a mask color which is used to prevent the aerial colouring being used for a specific section of the texture. This element is a sub-element of <code class="inline"><a href="#Variation">&lt;Variation&gt;</a></code> and is self-closing with the following attributes:</p>
+  <p> </p>
+  <table style="table-layout:auto;">
+    <tbody>
+      <tr>
+        <th>Attribute</th>
+        <th>Description</th>
+        <th>Type</th>
+        <th>Required</th>
+      </tr>
+      <tr>
+        <td><code class="inline">r</code></td>
+        <td>The red component of the color to mask, from 0 to 1.</td>
+        <td>Float</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+      <tr>
+        <td><code class="inline">g</code></td>
+        <td>The green component of the color to mask, from 0 to 1.</td>
+        <td>Float</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+      <tr>
+        <td><code class="inline">b</code></td>
+        <td>The blue component of the color to mask, from 0 to 1.</td>
+        <td>Float</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+      <tr>
+        <td><code class="inline">maxDistSquared</code></td>
+        <td>
+          <p>This is the <em>squared</em> maximum &quot;distance&quot; from the mask color after which aerial colouring will be applied to the material texture. This is a value between 0 - 1, and the squareroot of this value will be used to calculate the colours that fall inside/outside of the mask.</p>
+        </td>
+        <td>Float</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+    </tbody>
+  </table>
+  <p> </p>
+  <p> </p>
+  <h3 id="Material"><code class="inline">&lt;Material&gt;</code></h3>
+  <p>This element is used within the <code class="inline"><a href="#Species">&lt;Species&gt;</a></code> element definitions to set the material that will be used to texture the vegetation. You only have one material assigned per-species. This is a self-closing element with the following attribute:</p>
+  <p> </p>
+  <table style="table-layout:auto;">
+    <tbody>
+      <tr>
+        <th>Attribute</th>
+        <th>Description</th>
+        <th>Type</th>
+        <th>Required</th>
+      </tr>
+      <tr>
+        <td><code class="inline">name</code></td>
+        <td>The <a href="#" data-popovertext="GUID stands for &#39;Globally Unique IDentifier&#39; which is a 128-bit value used to identify information in computer systems." data-rhwidget="TextPopOver">GUID</a> of the material that is to be used. You can get the GUID for any material using the <a href="../../../Developer_Mode/Material_Editor/Inspector_Menus.htm#GUID">Copy GUID</a> option from <a href="../../../Developer_Mode/Material_Editor/The_Material_Inspector.htm">The Material Inspector</a> File menu.</td>
+        <td>String</td>
+        <td style="text-align: center">Yes</td>
+      </tr>
+    </tbody>
+  </table>
+  <p> </p>
+  <p>For further information on how to set up materials to be used for vegetation, please see the <a href="../../../Developer_Mode/Material_Editor/The_Material_Inspector.htm#TextureArrays">Texture Arrays</a> section of the documentation.</p>
+  <p> </p>
+  <p> </p>
+
+</div>
+  <div>
+    <script>
+      //<![CDATA[
+      var rhTopicTarget = document.getElementById("rh-topic"); //Get the main page DOM
+      var config = {
+        childList: true,
+        subtree: true
+      }; // We want to watch the arborescence under that node
+      var rhTopicCallback = function(_mutationsList, observer) { // Callback function
+        observer.disconnect(); // We disconnect the observer to prevent circular mutations
+        // All javascript that needs to be done, might need optimisation (TBD)
+        window.hasOwnProperty('Prism') ? Prism.highlightAllUnder(rhTopicTarget) : console.warn('Prism is not loaded'); // Prism
+        if (window.hasOwnProperty('MathJax')) {
+          MathJax.texReset();
+          MathJax.typesetClear();
+          MathJax.typesetPromise([rhTopicTarget]).then(() => observer.observe(rhTopicTarget, config)); // Turn the observer back on for potential next 
+        } else {
+          console.warn('MathJax is not loaded.');
+        } // Mathjax
+        // Collapsible!
+        let coll = document.getElementsByClassName("collapsible");
+        for (let indexColl = 0; indexColl < coll.length; ++indexColl) {
+          coll[indexColl].onclick = function() {
+            this.classList.toggle("collapsibleOpen");
+            this.nextElementSibling.classList.toggle("collapsibleContentOpen"); // Next element is the content
+          }
+        }
+        // SYNTAX HIGHLIGHT
+        coll = document.getElementsByClassName("xmlSource");
+        for (let indexColl = 0; indexColl < coll.length; ++indexColl) {
+          syntaxHighlight(coll[indexColl]);
+        }
+      };
+      // COLLAPSIBLE SYNTAX HIGHLIGHTING
+      const knownParametersNotInAllCaps = new Set(["Pl463", "SimpleCom", "MouseFlags"]);
+      function syntaxHighlight(elmntObj) {
+        let txt = elmntObj.innerHTML;
+        // Replace comments with our own tag, to avoid highlighting things inside of them.
+        // Store them with their highlight already done.
+        // NB: Our placeholder should be safe since it is itself a comment. It will still work if the original file already contains that string.
+        let commentStorage = Array();
+        let commentPlaceholder = "&lt;!-- PLACEHOLDERFORSYNTAXHIGHLIGHTING --&gt;";
+        txt = txt.replaceAll(/&lt;!--.*?--&gt;/sg,
+          (_fullMatch) => {
+            commentStorage.push("<span class=xmlComment>" + _fullMatch + "</span>");
+            return commentPlaceholder;
+          }
+        );
+        // <Value>PARAM</Value>
+        // NB: Execute before the syntax highlighting of tags (otherwise the regex won't match)
+        txt = txt.replaceAll(/(&lt;Value&gt;)([^%&"'<>]+?)(&lt;\/Value&gt;)/sg, "$1<span class=xmlGetParam>$2</span>$3");
+        // XML specifications: https://www.w3.org/TR/xml/#sec-starttags
+        // NB: We accept # as a valid character in tag names although it's not valid XML (this can be used to get a param as part of the tag name)
+        const regexGetParam = /#[^#<>\s]+?#/sg
+        const regexTag = /(?<bracketOpen>&lt;\/?)(?<tagName>[\w:#\-\.]+?)(?<attrAll>(?:\s+?[\w:\-\.]+(?:\s*?=\s*?(?:"[^%&"]*?"|'[^%&']*?'))?)*)(?<endingSpace>\s*?)(?<bracketClose>\/?&gt;)/sg
+        const regexAttribute = /(?<space>\s+?)(?<attrName>[\w:\-\.]+)(?<attrValue>(?<equal>\s*?=\s*?)(?:(?<DQOpen>")(?<attrValueDQ>[^%&"]*?)(?<DQClose>")|(?<SQOpen>')(?<attrValueSQ>[^%&']*?)(?<SQClose>')))?/sg;
+        // Normal tags
+        txt = txt.replaceAll(regexTag,
+          (_fullMatch, _bracketOpen, _tagName, _attributeAll, _endingSpace, _bracketClose /*, _offset, _wholeString, _groups*/ ) => {
+            // <tagName
+            // If the tag name is in ALL CAPS, or if it contains a #, then it's a param
+            // NB: That's not a totally reliable criteria, but the definition of parameters
+            // is litterally "anything that's not a known tag" which is awful to begin with
+            let classToUseForTagName = "xmlTagName";
+            if ((_tagName.indexOf("#") >= 0) || (_tagName == _tagName.toUpperCase()) || knownParametersNotInAllCaps.has(_tagName)) {
+              classToUseForTagName = "xmlParamName";
+            }
+            let res = "<span class=\"xmlTag\">" + _bracketOpen + "</span><span class=\"" + classToUseForTagName + "\">" + _tagName + "</span>";
+            // Attributes (if any)
+            if (_attributeAll != undefined) {
+              res += _attributeAll.replaceAll(regexAttribute,
+                (_fullMatch, _space, _attrName, _attrValue, _equal, _DQOpen, _attrValueDQ, _DQClose, _SQOpen, _attrValueSQ, _SQClose /*, _offset, _wholeString, _groups*/ ) => {
+                  // ␣␣attrName
+                  let res = _space + "<span class=\"xmlAttributeName\">" + _attrName + "</span>";
+                  // ␣␣=␣␣"attrValue" / ␣␣=␣␣'attrValue'
+                  if (_attrValue != undefined) {
+                    let classToUse = "xmlAttributeValue";
+                    switch (_tagName) {
+                      // Template names
+                      case "UseTemplate":
+                      case "Template":
+                        if (_attrName == "Name") {
+                          classToUse = "xmlTemplateName";
+                        }
+                        break;
+                        // Get Parameter
+                      case "Condition":
+                      case "Case":
+                      case "Arg":
+                        if ((_attrName == "Check") || (_attrName == "Valid") || (_attrName == "NotEmpty")) {
+                          classToUse = "xmlGetParam";
+                        }
+                        break;
+                      case "Switch":
+                        if (_attrName == "Param") {
+                          classToUse = "xmlGetParam";
+                        }
+                        break;
+                    }
+                    res += _equal + (_DQOpen || _SQOpen) + "<span class=\"" + classToUse + "\">" + (_attrValueDQ || _attrValueSQ) + "</span>" + (_DQClose || _SQClose);
+                  }
+                  return res;
+                }
+              );
+            }
+            // ␣␣>
+            res += _endingSpace + "<span class=xmlTag>" + _bracketClose + "</span>";
+            return res;
+          }
+        );
+        // Param Get
+        txt = txt.replaceAll(regexGetParam, "<span class=xmlGetParam>$&</span>");
+        // Put back highlighted comments
+        txt = txt.replaceAll(new RegExp(commentPlaceholder, "sg"),
+          (_fullMatch) => {
+            return commentStorage.shift();
+          }
+        );
+        /*
+      // Obsolete replacements:
+      // We apply a white-space style on the container element which gives better results without replacing.
+  
+      // Newlines (\r\n = Windows, \n = Unix-like, other cases are unlikely)
+      //txt = txt.replaceAll("\r\n", "<br>").replaceAll("\n", "<br>");
+  
+      // Tabs
+      //txt = txt.replaceAll("\t", "&emsp;&emsp;");   // 2 spaces
+      //txt = txt.replaceAll("\t", "&nbsp;&nbsp;");   // 2 non-breakable spaces
+      //txt = txt.replaceAll("\t", "&#9;");           // HTML tab (only works with "white-space = pre", but then \t also works so why bother)
+      */
+        elmntObj.innerHTML = txt;
+      }
+      // Launch code
+      var observer = new MutationObserver(rhTopicCallback); // Create the Mutation Observer object
+      observer.observe(rhTopicTarget, config); // Launch the the observation with callback and config
+      //]]>
+    </script>
+  </div>
+
+</div>
+          <div class="RH-LAYOUT-BRS-container" id="rh-brs"></div>
+        </div>
+        <div class="RH-LAYOUT-RIGHTPANEL-container" id="rh-rightpanel"></div>
+      </div>
+    </div>
+  </main>
+  <footer role="contentinfo" class="RH-LAYOUT-FOOTER-container" id="rh-footer">
+  <div class="rh-layout-footer-outer-box" style="background-color: #111; color: #A0A0A0; padding: 5px">
+    <!--<div class="rh-layout-footer-inner-left-box" style="background-color: #212121;"><img alt="World Icon" class="rh-layout-footer-imgTag" src="Group 114.svg" title="World Icon" />
+      <div>
+        <p style="text-align: center;background-color: #212121;color: rgb(0,0,0,);line-height: 2;margin: 0;"><span style="color:#ffffff;"></span><span style="color:rgb(0,0,0,);">EN</span></p>
+      </div>
+    </div>-->
+    <div class="rh-layout-footer-inner-right-box">
+      <div class="rh-layout-footer-inner-right-box1">
+        <p style="text-align: center; line-height: 2;margin: 0;"><a href="https://www.microsoft.com/" style="color: #A0A0A0; text-decoration: none;">©2023 Microsoft</a></p>
+      </div>
+      <!--<div class="rh-layout-footer-inner-right-box2">
+        <p style="text-align: center;height: 100%;line-height: 2;margin: 0;"><a href="https://flightsimulator.zendesk.com/hc/en-us" style="color: #A0A0A0; text-decoration: none;">Contact Us</a></p>
+      </div>-->
+      <div class="rh-layout-footer-inner-right-box2">
+        <p style="text-align: center;line-height: 2;margin: 0;"><span style="font-size: 11pt;"><a href="https://privacy.microsoft.com/en-us/privacystatement" style="color: #A0A0A0; text-decoration: none;">Privacy Policy</a></span></p>
+      </div>
+      <!--<div class="rh-layout-footer-inner-right-box4" style="background-color: #212121;">
+        <p style="text-align: center;color: rgb(0,0,0,);line-height: 2;margin: 0;"><a href="http://www.example.com" style="color: black; text-decoration: none;">Terms and Conditions<a/></p>
+      </div>-->
+      <div class="rh-layout-footer-inner-right-box3">
+        <p style="text-align: center;line-height: 2;margin: 0;"><a href="https://devsupport.flightsimulator.com/" style="color: #A0A0A0; text-decoration: none;">SDK Dev Support</a></p>
+      </div>
+      <div class="rh-layout-footer-inner-right-box4">
+        <p style="text-align: center;line-height: 2;margin: 0;"><a href="https://forums.flightsimulator.com/" style="color: #A0A0A0; text-decoration: none;">MSFS Forums</a></p>
+      </div>
+    </div>
+  </div>
+
+</footer>
+  <script type="text/javascript">//<![CDATA[
+
+    gRootRelPath = "../../.."
+    gCommonRootRelPath = "../../.."
+    gTopicId = "5.2.4.0_1"
+  
+//]]></script>
+
+
+  <script src="../../../template/scripts/topicpage.js"></script>
+  <script src="../../../whxdata/layoutconfig.js"></script>
+  <script src="../../../whxdata/brsdata.js"></script>
+
+  
+    
+
+            
+				  
+
+
+</body></html>

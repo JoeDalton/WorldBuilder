@@ -2081,6 +2081,32 @@ levels, veil 4.9 against 4.4, in_clouds 0.6 against 0.7); in motion
 (`motion_shots`, tower, forward) error 2.36 to 2.41, grain 1.23 to 1.27,
 specks 3.79 to 3.95 %.
 
+## 36. The far forest: Bruneton's shader-map (VEGETATION_PLAN.md V2, 2026-11-12)
+
+`scripts/vegetation_bench.py --ab --frames 480 --rounds 8` on the tiny planet, RTX 3070, 2560 x 1440, HIGH,
+with the trial's instanced trees off (`vegetation.tree_range=0`: the far forest alone, everywhere;
+[vegetation](vegetation.md)):
+
+| Version | forest_low | mixed_mid | forest_dusk | high |
+|---|---|---|---|---|
+| Tables looked up per pixel (float32 3D texture) | +0.64 ms | +0.52 ms | +0.68 ms | |
+| The same, 16-bit texels and `textureLod` | +0.54 ms | +0.23 ms | | |
+| The shader-map's body skipped (forest floor and split ground light only) | +0.00 ms | +0.10 ms | | |
+| **Shares looked up per vertex** (`terrain.vert`, `forest_table.glsl`), radiance per pixel | **+0.15 ms** | **+0.19 ms** | **+0.16 ms** | -0.01 ms |
+
+The fetches were not the cost: the shader-map's arithmetic in an already large fragment shader was. The
+angles and densities vary slowly over the ground, so the table lookups moved to the vertex stage (1.1 M
+vertices against 3.7 M pixels); V2's share was +0.15 ms.
+
+The whole stack (the trial's instanced trees plus the far forest, default settings) costs +2.6 to +2.7 ms
+over forest and +4.8 ms among the trees (forest_edge), against the trial's +0.9-1.0 and +2.5 ms: V1's denser
+forest (~420 conifers per hectare at full density) gives the trial's point-sprite impostors 425 000 trees at
+forest_low instead of about 200 000. That layer is part V3's to replace.
+
+The ray-marched canopy trial was then removed (it was off by default: no change to these numbers). With the
+instanced trees, the vegetation on against off (default `--ab`): forest_edge +4.23, forest_low +2.50,
+mixed_mid +0.79, high +0.01, desert +0.53, forest_dusk +2.38 ms.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

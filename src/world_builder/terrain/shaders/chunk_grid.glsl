@@ -1,5 +1,5 @@
 // A chunk's vertex grid (cubesphere.QUADS quads a side), shared by the
-// terrain's vertex shaders (terrain.vert, canopy.vert). Include once per
+// terrain's vertex shaders (terrain.vert). Include once per
 // shader with #pragma include.
 
 const int QUADS = 64;

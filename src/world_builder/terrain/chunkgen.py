@@ -10,7 +10,7 @@ Positions are ``dir * (R + h)`` in the planet frame (float64), stored
 relative to the chunk's float64 centre as float32: a leaf is resolved to
 better than a millimetre, a whole face to a few centimetres.
 
-The vertex layout is one interleaved 36-byte record (see :data:`VERTEX_DTYPE`),
+The vertex layout is one interleaved 40-byte record (see :data:`VERTEX_DTYPE`),
 packed here so the main thread only copies bytes. A skirt (one extra vertex
 per edge vertex, hung radially down) closes the cracks between chunks of
 different levels and the float-rounding seams between faces.
@@ -24,9 +24,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from world_builder.terrain import biomes
+from world_builder.terrain import biomes, forest
 from world_builder.terrain.cubesphere import QUADS, VERTS, Key
-from world_builder.terrain.noise import native_library
+from world_builder.terrain.forest import FOREST_BYTES
+from world_builder.terrain.noise import fbm, native_library
 from world_builder.terrain.planet import Planet, PlanetSpec
 
 __all__ = ["QUADS", "VERTS", "VERTEX_DTYPE", "ChunkData", "generate_chunk"]
@@ -35,6 +36,8 @@ __all__ = ["QUADS", "VERTS", "VERTEX_DTYPE", "ChunkData", "generate_chunk"]
 #: a = snow, rock, grass, forest; b = desert, the strata tint's mask (the
 #: shader takes beach as the rest of the weights), then the chunk's slot.
 #: ``height`` is metres above sea level (the skirt's own, below its edge).
+#: ``forest`` is the far forest's data (:func:`forest.pack_far`): the trees'
+#: cover / forest.COVER_MAX, then each far group's tree density.
 VERTEX_DTYPE = np.dtype(
     [
         ("vertex", np.float32, 3),
@@ -42,6 +45,7 @@ VERTEX_DTYPE = np.dtype(
         ("height", np.float32),
         ("biome_a", np.uint8, 4),
         ("biome_b", np.uint8, 4),
+        ("forest", np.uint8, 4),
     ]
 )
 
@@ -65,9 +69,13 @@ class ChunkData:
     :ivar geometric_error: max height change against the parent's coarser
         interpolation, metres
     :ivar gen_ms: generation time, milliseconds
-    :ivar canopy_lift: (VERTS, VERTS) float32 the vegetation shell's lift
-        per vertex (:func:`world_builder.terrain.vegetation.shell_lift`), for
-        a chunk fine enough to draw its plants and growing any; else None
+    :ivar forest: (n, len(forest.COLUMNS)) float32 the trees, bushes and
+        rocks standing on it (:func:`world_builder.terrain.forest.place`), or
+        None
+    :ivar density: (VERTS, VERTS) float32 the vegetation density (procedural,
+        then the level's density paints), or None (no vegetation)
+    :ivar convexity: (VERTS, VERTS) float32 minus the elevation's Laplacian,
+        1/m (> 0 on crests), or None (no vegetation)
     """
 
     key: Key
@@ -83,7 +91,9 @@ class ChunkData:
     skirt_depth: float
     geometric_error: float
     gen_ms: float
-    canopy_lift: np.ndarray | None = None
+    forest: np.ndarray | None = None
+    density: np.ndarray | None = None
+    convexity: np.ndarray | None = None
 
     def vertices(self) -> np.ndarray:
         """:returns: the vertex records as a :data:`VERTEX_DTYPE` array (a view)"""
@@ -227,19 +237,15 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         w = paint.apply(inner_dirs, w, radius)
     w_bytes = np.clip(np.rint(w * 255.0), 0, 255).astype(np.uint8)
     # The vertices carry five weights (the shader takes beach as the rest)
-    # and, in the sixth byte, where the rock strata tint the ground.
-    packed = w_bytes.copy()
+    # and, in the sixth byte, where the rock strata tint the ground; then the
+    # far forest's four bytes.
+    packed = np.zeros((VERTS * VERTS, 6 + FOREST_BYTES), dtype=np.uint8)
+    packed[:, :6] = w_bytes
     if sample.strata is None:
         packed[:, 5] = 0
     else:
         strata = sample.strata[inner].ravel()
         packed[:, 5] = np.clip(np.rint(strata * 255.0), 0, 255).astype(np.uint8)
-
-    canopy_lift = None
-    if spec.has_vegetation:
-        from world_builder.terrain import vegetation
-
-        canopy_lift = vegetation.chunk_lift(grid, key, elevation, w_bytes, spec)
 
     geometric_error = float(np.max(np.abs(elevation - parent_interpolation(elevation))))
     h_min, h_max = float(elevation.min()), float(elevation.max())
@@ -247,6 +253,25 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         4.0 * spacing + 4.0 * geometric_error, 0.5 * grid.chunk_size(level)
     )
     centre = grid.centre_dir(key) * (radius + 0.5 * (h_min + h_max))
+    # The trees, bushes and rocks on it, and the far forest's data per vertex
+    # (terrain.forest): by the vegetation density and the ground's convexity.
+    plants = density = convexity = None
+    if getattr(spec, "has_vegetation", False):
+        density = vegetation_density(spec, inner_dirs)
+        convexity = _convexity(full, border, step, spacing)
+        plants, far = forest.chunk_forest(
+            grid,
+            key,
+            dirs[inner],
+            elevation,
+            w_bytes,
+            centre,
+            spec,
+            density,
+            slope.ravel(),
+            convexity.ravel(),
+        )
+        packed[:, 6:] = far
 
     if native is not None:
         vertices = np.empty(VERTS * VERTS + 4 * QUADS, dtype=VERTEX_DTYPE)
@@ -284,8 +309,50 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
         skirt_depth=skirt_depth,
         geometric_error=geometric_error,
         gen_ms=(time.perf_counter() - start) * 1e3,
-        canopy_lift=canopy_lift,
+        forest=plants,
+        density=None
+        if density is None
+        else density.reshape(VERTS, VERTS).astype(np.float32),
+        convexity=None if convexity is None else convexity.astype(np.float32),
     )
+
+
+def vegetation_density(spec: PlanetSpec, dirs: np.ndarray) -> np.ndarray:
+    """The vegetation density at (N, 3) directions: the planet's procedural
+    field (low-frequency fbm, its own seed: :func:`forest.density_from_noise`),
+    then the level's density paints [SS4 s.22].
+
+    :returns: (N,) in [0, 1]
+    """
+    points = np.asarray(dirs, dtype=np.float64) * spec.radius
+    noise = fbm(
+        points, forest.DENSITY_WAVELENGTH, forest.DENSITY_OCTAVES, int(spec.seed) + 7919
+    )
+    density = forest.density_from_noise(noise)
+    for paint in getattr(spec, "density_paints", ()):
+        density = paint.apply(dirs, density, spec.radius)
+    return density
+
+
+def _convexity(full: np.ndarray, border: int, step: int, spacing: float) -> np.ndarray:
+    """Minus the elevation's Laplacian over +-*step* samples (the biome
+    slope's scale, biomes.SLOPE_SCALE, at most), 1/m: > 0 on crests and
+    hilltops, < 0 in hollows and valleys [SS4 s.22].
+
+    :param full: (n, n) heights with a border of *border* >= *step* samples
+    :returns: (VERTS, VERTS)
+    """
+    b, s = border, step
+    rows = slice(b, b + VERTS)
+    cols = slice(b, b + VERTS)
+    centre = full[rows, cols]
+    around = (
+        full[b + s : b + s + VERTS, cols]
+        + full[b - s : b - s + VERTS, cols]
+        + full[rows, b + s : b + s + VERTS]
+        + full[rows, b - s : b - s + VERTS]
+    )
+    return -(around - 4.0 * centre) / (s * spacing) ** 2
 
 
 def _sea_lifted(
@@ -364,6 +431,7 @@ def _pack_vertices(
     out["height"][:count] = elevation.ravel()
     out["biome_a"][:count] = w_bytes[:, 0:4]
     out["biome_b"][:count, 0:2] = w_bytes[:, 4:6]
+    out["forest"][:count] = w_bytes[:, 6 : 6 + FOREST_BYTES]
 
     skirt = out[count:]
     skirt[:] = out[ring]

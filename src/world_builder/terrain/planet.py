@@ -271,6 +271,8 @@ class PlanetSpec:
         benchmarks leave them out; a game's :class:`World` decides its own)
     :ivar stamps: hand-made heightmaps (:class:`stamps.Stamp`), in order
     :ivar paints: biome paint masks (:class:`stamps.Paint`), in order
+    :ivar density_paints: vegetation density paint masks
+        (:class:`stamps.DensityPaint`), in order, over the procedural density
     :ivar sea_bias: continental-field offset; None until :meth:`resolved`
     """
 
@@ -286,6 +288,7 @@ class PlanetSpec:
     climate: ClimateParams = field(default_factory=ClimateParams)
     stamps: tuple = ()
     paints: tuple = ()
+    density_paints: tuple = ()
     sea_bias: float | None = None
 
     def resolved(self) -> PlanetSpec:

@@ -37,7 +37,7 @@ COST_FIELDS = {
         "upload_ms_per_frame",
         "texture_size",
     ],
-    "vegetation": ["range", "shadow_range", "detail_range", "max_steps"],
+    "vegetation": ["mesh_range", "tree_range"],
     "atmosphere": ["steps", "vertex_steps"],
     "sky": ["star_fraction", "glow_size"],
     "clouds": [

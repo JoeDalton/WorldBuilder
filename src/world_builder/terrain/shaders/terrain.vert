@@ -11,9 +11,12 @@ in vec4 biome_a;        // snow, rock, grass, forest
 in vec4 biome_b;        // desert, the strata mask (beach is the rest of the
                         // weights), then the chunk's slot (low byte; high 7
                         // bits) with the skirt flag (top bit), set at upload
+in vec4 forest;         // the far forest's: the trees' cover / 2, then the far
+                        // groups' densities (world_builder.terrain.forest)
 
 #pragma include "../../ocean/shaders/swell.glsl"
 #pragma include "cube_faces.glsl"
+#pragma include "forest_table.glsl"
 
 uniform mat4 p3d_ModelViewProjectionMatrix;
 uniform mat4 p3d_ModelViewMatrix;
@@ -22,6 +25,7 @@ uniform vec4 p3d_ClipPlane[1];  // reflection pass only (view space)
 
 uniform vec3  uCamPos;          // MAIN camera in the render frame (also in the mirror pass)
 uniform vec3  uPlanetCentre;    // planet centre in the render frame
+uniform vec3  uSunDir;          // toward the sun, render frame
 uniform int   uSeaSurface;      // 1: the planet has a sea: the seabed is lifted
                                 // to it and shaded as water
 // Each chunk's own values, by its slot (Terrain's chunk table; one texture
@@ -42,14 +46,16 @@ out vec3 vNormal;
 out vec3 vUp;         // local vertical
 out vec4 vBiomeA;
 out vec4 vBiomeB;
+out vec4 vForest;
+out vec4 vForestK;     // the far forest's shares (forest_table.glsl's
+out vec4 vForestA;     // forestShares): kg, kg + kḡ, T, E; albedo, D;
+out vec2 vForestH;     // hotspot, expected cover
 out vec4 vSwell;     // the swell: gradient per metre (planet axes), field
 flat out int vFace;
 flat out vec3 vFaceU;  // the face's texture axes, render frame (the body turns)
 flat out vec3 vFaceV;
 flat out int vLevel;
 flat out float vStep;  // uv metres per vertex step (about the vertex spacing)
-flat out vec2 vPeriod; // which UV_PERIOD the chunk's first vertex is in (u, v):
-                       // the vegetation's cells (vegetation_cells.glsl)
 flat out int vMirror;  // 1 in the sea's reflection pass (its clip plane)
 
 #pragma include "chunk_grid.glsl"
@@ -66,7 +72,6 @@ void main() {
     vec4 uChunkCentre = texelFetch(uChunkTable, ivec2(slot, 0), 0);
     vec4 uChunk = texelFetch(uChunkTable, ivec2(slot, 1), 0);
     vec4 ids = texelFetch(uChunkTable, ivec2(slot, 2), 0);
-    vec4 vegetation = texelFetch(uChunkTable, ivec2(slot, 3), 0);
     float ground = skirt ? height + uChunk.w : height;  // the (edge) ground height
     float drawn = height;
     vSwell = vec4(0.0, 0.0, 0.0, SWELL_MEAN);
@@ -114,10 +119,12 @@ void main() {
     vUp = up;
     vBiomeA = biome_a;
     vBiomeB = biome_b;
+    vForest = forest;
+    forestShares(forest, up, normalize(-vRelPos), normalize(uSunDir),
+                 vForestK, vForestA, vForestH);
     vFace = int(ids.y + 0.5);
     vFaceU = rotation * FACE_U[vFace];
     vFaceV = rotation * FACE_V[vFace];
     vLevel = int(ids.x + 0.5);
     vStep = uChunk.z;
-    vPeriod = vegetation.xy;
 }

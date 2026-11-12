@@ -9,8 +9,8 @@
 
 // Terrain fragment shader: biome texture blending, lighting (sunlight through
 // the planet's own air: terrain_light.glsl), the sea (seabed lifted to the
-// water by terrain.vert), the far look of the vegetation
-// (vegetation_far.glsl), aerial perspective through every atmosphere, and
+// water by terrain.vert), the far forest (vegetation_far.glsl: Bruneton and
+// Neyret's shader-map) and the forest floor under it, aerial perspective through every atmosphere, and
 // the ACES tonemap. "Up" is the local vertical of the sphere (vUp), never the
 // render frame's +Z.
 //
@@ -28,6 +28,10 @@ in vec3 vNormal;
 in vec3 vUp;
 in vec4 vBiomeA;   // snow, rock, grass, forest
 in vec4 vBiomeB;   // desert, strata mask, the chunk's slot; skirt flag (a >= 0.5)
+in vec4 vForest;   // the trees' cover / 2, the far groups' densities
+in vec4 vForestK;  // the far forest's shares (terrain.vert)
+in vec4 vForestA;
+in vec2 vForestH;
 in vec4 vSwell;    // the swell: gradient per metre (planet axes), field
 flat in int vFace;
 flat in vec3 vFaceU;   // the face's texture axes, render frame
@@ -35,7 +39,6 @@ flat in vec3 vFaceV;
 flat in int vLevel;    // the chunk's level
 flat in float vStep;   // its vertex spacing (uv metres per step), metres
 flat in int vMirror;   // 1 in the sea's reflection pass (terrain.vert)
-flat in vec2 vPeriod;  // which UV_PERIOD the chunk's first vertex is in (u, v)
 
 uniform sampler2D uNoise;         // four tiling noises, breaks up biome edges
 uniform vec3  uMeanAlbedo[6];     // linear; drawn instead of textures far away
@@ -128,6 +131,14 @@ void main() {
     for (int i = 0; i < 6; ++i) {
         w[i] /= max(total, 1e-4);
     }
+    if (uDebugMode == 0 && uVegOn == 1 && uForestGroups > 0) {
+        // The forest floor lies under the trees [SS4 s.21]: the forest
+        // biome's ground where its trees stand (their expected cover),
+        // grass in its clearings.
+        float floorShare = smoothstep(0.02, 0.2, vForestH.y);
+        w[2] += w[3] * (1.0 - floorShare);
+        w[3] *= floorShare;
+    }
 
     if (uDebugMode == 1) {
         fragColor = vec4(hue(float(vLevel) / float(uMaxLevel + 1)) * (0.55 + 0.45 * upN), 1.0);
@@ -193,15 +204,21 @@ void main() {
     float sunDay, shade;
     surfaceLight(vRelPos, vPlanetPos, vHeight, N, surfaceN, up, L, footprint,
                  vMirror != 0, sunlight, skylight, sunDay, shade);
+    vec3 lightUp = uRadialLight == 1 ? up : surfaceN;
+    vec3 C;
     if (!water && uDebugMode == 0) {
-        // The trees and bushes: their far look (sub-pixel canopy), and their
-        // shadows and shade on the ground near the camera.
+        // The forest: the ground between its trees, and its far look.
+        vec3 groundSun = objectLight(albedo, surfaceN, roughness, ao, lightUp, L, V,
+                                     sunlight, sunDay, vec3(0.0));
+        vec3 groundSky = objectLight(albedo, surfaceN, roughness, ao, lightUp, L, V,
+                                     vec3(0.0), sunDay, skylight);
         float variation = 0.7 + 0.35 * (nearNoise.b + farNoise.g);
-        vegetationGround(w, vUv, vPeriod, vFace, Tu, Tv, up, L, V, dist, footprint,
-                         variation, albedo, surfaceN, sunlight, roughness, ao);
+        C = forestLight(vForest, vForestK, vForestA, vForestH, dist, groundSun, groundSky,
+                        sunlight * sunDay, skylight, variation);
+    } else {
+        C = objectLight(albedo, surfaceN, roughness, ao, lightUp, L, V, sunlight, sunDay,
+                        skylight);
     }
-    vec3 C = objectLight(albedo, surfaceN, roughness, ao,
-                         uRadialLight == 1 ? up : surfaceN, L, V, sunlight, sunDay, skylight);
     if (water) {
         // Sky reflected at grazing angles (Schlick).
         float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(surfaceN, V), 0.0), 5.0);

@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Vegetation placement, Serious Sam 4's way (VEGETATION_PLAN.md V1,
+  `docs/source/vegetation.md`): a vegetation density per vertex (procedural,
+  painted over by a level's `density:` paints, `stamps.DensityPaint`), the
+  ground's convexity, the trees and the small plants on jittered grids whose
+  cells derive from the baked crowns (`trees/crowns.json`), per-group rules
+  (instances per hectare by biome, slope, convexity and altitude ramps).
+- The far forest (V2): Bruneton and Neyret's shader-map in the ground's
+  shader, from tables measured on our own trees
+  (`scripts/bake_forest_tables.py`, `terrain.far_forest`), fed by four new
+  bytes per terrain vertex (the trees' cover, the far groups' densities); the
+  forest floor under the trees, grass in the clearings. The terrain's vertex
+  record is now 40 bytes (`chunkgen.VERTEX_DTYPE`, the native `chunk.c`:
+  rebuild the noise library).
+
+### Removed
+
+- The ray-marched canopy (`vegetation.Canopy`, `terrain.canopy`, the
+  `canopy*` and `vegetation_cells` shaders, the ground's shell variant
+  `terrain_veg.frag`): the trees one by one (`terrain.trees`) and the far
+  forest draw the vegetation. `VegetationSettings` keeps `enabled`,
+  `mesh_range` and `tree_range`; `terrain.vegetation` replaces
+  `terrain.canopy`. Saved settings with the old knobs still load (they are
+  dropped).
+
 - `scripts/frame_profile.py --at LAT LON ALT HEADING PITCH` (repeatable):
   more poses, from the demo's printed camera line.
 

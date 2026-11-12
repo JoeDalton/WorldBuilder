@@ -16,6 +16,8 @@ it works.
   looks, and updates them all every frame.
 - [Terrain](terrain.md): the planet's layers, the cube-sphere and its LOD,
   precision and depth, several bodies, and the demo.
+- [Vegetation](vegetation.md): where the trees, bushes and rocks stand
+  (density, grids, rules) and the far forest's shader-map.
 - [Atmosphere, sky and planet clouds](atmosphere.md): the scattering model,
   the star field and the clouds over a whole planet, with their weather.
 - [Sea](ocean.md): the sea the terrain draws, its two looks, its swell and
@@ -44,6 +46,7 @@ The per-class API is in the auto-generated [code reference](apidocs/index.rst).
 
 world
 terrain
+vegetation
 atmosphere
 ocean
 native_build
