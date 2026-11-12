@@ -41,6 +41,10 @@ flat out vec3 vAirS;
 flat out float vTint;
 flat out vec2 vScreenUp;  // the tree's vertical on screen (pixels, unit): the
                           // sprite is turned to it (a rolled camera)
+flat out float vSpriteScale;  // the tree's share of the sprite, across (1 in
+                              // the view; less in a coarser target's wider one)
+flat out float vHalfTexel;    // half a target pixel, in the tree's sprite (0 in
+                              // the view: one sample per pixel)
 
 vec2 hemiOct(vec3 d) {
     vec2 p = d.xy / (abs(d.x) + abs(d.y) + d.z);
@@ -76,6 +80,12 @@ void main() {
     // card), and at most a pixel more (more, a halo of the tree's depth).
     float size = info.y * scale / max(dist, 1.0) * uPixelScale[0];
     gl_PointSize = max(size * uPointScale + (uPointScale < 1.0 ? 1.0 : 0.0), 1.0);
+    // The tree keeps its size in that wider sprite (the view's, max(size, 1)
+    // pixels, in the target's): drawn over the whole of it, a small tree
+    // shrank to its middle, the target's pixels sampled the air at its
+    // corners and lost it (a tree unfogged in a cloud).
+    vSpriteScale = uPointScale < 1.0 ? max(size, 1.0) * uPointScale / gl_PointSize : 1.0;
+    vHalfTexel = uPointScale < 1.0 ? 0.5 / (gl_PointSize * vSpriteScale) : 0.0;
     vFadeIn = smoothstep(0.85 * uMeshRange, uMeshRange, dist);
     vFadeOut = 1.0 - smoothstep(0.8 * uTreeRange, uTreeRange, dist);
 
