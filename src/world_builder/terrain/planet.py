@@ -267,8 +267,12 @@ class PlanetSpec:
         surface, and the sea counted as solid by queries. Without one the
         lowlands are dry basins
     :ivar has_vegetation: False for a barren world (no grass, no forest)
+    :ivar has_clouds: False for a world drawn without clouds (the demos and
+        benchmarks leave them out; a game's :class:`World` decides its own)
     :ivar stamps: hand-made heightmaps (:class:`stamps.Stamp`), in order
     :ivar paints: biome paint masks (:class:`stamps.Paint`), in order
+    :ivar density_paints: vegetation density paint masks
+        (:class:`stamps.DensityPaint`), in order, over the procedural density
     :ivar sea_bias: continental-field offset; None until :meth:`resolved`
     """
 
@@ -279,10 +283,12 @@ class PlanetSpec:
     reference_lon: float = 10.0
     has_ocean: bool = True
     has_vegetation: bool = True
+    has_clouds: bool = True
     elevation: ElevationParams = field(default_factory=ElevationParams)
     climate: ClimateParams = field(default_factory=ClimateParams)
     stamps: tuple = ()
     paints: tuple = ()
+    density_paints: tuple = ()
     sea_bias: float | None = None
 
     def resolved(self) -> PlanetSpec:
@@ -353,6 +359,49 @@ PRESETS: dict[str, PlanetSpec] = {
             lapse_rate=0.0,
             humidity_mean=0.0,
             humidity_spread=0.0,
+        ),
+    ),
+    # A 20 km test ball for the vegetation: no clouds, gentle relief, and
+    # forest, grassland and desert within a few kilometres of each other (a
+    # short humidity wavelength over a warm climate). Small enough to load in
+    # seconds, for benchmarks and visual checks.
+    "tiny": PlanetSpec(
+        name="tiny",
+        radius=20e3,
+        has_clouds=False,
+        elevation=ElevationParams(
+            ocean_fraction=0.25,
+            plates=0,
+            continent_curve=(
+                (-1.0, -900.0),
+                (-0.35, -600.0),
+                (-0.12, -250.0),
+                (-0.04, -20.0),
+                (0.0, 0.0),
+                (0.04, 8.0),
+                (0.15, 40.0),
+                (0.35, 120.0),
+                (1.0, 300.0),
+            ),
+            mountain_height=1000.0,
+            mountain_coverage=-0.25,
+            dunes=False,
+            tablelands=False,
+            hills_wavelength=3000.0,
+            hills_height=60.0,
+            detail_wavelength=400.0,
+            detail_height=8.0,
+        ),
+        climate=ClimateParams(
+            temperature_mean=19.0,
+            temperature_spread=4.0,
+            temperature_latitude=6.0,
+            lapse_rate=0.0065,
+            humidity_mean=0.42,
+            humidity_spread=0.4,
+            temperature_wavelength=60e3,
+            humidity_wavelength=24e3,
+            humidity_octaves=3,
         ),
     ),
     "ice": PlanetSpec(

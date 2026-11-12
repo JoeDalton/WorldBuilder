@@ -21,6 +21,12 @@ A paint mask is a colour image whose colours map to biomes (``colors``). It
 forces those biomes where painted, blurred by ``falloff`` metres, blended by
 ``strength``. Pixels matching no colour leave the procedural biomes alone.
 
+A density paint is a grayscale image of the vegetation density (black none,
+white full: ``forest``'s trees, bushes and rocks, and the far forest),
+Serious Sam 4's "spray-painting" of forests [SS4 s.22]: it replaces the
+procedural density where painted, blurred by ``falloff`` metres, blended by
+``strength`` and by the image's alpha if it has one.
+
 Images load through Panda's PNMImage (in workers too) and are cached per
 process by path and modification time.
 """
@@ -238,6 +244,50 @@ class Paint:
         return out.astype(np.float32)
 
 
+@dataclass(frozen=True)
+class DensityPaint:
+    """A vegetation density paint mask (VEGETATION_PLAN.md, V1).
+
+    :ivar mask: grayscale image path (as :attr:`Stamp.heightmap`); an alpha
+        channel, if any, says where it paints
+    :ivar placement: where it lies
+    :ivar falloff: blur radius, metres, softening painted edges
+    :ivar strength: 1 replaces the procedural density, less blends it in
+    """
+
+    mask: str
+    placement: Placement
+    falloff: float = 0.0
+    strength: float = 1.0
+
+    def apply(self, dirs: np.ndarray, density: np.ndarray, radius: float) -> np.ndarray:
+        """Paint the density.
+
+        :param dirs: (N, 3) sample directions
+        :param density: (N,) the vegetation density in [0, 1]
+        :param radius: planet radius, metres
+        :returns: new (N,) density
+        """
+        near = self.placement.near(dirs, radius)
+        if near.size == 0:
+            return density
+        u, v = self.placement.local(dirs[near], radius)
+        within = self.placement.inside(u, v)
+        if not np.any(within):
+            return density
+        inside = near[within]
+        value, alpha = _density_channels(
+            self.mask, _mtime(self.mask), self.falloff, self.placement.width
+        )
+        row, col = self.placement.pixel(u[within], v[within], value.shape)
+        painted = ndimage.map_coordinates(value, [row, col], order=1, mode="nearest")
+        cover = ndimage.map_coordinates(alpha, [row, col], order=1, mode="constant")
+        cover = np.clip(cover, 0.0, 1.0) * self.strength
+        out = np.asarray(density, dtype=np.float64).copy()
+        out[inside] = out[inside] * (1.0 - cover) + np.clip(painted, 0.0, 1.0) * cover
+        return out
+
+
 # ── image caches (per process) ────────────────────────────────────────────────
 
 
@@ -304,3 +354,25 @@ def _paint_channels(path, _mtime_key, colors, tolerance, falloff, width) -> np.n
             ]
         )
     return channels
+
+
+@functools.lru_cache(maxsize=16)
+def _density_channels(
+    path, _mtime_key, falloff, width
+) -> tuple[np.ndarray, np.ndarray]:
+    """:returns: (density, where painted), (rows, cols) in [0, 1], blurred by
+    falloff"""
+    image = read_image(path).astype(np.float64)
+    value = image[:, :, 0]
+    alpha = image[:, :, 3] if image.shape[2] in (2, 4) else np.ones_like(value)
+    if image.shape[2] == 2:
+        alpha = image[:, :, 1]
+    if falloff > 0.0:
+        sigma = falloff / (width / value.shape[1])
+        # The value blurred over the painted part only, the cover with it.
+        weight = ndimage.gaussian_filter(alpha, sigma, mode="constant")
+        value = ndimage.gaussian_filter(
+            value * alpha, sigma, mode="constant"
+        ) / np.maximum(weight, 1e-6)
+        alpha = weight
+    return value, alpha

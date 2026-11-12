@@ -50,7 +50,7 @@ The radius is the one knob (`PlanetSpec.radius`, `planet.radius` in a level,
 - **The finest tile** is `QUADS` (64) quads of that spacing: 1.8 m spacing and
   115 m tiles at 600 km. The knob is `cubesphere.TARGET_SPACING` (2 m; the grid
   rounds to the nearest power of two). At runtime, `TerrainSettings.min_level`
-  (`Terrain(settings=)`, `set_settings`; MID drops one level, LOW three)
+  (`Terrain(settings=)`, `set_settings`; HIGH drops one level, MID two, LOW four, ULTRA none)
   stops refining at a coarser level, and collision follows. That and the
   terrain's other cost knobs (LOD distance, texture distance and filtering,
   caches, upload budget) are listed in [Quality settings](quality.md).

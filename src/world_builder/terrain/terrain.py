@@ -93,6 +93,8 @@ from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.strata import HIGH as STRATA_HIGH
 from world_builder.terrain.strata import LOW as STRATA_LOW
 from world_builder.terrain.strata import strata_lut
+from world_builder.terrain.trees import Trees
+from world_builder.terrain.vegetation import Vegetation, VegetationSettings
 from world_builder.terrain.workers import ChunkExecutor
 
 SHADER_PATH = Path(__file__).parent / "shaders"
@@ -184,7 +186,7 @@ class TerrainSettings(QualitySettings):
     """
 
     min_level: int = knob(
-        0,
+        1,
         "Finest detail dropped",
         unit="levels",
         range=(0, 8),
@@ -305,6 +307,7 @@ class TerrainSettings(QualitySettings):
             "texture_size": 1024,
         },
         QualityLevel.ULTRA: {
+            "min_level": 0,
             "split_factor": 2.5,
             "detail_far": 6000.0,
             "anisotropy": 16,
@@ -357,6 +360,7 @@ class Terrain:
         orientation: ArrayLike = (1.0, 0.0, 0.0, 0.0),
         executor: ChunkExecutor | None = None,
         settings: TerrainSettings | None = None,
+        vegetation: VegetationSettings | None = None,
     ):
         """
         :param parent: node to hang the terrain root under; must not be offset
@@ -393,6 +397,9 @@ class Terrain:
             creates a private one from *backend* and ``settings.workers``
         :param settings: what the terrain costs (:class:`TerrainSettings`;
             :meth:`set_settings` changes it); None = the HIGH preset
+        :param vegetation: what its trees and forests cost
+            (:class:`~world_builder.terrain.vegetation.VegetationSettings`;
+            :attr:`vegetation`'s ``set_settings`` changes it); None = HIGH
         """
         settings = settings or TerrainSettings()
         self._settings = settings
@@ -470,8 +477,15 @@ class Terrain:
             "finest": 0,
             "generated": 0,
         }
+        #: The forests (:class:`~world_builder.terrain.vegetation.Vegetation`)
+        self.vegetation: Vegetation | None = None
+        self.trees: Trees | None = None
         self.set_spec(spec)
         self._apply_settings(settings)
+        self.vegetation = Vegetation(self, vegetation)
+        #: The trees, bushes and rocks one by one
+        #: (:class:`~world_builder.terrain.trees.Trees`)
+        self.trees = Trees(self)
 
     # ── settings ───────────────────────────────────────────────────────────────
 
@@ -578,6 +592,11 @@ class Terrain:
         self._last_select_pos = None
         self._loading = True
         self.stats["finest"] = self.grid.max_level
+        if self.vegetation is not None:
+            self.vegetation.reset()
+        if self.trees is not None:
+            self.trees.clear()
+            self.trees.apply_settings()
 
     def enable_collision(
         self,
@@ -910,6 +929,8 @@ class Terrain:
         rebased = self._origin is None or bool(np.any(origin != self._origin))
         if rebased:
             self._origin = origin
+            # The meshes' bases are from the origin: a pass now.
+            self._last_select_pos = None
             for name, (cell, centre) in list(self._cells.items()):
                 if cell.get_num_children() == 0:  # made again when needed
                     cell.remove_node()
@@ -1072,7 +1093,7 @@ class Terrain:
         slot = self._free_slots.pop()
         self._slots[key] = slot
         self._new_slots.append(slot)
-        level, face = key[0], key[1]
+        level, face, _, _ = key
         u0, v0 = self.grid.uv_origin(key)
         values = self._chunk_values
         values[0, slot] = (*chunk.centre, 0.25 / self.grid.spacing(level))
@@ -1082,6 +1103,8 @@ class Terrain:
 
     def _drop_node(self, key) -> None:
         """Remove an uploaded chunk's node and free its slot."""
+        if self.trees is not None:
+            self.trees.drop(key)
         self.nodes.pop(key).remove_node()
         self._free_slots.append(self._slots.pop(key))
         self.selector.set_ready(key, False)
@@ -1158,5 +1181,7 @@ class Terrain:
         )
         self._evict_store()
         self._evict_nodes()
+        if self.trees is not None and self._origin is not None:
+            self.trees.update(draw, cam, self._origin)
         self.stats["select_ms"] = (time.perf_counter() - start) * 1e3
         self.stats["finest"] = min((k[0] for k in draw), default=self.grid.max_level)

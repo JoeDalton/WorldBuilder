@@ -126,10 +126,13 @@ def pass_camera(
     bit: int,
     initial: RenderState,
     terrain: RenderState,
+    point_scale: float = 1.0,
 ) -> NodePath:
     """A camera of a cloud pass: under the app's camera, sharing a split
     camera's very lens (so it follows its range, fov and aspect every
-    frame), seeing what is shown to *bit* with :func:`pass_states`.
+    frame), seeing what is shown to *bit* with :func:`pass_states`, the
+    trees' impostors sized in its pixels (*point_scale*: its pixels per view
+    pixel, across).
 
     :returns: the camera's NodePath
     """
@@ -138,6 +141,9 @@ def pass_camera(
     node.set_initial_state(initial)
     node.set_tag_state_key(PASS_TAG)
     node.set_tag_state("terrain", terrain)
+    from world_builder.terrain.trees import IMPOSTOR_TAG, pass_state
+
+    node.set_tag_state(IMPOSTOR_TAG, pass_state(point_scale))
     return app.camera.attach_new_node(node)
 
 
@@ -190,6 +196,7 @@ class _Layer:
         sort: int,
         initial: RenderState,
         terrain: RenderState,
+        point_scale: float = 1.0,
     ) -> None:
         self.texture = Texture(name)
         self.texture.set_wrap_u(SamplerState.WM_clamp)
@@ -206,7 +213,7 @@ class _Layer:
         self.buffer.set_clear_color_active(True)
         self.buffer.set_clear_color((0.0, 0.0, 0.0, 0.0))
         self.buffer.set_clear_depth_active(True)
-        self.camera = pass_camera(app, name, lens, bit, initial, terrain)
+        self.camera = pass_camera(app, name, lens, bit, initial, terrain, point_scale)
         self.buffer.make_display_region().set_camera(self.camera)
         self.card = composite_card(app, name, self.texture, shown_to)
         self.uv_scale = LVecBase2f(1.0, 1.0)
@@ -270,6 +277,7 @@ class HalfResClouds:
             sort,
             initial,
             terrain,
+            scale,
         )
         self.near = _Layer(
             app,
@@ -282,6 +290,7 @@ class HalfResClouds:
             sort + 1,
             initial,
             terrain,
+            scale,
         )
 
     @property

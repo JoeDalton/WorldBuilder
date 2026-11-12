@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] 2026-11-12
+
 ### Added
+
+- Vegetation placement, Serious Sam 4's way (VEGETATION_PLAN.md V1,
+  `docs/source/vegetation.md`): a vegetation density per vertex (procedural,
+  painted over by a level's `density:` paints, `stamps.DensityPaint`), the
+  ground's convexity, the trees and the small plants on jittered grids whose
+  cells derive from the baked crowns (`trees/crowns.json`), per-group rules
+  (instances per hectare by biome, slope, convexity and altitude ramps).
+- The trees one by one (`world_builder.terrain.trees`, `terrain.trees`): the
+  plants placed on each chunk drawn as instanced meshes near the camera
+  (`VegetationSettings.mesh_range`) and as impostors out to `tree_range`
+  (one point per plant, drawn from views baked by
+  `scripts/bake_tree_impostors.py`), crossing over a dithered band; rocks and
+  bushes are meshes only. `scripts/build_tree_assets.py`, `tree_gallery.py`
+  and `vegetation_bench.py` make and look at them.
+- The far forest (V2): Bruneton and Neyret's shader-map in the ground's
+  shader, from tables measured on our own trees
+  (`scripts/bake_forest_tables.py`, `terrain.far_forest`), fed by four new
+  bytes per terrain vertex (the trees' cover, the far groups' densities); the
+  forest floor under the trees, grass in the clearings. The terrain's vertex
+  record is now 40 bytes (`chunkgen.VERTEX_DTYPE`, the native `chunk.c`:
+  rebuild the noise library).
 
 - `scripts/frame_profile.py --at LAT LON ALT HEADING PITCH` (repeatable):
   more poses, from the demo's printed camera line.
@@ -65,6 +88,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   atmospheres, the sky and the shadow maps too, and the report has p99.
 
 ### Changed
+
+- HIGH terrain drops one level of the finest LOD (`TerrainSettings.min_level`
+  defaults to 1, about 3.6 m of vertex spacing); ULTRA keeps the finest (0).
 
 - Each terrain chunk carries a coarse mesh over its own vertices (every
   other one: `chunkgen.triangle_indices(COARSE_STRIDE)`, a quarter of the
@@ -218,6 +244,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolved its class's type hints (~0.3 ms each, ~6 ms a refresh). The hints
   are now resolved once per class (`quality._type_hints`); the frame's p95 at
   a still pose fell from 17.7 to 14.3 ms.
+- Trees in clouds: the raymarch's depth passes draw the trees too (their
+  impostors sized in the pass's pixels, `trees.pass_state`), and the resolve
+  weighs each sample by how near the scene it stopped at is to the pixel's
+  (`uSceneDepthNear`, `uSceneDepthFar`): a tree in a cloud no longer stands
+  unfogged in front of it or shows a halo of sky around it. The impostors'
+  facing and the artifacts where cloud met terrain are corrected.
+- The tree population's tuning (`forest.SPECIES`) changed `TREE_CELL`; the
+  far forest's tables are baked again for it.
+
+### Removed
+
+- The ray-marched canopy (`vegetation.Canopy`, `terrain.canopy`, the
+  `canopy*` and `vegetation_cells` shaders, the ground's shell variant
+  `terrain_veg.frag`): the trees one by one (`terrain.trees`) and the far
+  forest draw the vegetation. `VegetationSettings` keeps `enabled`,
+  `mesh_range` and `tree_range`; `terrain.vegetation` replaces
+  `terrain.canopy`. Saved settings with the old knobs still load (they are
+  dropped).
 
 ## [0.3.0] 2026-11-04
 

@@ -3,6 +3,7 @@ import shutil
 
 from invoke import task
 
+
 @task
 def check_dynamic_versioning(c):
     result = c.run("poetry self show plugins", hide=True, warn=True)
@@ -56,7 +57,10 @@ def quality(c):
 
 @task
 def check_env(c):
-    c.run("pip freeze |grep numpy ; pip freeze |grep scipy ; pip freeze |grep world_builder")
+    c.run(
+        "pip freeze | grep numpy ; pip freeze | grep scipy ; "
+        "pip freeze | grep world_builder"
+    )
 
 
 @task
@@ -67,7 +71,8 @@ def deploy(c):
 @task
 def coverage(c):
     c.run(
-        "poetry run pytest tests -v -n auto --cov-report term --cov-report html:htmlcov --cov-report xml --cov=./src/"
+        "poetry run pytest tests -v -n auto --cov-report term "
+        "--cov-report html:htmlcov --cov-report xml --cov=./src/"
     )
     c.run("poetry run coverage report")
     c.run("poetry run coverage xml")

@@ -11,9 +11,12 @@ in vec4 biome_a;        // snow, rock, grass, forest
 in vec4 biome_b;        // desert, the strata mask (beach is the rest of the
                         // weights), then the chunk's slot (low byte; high 7
                         // bits) with the skirt flag (top bit), set at upload
+in vec4 forest;         // the far forest's: the trees' cover / 2, then the far
+                        // groups' densities (world_builder.terrain.forest)
 
 #pragma include "../../ocean/shaders/swell.glsl"
 #pragma include "cube_faces.glsl"
+#pragma include "forest_table.glsl"
 
 uniform mat4 p3d_ModelViewProjectionMatrix;
 uniform mat4 p3d_ModelViewMatrix;
@@ -22,6 +25,7 @@ uniform vec4 p3d_ClipPlane[1];  // reflection pass only (view space)
 
 uniform vec3  uCamPos;          // MAIN camera in the render frame (also in the mirror pass)
 uniform vec3  uPlanetCentre;    // planet centre in the render frame
+uniform vec3  uSunDir;          // toward the sun, render frame
 uniform int   uSeaSurface;      // 1: the planet has a sea: the seabed is lifted
                                 // to it and shaded as water
 // Each chunk's own values, by its slot (Terrain's chunk table; one texture
@@ -42,6 +46,10 @@ out vec3 vNormal;
 out vec3 vUp;         // local vertical
 out vec4 vBiomeA;
 out vec4 vBiomeB;
+out vec4 vForest;
+out vec4 vForestK;     // the far forest's shares (forest_table.glsl's
+out vec4 vForestA;     // forestShares): kg, kg + kḡ, T, E; albedo, D;
+out vec2 vForestH;     // hotspot, expected cover
 out vec4 vSwell;     // the swell: gradient per metre (planet axes), field
 flat out int vFace;
 flat out vec3 vFaceU;  // the face's texture axes, render frame (the body turns)
@@ -50,24 +58,7 @@ flat out int vLevel;
 flat out float vStep;  // uv metres per vertex step (about the vertex spacing)
 flat out int vMirror;  // 1 in the sea's reflection pass (its clip plane)
 
-const int QUADS = 64;
-const int VERTS = QUADS + 1;
-
-// (column, row) of a vertex in the chunk grid; skirt vertices repeat their edge
-// vertex, in chunkgen.skirt_ring's order.
-vec2 gridCoord(int id) {
-    if (id < VERTS * VERTS) {
-        return vec2(id % VERTS, id / VERTS);
-    }
-    int p = id - VERTS * VERTS;
-    int side = p / QUADS;
-    float t = float(p % QUADS);
-    float n = float(QUADS);
-    if (side == 0) return vec2(t, 0.0);       // south
-    if (side == 1) return vec2(n, t);         // east
-    if (side == 2) return vec2(n - t, n);     // north
-    return vec2(0.0, n - t);                  // west
-}
+#pragma include "chunk_grid.glsl"
 
 void main() {
     vec4 local = p3d_Vertex;
@@ -128,6 +119,9 @@ void main() {
     vUp = up;
     vBiomeA = biome_a;
     vBiomeB = biome_b;
+    vForest = forest;
+    forestShares(forest, up, normalize(-vRelPos), normalize(uSunDir),
+                 vForestK, vForestA, vForestH);
     vFace = int(ids.y + 0.5);
     vFaceU = rotation * FACE_U[vFace];
     vFaceV = rotation * FACE_V[vFace];

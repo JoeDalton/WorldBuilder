@@ -109,9 +109,6 @@ class TrackedLights:
                 del self._tracked[index]
                 return
 
-    def is_tracked(self, node: NodePath) -> bool:
-        return any(tracked.node == node for tracked in self._tracked)
-
     def casts(self, node: NodePath) -> bool:
         """:returns: whether a tracked node casts shadows
         :raises KeyError: for a node not tracked"""

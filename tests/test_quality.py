@@ -37,6 +37,7 @@ COST_FIELDS = {
         "upload_ms_per_frame",
         "texture_size",
     ],
+    "vegetation": ["mesh_range", "tree_range"],
     "atmosphere": ["steps", "vertex_steps"],
     "sky": ["star_fraction", "glow_size"],
     "clouds": [
@@ -150,9 +151,9 @@ def test_high_clouds_are_the_authored_types():
 
 
 def test_lower_presets_drop_terrain_detail():
-    """MID drops one level of the finest LOD, LOW two more."""
+    """HIGH drops one level of the finest LOD, MID two, LOW four; ULTRA none."""
     dropped = [TerrainSettings.preset(level).min_level for level in LEVELS]
-    assert dropped == [4, 2, 0, 0]
+    assert dropped == [4, 2, 1, 0]
 
 
 def test_the_constructor_is_strict():

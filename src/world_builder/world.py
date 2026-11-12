@@ -320,7 +320,7 @@ class Body:
 
     def parts(self) -> list:
         """:returns: its parts that take world settings"""
-        parts = [self.terrain]
+        parts = [self.terrain, self.terrain.vegetation]
         if self.clouds is not None:
             parts.append(self.clouds)
         if self.ocean is not None:
@@ -498,6 +498,7 @@ class World:
                 materials=materials,
                 position=look.position,
                 settings=self.settings.terrain,
+                vegetation=self.settings.vegetation,
             )
             self.shadows.bind(terrain.root, len(self.bodies))
             # One texture set for every body (they load once)
@@ -1109,6 +1110,8 @@ class World:
             self.half_res.update()
             scale = self.half_res.pixel_scale
         for body in self.bodies:
+            if pixel_angle is not None and body.terrain.trees is not None:
+                body.terrain.trees.set_pixel_angle(pixel_angle)
             if body.clouds is not None:
                 if pixel_angle is not None:
                     body.clouds.set_pixel_angle(pixel_angle, volume_scale=scale)

@@ -1,0 +1,10 @@
+# The tiny test planet (PRESETS["tiny"], 20 km): no stamps, no paints. Chosen
+# where desert (west and north), grassland (the middle band) and forest
+# (south and east) meet within ~2 km, on low, gentle ground.
+planet:
+  preset: tiny
+  seed: 1
+  reference: {lat: 33.3, lon: -147.0}
+
+# Over the grassland, looking south-east over the forest's edge.
+camera: {x: 0, y: 0, z: 300, heading: -135, pitch: -12}

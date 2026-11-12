@@ -510,6 +510,12 @@ def march_local(
     lifted = radius + np.maximum(here, 0.0)
     # Every step at once (one lookup).
     k = np.arange(max(1, round(near / spacing)), int(math.ceil(far / spacing)))
+    if k.size == 0:
+        # No step between near and far (a small planet: the global map's
+        # reach under two spacings): nothing occludes, as the GPU's empty
+        # march gives.
+        out = np.stack([np.full(len(d), NO_CEILING), np.full(len(d), far)], axis=-1)
+        return out.reshape(shape + (2,))
     angle = k * spacing / radius
     node = (
         np.cos(angle)[:, None, None] * d[None]

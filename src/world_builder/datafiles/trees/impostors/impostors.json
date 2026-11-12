@@ -1,0 +1,186 @@
+{
+ "tile": 128,
+ "frames": 8,
+ "assets": [
+  {
+   "name": "forest_tree_near_0",
+   "layer": 0,
+   "diameter": 15.597,
+   "centre": [
+    0.252,
+    -0.399,
+    5.933
+   ]
+  },
+  {
+   "name": "forest_tree_near_1",
+   "layer": 1,
+   "diameter": 23.31,
+   "centre": [
+    0.387,
+    0.053,
+    9.229
+   ]
+  },
+  {
+   "name": "forest_tree_near_2",
+   "layer": 2,
+   "diameter": 27.619,
+   "centre": [
+    0.334,
+    -0.235,
+    12.706
+   ]
+  },
+  {
+   "name": "forest_tree_near_3",
+   "layer": 3,
+   "diameter": 13.103,
+   "centre": [
+    -0.021,
+    -0.077,
+    5.169
+   ]
+  },
+  {
+   "name": "forest_tree_far_0",
+   "layer": 4,
+   "diameter": 27.593,
+   "centre": [
+    -0.0,
+    -0.0,
+    13.007
+   ]
+  },
+  {
+   "name": "forest_tree_far_1",
+   "layer": 5,
+   "diameter": 27.174,
+   "centre": [
+    0.0,
+    -0.0,
+    12.888
+   ]
+  },
+  {
+   "name": "forest_tree_far_2",
+   "layer": 6,
+   "diameter": 35.476,
+   "centre": [
+    0.0,
+    -0.0,
+    16.634
+   ]
+  },
+  {
+   "name": "forest_tree_far_3",
+   "layer": 7,
+   "diameter": 29.366,
+   "centre": [
+    0.0,
+    0.0,
+    12.272
+   ]
+  },
+  {
+   "name": "forest_tree_far_4",
+   "layer": 8,
+   "diameter": 27.769,
+   "centre": [
+    0.0,
+    0.0,
+    13.007
+   ]
+  },
+  {
+   "name": "forest_tree_far_5",
+   "layer": 9,
+   "diameter": 21.037,
+   "centre": [
+    0.0,
+    0.0,
+    9.111
+   ]
+  },
+  {
+   "name": "forest_tree_far_6",
+   "layer": 10,
+   "diameter": 33.411,
+   "centre": [
+    0.0,
+    -0.0,
+    14.632
+   ]
+  },
+  {
+   "name": "forest_tree_far_7",
+   "layer": 11,
+   "diameter": 27.837,
+   "centre": [
+    -0.0,
+    0.0,
+    13.007
+   ]
+  },
+  {
+   "name": "birch_tree_0",
+   "layer": 12,
+   "diameter": 25.288,
+   "centre": [
+    0.0,
+    0.0,
+    8.688
+   ]
+  },
+  {
+   "name": "birch_tree_1",
+   "layer": 13,
+   "diameter": 22.458,
+   "centre": [
+    0.0,
+    0.0,
+    7.199
+   ]
+  },
+  {
+   "name": "birch_tree_2",
+   "layer": 14,
+   "diameter": 25.024,
+   "centre": [
+    0.0,
+    0.0,
+    8.313
+   ]
+  },
+  {
+   "name": "snowy_tree_0",
+   "layer": 15,
+   "diameter": 17.823,
+   "centre": [
+    0.0,
+    0.0,
+    6.37
+   ]
+  },
+  {
+   "name": "snowy_tree_1",
+   "layer": 16,
+   "diameter": 22.398,
+   "centre": [
+    0.0,
+    0.0,
+    9.509
+   ]
+  },
+  {
+   "name": "snowy_tree_2",
+   "layer": 17,
+   "diameter": 14.28,
+   "centre": [
+    0.0,
+    0.0,
+    5.252
+   ]
+  }
+ ]
+}

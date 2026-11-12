@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="pingback" href="https://developer.x-plane.com/xmlrpc.php">
+
+<link rel="apple-touch-icon" sizes="57x57" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-57x57.png">
+<link rel="apple-touch-icon" sizes="60x60" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-60x60.png">
+<link rel="apple-touch-icon" sizes="72x72" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-72x72.png">
+<link rel="apple-touch-icon" sizes="76x76" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-76x76.png">
+<link rel="apple-touch-icon" sizes="114x114" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-114x114.png">
+<link rel="apple-touch-icon" sizes="120x120" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-120x120.png">
+<link rel="apple-touch-icon" sizes="144x144" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-144x144.png">
+<link rel="apple-touch-icon" sizes="152x152" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-152x152.png">
+<link rel="apple-touch-icon" sizes="180x180" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-180x180.png">
+<link rel="icon" type="image/png" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/favicon-32x32.png" sizes="32x32">
+<link rel="icon" type="image/png" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/favicon-194x194.png" sizes="194x194">
+<link rel="icon" type="image/png" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/favicon-96x96.png" sizes="96x96">
+<link rel="icon" type="image/png" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/android-chrome-192x192.png" sizes="192x192">
+<link rel="icon" type="image/png" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/favicon-16x16.png" sizes="16x16">
+<link rel="manifest" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/manifest.json">
+<link rel="mask-icon" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/safari-pinned-tab.svg" color="#1678b5">
+<link rel="shortcut icon" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/favicon.ico">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="msapplication-TileImage" content="https://developer.x-plane.com/wp-content/themes/xplane/favicons/mstile-144x144.png">
+<meta name="msapplication-config" content="https://developer.x-plane.com/wp-content/themes/xplane/favicons/browserconfig.xml">
+<meta name="theme-color" content="#ffffff">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+<meta name='robots' content='index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1' />
+
+	<title>Building Custom 3-D Trees - X-Plane Developer</title>
+	<link rel="canonical" href="https://developer.x-plane.com/article/building-custom-3-d-trees/" />
+	<meta property="og:locale" content="en_US" />
+	<meta property="og:type" content="article" />
+	<meta property="og:title" content="Building Custom 3-D Trees - X-Plane Developer" />
+	<meta property="og:description" content="This article explains X-Plane 12&#039;s requirements for customizing or adding new 3-D trees." />
+	<meta property="og:url" content="https://developer.x-plane.com/article/building-custom-3-d-trees/" />
+	<meta property="og:site_name" content="X-Plane Developer" />
+	<meta property="article:publisher" content="http://facebook.com/XPlaneOfficial/" />
+	<meta property="og:image" content="http://developer.x-plane.com/wp-content/uploads/2022/06/01.jpg" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:site" content="@XPlaneOfficial" />
+	<meta name="twitter:label1" content="Est. reading time" />
+	<meta name="twitter:data1" content="8 minutes" />
+	<script type="application/ld+json" class="yoast-schema-graph">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://developer.x-plane.com/#website","url":"https://developer.x-plane.com/","name":"X-Plane Developer","description":"Developer resources for the X-Plane flight simulator","potentialAction":[{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://developer.x-plane.com/?s={search_term_string}"},"query-input":"required name=search_term_string"}],"inLanguage":"en-US"},{"@type":"ImageObject","@id":"https://developer.x-plane.com/article/building-custom-3-d-trees/#primaryimage","inLanguage":"en-US","url":"https://developer.x-plane.com/wp-content/uploads/2022/06/01.jpg","contentUrl":"https://developer.x-plane.com/wp-content/uploads/2022/06/01.jpg","width":1200,"height":512},{"@type":"WebPage","@id":"https://developer.x-plane.com/article/building-custom-3-d-trees/#webpage","url":"https://developer.x-plane.com/article/building-custom-3-d-trees/","name":"Building Custom 3-D Trees - X-Plane Developer","isPartOf":{"@id":"https://developer.x-plane.com/#website"},"primaryImageOfPage":{"@id":"https://developer.x-plane.com/article/building-custom-3-d-trees/#primaryimage"},"datePublished":"2022-06-09T18:48:28+00:00","dateModified":"2022-06-09T18:48:28+00:00","breadcrumb":{"@id":"https://developer.x-plane.com/article/building-custom-3-d-trees/#breadcrumb"},"inLanguage":"en-US","potentialAction":[{"@type":"ReadAction","target":["https://developer.x-plane.com/article/building-custom-3-d-trees/"]}]},{"@type":"BreadcrumbList","@id":"https://developer.x-plane.com/article/building-custom-3-d-trees/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://developer.x-plane.com/"},{"@type":"ListItem","position":2,"name":"Building Custom 3-D Trees"}]}]}</script>
+
+
+<link rel='dns-prefetch' href='//fonts.googleapis.com' />
+<link rel="alternate" type="application/rss+xml" title="X-Plane Developer &raquo; Feed" href="https://developer.x-plane.com/feed/" />
+<link rel="alternate" type="application/rss+xml" title="X-Plane Developer &raquo; Comments Feed" href="https://developer.x-plane.com/comments/feed/" />
+<link rel="alternate" type="application/rss+xml" title="X-Plane Developer &raquo; Building Custom 3-D Trees Comments Feed" href="https://developer.x-plane.com/article/building-custom-3-d-trees/feed/" />
+<link rel="alternate" title="oEmbed (JSON)" type="application/json+oembed" href="https://developer.x-plane.com/wp-json/oembed/1.0/embed?url=https%3A%2F%2Fdeveloper.x-plane.com%2Farticle%2Fbuilding-custom-3-d-trees%2F" />
+<link rel="alternate" title="oEmbed (XML)" type="text/xml+oembed" href="https://developer.x-plane.com/wp-json/oembed/1.0/embed?url=https%3A%2F%2Fdeveloper.x-plane.com%2Farticle%2Fbuilding-custom-3-d-trees%2F&#038;format=xml" />
+		
+	<style id="wp-img-auto-sizes-contain-inline-css">
+img:is([sizes=auto i],[sizes^="auto," i]){contain-intrinsic-size:3000px 1500px}
+/*# sourceURL=wp-img-auto-sizes-contain-inline-css */
+</style>
+<link rel='stylesheet' id='wp-quicklatex-format-css' href='https://developer.x-plane.com/wp-content/plugins/wp-quicklatex/css/quicklatex-format.css?ver=7.1.4' media='all' />
+<style id="wp-emoji-styles-inline-css">
+
+	img.wp-smiley, img.emoji {
+		display: inline !important;
+		border: none !important;
+		box-shadow: none !important;
+		height: 1em !important;
+		width: 1em !important;
+		margin: 0 0.07em !important;
+		vertical-align: -0.1em !important;
+		background: none !important;
+		padding: 0 !important;
+	}
+/*# sourceURL=wp-emoji-styles-inline-css */
+</style>
+<style id="wp-block-library-inline-css">
+:root{--wp-block-synced-color:#7a00df;--wp-block-synced-color--rgb:122,0,223;--wp-bound-block-color:var(--wp-block-synced-color);--wp-editor-canvas-background:#ddd;--wp-admin-theme-color:#007cba;--wp-admin-theme-color--rgb:0,124,186;--wp-admin-theme-color-darker-10:#006ba1;--wp-admin-theme-color-darker-10--rgb:0,107,160.5;--wp-admin-theme-color-darker-20:#005a87;--wp-admin-theme-color-darker-20--rgb:0,90,135;--wp-admin-border-width-focus:2px}@media (min-resolution:192dpi){:root{--wp-admin-border-width-focus:1.5px}}.wp-element-button{cursor:pointer}:root .has-very-light-gray-background-color{background-color:#eee}:root .has-very-dark-gray-background-color{background-color:#313131}:root .has-very-light-gray-color{color:#eee}:root .has-very-dark-gray-color{color:#313131}:root .has-vivid-green-cyan-to-vivid-cyan-blue-gradient-background{background:linear-gradient(135deg,#00d084,#0693e3)}:root .has-purple-crush-gradient-background{background:linear-gradient(135deg,#34e2e4,#4721fb 50%,#ab1dfe)}:root .has-hazy-dawn-gradient-background{background:linear-gradient(135deg,#faaca8,#dad0ec)}:root .has-subdued-olive-gradient-background{background:linear-gradient(135deg,#fafae1,#67a671)}:root .has-atomic-cream-gradient-background{background:linear-gradient(135deg,#fdd79a,#004a59)}:root .has-nightshade-gradient-background{background:linear-gradient(135deg,#330968,#31cdcf)}:root .has-midnight-gradient-background{background:linear-gradient(135deg,#020381,#2874fc)}:root{--wp--preset--font-size--normal:16px;--wp--preset--font-size--huge:42px}.has-regular-font-size{font-size:1em}.has-larger-font-size{font-size:2.625em}.has-normal-font-size{font-size:var(--wp--preset--font-size--normal)}.has-huge-font-size{font-size:var(--wp--preset--font-size--huge)}:root .has-text-align-center{text-align:center}:root .has-text-align-left{text-align:left}:root .has-text-align-right{text-align:right}.has-fit-text{white-space:nowrap!important}#end-resizable-editor-section{display:none}.aligncenter{clear:both}.items-justified-left{justify-content:flex-start}.items-justified-center{justify-content:center}.items-justified-right{justify-content:flex-end}.items-justified-space-between{justify-content:space-between}.screen-reader-text{word-wrap:normal!important;border:0;clip-path:inset(50%);height:1px;margin:-1px;overflow:hidden;padding:0;position:absolute;width:1px;word-break:normal!important}.screen-reader-text:focus{background-color:#ddd;clip-path:none;color:#444;display:block;font-size:1em;height:auto;left:5px;line-height:normal;padding:15px 23px 14px;text-decoration:none;top:5px;width:auto;z-index:100000}html :where(.has-border-color){border-style:solid}html :where([style^=border-color],[style*=";border-color"],[style*="; border-color"]){border-style:solid}html :where([style^=border-top-color],[style*=";border-top-color"],[style*="; border-top-color"]){border-top-style:solid}html :where([style^=border-right-color],[style*=";border-right-color"],[style*="; border-right-color"]){border-right-style:solid}html :where([style^=border-bottom-color],[style*=";border-bottom-color"],[style*="; border-bottom-color"]){border-bottom-style:solid}html :where([style^=border-left-color],[style*=";border-left-color"],[style*="; border-left-color"]){border-left-style:solid}html :where([style^=border-width],[style*=";border-width"],[style*="; border-width"]){border-style:solid}html :where([style^=border-top-width],[style*=";border-top-width"],[style*="; border-top-width"]){border-top-style:solid}html :where([style^=border-right-width],[style*=";border-right-width"],[style*="; border-right-width"]){border-right-style:solid}html :where([style^=border-bottom-width],[style*=";border-bottom-width"],[style*="; border-bottom-width"]){border-bottom-style:solid}html :where([style^=border-left-width],[style*=";border-left-width"],[style*="; border-left-width"]){border-left-style:solid}html :where(img[class*=wp-image-]){height:auto;max-width:100%}:where(figure){margin:0 0 1em}html :where(.is-position-sticky){--wp-admin--admin-bar--position-offset:var(--wp-admin--admin-bar--height,0px)}@media screen and (max-width:600px){html :where(.is-position-sticky){--wp-admin--admin-bar--position-offset:0px}}
+
+/*# sourceURL=/wp-includes/css/dist/block-library/common.min.css */
+</style>
+<style id="classic-theme-styles-inline-css">
+/*! This file is auto-generated */
+.wp-block-button__link{color:#fff;background-color:#32373c;border-radius:9999px;box-shadow:none;text-decoration:none;padding:calc(.667em + 2px) calc(1.333em + 2px);font-size:1.125em}.wp-block-file__button{background:#32373c;color:#fff;text-decoration:none}
+/*# sourceURL=/wp-includes/css/classic-themes.min.css */
+</style>
+
+<style id="global-styles-inline-css">
+:root{--wp--preset--aspect-ratio--square: 1;--wp--preset--aspect-ratio--4-3: 4/3;--wp--preset--aspect-ratio--3-4: 3/4;--wp--preset--aspect-ratio--3-2: 3/2;--wp--preset--aspect-ratio--2-3: 2/3;--wp--preset--aspect-ratio--16-9: 16/9;--wp--preset--aspect-ratio--9-16: 9/16;--wp--preset--color--black: #000000;--wp--preset--color--cyan-bluish-gray: #abb8c3;--wp--preset--color--white: #ffffff;--wp--preset--color--pale-pink: #f78da7;--wp--preset--color--vivid-red: #cf2e2e;--wp--preset--color--luminous-vivid-orange: #ff6900;--wp--preset--color--luminous-vivid-amber: #fcb900;--wp--preset--color--light-green-cyan: #7bdcb5;--wp--preset--color--vivid-green-cyan: #00d084;--wp--preset--color--pale-cyan-blue: #8ed1fc;--wp--preset--color--vivid-cyan-blue: #0693e3;--wp--preset--color--vivid-purple: #9b51e0;--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple: linear-gradient(135deg,rgb(6,147,227) 0%,rgb(155,81,224) 100%);--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan: linear-gradient(135deg,rgb(122,220,180) 0%,rgb(0,208,130) 100%);--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange: linear-gradient(135deg,rgb(252,185,0) 0%,rgb(255,105,0) 100%);--wp--preset--gradient--luminous-vivid-orange-to-vivid-red: linear-gradient(135deg,rgb(255,105,0) 0%,rgb(207,46,46) 100%);--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray: linear-gradient(135deg,rgb(238,238,238) 0%,rgb(169,184,195) 100%);--wp--preset--gradient--cool-to-warm-spectrum: linear-gradient(135deg,rgb(74,234,220) 0%,rgb(151,120,209) 20%,rgb(207,42,186) 40%,rgb(238,44,130) 60%,rgb(251,105,98) 80%,rgb(254,248,76) 100%);--wp--preset--gradient--blush-light-purple: linear-gradient(135deg,rgb(255,206,236) 0%,rgb(152,150,240) 100%);--wp--preset--gradient--blush-bordeaux: linear-gradient(135deg,rgb(254,205,165) 0%,rgb(254,45,45) 50%,rgb(107,0,62) 100%);--wp--preset--gradient--luminous-dusk: linear-gradient(135deg,rgb(255,203,112) 0%,rgb(199,81,192) 50%,rgb(65,88,208) 100%);--wp--preset--gradient--pale-ocean: linear-gradient(135deg,rgb(255,245,203) 0%,rgb(182,227,212) 50%,rgb(51,167,181) 100%);--wp--preset--gradient--electric-grass: linear-gradient(135deg,rgb(202,248,128) 0%,rgb(113,206,126) 100%);--wp--preset--gradient--midnight: linear-gradient(135deg,rgb(2,3,129) 0%,rgb(40,116,252) 100%);--wp--preset--font-size--small: 13px;--wp--preset--font-size--medium: 20px;--wp--preset--font-size--large: 36px;--wp--preset--font-size--x-large: 42px;--wp--preset--spacing--20: 0.44rem;--wp--preset--spacing--30: 0.67rem;--wp--preset--spacing--40: 1rem;--wp--preset--spacing--50: 1.5rem;--wp--preset--spacing--60: 2.25rem;--wp--preset--spacing--70: 3.38rem;--wp--preset--spacing--80: 5.06rem;--wp--preset--shadow--natural: 6px 6px 9px rgba(0, 0, 0, 0.2);--wp--preset--shadow--deep: 12px 12px 50px rgba(0, 0, 0, 0.4);--wp--preset--shadow--sharp: 6px 6px 0px rgba(0, 0, 0, 0.2);--wp--preset--shadow--outlined: 6px 6px 0px -3px rgb(255, 255, 255), 6px 6px rgb(0, 0, 0);--wp--preset--shadow--crisp: 6px 6px 0px rgb(0, 0, 0);}.wp-block-button{--wp--preset--dimension--25: 25%;--wp--preset--dimension--50: 50%;--wp--preset--dimension--75: 75%;--wp--preset--dimension--100: 100%;}:where(body) { margin: 0; }:where(.is-layout-flex){gap: 0.5em;}:where(.is-layout-grid){gap: 0.5em;}body .is-layout-flex{display: flex;}.is-layout-flex{flex-wrap: wrap;align-items: center;}.is-layout-flex > :is(*, div){margin: 0;}body .is-layout-grid{display: grid;}.is-layout-grid > :is(*, div){margin: 0;}body{padding-top: 0px;padding-right: 0px;padding-bottom: 0px;padding-left: 0px;}:root :where(.wp-element-button, .wp-block-button__link){background-color: #32373c;border-width: 0;color: #fff;font-family: inherit;font-size: inherit;font-style: inherit;font-weight: inherit;letter-spacing: inherit;line-height: inherit;padding-top: calc(0.667em + 2px);padding-right: calc(1.333em + 2px);padding-bottom: calc(0.667em + 2px);padding-left: calc(1.333em + 2px);text-decoration: none;text-transform: inherit;}.has-black-color{color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-color{color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-color{color: var(--wp--preset--color--white) !important;}.has-pale-pink-color{color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-color{color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-color{color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-color{color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-color{color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-color{color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-color{color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-color{color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-color{color: var(--wp--preset--color--vivid-purple) !important;}.has-black-background-color{background-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-background-color{background-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-background-color{background-color: var(--wp--preset--color--white) !important;}.has-pale-pink-background-color{background-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-background-color{background-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-background-color{background-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-background-color{background-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-background-color{background-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-background-color{background-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-background-color{background-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-background-color{background-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-background-color{background-color: var(--wp--preset--color--vivid-purple) !important;}.has-black-border-color{border-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-border-color{border-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-border-color{border-color: var(--wp--preset--color--white) !important;}.has-pale-pink-border-color{border-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-border-color{border-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-border-color{border-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-border-color{border-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-border-color{border-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-border-color{border-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-border-color{border-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-border-color{border-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-border-color{border-color: var(--wp--preset--color--vivid-purple) !important;}.has-vivid-cyan-blue-to-vivid-purple-gradient-background{background: var(--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple) !important;}.has-light-green-cyan-to-vivid-green-cyan-gradient-background{background: var(--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan) !important;}.has-luminous-vivid-amber-to-luminous-vivid-orange-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange) !important;}.has-luminous-vivid-orange-to-vivid-red-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-orange-to-vivid-red) !important;}.has-very-light-gray-to-cyan-bluish-gray-gradient-background{background: var(--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray) !important;}.has-cool-to-warm-spectrum-gradient-background{background: var(--wp--preset--gradient--cool-to-warm-spectrum) !important;}.has-blush-light-purple-gradient-background{background: var(--wp--preset--gradient--blush-light-purple) !important;}.has-blush-bordeaux-gradient-background{background: var(--wp--preset--gradient--blush-bordeaux) !important;}.has-luminous-dusk-gradient-background{background: var(--wp--preset--gradient--luminous-dusk) !important;}.has-pale-ocean-gradient-background{background: var(--wp--preset--gradient--pale-ocean) !important;}.has-electric-grass-gradient-background{background: var(--wp--preset--gradient--electric-grass) !important;}.has-midnight-gradient-background{background: var(--wp--preset--gradient--midnight) !important;}.has-small-font-size{font-size: var(--wp--preset--font-size--small) !important;}.has-medium-font-size{font-size: var(--wp--preset--font-size--medium) !important;}.has-large-font-size{font-size: var(--wp--preset--font-size--large) !important;}.has-x-large-font-size{font-size: var(--wp--preset--font-size--x-large) !important;}
+/*# sourceURL=global-styles-inline-css */
+</style>
+
+<link rel='stylesheet' id='prism_css-css' href='https://developer.x-plane.com/wp-content/plugins/code-sample-generation/lib/paulund-syntax-highlighter/css/prism.css?ver=7.1.4' media='all' />
+<link rel='stylesheet' id='cleaner-gallery-css' href='https://developer.x-plane.com/wp-content/plugins/cleaner-gallery/css/gallery.min.css?ver=20130526' media='all' />
+<link rel='stylesheet' id='roboto-css' href='https://fonts.googleapis.com/css?family=Roboto:400,100,500&#038;ver=7.1.4' media='all' />
+<link rel='stylesheet' id='xplane-style-css' href='https://developer.x-plane.com/wp-content/themes/xplane/style.css?ver=1.2.32' media='all' />
+<link rel='stylesheet' id='wpgdprc-front-css-css' href='https://developer.x-plane.com/wp-content/plugins/wp-gdpr-compliance/Assets/css/front.css?ver=1649713222' media='all' />
+<style id="wpgdprc-front-css-inline-css">
+:root{--wp-gdpr--bar--background-color: #000000;--wp-gdpr--bar--color: #ffffff;--wp-gdpr--button--background-color: #000000;--wp-gdpr--button--background-color--darken: #000000;--wp-gdpr--button--color: #ffffff;}
+/*# sourceURL=wpgdprc-front-css-inline-css */
+</style>
+<link rel='stylesheet' id='wp-paginate-css' href='https://developer.x-plane.com/wp-content/plugins/wp-paginate/css/wp-paginate.css?ver=2.1.8' media='screen' />
+<script id="script_fingerprintjs-js" src="https://developer.x-plane.com/wp-content/plugins/nk-google-analytics/js/fingerprint.min.js?ver=7.1.4"></script>
+<script id="jquery-core-js" src="https://developer.x-plane.com/wp-includes/js/jquery/jquery.min.js?ver=3.7.1"></script>
+<script id="jquery-migrate-js" src="https://developer.x-plane.com/wp-includes/js/jquery/jquery-migrate.min.js?ver=3.4.1"></script>
+<script id="wpgdprc-front-js-js-extra">
+var wpgdprcFront = {"ajaxUrl":"https://developer.x-plane.com/wp-admin/admin-ajax.php","ajaxNonce":"8ab2ad11dd","ajaxArg":"security","pluginPrefix":"wpgdprc","blogId":"1","isMultiSite":"","locale":"en_US","showSignUpModal":"","showFormModal":"","cookieName":"wpgdprc-consent","consentVersion":"","path":"/","prefix":"wpgdprc"};
+//# sourceURL=wpgdprc-front-js-js-extra
+</script>
+<script id="wpgdprc-front-js-js" src="https://developer.x-plane.com/wp-content/plugins/wp-gdpr-compliance/Assets/js/front.min.js?ver=1649713222"></script>
+<script id="wp-quicklatex-frontend-js" src="https://developer.x-plane.com/wp-content/plugins/wp-quicklatex/js/wp-quicklatex-frontend.js?ver=1.0"></script>
+<link rel="https://api.w.org/" href="https://developer.x-plane.com/wp-json/" /><link rel="alternate" title="JSON" type="application/json" href="https://developer.x-plane.com/wp-json/wp/v2/article/40579" /><link rel="EditURI" type="application/rsd+xml" title="RSD" href="https://developer.x-plane.com/xmlrpc.php?rsd" />
+<link rel='shortlink' href='https://developer.x-plane.com/?p=40579' />
+<style>.recentcomments a{display:inline !important;padding:0 !important;margin:0 !important;}</style><link rel="icon" href="https://developer.x-plane.com/wp-content/uploads/2017/12/cropped-X-32x32.png" sizes="32x32" />
+<link rel="icon" href="https://developer.x-plane.com/wp-content/uploads/2017/12/cropped-X-192x192.png" sizes="192x192" />
+<link rel="apple-touch-icon" href="https://developer.x-plane.com/wp-content/uploads/2017/12/cropped-X-180x180.png" />
+<meta name="msapplication-TileImage" content="https://developer.x-plane.com/wp-content/uploads/2017/12/cropped-X-270x270.png" />
+<!-- Global site tag (gtag.js) - Google Analytics -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-TLEY7BTH3N"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-TLEY7BTH3N');
+</script>
+</head> <body class="wp-singular article-template-default single single-article postid-40579 wp-theme-xplane">
+<div class="cs-loader">
+  <div class="cs-loader-inner">
+    <label>	●</label>
+    <label>	●</label>
+    <label>	●</label>
+    <label>	●</label>
+    <label>	●</label>
+    <label>	●</label>
+  </div>
+</div> 
+<header class="site-header desktop-header">
+	<div class="row small-collapse medium-uncollapse">
+		<div class="small-9 columns">
+			<a href="https://developer.x-plane.com/" class="site-title"><img src="//developer.x-plane.com/wp-content/uploads/2017/12/x-plane-developer-logo-web.svg" alt="X-Plane Developer" title="X-Plane Developer" class="logo"></a>
+			<nav class="site-nav">
+				<a href="#site-nav-menu" class="mobile-nav-icon main-menu-button" id="menu-button"><img src="https://developer.x-plane.com/wp-content/themes/xplane/images/menu-button.svg" alt="Site Menu" title="Site Menu"></a>
+				<div class="menu-main-menu-container"><ul id="site-nav-menu" class="menu"><li id="menu-item-8172" class="menu-item menu-item-type-post_type menu-item-object-page current_page_parent menu-item-8172"><a href="https://developer.x-plane.com/blog/">Blog</a></li>
+<li id="menu-item-5481" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-has-children menu-item-5481"><a href="https://developer.x-plane.com/tools/">Scenery Tools</a>
+<ul class="sub-menu">
+	<li id="menu-item-8677" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-8677"><a href="https://developer.x-plane.com/tools/blender/">Blender</a></li>
+	<li id="menu-item-5483" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5483"><a href="https://developer.x-plane.com/tools/xptools/">Command-Line Tools</a></li>
+	<li id="menu-item-5484" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5484"><a href="https://developer.x-plane.com/tools/datarefeditor/">DataRefEditor</a></li>
+	<li id="menu-item-5485" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5485"><a href="https://developer.x-plane.com/tools/meshtool/">MeshTool</a></li>
+	<li id="menu-item-8679" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-8679"><a href="https://developer.x-plane.com/tools/substance-painter/">Substance Painter</a></li>
+	<li id="menu-item-5486" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5486"><a href="https://developer.x-plane.com/tools/worldeditor/">WorldEditor (WED)</a></li>
+</ul>
+</li>
+<li id="menu-item-5487" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-has-children menu-item-5487"><a href="https://developer.x-plane.com/videos/">Videos</a>
+<ul class="sub-menu">
+	<li id="menu-item-40268" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-40268"><a href="https://developer.x-plane.com/2d-panels-generic-instruments/">2D Panels &#038; Generic Instruments</a></li>
+	<li id="menu-item-5488" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5488"><a href="https://developer.x-plane.com/videos/creating-airports-with-worldeditor/">Creating Airports with WorldEditor</a></li>
+	<li id="menu-item-8550" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-8550"><a href="https://developer.x-plane.com/?page_id=8535">Substance Painter Tutorial</a></li>
+</ul>
+</li>
+<li id="menu-item-5489" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-has-children menu-item-5489"><a href="https://developer.x-plane.com/docs/">Documentation</a>
+<ul class="sub-menu">
+	<li id="menu-item-39217" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-39217"><a href="https://developer.x-plane.com/docs/atc/">Air Traffic Control (ATC)</a></li>
+	<li id="menu-item-5491" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5491"><a href="https://developer.x-plane.com/docs/aircraft/">Aircraft</a></li>
+	<li id="menu-item-40398" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-40398"><a href="https://developer.x-plane.com/docs/sound/">FMOD Sound</a></li>
+	<li id="menu-item-7283" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-7283"><a href="https://developer.x-plane.com/docs/modeling/">Modeling</a></li>
+	<li id="menu-item-8233" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-8233"><a href="https://developer.x-plane.com/sdk/">Plugins</a></li>
+	<li id="menu-item-5494" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5494"><a href="https://developer.x-plane.com/docs/scenery/">Scenery</a></li>
+	<li id="menu-item-40893" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-40893"><a href="https://developer.x-plane.com/docs/web-apis/">Web APIs</a></li>
+	<li id="menu-item-6942" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-6942"><a href="https://developer.x-plane.com/docs/weather-documentation/">Weather</a></li>
+	<li id="menu-item-6579" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-6579"><a href="https://developer.x-plane.com/docs/data-development-documentation/">Data Development</a></li>
+	<li id="menu-item-5492" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5492"><a href="https://developer.x-plane.com/docs/specs/">File Format Specifications</a></li>
+	<li id="menu-item-6764" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-6764"><a href="https://developer.x-plane.com/docs/requests-for-comment/">Requests for Comment</a></li>
+	<li id="menu-item-39460" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-39460"><a href="https://developer.x-plane.com/datarefs/">Datarefs</a></li>
+</ul>
+</li>
+<li id="menu-item-5495" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-has-children menu-item-5495"><a href="https://developer.x-plane.com/code/">More</a>
+<ul class="sub-menu">
+	<li id="menu-item-40777" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-40777"><a href="https://developer.x-plane.com/x-plane-bug-database/">X-Plane bug database</a></li>
+	<li id="menu-item-5496" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5496"><a href="https://developer.x-plane.com/code/scenery-tools-bug-database/">Scenery Tools Bug Database</a></li>
+	<li id="menu-item-40731" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-40731"><a href="https://developer.x-plane.com/code/paint-kits/">Paint kits</a></li>
+</ul>
+</li>
+</ul></div>			</nav>
+		</div>
+		<div class="small-3 columns text-right right-nav ">
+			<nav class="search-nav">
+				<a href="#search-form" class="mobile-nav-icon" id="search-button"><img src="https://developer.x-plane.com/wp-content/themes/xplane/images/search-icon.svg" alt="Search" title="Search"></a>
+				<form action="https://developer.x-plane.com/search_gcse/" method="get" class="search-form" id="search-form">
+	<div class="row full-width collapse">
+		<div class="small-8 columns">
+			<input type="text" placeholder="Search for..." class="search-input full-width" name="q">
+		</div>
+		<div class="small-4 search-button-container columns">
+			<p><button type="submit" class="full-width search-button">Search</button></p>
+		</div>
+	</div>
+</form>			</nav> 		</div>
+	</div> </header>
+<div class="page-wrap">
+<!-- /header.php -->
+    <!-- template_toc.php -->     <section class="banner">
+        <div class="row">
+            <div class="small-12 columns">
+                <h1>Building Custom 3-D Trees</h1>
+                <div class="the-date">Last updated June 9, 2022</div>
+            </div>
+        </div>
+    </section>
+    <section class="white-section main-section">
+        <div class="row">
+                            <div class="small-12 large-8 columns"> <!-- content-single-noauthor.php -->
+<article id="post-40579" class="post-40579 article type-article status-publish hentry topic-modeling-3 article_type-guide version-x-plane-12">
+    <h2 id="h.c4c5vyc51ewc"><span id="Basics">Basics</span></h2>
+<p>New 3D trees in X-Plane consist of two main parts.</p>
+<ul>
+<li>The first part of a tree definition is a 2-d billboard side view of the tree. These operate almost identically to X-Plane 11 trees. In X-Plane 12, the side billboard always faces the camera and there is only one per tree.</li>
+<li>The second part is one or more 3-d models of the tree that are used for close up rendering. X-Plane dynamically animates the 3-d model based on wind parameters.</li>
+</ul>
+<p>X-Plane automatically uses the 3-d model of the tree for close rendering and transitions to the 2-d billboard for far views for performance.</p>
+<p>The two parts of the tree use separate texture and materials &#8211; the 2-d textures and material is shared by all 2-d billboards in the .for file; the 3-d textures and material is shared by all 3-d models in the .for file.</p>
+<p>This guide requires some basic Blender knowledge like adding vertex groups and weight painting.</p>
+<h2 id="h.al48yf8t80iq"><span id="Textures">Textures</span></h2>
+<p>Both parts use separate textures &#8211; one for billboards and another for 3D parts. This is also the main prerequisite &#8211; all billboards and all 3D parts for all trees (all species) within a single *.for must be in a single texture sheet. A typical pair of textures may look like this:</p>
+<div style="text-align: center;"><img decoding="async" src="https://developer.x-plane.com/wp-content/uploads/2022/06/01.jpg" alt="01" /></div>
+<p>X-Plane 12 offers a new type of shader called translucent. It was designed specifically for 3D vegetation. Unlike a typical PBR shader, it has a different usage of the normal map blue channel. Instead of metallic property, it determines translucency. White color means fully translucent (leaves) and black means no translucent (solid parts &#8211; trunk). Here is what a typical normal map may look like:</p>
+<div style="text-align: center;"><img decoding="async" src="https://developer.x-plane.com/wp-content/uploads/2022/06/02.jpg" alt="02" /></div>
+<h2 id="h.h7n79ydjas5n"><span id="Creating_Trees_in_Blender">Creating Trees in Blender</span></h2>
+<p>In Blender, all parts are organized in a hierarchy and in collections by strict rules. A single tree consists of three (or more) parts. The top-level object is an empty wrapper (Its name is used for the tree name on export). This parent wrapper must have two child objects &#8211; a billboard (single vertical quad) and a 3D tree (mesh object).</p>
+<div style="text-align: center;"><img decoding="async" src="https://developer.x-plane.com/wp-content/uploads/2022/06/03b.jpg" alt="03b" /></div>
+<p>Each tree can have up to three 3D meshes. The reason is more per-tree LODs that can be additive. The typical use is: the first LOD mesh (0 to 500 m) has all triangles that are facing upward. The second LOD for a shorter distance (0 to 100 m) has all triangles that are facing towards the ground and thus don&#8217;t need to be visible for a bigger distance (bottom of branches). This is highly recommended for better performance, in particular when using high polycount on 3D meshes.</p>
+<div style="text-align: center;"><img decoding="async" src="https://developer.x-plane.com/wp-content/uploads/2022/06/04.jpg" alt="04" /></div>
+<p>Trees are organized into forests using collections and each forest needs two levels. The top-level collection (right under the Scene root collection) is the forest itself. It consists of nothing but other collections. Those collections represent forest layers and all names must start with a numeric value (01, 02, 01-conifers, etc). This value is used as a tree layer index on the export. Obviously, all trees (with all their parts) must belong to some &#8220;layer&#8221; collection.</p>
+<div style="text-align: center;"><img decoding="async" src="https://developer.x-plane.com/wp-content/uploads/2022/06/05.jpg" alt="05" /></div>
+<h3 id="h.sytaj2beh5m0"><span id="Parameters">Parameters</span></h3>
+<p>All important parameters in Blender can be found in the properties editor but they&#8217;re spread across various tabs. All parts of a tree must be organized in the proper hierarchy and collection in order to get the options tab visible.</p>
+<p>Global forest options can be found on the scene tab. Besides the main &#8220;Export&#8221; button the most important parameters here are the file name used on export, tree spacing, and global LOD distance. A separate tab for each existing root collection is shown. A collection is treated as a separate *.for on export once it has some filename entered.</p>
+<div style="text-align: center;"><img decoding="async" src="https://developer.x-plane.com/wp-content/uploads/2022/06/06.jpg" alt="06" /></div>
+<p>The tree root object (empty wrapper) has all options on the objects tab. The “Weighted Importance” value is a relative occurrence of the tree within a forest layer. “Max tree height” is the size limit of the tree. The minimum height is determined from the real size of the tree billboard (in other words, trees are prepared in Blender in their minimum size).</p>
+<p>3D tree mesh-specific options are on the object data tab. 3D tree mesh LOD values are set to 0 and 500 by default. This is also the recommended value for all trees that are intended to cast shadows because 500 meters is currently the default max shadow distance in X-Plane. Shorter distances might cause popping shadow artifacts, but for some types of meshes it is not important, such as bottom facing geometry.</p>
+<p>In addition, both billboards and 3D meshes have material options on the material tab. It is recommended to use blend hash and normal translucency mode for both materials.</p>
+<div style="text-align: center;"><img decoding="async" src="https://developer.x-plane.com/wp-content/uploads/2022/06/07.jpg" alt="07" /></div>
+<h3 id="h.3ecdux8fv6wm"><span id="Adding_Wind_Effects">Adding Wind Effects</span></h3>
+<p>3D trees can sway in X-Plane’s dynamic wind. In order to do so the mesh needs additional vertex data. In Blender we have three vertex weight data channels: w_stiffness, w_edge_stiffness, and w_phase. These names are mandatory and case sensitive!</p>
+<p>The stiffness channel (<strong>w_stiffness</strong>) is used to displace mesh vertices horizontally in the wind direction. The maximum distance of displacement (in meters) is defined by the stiffness parameter on the mesh data tab. It is a multiplier of the vertex data value.</p>
+<div style="text-align: center;"><img decoding="async" src="https://developer.x-plane.com/wp-content/uploads/2022/06/08.jpg" alt="08" /></div>
+<p>Edge stiffness (<strong>w_edge_stiffness</strong>) is used to displace mesh vertices vertically (vertical oscillation or swaying).</p>
+<p>Phase data (<strong>w_phase</strong>) is used to shift various branches&#8217; movement in time. This can avoid uniformity in the look of the whole tree’s movement.</p>
+<p>Stiffness and edge stiffness data might look very similar in most cases. Maximum weight value is on the tip of the branch and zero near the trunk. Phase data is different however. The whole branch usually has the same weight (any value in range 0 &#8211; 1).</p>
+<div style="text-align: center;"><img decoding="async" src="https://developer.x-plane.com/wp-content/uploads/2022/06/09.jpg" alt="09" /></div>
+<p>On top of that the whole tree is bent by wind. This bend is calculated automatically from the ground to the top of the tree. The stronger the wind, the greater the bend at the top of the tree. There is a calibration value on the mesh data tab that can tweak the total amount according to tree height.</p>
+<div style="text-align: center;"><img decoding="async" src="https://developer.x-plane.com/wp-content/uploads/2022/06/10.jpg" alt="10" /></div>
+<p>The default value of 1.0 is calibrated for a 10 meters tall tree. This value might change on the tree shape and the artist&#8217;s desires however. Here are a few examples:</p>
+<p>10 m tree        1.0</p>
+<p>20 m tree        0.5</p>
+<p>30 m tree        0.3</p>
+<p>5 m tree        1.6</p>
+<p>Rock                0.0 (no bend)</p>
+<h3 id="h.eeca6u8mhej9"><span id="Seasons">Seasons</span></h3>
+<p>At this time the exporter has no automatic support for creation of seasons. It has to be done manually. To do so, make a copy of final *.for and change the texture to a different season variant. More info about seasons in different document (link?).</p>
+<h2 id="h.q3y7qcqz3uo1"><span id="Tips_Tricks">Tips &amp; Tricks</span></h2>
+<ul>
+<li>The exporter is still in a very raw stage. Code isn&#8217;t error proof so you have to follow strict rules to avoid errors on export.</li>
+<li>All parameters in the Blender UI have a tooltip with descriptions.</li>
+<li>It is recommended to use one forest per one Blender scene.</li>
+<li>Everything except proper forest collections must be turned off (excluded from View Layer) on export time.</li>
+<li>Try to avoid extremely high polycounts. A typical big tree mesh can have 1000 &#8211; 2000 triangles, or 3000 &#8211; 4000 for very big, old trees.</li>
+</ul>
+</article><!-- #post-## -->
+
+<div id="comments" class="comments-area">
+
+			<h2 class="comments-title">
+			One comment on &ldquo;<span>Building Custom 3-D Trees</span>&rdquo;		</h2>
+
+		
+		<ol class="comment-list">
+					<li id="comment-42324" class="comment even thread-even depth-1">
+			<article id="div-comment-42324" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/d16e711127397fc15eb24580506978340cf2870e2c526a0e7d064cb3d302ae5e?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/d16e711127397fc15eb24580506978340cf2870e2c526a0e7d064cb3d302ae5e?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">DINKIssTyle</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/article/building-custom-3-d-trees/#comment-42324"><time datetime="2023-03-09T18:49:21-05:00">March 9, 2023 at 6:49 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Can I get a sample Blender file for this?</p>
+				</div><!-- .comment-content -->
+
+				<div class="reply"><a rel="nofollow" class="comment-reply-link" href="#comment-42324" data-commentid="42324" data-postid="40579" data-belowelement="div-comment-42324" data-respondelement="respond" data-replyto="Reply to DINKIssTyle" aria-label="Reply to DINKIssTyle">Reply</a></div>			</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		</ol><!-- .comment-list -->
+
+			<div id="respond" class="comment-respond">
+		<h3 id="reply-title" class="comment-reply-title">Leave a Reply <small><a rel="nofollow" id="cancel-comment-reply-link" href="/article/building-custom-3-d-trees/#respond" style="display:none;">Cancel reply</a></small></h3><form action="https://developer.x-plane.com/wp-comments-post.php?wpe-comment-post=xplanedev" method="post" id="commentform" class="comment-form"><p class="comment-notes"><span id="email-notes">Your email address will not be published.</span> <span class="required-field-message">Required fields are marked <span class="required">*</span></span></p><p class="comment-form-comment"><label for="comment">Comment <span class="required">*</span></label> <textarea id="comment" name="comment" cols="45" rows="8" maxlength="65525" required></textarea></p><p class="no-bug-reports">Please <strong>do not</strong> report bugs in the blog comments.<br>Only bugs reported via the <a href="http://dev.x-plane.com/support/bugreport.html" target="_blank">X-Plane Bug Reporter</a> are tracked.</p><p class="comment-form-author"><label for="author">Name <span class="required">*</span></label> <input id="author" name="author" type="text" value="" size="30" maxlength="245" autocomplete="name" required /></p>
+<p class="comment-form-email"><label for="email">Email <span class="required">*</span></label> <input id="email" name="email" type="email" value="" size="30" maxlength="100" aria-describedby="email-notes" autocomplete="email" required /></p>
+<p class="comment-form-url"><label for="url">Website</label> <input id="url" name="url" type="url" value="" size="30" maxlength="200" autocomplete="url" /></p>
+<p class="comment-form-cookies-consent"><input id="wp-comment-cookies-consent" name="wp-comment-cookies-consent" type="checkbox" value="yes" /> <label for="wp-comment-cookies-consent">Save my name, email, and website in this browser for the next time I comment.</label></p>
+
+<p class="wpgdprc-checkbox
+comment-form-wpgdprc">
+	<input type="checkbox" name="wpgdprc" id="wpgdprc" value="1"  />
+	<label for="wpgdprc">
+		I consent for my personal data (including name, email address, and web site) to be used in accordance with this site’s <a href="/privacy-policy" target="_blank">privacy policy</a>. (Your name and web site will be publicly visible with your comment, but Laminar Research will never share your email address with third parties.) 
+<abbr class="wpgdprc-required" title="You need to accept this checkbox">*</abbr>
+	</label>
+</p>
+<p class="form-submit"><input name="submit" type="submit" id="submit" class="submit" value="Post Comment" /> <input type='hidden' name='comment_post_ID' value='40579' id='comment_post_ID' />
+<input type='hidden' name='comment_parent' id='comment_parent' value='0' />
+</p><p style="display: none;"><input type="hidden" id="akismet_comment_nonce" name="akismet_comment_nonce" value="05bbc427bd" /></p><p style="display: none !important;"><label>&#916;<textarea name="ak_hp_textarea" cols="45" rows="8" maxlength="100"></textarea></label><input type="hidden" id="ak_js_1" name="ak_js" value="77"/><script>document.getElementById( "ak_js_1" ).setAttribute( "value", ( new Date() ).getTime() );</script></p></form>	</div><!-- #respond -->
+	
+</div><!-- #comments -->
+                </div>
+                <div class="small-12 large-4 columns">
+                    <aside id="secondary" class="widget-area sidebar-1" role="complementary">
+                        <aside id="toc_container" class="no_bullets widget-container widget_search">
+                                    <h2 class="widget-title">Contents</h2>
+                                    <ul class="toc_list">
+                                        <li><a href="#Basics"><span class="toc_number toc_depth_1">1</span> Basics</a></li><li><a href="#Textures"><span class="toc_number toc_depth_1">2</span> Textures</a></li><li><a href="#Creating_Trees_in_Blender"><span class="toc_number toc_depth_1">3</span> Creating Trees in Blender</a><ul><li><a href="#Parameters"><span class="toc_number toc_depth_2">3.1</span> Parameters</a></li><li><a href="#Adding_Wind_Effects"><span class="toc_number toc_depth_2">3.2</span> Adding Wind Effects</a></li><li><a href="#Seasons"><span class="toc_number toc_depth_2">3.3</span> Seasons</a></li></ul></li><li><a href="#Tips_Tricks"><span class="toc_number toc_depth_1">4</span> Tips &amp; Tricks</a></li>                                    </ul>
+                        </aside>
+                    </aside>
+                    <h2 class="widget-title">Meta</h2>
+
+    <h4 class="widget-title">Topic:</h4>
+    <ul>
+<li>Modeling</li>    </ul>
+    <h4 class="widget-title">Article type:</h4>
+    <ul>
+		<li>Guide</li>    </ul>
+    <h4 class="widget-title">Version:</h4>
+    <ul>
+		<li>X-Plane 12</li>    </ul>
+                </div>
+                    </div>
+    </section> </div>
+<!-- footer.php -->
+<footer class="site-footer">
+	<div class="row">     <div class="small-12 large-6 columns">
+        <p><img src="//developer.x-plane.com/wp-content/uploads/2017/12/x-plane-developer-logo-web.svg" alt="X-Plane" style="width:60%"></p>
+        <p>Developer resources for the X-Plane flight simulator</p>
+        <p class="social-icons" data-facebook="https://www.facebook.com/XPlaneOfficial/" data-twitter="https://twitter.com/XPlaneOfficial" data-youtube="https://www.youtube.com/user/XPlaneOfficial">
+            <a href='https://www.facebook.com/XPlaneOfficial/'><img src='https://developer.x-plane.com/wp-content/themes/xplane/images/facebook.svg' alt='Facebook'></a><a href='https://twitter.com/XPlaneOfficial'><img src='https://developer.x-plane.com/wp-content/themes/xplane/images/twitter.svg' alt='Twitter'></a><a href='https://www.youtube.com/user/XPlaneOfficial'><img src='https://developer.x-plane.com/wp-content/themes/xplane/images/youtube.svg' alt='YouTube'></a>
+        </p>
+    </div>    <div class="small-12 large-5 large-offset-1 columns email-container" id="footer-email-signup">
+        <h3 class="email-block-title">Never miss an update</h3>
+        <p class="email-block-subheading">Sign up for email updates below to get the latest X&#8209;Plane news in your inbox.</p>
+        <form action="/thanks-for-signing-up/" method="post" class="subscribe-form">
+            <input type="hidden" name="form-type" class="form-type" value="dev">
+            <div class="row collapse">
+                <div class="small-12 large-7 columns">
+                    <input type="email" name="EMAIL" class="full-width subscribe-input" placeholder="you@domain.com">
+                </div>
+                <div class="small-12 large-5 columns">
+                    <p><button type="submit" name="subscribe" class="full-width subscribe-button">Sign Up</button></p>
+                </div>
+            </div>
+        </form>
+                    <div class="gdpr">
+                <p>We will never sell or share your email address; we&rsquo;ll only use it to send you X&#8209;Plane-related emails. (More info in our <a href="/privacy-policy/">privacy policy</a>.)</p>
+                <p>You&rsquo;ll receive about one email a month, and you can unsubscribe at any time.</p>
+            </div>
+    </div>	</div>
+</footer><footer class="site-colophon">
+	<div class="row">
+		<div class="large-6 columns">
+			&copy; X-Plane 2026<br>
+            <nav><a href="/privacy-policy/" style="opacity:0.6; font-size:0.8rem; position: relative; top: -0.5rem;">Privacy Policy</a></nav>
+		</div>
+		<div class="large-6 columns large-text-right">
+			<nav class="footer-nav">
+							</nav>
+		</div>
+	</div>
+</footer>
+<script type="speculationrules">
+{"prefetch":[{"source":"document","where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":["/wp-*.php","/wp-admin/*","/wp-content/uploads/*","/wp-content/*","/wp-content/plugins/*","/wp-content/themes/xplane/*","/*\\?(.+)"]}},{"not":{"selector_matches":"a[rel~=\"nofollow\"]"}},{"not":{"selector_matches":".no-prefetch, .no-prefetch a"}}]},"eagerness":"conservative"}]}
+</script>
+	<script type="text/javascript">
+        function ga_ready() {
+            return ga && ga.hasOwnProperty('loaded') && ga.loaded === true;
+        }
+
+		jQuery(document).ready(function($) {
+			var filetypes = /\.(zip|exe|dmg|pdf|doc.*|xls.*|ppt.*|mp3|txt|rar|wma|mov|avi|wmv|flv|wav)$/i;
+			$('a').on('click', function(event) {
+				var el = $(this);
+				var href = (typeof(el.attr('href')) != 'undefined' ) ? el.attr('href') : "";
+				if(ga_ready() && !href.match(/^javascript:/i) && href.match(filetypes)) {
+					var extension = (/[.]/.exec(href)) ? /[^.]+$/.exec(href) : undefined;
+					// Setting the transport method to 'beacon' lets the hit be sent using 'navigator.sendBeacon' in browsers that support it.
+					ga('send', 'event', "download", "File (" + extension[0] + ")", href, {
+						transport: 'beacon',
+						hitCallback: function(){ document.location = href; }
+					});
+					return false; // prevent the link from transporting you until the hitCallback gets called
+				}
+			});
+		});
+	</script>
+<!-- Tracking code easily added by NK Google Analytics -->
+<script type="text/javascript"> 
+(function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){ 
+(i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o), 
+m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m) 
+})(window,document,'script','https://www.google-analytics.com/analytics.js','ga'); 
+ga('create', 'G-TLEY7BTH3N', { 'storage': 'none', 'clientId': new Fingerprint().get()}); 
+ga('set', 'anonymizeIp', true); 
+ga('send', 'pageview'); 
+</script> 
+<script id="google_cse_v2-js-extra">
+var scriptParams = {"google_search_engine_id":"007831620928223713148:yjc2x8tviui"};
+//# sourceURL=google_cse_v2-js-extra
+</script>
+<script id="google_cse_v2-js" src="https://developer.x-plane.com/wp-content/plugins/wp-google-search/assets/js/google_cse_v2.js?ver=1"></script>
+<script id="prism_js-js" src="https://developer.x-plane.com/wp-content/plugins/code-sample-generation/lib/paulund-syntax-highlighter/js/prism-xplane.js?ver=1.0.1"></script>
+<script id="toc-front-js-extra">
+var tocplus = {"visibility_show":"show","visibility_hide":"hide","width":"Auto"};
+//# sourceURL=toc-front-js-extra
+</script>
+<script id="toc-front-js" src="https://developer.x-plane.com/wp-content/plugins/table-of-contents-plus/front.min.js?ver=1509"></script>
+<script id="js-cookie-js" src="https://developer.x-plane.com/wp-content/themes/xplane/js/js.cookie.js?ver=2.2.0"></script>
+<script id="magnific-js" src="https://developer.x-plane.com/wp-content/themes/xplane/js/magnific.js?ver=1.1.0"></script>
+<script id="custom-js" src="https://developer.x-plane.com/wp-content/themes/xplane/js/custom.js?ver=1.1.2"></script>
+<script id="email_signup-js" src="https://developer.x-plane.com/wp-content/themes/xplane/js/email_signup.js?ver=1.3.04"></script>
+<script id="fingerprintjs-js" src="https://developer.x-plane.com/wp-content/themes/xplane/js/fingerprint.min.js?ver=4.9.8"></script>
+<script async data-wp-strategy="async" fetchpriority="low" id="comment-reply-js" src="https://developer.x-plane.com/wp-includes/js/comment-reply.min.js?ver=7.1.4"></script>
+<script id="wp-emoji-settings" type="application/json">
+{"baseUrl":"https://s.w.org/images/core/emoji/17.0.2/72x72/","ext":".png","svgUrl":"https://s.w.org/images/core/emoji/17.0.2/svg/","svgExt":".svg","source":{"concatemoji":"https://developer.x-plane.com/wp-includes/js/wp-emoji-release.min.js?ver=7.1.4"}}
+</script>
+<script type="module">
+/*! This file is auto-generated */
+var e="script#wp-emoji-settings",t=document.querySelector(e);if(!(t instanceof HTMLScriptElement))throw new Error("Element missing: "+e);const r=JSON.parse(t.text),s=(window._wpemojiSettings=r,"wpEmojiSettingsSupports"),o=["flag","emoji"];function i(e){try{var t={supportTests:e,timestamp:(new Date).valueOf()};sessionStorage.setItem(s,JSON.stringify(t))}catch(e){}}function c(e,t,n){e.clearRect(0,0,e.canvas.width,e.canvas.height),e.fillText(t,0,0);t=new Uint32Array(e.getImageData(0,0,e.canvas.width,e.canvas.height).data);e.clearRect(0,0,e.canvas.width,e.canvas.height),e.fillText(n,0,0);const r=new Uint32Array(e.getImageData(0,0,e.canvas.width,e.canvas.height).data);return t.every((e,t)=>e===r[t])}function p(e,t){e.clearRect(0,0,e.canvas.width,e.canvas.height),e.fillText(t,0,0);var n=e.getImageData(16,16,1,1);for(let e=0;e<n.data.length;e++)if(0!==n.data[e])return!1;return!0}function u(e,t,n,r){switch(t){case"flag":return n(e,"\ud83c\udff3\ufe0f\u200d\u26a7\ufe0f","\ud83c\udff3\ufe0f\u200b\u26a7\ufe0f")?!1:!n(e,"\ud83c\udde8\ud83c\uddf6","\ud83c\udde8\u200b\ud83c\uddf6")&&!n(e,"\ud83c\udff4\udb40\udc67\udb40\udc62\udb40\udc65\udb40\udc6e\udb40\udc67\udb40\udc7f","\ud83c\udff4\u200b\udb40\udc67\u200b\udb40\udc62\u200b\udb40\udc65\u200b\udb40\udc6e\u200b\udb40\udc67\u200b\udb40\udc7f");case"emoji":return!r(e,"\ud83e\u1fac8")}return!1}function f(e,t,n,r){let a;const s=(a="undefined"!=typeof WorkerGlobalScope&&self instanceof WorkerGlobalScope?new OffscreenCanvas(300,150):document.createElement("canvas")).getContext("2d",{willReadFrequently:!0}),o=(s.textBaseline="top",s.font="600 32px Arial",{});return e.forEach(e=>{o[e]=t(s,e,n,r)}),o}function a(e){var t=document.createElement("script");t.src=e,t.defer=!0,document.head.appendChild(t)}r.supports={everything:!0,everythingExceptFlag:!0},new Promise(t=>{let n=function(){try{var e=JSON.parse(sessionStorage.getItem(s));if("object"==typeof e&&"number"==typeof e.timestamp&&(new Date).valueOf()<e.timestamp+604800&&"object"==typeof e.supportTests)return e.supportTests}catch(e){}return null}();if(!n){if("undefined"!=typeof Worker&&"undefined"!=typeof OffscreenCanvas&&"undefined"!=typeof URL&&URL.createObjectURL&&"undefined"!=typeof Blob)try{var e="postMessage("+f.toString()+"("+[JSON.stringify(o),u.toString(),c.toString(),p.toString()].join(",")+"));",r=new Blob([e],{type:"text/javascript"});const a=new Worker(URL.createObjectURL(r),{name:"wpTestEmojiSupports"});return void(a.onmessage=e=>{i(n=e.data),a.terminate(),t(n)})}catch(e){}i(n=f(o,u,c,p))}t(n)}).then(e=>{for(const n in e)r.supports[n]=e[n],r.supports.everything=r.supports.everything&&r.supports[n],"flag"!==n&&(r.supports.everythingExceptFlag=r.supports.everythingExceptFlag&&r.supports[n]);var t;r.supports.everythingExceptFlag=r.supports.everythingExceptFlag&&!r.supports.flag,r.supports.everything||((t=r.source||{}).concatemoji?a(t.concatemoji):t.wpemoji&&t.twemoji&&(a(t.twemoji),a(t.wpemoji)))});
+//# sourceURL=https://developer.x-plane.com/wp-includes/js/wp-emoji-loader.min.js
+</script>
+<div class="small-12 medium-2" id="medium-less-than-full-width"></div>
+<div class="medium-12 large-2" id="large-less-than-full-width"></div>
+</body>
+</html>

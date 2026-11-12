@@ -1,0 +1,2030 @@
+<!DOCTYPE html>
+<html lang="en-US">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="pingback" href="https://developer.x-plane.com/xmlrpc.php">
+
+<link rel="apple-touch-icon" sizes="57x57" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-57x57.png">
+<link rel="apple-touch-icon" sizes="60x60" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-60x60.png">
+<link rel="apple-touch-icon" sizes="72x72" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-72x72.png">
+<link rel="apple-touch-icon" sizes="76x76" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-76x76.png">
+<link rel="apple-touch-icon" sizes="114x114" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-114x114.png">
+<link rel="apple-touch-icon" sizes="120x120" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-120x120.png">
+<link rel="apple-touch-icon" sizes="144x144" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-144x144.png">
+<link rel="apple-touch-icon" sizes="152x152" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-152x152.png">
+<link rel="apple-touch-icon" sizes="180x180" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/apple-touch-icon-180x180.png">
+<link rel="icon" type="image/png" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/favicon-32x32.png" sizes="32x32">
+<link rel="icon" type="image/png" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/favicon-194x194.png" sizes="194x194">
+<link rel="icon" type="image/png" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/favicon-96x96.png" sizes="96x96">
+<link rel="icon" type="image/png" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/android-chrome-192x192.png" sizes="192x192">
+<link rel="icon" type="image/png" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/favicon-16x16.png" sizes="16x16">
+<link rel="manifest" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/manifest.json">
+<link rel="mask-icon" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/safari-pinned-tab.svg" color="#1678b5">
+<link rel="shortcut icon" href="https://developer.x-plane.com/wp-content/themes/xplane/favicons/favicon.ico">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="msapplication-TileImage" content="https://developer.x-plane.com/wp-content/themes/xplane/favicons/mstile-144x144.png">
+<meta name="msapplication-config" content="https://developer.x-plane.com/wp-content/themes/xplane/favicons/browserconfig.xml">
+<meta name="theme-color" content="#ffffff">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+<meta name='robots' content='index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1' />
+
+	<title>Next generation trees and OpenGL - X-Plane Developer</title>
+	<link rel="canonical" href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/" />
+	<meta property="og:locale" content="en_US" />
+	<meta property="og:type" content="article" />
+	<meta property="og:title" content="Next generation trees and OpenGL - X-Plane Developer" />
+	<meta property="og:description" content="Back in June, Ben shared some information regarding X-Plane&#8217;s next generation lighting pipeline. It&#8217;s now time to go back to the future and talk about another piece of the next generation: Vegetation. In case you have missed it, Chris and Thomson made an awesome preview video for this as well: Vegetation As you can see, [&hellip;]" />
+	<meta property="og:url" content="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/" />
+	<meta property="og:site_name" content="X-Plane Developer" />
+	<meta property="article:publisher" content="http://facebook.com/XPlaneOfficial/" />
+	<meta property="article:published_time" content="2021-08-02T17:21:00+00:00" />
+	<meta property="article:modified_time" content="2021-10-12T14:21:18+00:00" />
+	<meta property="og:image" content="https://developer.x-plane.com/wp-content/uploads/2017/12/cropped-X.png" />
+	<meta property="og:image:width" content="512" />
+	<meta property="og:image:height" content="512" />
+	<meta property="og:image:type" content="image/png" />
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:creator" content="@XPlaneOfficial" />
+	<meta name="twitter:site" content="@XPlaneOfficial" />
+	<meta name="twitter:label1" content="Written by" />
+	<meta name="twitter:data1" content="Sidney Just" />
+	<meta name="twitter:label2" content="Est. reading time" />
+	<meta name="twitter:data2" content="5 minutes" />
+	<script type="application/ld+json" class="yoast-schema-graph">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://developer.x-plane.com/#website","url":"https://developer.x-plane.com/","name":"X-Plane Developer","description":"Developer resources for the X-Plane flight simulator","potentialAction":[{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://developer.x-plane.com/?s={search_term_string}"},"query-input":"required name=search_term_string"}],"inLanguage":"en-US"},{"@type":"WebPage","@id":"https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#webpage","url":"https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/","name":"Next generation trees and OpenGL - X-Plane Developer","isPartOf":{"@id":"https://developer.x-plane.com/#website"},"datePublished":"2021-08-02T17:21:00+00:00","dateModified":"2021-10-12T14:21:18+00:00","author":{"@id":"https://developer.x-plane.com/#/schema/person/dcf1a175aac81187d67adda5e8d30e61"},"breadcrumb":{"@id":"https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#breadcrumb"},"inLanguage":"en-US","potentialAction":[{"@type":"ReadAction","target":["https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/"]}]},{"@type":"BreadcrumbList","@id":"https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://developer.x-plane.com/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://developer.x-plane.com/blog/"},{"@type":"ListItem","position":3,"name":"Next generation trees and OpenGL"}]},{"@type":"Person","@id":"https://developer.x-plane.com/#/schema/person/dcf1a175aac81187d67adda5e8d30e61","name":"Sidney Just","image":{"@type":"ImageObject","@id":"https://developer.x-plane.com/#personlogo","inLanguage":"en-US","url":"https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=96&d=mm&r=g","contentUrl":"https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=96&d=mm&r=g","caption":"Sidney Just"},"description":"Sidney is a software developer for X-Plane; As the Vulkanologist he specializes on pyroclastic flow and talking to bitcoin mining hardware.","sameAs":["http://x-plane.com"],"url":"https://developer.x-plane.com/author/justsid/"}]}</script>
+
+
+<link rel='dns-prefetch' href='//fonts.googleapis.com' />
+<link rel="alternate" type="application/rss+xml" title="X-Plane Developer &raquo; Feed" href="https://developer.x-plane.com/feed/" />
+<link rel="alternate" type="application/rss+xml" title="X-Plane Developer &raquo; Comments Feed" href="https://developer.x-plane.com/comments/feed/" />
+<link rel="alternate" type="application/rss+xml" title="X-Plane Developer &raquo; Next generation trees and OpenGL Comments Feed" href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/feed/" />
+<link rel="alternate" title="oEmbed (JSON)" type="application/json+oembed" href="https://developer.x-plane.com/wp-json/oembed/1.0/embed?url=https%3A%2F%2Fdeveloper.x-plane.com%2F2021%2F08%2Fnext-generation-trees-and-opengl%2F" />
+<link rel="alternate" title="oEmbed (XML)" type="text/xml+oembed" href="https://developer.x-plane.com/wp-json/oembed/1.0/embed?url=https%3A%2F%2Fdeveloper.x-plane.com%2F2021%2F08%2Fnext-generation-trees-and-opengl%2F&#038;format=xml" />
+		
+	<style id="wp-img-auto-sizes-contain-inline-css">
+img:is([sizes=auto i],[sizes^="auto," i]){contain-intrinsic-size:3000px 1500px}
+/*# sourceURL=wp-img-auto-sizes-contain-inline-css */
+</style>
+<link rel='stylesheet' id='wp-quicklatex-format-css' href='https://developer.x-plane.com/wp-content/plugins/wp-quicklatex/css/quicklatex-format.css?ver=7.1.4' media='all' />
+<style id="wp-emoji-styles-inline-css">
+
+	img.wp-smiley, img.emoji {
+		display: inline !important;
+		border: none !important;
+		box-shadow: none !important;
+		height: 1em !important;
+		width: 1em !important;
+		margin: 0 0.07em !important;
+		vertical-align: -0.1em !important;
+		background: none !important;
+		padding: 0 !important;
+	}
+/*# sourceURL=wp-emoji-styles-inline-css */
+</style>
+<style id="wp-block-library-inline-css">
+:root{--wp-block-synced-color:#7a00df;--wp-block-synced-color--rgb:122,0,223;--wp-bound-block-color:var(--wp-block-synced-color);--wp-editor-canvas-background:#ddd;--wp-admin-theme-color:#007cba;--wp-admin-theme-color--rgb:0,124,186;--wp-admin-theme-color-darker-10:#006ba1;--wp-admin-theme-color-darker-10--rgb:0,107,160.5;--wp-admin-theme-color-darker-20:#005a87;--wp-admin-theme-color-darker-20--rgb:0,90,135;--wp-admin-border-width-focus:2px}@media (min-resolution:192dpi){:root{--wp-admin-border-width-focus:1.5px}}.wp-element-button{cursor:pointer}:root .has-very-light-gray-background-color{background-color:#eee}:root .has-very-dark-gray-background-color{background-color:#313131}:root .has-very-light-gray-color{color:#eee}:root .has-very-dark-gray-color{color:#313131}:root .has-vivid-green-cyan-to-vivid-cyan-blue-gradient-background{background:linear-gradient(135deg,#00d084,#0693e3)}:root .has-purple-crush-gradient-background{background:linear-gradient(135deg,#34e2e4,#4721fb 50%,#ab1dfe)}:root .has-hazy-dawn-gradient-background{background:linear-gradient(135deg,#faaca8,#dad0ec)}:root .has-subdued-olive-gradient-background{background:linear-gradient(135deg,#fafae1,#67a671)}:root .has-atomic-cream-gradient-background{background:linear-gradient(135deg,#fdd79a,#004a59)}:root .has-nightshade-gradient-background{background:linear-gradient(135deg,#330968,#31cdcf)}:root .has-midnight-gradient-background{background:linear-gradient(135deg,#020381,#2874fc)}:root{--wp--preset--font-size--normal:16px;--wp--preset--font-size--huge:42px}.has-regular-font-size{font-size:1em}.has-larger-font-size{font-size:2.625em}.has-normal-font-size{font-size:var(--wp--preset--font-size--normal)}.has-huge-font-size{font-size:var(--wp--preset--font-size--huge)}:root .has-text-align-center{text-align:center}:root .has-text-align-left{text-align:left}:root .has-text-align-right{text-align:right}.has-fit-text{white-space:nowrap!important}#end-resizable-editor-section{display:none}.aligncenter{clear:both}.items-justified-left{justify-content:flex-start}.items-justified-center{justify-content:center}.items-justified-right{justify-content:flex-end}.items-justified-space-between{justify-content:space-between}.screen-reader-text{word-wrap:normal!important;border:0;clip-path:inset(50%);height:1px;margin:-1px;overflow:hidden;padding:0;position:absolute;width:1px;word-break:normal!important}.screen-reader-text:focus{background-color:#ddd;clip-path:none;color:#444;display:block;font-size:1em;height:auto;left:5px;line-height:normal;padding:15px 23px 14px;text-decoration:none;top:5px;width:auto;z-index:100000}html :where(.has-border-color){border-style:solid}html :where([style^=border-color],[style*=";border-color"],[style*="; border-color"]){border-style:solid}html :where([style^=border-top-color],[style*=";border-top-color"],[style*="; border-top-color"]){border-top-style:solid}html :where([style^=border-right-color],[style*=";border-right-color"],[style*="; border-right-color"]){border-right-style:solid}html :where([style^=border-bottom-color],[style*=";border-bottom-color"],[style*="; border-bottom-color"]){border-bottom-style:solid}html :where([style^=border-left-color],[style*=";border-left-color"],[style*="; border-left-color"]){border-left-style:solid}html :where([style^=border-width],[style*=";border-width"],[style*="; border-width"]){border-style:solid}html :where([style^=border-top-width],[style*=";border-top-width"],[style*="; border-top-width"]){border-top-style:solid}html :where([style^=border-right-width],[style*=";border-right-width"],[style*="; border-right-width"]){border-right-style:solid}html :where([style^=border-bottom-width],[style*=";border-bottom-width"],[style*="; border-bottom-width"]){border-bottom-style:solid}html :where([style^=border-left-width],[style*=";border-left-width"],[style*="; border-left-width"]){border-left-style:solid}html :where(img[class*=wp-image-]){height:auto;max-width:100%}:where(figure){margin:0 0 1em}html :where(.is-position-sticky){--wp-admin--admin-bar--position-offset:var(--wp-admin--admin-bar--height,0px)}@media screen and (max-width:600px){html :where(.is-position-sticky){--wp-admin--admin-bar--position-offset:0px}}
+
+/*# sourceURL=/wp-includes/css/dist/block-library/common.min.css */
+</style>
+<style id="wp-block-embed-inline-css">
+.wp-block-embed.alignleft,.wp-block-embed.alignright,.wp-block[data-align=left]>[data-type="core/embed"],.wp-block[data-align=right]>[data-type="core/embed"]{max-width:360px;width:100%}.wp-block-embed.alignleft .wp-block-embed__wrapper,.wp-block-embed.alignright .wp-block-embed__wrapper,.wp-block[data-align=left]>[data-type="core/embed"] .wp-block-embed__wrapper,.wp-block[data-align=right]>[data-type="core/embed"] .wp-block-embed__wrapper{min-width:280px}.wp-block-cover .wp-block-embed{min-height:240px;min-width:320px}.wp-block-group.is-layout-flex .wp-block-embed{flex:1 1 0%;min-width:0}.wp-block-embed{overflow-wrap:break-word}.wp-block-embed :where(figcaption){margin-bottom:1em;margin-top:.5em}.wp-block-embed iframe{max-width:100%}.wp-block-embed__wrapper{position:relative}.wp-embed-responsive .wp-has-aspect-ratio .wp-block-embed__wrapper:before{content:"";display:block;padding-top:50%}.wp-embed-responsive .wp-has-aspect-ratio iframe{bottom:0;height:100%;left:0;position:absolute;right:0;top:0;width:100%}.wp-embed-responsive .wp-embed-aspect-21-9 .wp-block-embed__wrapper:before{padding-top:42.85%}.wp-embed-responsive .wp-embed-aspect-18-9 .wp-block-embed__wrapper:before{padding-top:50%}.wp-embed-responsive .wp-embed-aspect-16-9 .wp-block-embed__wrapper:before{padding-top:56.25%}.wp-embed-responsive .wp-embed-aspect-4-3 .wp-block-embed__wrapper:before{padding-top:75%}.wp-embed-responsive .wp-embed-aspect-1-1 .wp-block-embed__wrapper:before{padding-top:100%}.wp-embed-responsive .wp-embed-aspect-9-16 .wp-block-embed__wrapper:before{padding-top:177.77%}.wp-embed-responsive .wp-embed-aspect-1-2 .wp-block-embed__wrapper:before{padding-top:200%}
+/*# sourceURL=https://developer.x-plane.com/wp-includes/blocks/embed/style.min.css */
+</style>
+
+<style id="classic-theme-styles-inline-css">
+/*! This file is auto-generated */
+.wp-block-button__link{color:#fff;background-color:#32373c;border-radius:9999px;box-shadow:none;text-decoration:none;padding:calc(.667em + 2px) calc(1.333em + 2px);font-size:1.125em}.wp-block-file__button{background:#32373c;color:#fff;text-decoration:none}
+/*# sourceURL=/wp-includes/css/classic-themes.min.css */
+</style>
+
+<style id="global-styles-inline-css">
+:root{--wp--preset--aspect-ratio--square: 1;--wp--preset--aspect-ratio--4-3: 4/3;--wp--preset--aspect-ratio--3-4: 3/4;--wp--preset--aspect-ratio--3-2: 3/2;--wp--preset--aspect-ratio--2-3: 2/3;--wp--preset--aspect-ratio--16-9: 16/9;--wp--preset--aspect-ratio--9-16: 9/16;--wp--preset--color--black: #000000;--wp--preset--color--cyan-bluish-gray: #abb8c3;--wp--preset--color--white: #ffffff;--wp--preset--color--pale-pink: #f78da7;--wp--preset--color--vivid-red: #cf2e2e;--wp--preset--color--luminous-vivid-orange: #ff6900;--wp--preset--color--luminous-vivid-amber: #fcb900;--wp--preset--color--light-green-cyan: #7bdcb5;--wp--preset--color--vivid-green-cyan: #00d084;--wp--preset--color--pale-cyan-blue: #8ed1fc;--wp--preset--color--vivid-cyan-blue: #0693e3;--wp--preset--color--vivid-purple: #9b51e0;--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple: linear-gradient(135deg,rgb(6,147,227) 0%,rgb(155,81,224) 100%);--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan: linear-gradient(135deg,rgb(122,220,180) 0%,rgb(0,208,130) 100%);--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange: linear-gradient(135deg,rgb(252,185,0) 0%,rgb(255,105,0) 100%);--wp--preset--gradient--luminous-vivid-orange-to-vivid-red: linear-gradient(135deg,rgb(255,105,0) 0%,rgb(207,46,46) 100%);--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray: linear-gradient(135deg,rgb(238,238,238) 0%,rgb(169,184,195) 100%);--wp--preset--gradient--cool-to-warm-spectrum: linear-gradient(135deg,rgb(74,234,220) 0%,rgb(151,120,209) 20%,rgb(207,42,186) 40%,rgb(238,44,130) 60%,rgb(251,105,98) 80%,rgb(254,248,76) 100%);--wp--preset--gradient--blush-light-purple: linear-gradient(135deg,rgb(255,206,236) 0%,rgb(152,150,240) 100%);--wp--preset--gradient--blush-bordeaux: linear-gradient(135deg,rgb(254,205,165) 0%,rgb(254,45,45) 50%,rgb(107,0,62) 100%);--wp--preset--gradient--luminous-dusk: linear-gradient(135deg,rgb(255,203,112) 0%,rgb(199,81,192) 50%,rgb(65,88,208) 100%);--wp--preset--gradient--pale-ocean: linear-gradient(135deg,rgb(255,245,203) 0%,rgb(182,227,212) 50%,rgb(51,167,181) 100%);--wp--preset--gradient--electric-grass: linear-gradient(135deg,rgb(202,248,128) 0%,rgb(113,206,126) 100%);--wp--preset--gradient--midnight: linear-gradient(135deg,rgb(2,3,129) 0%,rgb(40,116,252) 100%);--wp--preset--font-size--small: 13px;--wp--preset--font-size--medium: 20px;--wp--preset--font-size--large: 36px;--wp--preset--font-size--x-large: 42px;--wp--preset--spacing--20: 0.44rem;--wp--preset--spacing--30: 0.67rem;--wp--preset--spacing--40: 1rem;--wp--preset--spacing--50: 1.5rem;--wp--preset--spacing--60: 2.25rem;--wp--preset--spacing--70: 3.38rem;--wp--preset--spacing--80: 5.06rem;--wp--preset--shadow--natural: 6px 6px 9px rgba(0, 0, 0, 0.2);--wp--preset--shadow--deep: 12px 12px 50px rgba(0, 0, 0, 0.4);--wp--preset--shadow--sharp: 6px 6px 0px rgba(0, 0, 0, 0.2);--wp--preset--shadow--outlined: 6px 6px 0px -3px rgb(255, 255, 255), 6px 6px rgb(0, 0, 0);--wp--preset--shadow--crisp: 6px 6px 0px rgb(0, 0, 0);}.wp-block-button{--wp--preset--dimension--25: 25%;--wp--preset--dimension--50: 50%;--wp--preset--dimension--75: 75%;--wp--preset--dimension--100: 100%;}:where(body) { margin: 0; }:where(.is-layout-flex){gap: 0.5em;}:where(.is-layout-grid){gap: 0.5em;}body .is-layout-flex{display: flex;}.is-layout-flex{flex-wrap: wrap;align-items: center;}.is-layout-flex > :is(*, div){margin: 0;}body .is-layout-grid{display: grid;}.is-layout-grid > :is(*, div){margin: 0;}body{padding-top: 0px;padding-right: 0px;padding-bottom: 0px;padding-left: 0px;}:root :where(.wp-element-button, .wp-block-button__link){background-color: #32373c;border-width: 0;color: #fff;font-family: inherit;font-size: inherit;font-style: inherit;font-weight: inherit;letter-spacing: inherit;line-height: inherit;padding-top: calc(0.667em + 2px);padding-right: calc(1.333em + 2px);padding-bottom: calc(0.667em + 2px);padding-left: calc(1.333em + 2px);text-decoration: none;text-transform: inherit;}.has-black-color{color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-color{color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-color{color: var(--wp--preset--color--white) !important;}.has-pale-pink-color{color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-color{color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-color{color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-color{color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-color{color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-color{color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-color{color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-color{color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-color{color: var(--wp--preset--color--vivid-purple) !important;}.has-black-background-color{background-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-background-color{background-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-background-color{background-color: var(--wp--preset--color--white) !important;}.has-pale-pink-background-color{background-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-background-color{background-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-background-color{background-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-background-color{background-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-background-color{background-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-background-color{background-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-background-color{background-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-background-color{background-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-background-color{background-color: var(--wp--preset--color--vivid-purple) !important;}.has-black-border-color{border-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-border-color{border-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-border-color{border-color: var(--wp--preset--color--white) !important;}.has-pale-pink-border-color{border-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-border-color{border-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-border-color{border-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-border-color{border-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-border-color{border-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-border-color{border-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-border-color{border-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-border-color{border-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-border-color{border-color: var(--wp--preset--color--vivid-purple) !important;}.has-vivid-cyan-blue-to-vivid-purple-gradient-background{background: var(--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple) !important;}.has-light-green-cyan-to-vivid-green-cyan-gradient-background{background: var(--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan) !important;}.has-luminous-vivid-amber-to-luminous-vivid-orange-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange) !important;}.has-luminous-vivid-orange-to-vivid-red-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-orange-to-vivid-red) !important;}.has-very-light-gray-to-cyan-bluish-gray-gradient-background{background: var(--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray) !important;}.has-cool-to-warm-spectrum-gradient-background{background: var(--wp--preset--gradient--cool-to-warm-spectrum) !important;}.has-blush-light-purple-gradient-background{background: var(--wp--preset--gradient--blush-light-purple) !important;}.has-blush-bordeaux-gradient-background{background: var(--wp--preset--gradient--blush-bordeaux) !important;}.has-luminous-dusk-gradient-background{background: var(--wp--preset--gradient--luminous-dusk) !important;}.has-pale-ocean-gradient-background{background: var(--wp--preset--gradient--pale-ocean) !important;}.has-electric-grass-gradient-background{background: var(--wp--preset--gradient--electric-grass) !important;}.has-midnight-gradient-background{background: var(--wp--preset--gradient--midnight) !important;}.has-small-font-size{font-size: var(--wp--preset--font-size--small) !important;}.has-medium-font-size{font-size: var(--wp--preset--font-size--medium) !important;}.has-large-font-size{font-size: var(--wp--preset--font-size--large) !important;}.has-x-large-font-size{font-size: var(--wp--preset--font-size--x-large) !important;}
+/*# sourceURL=global-styles-inline-css */
+</style>
+
+<link rel='stylesheet' id='prism_css-css' href='https://developer.x-plane.com/wp-content/plugins/code-sample-generation/lib/paulund-syntax-highlighter/css/prism.css?ver=7.1.4' media='all' />
+<link rel='stylesheet' id='cleaner-gallery-css' href='https://developer.x-plane.com/wp-content/plugins/cleaner-gallery/css/gallery.min.css?ver=20130526' media='all' />
+<link rel='stylesheet' id='roboto-css' href='https://fonts.googleapis.com/css?family=Roboto:400,100,500&#038;ver=7.1.4' media='all' />
+<link rel='stylesheet' id='xplane-style-css' href='https://developer.x-plane.com/wp-content/themes/xplane/style.css?ver=1.2.32' media='all' />
+<link rel='stylesheet' id='wpgdprc-front-css-css' href='https://developer.x-plane.com/wp-content/plugins/wp-gdpr-compliance/Assets/css/front.css?ver=1649713222' media='all' />
+<style id="wpgdprc-front-css-inline-css">
+:root{--wp-gdpr--bar--background-color: #000000;--wp-gdpr--bar--color: #ffffff;--wp-gdpr--button--background-color: #000000;--wp-gdpr--button--background-color--darken: #000000;--wp-gdpr--button--color: #ffffff;}
+/*# sourceURL=wpgdprc-front-css-inline-css */
+</style>
+<link rel='stylesheet' id='wp-block-paragraph-css' href='https://developer.x-plane.com/wp-includes/blocks/paragraph/style.min.css?ver=7.1.4' media='all' />
+<link rel='stylesheet' id='wp-block-heading-css' href='https://developer.x-plane.com/wp-includes/blocks/heading/style.min.css?ver=7.1.4' media='all' />
+<link rel='stylesheet' id='wp-paginate-css' href='https://developer.x-plane.com/wp-content/plugins/wp-paginate/css/wp-paginate.css?ver=2.1.8' media='screen' />
+<script id="script_fingerprintjs-js" src="https://developer.x-plane.com/wp-content/plugins/nk-google-analytics/js/fingerprint.min.js?ver=7.1.4"></script>
+<script id="jquery-core-js" src="https://developer.x-plane.com/wp-includes/js/jquery/jquery.min.js?ver=3.7.1"></script>
+<script id="jquery-migrate-js" src="https://developer.x-plane.com/wp-includes/js/jquery/jquery-migrate.min.js?ver=3.4.1"></script>
+<script id="wpgdprc-front-js-js-extra">
+var wpgdprcFront = {"ajaxUrl":"https://developer.x-plane.com/wp-admin/admin-ajax.php","ajaxNonce":"8ab2ad11dd","ajaxArg":"security","pluginPrefix":"wpgdprc","blogId":"1","isMultiSite":"","locale":"en_US","showSignUpModal":"","showFormModal":"","cookieName":"wpgdprc-consent","consentVersion":"","path":"/","prefix":"wpgdprc"};
+//# sourceURL=wpgdprc-front-js-js-extra
+</script>
+<script id="wpgdprc-front-js-js" src="https://developer.x-plane.com/wp-content/plugins/wp-gdpr-compliance/Assets/js/front.min.js?ver=1649713222"></script>
+<script id="wp-quicklatex-frontend-js" src="https://developer.x-plane.com/wp-content/plugins/wp-quicklatex/js/wp-quicklatex-frontend.js?ver=1.0"></script>
+<link rel="https://api.w.org/" href="https://developer.x-plane.com/wp-json/" /><link rel="alternate" title="JSON" type="application/json" href="https://developer.x-plane.com/wp-json/wp/v2/posts/40247" /><link rel="EditURI" type="application/rsd+xml" title="RSD" href="https://developer.x-plane.com/xmlrpc.php?rsd" />
+<link rel='shortlink' href='https://developer.x-plane.com/?p=40247' />
+<style>.recentcomments a{display:inline !important;padding:0 !important;margin:0 !important;}</style><link rel="icon" href="https://developer.x-plane.com/wp-content/uploads/2017/12/cropped-X-32x32.png" sizes="32x32" />
+<link rel="icon" href="https://developer.x-plane.com/wp-content/uploads/2017/12/cropped-X-192x192.png" sizes="192x192" />
+<link rel="apple-touch-icon" href="https://developer.x-plane.com/wp-content/uploads/2017/12/cropped-X-180x180.png" />
+<meta name="msapplication-TileImage" content="https://developer.x-plane.com/wp-content/uploads/2017/12/cropped-X-270x270.png" />
+<!-- Global site tag (gtag.js) - Google Analytics -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-TLEY7BTH3N"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-TLEY7BTH3N');
+</script>
+</head> <body class="wp-singular post-template-default single single-post postid-40247 single-format-standard wp-theme-xplane">
+<div class="cs-loader">
+  <div class="cs-loader-inner">
+    <label>	●</label>
+    <label>	●</label>
+    <label>	●</label>
+    <label>	●</label>
+    <label>	●</label>
+    <label>	●</label>
+  </div>
+</div> 
+<header class="site-header desktop-header">
+	<div class="row small-collapse medium-uncollapse">
+		<div class="small-9 columns">
+			<a href="https://developer.x-plane.com/" class="site-title"><img src="//developer.x-plane.com/wp-content/uploads/2017/12/x-plane-developer-logo-web.svg" alt="X-Plane Developer" title="X-Plane Developer" class="logo"></a>
+			<nav class="site-nav">
+				<a href="#site-nav-menu" class="mobile-nav-icon main-menu-button" id="menu-button"><img src="https://developer.x-plane.com/wp-content/themes/xplane/images/menu-button.svg" alt="Site Menu" title="Site Menu"></a>
+				<div class="menu-main-menu-container"><ul id="site-nav-menu" class="menu"><li id="menu-item-8172" class="menu-item menu-item-type-post_type menu-item-object-page current_page_parent menu-item-8172"><a href="https://developer.x-plane.com/blog/">Blog</a></li>
+<li id="menu-item-5481" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-has-children menu-item-5481"><a href="https://developer.x-plane.com/tools/">Scenery Tools</a>
+<ul class="sub-menu">
+	<li id="menu-item-8677" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-8677"><a href="https://developer.x-plane.com/tools/blender/">Blender</a></li>
+	<li id="menu-item-5483" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5483"><a href="https://developer.x-plane.com/tools/xptools/">Command-Line Tools</a></li>
+	<li id="menu-item-5484" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5484"><a href="https://developer.x-plane.com/tools/datarefeditor/">DataRefEditor</a></li>
+	<li id="menu-item-5485" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5485"><a href="https://developer.x-plane.com/tools/meshtool/">MeshTool</a></li>
+	<li id="menu-item-8679" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-8679"><a href="https://developer.x-plane.com/tools/substance-painter/">Substance Painter</a></li>
+	<li id="menu-item-5486" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5486"><a href="https://developer.x-plane.com/tools/worldeditor/">WorldEditor (WED)</a></li>
+</ul>
+</li>
+<li id="menu-item-5487" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-has-children menu-item-5487"><a href="https://developer.x-plane.com/videos/">Videos</a>
+<ul class="sub-menu">
+	<li id="menu-item-40268" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-40268"><a href="https://developer.x-plane.com/2d-panels-generic-instruments/">2D Panels &#038; Generic Instruments</a></li>
+	<li id="menu-item-5488" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5488"><a href="https://developer.x-plane.com/videos/creating-airports-with-worldeditor/">Creating Airports with WorldEditor</a></li>
+	<li id="menu-item-8550" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-8550"><a href="https://developer.x-plane.com/?page_id=8535">Substance Painter Tutorial</a></li>
+</ul>
+</li>
+<li id="menu-item-5489" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-has-children menu-item-5489"><a href="https://developer.x-plane.com/docs/">Documentation</a>
+<ul class="sub-menu">
+	<li id="menu-item-39217" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-39217"><a href="https://developer.x-plane.com/docs/atc/">Air Traffic Control (ATC)</a></li>
+	<li id="menu-item-5491" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5491"><a href="https://developer.x-plane.com/docs/aircraft/">Aircraft</a></li>
+	<li id="menu-item-40398" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-40398"><a href="https://developer.x-plane.com/docs/sound/">FMOD Sound</a></li>
+	<li id="menu-item-7283" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-7283"><a href="https://developer.x-plane.com/docs/modeling/">Modeling</a></li>
+	<li id="menu-item-8233" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-8233"><a href="https://developer.x-plane.com/sdk/">Plugins</a></li>
+	<li id="menu-item-5494" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5494"><a href="https://developer.x-plane.com/docs/scenery/">Scenery</a></li>
+	<li id="menu-item-40893" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-40893"><a href="https://developer.x-plane.com/docs/web-apis/">Web APIs</a></li>
+	<li id="menu-item-6942" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-6942"><a href="https://developer.x-plane.com/docs/weather-documentation/">Weather</a></li>
+	<li id="menu-item-6579" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-6579"><a href="https://developer.x-plane.com/docs/data-development-documentation/">Data Development</a></li>
+	<li id="menu-item-5492" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5492"><a href="https://developer.x-plane.com/docs/specs/">File Format Specifications</a></li>
+	<li id="menu-item-6764" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-6764"><a href="https://developer.x-plane.com/docs/requests-for-comment/">Requests for Comment</a></li>
+	<li id="menu-item-39460" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-39460"><a href="https://developer.x-plane.com/datarefs/">Datarefs</a></li>
+</ul>
+</li>
+<li id="menu-item-5495" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-has-children menu-item-5495"><a href="https://developer.x-plane.com/code/">More</a>
+<ul class="sub-menu">
+	<li id="menu-item-40777" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-40777"><a href="https://developer.x-plane.com/x-plane-bug-database/">X-Plane bug database</a></li>
+	<li id="menu-item-5496" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-5496"><a href="https://developer.x-plane.com/code/scenery-tools-bug-database/">Scenery Tools Bug Database</a></li>
+	<li id="menu-item-40731" class="menu-item menu-item-type-post_type menu-item-object-page menu-item-40731"><a href="https://developer.x-plane.com/code/paint-kits/">Paint kits</a></li>
+</ul>
+</li>
+</ul></div>			</nav>
+		</div>
+		<div class="small-3 columns text-right right-nav ">
+			<nav class="search-nav">
+				<a href="#search-form" class="mobile-nav-icon" id="search-button"><img src="https://developer.x-plane.com/wp-content/themes/xplane/images/search-icon.svg" alt="Search" title="Search"></a>
+				<form action="https://developer.x-plane.com/search_gcse/" method="get" class="search-form" id="search-form">
+	<div class="row full-width collapse">
+		<div class="small-8 columns">
+			<input type="text" placeholder="Search for..." class="search-input full-width" name="q">
+		</div>
+		<div class="small-4 search-button-container columns">
+			<p><button type="submit" class="full-width search-button">Search</button></p>
+		</div>
+	</div>
+</form>			</nav> 		</div>
+	</div> </header>
+<div class="page-wrap">
+<!-- /header.php -->
+<!-- single.php --> 	<section class="banner">
+		<div class="row">
+			<div class="small-12 columns">
+				<h1>Next generation trees and OpenGL</h1>
+				<div class="the-date">Posted August 2, 2021</div>
+			</div>
+		</div>
+	</section>
+	<section class="white-section main-section">
+		<div class="row">
+			<div class="small-12 large-8 columns">
+				
+<!-- content-single.php -->
+<article id="post-40247" class="post-40247 post type-post status-publish format-standard hentry category-news">
+
+<p class="wp-block-paragraph">Back in June, Ben shared some information regarding X-Plane&#8217;s next generation lighting pipeline. It&#8217;s now time to go back to the future and talk about another piece of the next generation: Vegetation. In case you have missed it, Chris and Thomson made an awesome preview video for this as well:</p>
+
+
+
+<span id="more-40247"></span>
+
+
+
+<figure class="wp-block-embed is-type-rich is-provider-embed-handler wp-block-embed-embed-handler wp-embed-aspect-16-9 wp-has-aspect-ratio"><div class="wp-block-embed__wrapper">
+<iframe title="X-Plane Next Generation Forestry Preview" width="640" height="360" src="https://www.youtube.com/embed/yxLqU-NJhbE?feature=oembed" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+</div></figure>
+
+
+
+<h2 class="wp-block-heading"><span id="Vegetation">Vegetation</span></h2>
+
+
+
+<p class="wp-block-paragraph">As you can see, vegetation got a big upgrade from what we currently have. Instead of one or two quads wedged into each other, we now have fully modeled and animated 3D trees, and lots of them. The vegetation animations are based on the current wind conditions, giving them a very nice and dynamic feeling. They also come pre-seasoned for extra flavour, so their look will match whatever local season you are currently in. Naturally this led to a lot of questions, so I&#8217;ll try to answer the two most common ones that I have seen:</p>
+
+
+
+<h3 class="wp-block-heading"><span id="How_do_the_new_trees_work_and_what_happens_to_my_old_ones">How do the new trees work and what happens to my old ones?</span></h3>
+
+
+
+<p class="wp-block-paragraph">While the vegetation engine is built from scratch, it uses the existing .for file format. Of course the .for file format received a few additions to be able to deal with 3D meshes as well as some additional parameters, but the key take away here is that if you already have custom forests, they will continue to work. It also means that if you are a scenery author, you will be able to extend your trees into the third dimension and provide updates to your users. All the vegetation that ships with X-Plane has already been enhanced with 3D versions&#8211;Petr has done an absolutely phenomenal job crafting these trees. So if you have scenery that is using the built-in forest library, you don&#8217;t have to make any changes to get them into your scenery.</p>
+
+
+
+<p class="wp-block-paragraph">The quad based trees will continue to work as before if you have a .for file that hasn&#8217;t been updated for 3D trees. They will however take advantage of the new vegetation engine for rendering. Since the forest system uses the same scenery lookup rules as before, it&#8217;s also possible to force old scenery with custom .for files to use the new 3D trees using a custom library.txt file. I&#8217;m sure there will be at least a handful of people who&#8217;ll want to do that. But the general take away here is that the new vegetation system should just work without any compatibility issues.</p>
+
+
+
+<p class="wp-block-paragraph">Lastly, the wind animations: These are done dynamically on the GPU, although they are driven by parameters provided through the .for file and additional vertex attributes on the mesh. This makes it easy to make the trunk of the tree very stiff and resist bending, for example, while the leaves can freely flutter in the wind. This means that you don&#8217;t have to rig trees in any way; as a scenery author you can just paint in the different parts of the trees in Blender for example, and let the system drive all the animations.</p>
+
+
+
+<p class="wp-block-paragraph">We will have both tooling and .for file specification updates available for scenery authors in the future, so adopting 3D trees should be very painless.</p>
+
+
+
+<h3 class="wp-block-heading"><span id="Surely_this_is_going_to_be_insanely_slow_right">Surely this is going to be insanely slow, right?</span></h3>
+
+
+
+<p class="wp-block-paragraph">When we set out to create the next generation vegetation engine, we knew that we&#8217;d have to build a system that can handle millions of trees. While it&#8217;s still too early to give you anything in terms of hardware requirements, I can say that the system is definitely built to be able to cope with <em>a lot</em> of trees. This is possible because the new vegetation engine is designed to use very little CPU processing, and instead moves the majority of the work to the GPU. A lot of the heavy processing for trees also happens very early in the frame, at a time when the GPU was mostly idle waiting for actual drawing commands from the CPU. For anyone curious about the technical aspect of this, we make heavy use of compute to cull the list of trees down to just the ones that are actually visible by the camera. We then use that information to prepare one or more indirect draw calls. This way the CPU can send forests that span multiple kilometers for processing and the GPU will generate the rest of the data all by itself.</p>
+
+
+
+<p class="wp-block-paragraph">Drawing lots of geometry is, of course, more expensive than not drawing it. Even if we only ever draw what is actually on screen, drawing anything isn&#8217;t free. So we also employ a classic LOD scheme here. Scenery authors can create multiple 3D LODs for their trees, and there is an additional billboard LOD generated at the end of the chain. The billboards are just flat tree quads that always face the camera, so they&#8217;ll still give the illusion of plenty of geometry complexity at a distance. This way we can fill the near view with maybe a few hundred or so complex 3D trees, and then fade over to the cheap billboard to fill the rest of the scene. LOD decisions are also done on the GPU on an individual, per tree basis, so the GPU is quite literally creating its own optimized workload.</p>
+
+
+
+<h2 class="wp-block-heading"><span id="OpenGL">OpenGL</span></h2>
+
+
+
+<p class="wp-block-paragraph">The next generation tree tech makes heavy use of features that have only become possible for us thanks to Vulkan and Metal. In fact, it&#8217;s not just the tree tech, the new lighting and other next generation features make heavy use of features we finally have access to. The road to Vulkan and Metal wasn&#8217;t just to make the sim faster, but also pave the road for what&#8217;s to come next. So what does this mean for the venerable OpenGL rendering backend? Sadly, there is no next generation future for OpenGL, as it just isn&#8217;t possible to support it. But fear not, this is only the case for X-Plane&#8217;s own rendering. Plugins will continue to be able to use OpenGL, just like they are right now under Vulkan and Metal.</p>
+
+
+
+<p class="wp-block-paragraph">So if you have plugins using OpenGL that work with X-Plane 11.55 under Vulkan or Metal, it should continue to work in the next generation world as well. The one exception here being the modern3D drawing phase. Due to the new lighting engine being completely photometric, old school 3D drawing doesn&#8217;t work anymore because it&#8217;s not in on the joke that pixels aren&#8217;t plain rgb8 triplets anymore. I can&#8217;t talk about a replacement yet, but this is certainly something you might want to keep in mind if you are about to start writing a new plugin today.</p>
+
+
+
+<p class="wp-block-paragraph">Other than that, custom panel and GUI drawing will continue to work just like it does right now.</p>
+            <div id="entry-author-info">
+                <div id="author-avatar"> <img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=96&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=192&#038;d=mm&#038;r=g 2x' class='avatar avatar-96 photo' height='96' width='96' decoding='async'/></div>
+                <div id="author-description">
+                    <h2>About Sidney Just</h2>
+                    Sidney is a software developer for X-Plane; As the Vulkanologist he specializes on pyroclastic flow and talking to bitcoin mining hardware.                    <div id="author-link">
+                        <a href="https://developer.x-plane.com/author/justsid/" rel="author">
+                            View all posts by Sidney Just <span class="meta-nav">&rarr;</span>                        </a>
+                    </div><!-- #author-link	-->
+                </div><!-- #author-description -->
+            </div><!-- #entry-author-info -->
+<hr>
+</article><!-- #post-## -->
+
+<div id="comments" class="comments-area">
+
+			<h2 class="comments-title">
+			64 comments on &ldquo;<span>Next generation trees and OpenGL</span>&rdquo;		</h2>
+
+		
+		<ol class="comment-list">
+					<li id="comment-40278" class="comment even thread-even depth-1 parent">
+			<article id="div-comment-40278" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/355694eea97d97f045fad2ce3022dcfe9331ce6b0df04d776f3508630fcb83c3?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/355694eea97d97f045fad2ce3022dcfe9331ce6b0df04d776f3508630fcb83c3?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Ulrich</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40278"><time datetime="2021-08-02T14:17:39-05:00">August 2, 2021 at 2:17 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>OK, nice trees are nice, BUT: I&#8217;d prefer to have &#8220;tree contact&#8221; (with the airplane) being modeled in a realistic way, maybe like this:<br />
+If you hit the treetop with the gear, the plane should rotate &#8220;nose down&#8221;.<br />
+If you hit a tree with the left wingtip, the plane should rotate left.<br />
+&#8230;you get the idea&#8230;<br />
+OK, not just for trees, but also for builings.<br />
+I consider this basic realism/simulation feature much more important than good-looking trees.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40281" class="comment byuser comment-author-justsid bypostauthor odd alt depth-2 parent">
+			<article id="div-comment-40281" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40281"><time datetime="2021-08-02T16:18:38-05:00">August 2, 2021 at 4:18 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>At least in the current implementation, there is no collision with trees. The problem with making everything in the world a hard object is that it requires us to eat quite a bit of RAM as well as processing time. For starters, all meshes would have to live in RAM as well now, since reading anything back from the GPU is insanely slow. Additionally we then have to also walk the whole scene graph during physics update to find potential colliders, and once we have those, we would additionally have to also apply all animations to the mesh in order to get a fine collision detection.</p>
+<p>Unfortunately for now, this just isn&#8217;t really feasible with the amount of things that can be in the world. Especially for trees of which we can have thousands close by to the aircraft. The system is really designed to make it fast to render without the CPU having to know much about it. For collision detection the CPU would have to be in on the joke about trees, negating all the GPU benefits.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40286" class="comment even depth-3">
+			<article id="div-comment-40286" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/47f76465fa00f150a82e0788b65f881ca20abd86d1f283aec7a5b64c7b64cbfa?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/47f76465fa00f150a82e0788b65f881ca20abd86d1f283aec7a5b64c7b64cbfa?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Ulrich (a different one)</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40286"><time datetime="2021-08-02T18:00:25-05:00">August 2, 2021 at 6:00 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Tree and scenery collision is a curious thing indeed inside flight sims.</p>
+<p>As I recall FSX implemented it (rather poorly by modern standards) once upon a time &#8211; I ended up turning it off because it felt like simplified and overdone &#8216;hitboxes&#8217; rather than collision.<br />
+I think most of us will happily wait for the tech to catch up instead of risking that sort of ordeal again 😉</p>
+<p>Also I appreciate the technical explanation here and the reasoning behind the decisions.</p>
+<p>Keep up the good work. I&#8217;m looking forward to the day we get to see all this new stuff live in sim.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40291" class="comment odd alt depth-3 parent">
+			<article id="div-comment-40291" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/b9599cca547fd1d42db62ab0c9a67091ce9a905eae28dfadcba85fdb2be31ea6?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/b9599cca547fd1d42db62ab0c9a67091ce9a905eae28dfadcba85fdb2be31ea6?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Todor</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40291"><time datetime="2021-08-03T03:22:02-05:00">August 3, 2021 at 3:22 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Hi Sid,<br />
+wouldn&#8217;t it be possible to simplify things a bit? Can collision detection be tasked to the GPU as well, using something like what Steve Wilson proposed with the LOD? It does not have to be real time connected to the physics engine on the CPU. What I mean is that crash simulation is not really needed and is just enough if collision event is returned only to be used as a warning to the user. That way the slow GPU-CPU reading back will not matter as this will be one time event. Than there can be a popup to the user &#8220;You have just crashed&#8221; and option to start new flight, replay or continue as if it never happened.  No one will care if this happens at the same frame as the event occurred or 100 later.<br />
+I have no idea if this is possible, I am just thinking out loud because this is a feature I want to have even not 100% simulated as Ulrich proposed.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40308" class="comment even depth-4 parent">
+			<article id="div-comment-40308" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/0411162d0e106a145125861bf0b19f2287cfdfd034936adfb8fe376ee7775e6a?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/0411162d0e106a145125861bf0b19f2287cfdfd034936adfb8fe376ee7775e6a?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Pedro</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40308"><time datetime="2021-08-03T13:28:35-05:00">August 3, 2021 at 1:28 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>I’d assume there is also a fair percentage of the population who , like Austin puts it, knows what happens when you hit a tree. I understand that for bush flying this may be an interesting concept to have. Why not a compromise:<br />
+&#8211; trees around airfields say on the glide path are part of the mesh and interact with the model?</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40313" class="comment odd alt depth-5">
+			<article id="div-comment-40313" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/b9599cca547fd1d42db62ab0c9a67091ce9a905eae28dfadcba85fdb2be31ea6?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/b9599cca547fd1d42db62ab0c9a67091ce9a905eae28dfadcba85fdb2be31ea6?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Todor</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40313"><time datetime="2021-08-03T15:38:01-05:00">August 3, 2021 at 3:38 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Hi Pedro,<br />
+I think Austin misses a point &#8211; it is not about knowing what happens, it is about knowing when it happens. I personally love bush flying and landing at though spots. I am working on a agricultural/firefighter plane for some time and if you watch some vids on yt you&#8217;ll see a lot of near misses. That is just how those guys fly, clearing the trees at the end of the field at the last possible moment for 10s or 100s of passes in a row and avoiding power lines, wind turbines and all kinds of obstacles. If you hit a tree or anything head on of course you will know it, but if you just touched it with your gears or vertical stabilizer out of your field of view you&#8217;ll know only if you watch a replay. And as I said it is not important to model the interaction, only to detect the event.<br />
+Not that this feature is critical, but it will be nice to have if possible.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40310" class="comment even depth-4">
+			<article id="div-comment-40310" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/0c61f7198670d73899dd6fd6b358c4b862c6153daaf7d278f7c6b10cd479acce?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/0c61f7198670d73899dd6fd6b358c4b862c6153daaf7d278f7c6b10cd479acce?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Henrik</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40310"><time datetime="2021-08-03T13:56:59-05:00">August 3, 2021 at 1:56 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>With Vulkan/Metal, you can read back data from the GPU with a frame&#8217;s delay without risk of slowing anything down. Should be sufficient to solve the problem, with some trickery.</p>
+<p>However, my guess is that it&#8217;s probably not worth the quite large amount of work it takes to set that up, weighted against other priorities of the team.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40324" class="comment odd alt depth-3">
+			<article id="div-comment-40324" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/b5beb3dd239a115e0eeaad757bcb6761a866cb6aeef1109a992062375b6d027f?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/b5beb3dd239a115e0eeaad757bcb6761a866cb6aeef1109a992062375b6d027f?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">quantumac</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40324"><time datetime="2021-08-04T11:43:53-05:00">August 4, 2021 at 11:43 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>There are optimization techniques to reduce the workload for general collision detection for non-moving objects, such as subdividing a large space using sparse matrices and only comparing against objects which are in a localized space.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40331" class="comment even depth-3 parent">
+			<article id="div-comment-40331" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/b3bd6b5029b2f98bfa3561f40643e261380d0235a95acb1918532a56a91d8e86?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/b3bd6b5029b2f98bfa3561f40643e261380d0235a95acb1918532a56a91d8e86?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">ima pseudonym</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40331"><time datetime="2021-08-05T08:08:00-05:00">August 5, 2021 at 8:08 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Collision detection with trees is very important for realism.   Enable below 50ft agl and near an airport, and use simple (invisible) polygons for collision detection.   Let the scenery maker define these polygons.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40337" class="comment odd alt depth-4 parent">
+			<article id="div-comment-40337" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/faeabd1732c484f8f924ecce63ee0e34ca9f7af513b092c17cf7a61b42905775?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/faeabd1732c484f8f924ecce63ee0e34ca9f7af513b092c17cf7a61b42905775?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Günther Wittwar</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40337"><time datetime="2021-08-05T11:55:25-05:00">August 5, 2021 at 11:55 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Realism?<br />
+In reality I never ever would like to test what happens hitting a tree.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40348" class="comment even depth-5">
+			<article id="div-comment-40348" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/b3bd6b5029b2f98bfa3561f40643e261380d0235a95acb1918532a56a91d8e86?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/b3bd6b5029b2f98bfa3561f40643e261380d0235a95acb1918532a56a91d8e86?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">ima pseudonym</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40348"><time datetime="2021-08-06T08:44:09-05:00">August 6, 2021 at 8:44 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>I am talking about the realism of knowing _when_ you collided with something.   You are talking about the post-impact realism.   </p>
+<p>I could care less about the post-impact, just give me a red screen to communicate &#8220;you crashed&#8221;.  Post-collision realism is for video games, not for flight simulators.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40341" class="comment odd alt depth-3">
+			<article id="div-comment-40341" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/6cd4c61cf48d590d14cafc7079b56f526dcaf9ca0299fa72e66732d31844f401?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/6cd4c61cf48d590d14cafc7079b56f526dcaf9ca0299fa72e66732d31844f401?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://maps.avnwx.com" class="url" rel="ugc external nofollow">Peter Buckner</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40341"><time datetime="2021-08-05T19:01:12-05:00">August 5, 2021 at 7:01 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>I know where the trees are &#8212; I worry about missing the power lines strung across canyons and valleys.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40374" class="comment even depth-3">
+			<article id="div-comment-40374" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/3df428266c317feebef5ce6698fd647436976effa10eedd6a351fc86e1d55f66?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/3df428266c317feebef5ce6698fd647436976effa10eedd6a351fc86e1d55f66?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Chris Hansen</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40374"><time datetime="2021-08-08T21:35:57-05:00">August 8, 2021 at 9:35 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>The new trees looks great!!<br />
+Never mind colliding with those though..<br />
+Still any places like FLAT ROOF TOPS should really be hard objects by default for helicopters.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40293" class="comment odd alt depth-2 parent">
+			<article id="div-comment-40293" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/8a3f1ee78feafe40e994c06b22f10e2c988f4ef6be68d9973c4e8fd62b2beebc?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/8a3f1ee78feafe40e994c06b22f10e2c988f4ef6be68d9973c4e8fd62b2beebc?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://www.ianhowlett.com" class="url" rel="ugc external nofollow">Ian Howlett</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40293"><time datetime="2021-08-03T04:40:05-05:00">August 3, 2021 at 4:40 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>If you&#8217;re hitting the trees you&#8217;re flying the plane wrong! 🙂</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40301" class="comment even depth-3">
+			<article id="div-comment-40301" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/355694eea97d97f045fad2ce3022dcfe9331ce6b0df04d776f3508630fcb83c3?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/355694eea97d97f045fad2ce3022dcfe9331ce6b0df04d776f3508630fcb83c3?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Ulrich</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40301"><time datetime="2021-08-03T11:50:04-05:00">August 3, 2021 at 11:50 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Also when you stall, misuse the autopilot, hit the ground, etc.<br />
+A flight simulator is not a scenery viewing tool, but a learning tool: It should detect any errors you make.<br />
+Somehow many years ago more simple simulators could detect that. For example Flight Unlimited fid not just &#8220;make boom (an explosion)&#8221;, but you could get a bent gear, wing, propeller, etc. For example when you hit a tree while landing. For X-Planers: If you haven&#8217;t tried, try landing at Ranger&#8217;s Creek in the Seattle area&#8230;</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40279" class="comment odd alt thread-odd thread-alt depth-1 parent">
+			<article id="div-comment-40279" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Steve.Wilson</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40279"><time datetime="2021-08-02T14:22:59-05:00">August 2, 2021 at 2:22 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Great stuff, Sid.  Thanks for the insight.  A vegitation engine?  I&#8217;ve seen those before.  They run on cannabis.  😉  Naturally.  </p>
+<p>We&#8217;ve recently seen some experimentation on X-Plane.org with collision modeling and trees &#8211; and I was wondering what thoughts you may have.  The notion &#8211; which is likely in error according to an unimpeachable source &#8211; was to add a very close-in LOD for a modest bit of &#8220;hard&#8221; surfaces.  The idea is to provide consequences for errant flying &#8211; not flying into things deliberately.  There are some annoying trees right in the normal descent path into (the fictional) NZMH on the southern island of New Zealand.  I&#8217;m invariably brushing into these since I land a bit on the hot side, considering my bush bird of choice.  I would love to have the challenge of a must miss scenario.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40282" class="comment byuser comment-author-justsid bypostauthor even depth-2 parent">
+			<article id="div-comment-40282" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40282"><time datetime="2021-08-02T16:18:51-05:00">August 2, 2021 at 4:18 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>As a permanent resident in Canada, I can assure you that I too run on cannabis. Sorry west coast, that smoke is all me.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40290" class="comment odd alt depth-3">
+			<article id="div-comment-40290" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Steve.Wilson</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40290"><time datetime="2021-08-02T22:11:15-05:00">August 2, 2021 at 10:11 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Have to admit, that reply just stumped me with a good come-back!!  As a permanent resident in AZ, USA, I could say the same thing as of early this year,  but I have yet to visit one of the many happy new establishments.  Have to wonder what the effects could be on code!  </p>
+<p>Oh&#8230;. oops&#8230; weren&#8217;t we talking about collisions?  </p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40297" class="comment even depth-3 parent">
+			<article id="div-comment-40297" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/20433d29d62617c69928d2cae73064765b41e7770940d1720648ccd398753e5a?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/20433d29d62617c69928d2cae73064765b41e7770940d1720648ccd398753e5a?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">John Rogers</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40297"><time datetime="2021-08-03T08:32:28-05:00">August 3, 2021 at 8:32 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>That smoke has made its way here to northwest Alberta. I think you may need to slow down a bit.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40298" class="comment byuser comment-author-justsid bypostauthor odd alt depth-4">
+			<article id="div-comment-40298" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40298"><time datetime="2021-08-03T10:38:38-05:00">August 3, 2021 at 10:38 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>But then I would have to accept the fact that there are two out of control wildfires burning just a few kilometres from where I live and that would seriously impact my mental well being.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40280" class="comment even thread-even depth-1 parent">
+			<article id="div-comment-40280" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/e51c47f2ab0687f6b95e755c5125bf4a7df14df219dc1cf12b83c7c86f9adfc6?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/e51c47f2ab0687f6b95e755c5125bf4a7df14df219dc1cf12b83c7c86f9adfc6?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">B787</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40280"><time datetime="2021-08-02T16:07:30-05:00">August 2, 2021 at 4:07 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Really promising features ahead. September and FSExpo can&#8217;t come soon enough to see more.</p>
+<p>At risk of asking too soon about this, and I don&#8217;t want to spoil anything, but since grass is part of vegetation, is Volumetric/3D grass expected to be added also? Is a really good addition for airports, but also for brush landings</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40287" class="comment odd alt depth-2 parent">
+			<article id="div-comment-40287" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/43e0040e542b159214d63c9b528bcab6de8b4a4f574f9db16b8e2a775c6cf122?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/43e0040e542b159214d63c9b528bcab6de8b4a4f574f9db16b8e2a775c6cf122?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://NewBluePublishing/X-PlaneReviews" class="url" rel="ugc external nofollow">Stephen Dutton</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40287"><time datetime="2021-08-02T19:11:31-05:00">August 2, 2021 at 7:11 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Yes me to on this Sid&#8230;  Volumetric/3D grass would be a huge significant step forward!</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40302" class="comment even depth-3">
+			<article id="div-comment-40302" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/c4c4a653c92555381f1f39815678d8782a915fe9c09427bac918b73486bddad7?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/c4c4a653c92555381f1f39815678d8782a915fe9c09427bac918b73486bddad7?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">David</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40302"><time datetime="2021-08-03T11:55:59-05:00">August 3, 2021 at 11:55 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Honestly I don&#8217;t really care about 3D grass, but, 3D clouds is now a must. This is now going to be a show stopper I think, especially since MSFS 2020 and DCS 2.7 &#8230; They can&#8217;t do without it.</p>
+<p>But&#8230; That is just my humble opinion, we will see. Oh, and 3D water as well (they could implement the Proland ocean plugin for example, it&#8217;s free to use if I&#8217;m not mistaken), though clouds and general weather modeling is more important.</p>
+<p>While MSFS is doing it impressively, I don&#8217;t like their thunderstorm lightning depiction for example. Not a big deal, but there is room for improvement. They could out do MSFS if they want and have the time and money to do so. Still I&#8217;m curious to see what XP 12 is going to be&#8230;</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40283" class="comment odd alt thread-odd thread-alt depth-1 parent">
+			<article id="div-comment-40283" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/dcb4b898573af5cfc31640e06ffd262756de5dd9b558d111c671c528a63c4fe1?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/dcb4b898573af5cfc31640e06ffd262756de5dd9b558d111c671c528a63c4fe1?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Nathan</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40283"><time datetime="2021-08-02T16:40:10-05:00">August 2, 2021 at 4:40 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>So, for clarity &#8211; x-plane next gen is dropping the end-user option of an open-gl renderer (as you’ve always said), but plug-in devs still have access to your open-gl compatibility layer like they do today. Just checkin’. ?</p>
+<p>Whats your rough gut-feel on vr framerate loss with these trees?<br />
+I expect the lod ranges will be hidden from the ui, but id like the idea of an ‘airports only’ option for vr users with less capable hardware. &#8211; wait wait wait, scrap that, here I am trying to solve problems before they’re even found! Looking forward to xp-next.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40288" class="comment byuser comment-author-justsid bypostauthor even depth-2 parent">
+			<article id="div-comment-40288" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40288"><time datetime="2021-08-02T20:24:27-05:00">August 2, 2021 at 8:24 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Yes, you got it right about OpenGL</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40320" class="comment odd alt depth-3 parent">
+			<article id="div-comment-40320" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/8b86cbe7d976c5730ba4139442a8581031137e084f254a8706cc647c335941db?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/8b86cbe7d976c5730ba4139442a8581031137e084f254a8706cc647c335941db?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Manuel L</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40320"><time datetime="2021-08-04T02:43:26-05:00">August 4, 2021 at 2:43 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Why not drop GL support completely, even the compat layer/bridge, for next gen?</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40321" class="comment byuser comment-author-justsid bypostauthor even depth-4">
+			<article id="div-comment-40321" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40321"><time datetime="2021-08-04T09:26:19-05:00">August 4, 2021 at 9:26 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>You mean besides that it would kill basically every plugin and add-on aircraft dead?</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40332" class="comment odd alt depth-4 parent">
+			<article id="div-comment-40332" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/119bd2d86df8a79b586840badc329192d2f674c1546105fb24d6bb872cd77fc4?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/119bd2d86df8a79b586840badc329192d2f674c1546105fb24d6bb872cd77fc4?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Christer</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40332"><time datetime="2021-08-05T08:21:23-05:00">August 5, 2021 at 8:21 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>The open-gl plug-in architecture will be replaced in the future when Laminar has a Vulkan/Metal based plug-in architecture. Only Laminar knows when it will be released (but I guess they don’t currently know when, since the idea is still on blueprint or on draft code).</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40333" class="comment byuser comment-author-justsid bypostauthor even depth-5">
+			<article id="div-comment-40333" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40333"><time datetime="2021-08-05T09:18:29-05:00">August 5, 2021 at 9:18 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Just to make this clear: We have absolutely no plans to expose Vulkan and/or Metal to third parties for their drawing needs. We also have no plans to remove the OpenGL support for third parties either.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40284" class="comment odd alt thread-even depth-1 parent">
+			<article id="div-comment-40284" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/db544a3755a7bd4d04aa7bfd21127af9a3e35f5051e5612568f5fa8c1998238c?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/db544a3755a7bd4d04aa7bfd21127af9a3e35f5051e5612568f5fa8c1998238c?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Bernt Michael Johansen</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40284"><time datetime="2021-08-02T17:02:59-05:00">August 2, 2021 at 5:02 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>This is great news, thank you!</p>
+<p>The X-Plane experience is so nice in many ways, and most importantly on physics and flight model. Graphic updates, rendering and lighting are indeed very welcome,  needed to make the step into the future.<br />
+One particular feature I have always missed though, is audible ambience from the scenery and given surroundings. As a sound engineer I come from a strange religion based on &#8220;hearing is believing&#8221;.. There is a major benefit from immersion by sound. Soon you have 3D trees. Maybe they will also be able to move or sway.. Now how about hearing wind buildup based on METAR and seeing those trees sway. Or the waves of the ocean when near. Or urban/city ambience, airport sounds, birds chirping at a bush-airfield etc.<br />
+That really breathes life into a simulator. And would perhaps do so WITHOUT the expense of framerates as its handled mainly by your audio card.<br />
+That would be something 🙂  (sorry for de-railing this fine post!)</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40289" class="comment byuser comment-author-justsid bypostauthor even depth-2 parent">
+			<article id="div-comment-40289" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40289"><time datetime="2021-08-02T21:13:22-05:00">August 2, 2021 at 9:13 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>So, first of all, I have to absolutely agree with you. I think game developers tend to really lose focus on sound a lot, even though it adds so much to the feel of things.</p>
+<p>Unfortunately I can&#8217;t give you anything concrete about what things are planned for environmental sounds. But what I can say is that Daniela is working on sounds that aren&#8217;t just airplane sounds.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40304" class="comment odd alt depth-3">
+			<article id="div-comment-40304" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/355694eea97d97f045fad2ce3022dcfe9331ce6b0df04d776f3508630fcb83c3?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/355694eea97d97f045fad2ce3022dcfe9331ce6b0df04d776f3508630fcb83c3?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Ulrich</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40304"><time datetime="2021-08-03T12:00:36-05:00">August 3, 2021 at 12:00 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>What I&#8217;d like to hear is (for example) the sound of air when the gear is close to touchdown (think of instrument failure). I don&#8217;t care much about grass, trees, birds or bees.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40285" class="comment even thread-odd thread-alt depth-1">
+			<article id="div-comment-40285" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/d5ce94094ed2b8451de6bf53bb92801cf2d415d5f9d209e35804a4f50e53ba93?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/d5ce94094ed2b8451de6bf53bb92801cf2d415d5f9d209e35804a4f50e53ba93?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">bakr mustafa</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40285"><time datetime="2021-08-02T17:41:44-05:00">August 2, 2021 at 5:41 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Marvelous,<br />
+Now i can find an empty spot to land my airplane, and do some barbeque and have picnic walk around the tree, with hope not to confront with air-inflated bears that stair at me.<br />
+All in all, Great Job, we are eager to see X-Plane leap edition in a year time with all next-gen goodies and maximum capitalization on new hardware/software 3d acceleration stack.<br />
+i believe it can be achievable to end up with forza-like smooth cornered wet and dry roads and 3d vegetation and urban recreation that stretches in an open world&#8230;<br />
+Not to forget mirage effects on tarmac.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40292" class="comment odd alt thread-even depth-1 parent">
+			<article id="div-comment-40292" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/8d3b2087c179e03852bf01de59953d4a925bc2c5304214b952619fcf65ecdd31?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/8d3b2087c179e03852bf01de59953d4a925bc2c5304214b952619fcf65ecdd31?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">David</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40292"><time datetime="2021-08-03T04:00:27-05:00">August 3, 2021 at 4:00 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Great explanation,  Sidney, as always.<br />
+Question about the comment on &#8220;solid trees &#8221; Or &#8220;tree contact&#8221;.<br />
+I totally understand the point, this is not a gta game, it is a flight simulator.<br />
+Also I understand the impact it could have in term of gpu ressources.</p>
+<p>But perhaps.could it be feasible to generate those kind of options only in the case of bush airports (Canada, Alaska, etc) and trees immediately surrounding a runway? </p>
+<p>Last question: the video and comments from Austin refer to trees. Is there something about 3d grass?</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40300" class="comment even depth-2 parent">
+			<article id="div-comment-40300" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/401c195d1eb93e1d4fc1e7023a4c1bbd7776ee1086d104280d3a198edea3ba0c?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/401c195d1eb93e1d4fc1e7023a4c1bbd7776ee1086d104280d3a198edea3ba0c?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Dellanie Byron</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40300"><time datetime="2021-08-03T11:29:32-05:00">August 3, 2021 at 11:29 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Happy to be pointed out wrong here, but I&#8217;m like 70% sure tree collisions would be a hit to the CPU, not the GPU. You essentially have a few problems to deal with</p>
+<p>&#8211; How do the CPU and GPU communicate to each other efficiently about trees. </p>
+<p>&#8211; How to ensure the flight model takes priority so it is not dragged down by any visual features</p>
+<p>&#8211; How do you actually define a tree boundary in the sim. I saw quoted somewhere that the demo of XPNG trees was 300k. But trees take place in many different shapes and are animated. So you would need a pretty tight hitbox simulation. Even if you masked the collidable area to a couple hundred of those trees, it would still have a big impact with tighter hitboxes. Sure you could slap a singular cube hitbox, but then you risk the chance of striking &#8220;nothing&#8221; in midair. Make em too small and you&#8217;re still clipping branches, then there&#8217;s no point</p>
+<p>&#8211; How do hitboxes also work for legacy forest definitions. </p>
+<p>&#8211; In a practical world&#8230; why do you even need this collisions at all? We know what the end-scenario irl, you die. From a user-experience, it probably does not provide any positive encouragement to enable tree collisions if all you have to do is restart your mission.</p>
+<p>It&#8217;s a cool idea, but I just don&#8217;t see what the imperative need for tree collisions is, and can see why it might not be top of Laminar&#8217;s priority list. Although I can think of a few things that should *coughmesheditingcough*.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40314" class="comment odd alt depth-3 parent">
+			<article id="div-comment-40314" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Steve.Wilson</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40314"><time datetime="2021-08-03T16:10:44-05:00">August 3, 2021 at 4:10 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>To be honest and clear:  if my little LOD notion has any validity, it&#8217;s good to confirm that validity, and that&#8217;s all I&#8217;m seeking for myself and other interested parties at this point.  That&#8217;s what one enterprising fellow is doing over on the .Org with a whole bunch of experimentation, and with some interesting results.   If the notion is valid, then LR doesn&#8217;t have to do a thing.  If it&#8217;s not, I do not think that we need to prod for it.  There are many much more tasty and important fish to fry for LR at the moment.</p>
+<p>So, in sum, I don&#8217;t think there&#8217;s any need to interrupt Ben&#8217;s, Sidney&#8217;s and Michael&#8217;s very important efforts &#8212;  except to seek a deeper understanding and *re-confirmation* of how the use of LOD parameters may help prevent CPU load when it comes to collision detection.</p>
+<p>If all else fails, the few trees or other obstacles that &#8220;get in the way&#8221; can be paired with an invisible &#8220;hard object&#8221; on a case by case basis if this is really important.</p>
+<p>The key thing is that collision detection already exists.  It&#8217;s how we use it, and how the scenery uses it, that may bear scrutiny and independent development.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40315" class="comment byuser comment-author-justsid bypostauthor even depth-4 parent">
+			<article id="div-comment-40315" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40315"><time datetime="2021-08-03T16:25:49-05:00">August 3, 2021 at 4:25 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>I&#8217;m a little confused where the notion of LODs interacting with the physics engine is coming from. LODs are used to speed up rendering, by using less complex geometry for objects further in the distance so that the GPU doesn&#8217;t have to process a ton of small triangles that don&#8217;t contribute to any detail. Having LODs in the scene does nothing for the CPU side of things, since it still needs to discover all of the same objects regardless. Collision checks are performed against the highest LOD mesh, because why would you want to check against an object that doesn&#8217;t physically represent what you want to check against?</p>
+<p>Checking for collision costs CPU time, I don&#8217;t know really understand why people are trying to argue against that. The CPU will have to transform the mesh just like the GPU to compute its final pose and then do a ray/triangle intersection check for potentially every single triangle. On top of that, all of the geometry data needs to be additionally held in RAM so the CPU can access it in the first place.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40316" class="comment odd alt depth-5 parent">
+			<article id="div-comment-40316" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Steve.Wilson</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40316"><time datetime="2021-08-03T17:07:35-05:00">August 3, 2021 at 5:07 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>I do not think people are arguing against the reality of the CPU cost of collision checking, Sid.  In fact, that&#8217;s what I was trying to prevent with the idea of mixing LOD with collidable tris.  I know what LOD is for &#8211; it saves rendering visually useless information at distance.  </p>
+<p>The germ of the idea was that tris with ATTR_hard applied are also useless at distance, theoretically.  </p>
+<p>It comes down to two possible code organization possibilities &#8211; which comes first, LOD or collision?</p>
+<p>If &#8220;LOD filtering&#8221; is applied before the CPU does collision testing, it won&#8217;t &#8220;see&#8221; the hard tris.  </p>
+<p>If &#8220;LOD filtering&#8221; is applied *after* collision testing, as Michael Minnhaar has declared, then this whole line of discussion is moot &#8211; at least as far as using LOD to reduce the CPU load of collision testing.  We could not use LOD in this way.</p>
+<p>Have I made myself any clearer?  It was just a momentary inspiration, but it&#8217;s kind of gained a bit of a life of its own.</p>
+<p>It&#8217;s an efficiency thing &#8211; rolling with Austin&#8217;s current development paradigm &#8211; trying to reduce load, not increase it, while still gaining what some would find a valuable feature, and while not making a single change to X-Plane as it stands right now nor any changes to the next generation version either.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40317" class="comment byuser comment-author-justsid bypostauthor even depth-5">
+			<article id="div-comment-40317" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40317"><time datetime="2021-08-03T17:17:42-05:00">August 3, 2021 at 5:17 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Physics always comes first, since that drives what needs to be rendered. The aircraft tends to drag the virtual camera with it, and the position of the virtual camera drives LOD selection. So we always resolve the physics first, then figure out what needs to be rendered.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40318" class="comment odd alt depth-5">
+			<article id="div-comment-40318" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Steve.Wilson</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40318"><time datetime="2021-08-03T17:43:55-05:00">August 3, 2021 at 5:43 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Thanks Sid, that&#8217;s a solid second source verification.  Thanks for sparing the keystrokes.  😉</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40295" class="comment even thread-odd thread-alt depth-1">
+			<article id="div-comment-40295" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/093f870f2512a1041f4b2fe3bc8d3096a3ca07b83fb8c6aeec216a76a544b9c6?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/093f870f2512a1041f4b2fe3bc8d3096a3ca07b83fb8c6aeec216a76a544b9c6?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">jordi</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40295"><time datetime="2021-08-03T06:17:35-05:00">August 3, 2021 at 6:17 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>well i like the new threes only this opengl i dont like its not more supported for the next gen xplane in xplane 11 i dont use vulcan because its unstable i am using 1080ti and if i use vulkan i get crashes or after every flight i need to restart the sim i cant do two legs</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40296" class="comment odd alt thread-even depth-1 parent">
+			<article id="div-comment-40296" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/198e1456d019017bf193d652c35a0041d29802b229a9c4ec54efaa2dddb2bb28?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/198e1456d019017bf193d652c35a0041d29802b229a9c4ec54efaa2dddb2bb28?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Jonathan</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40296"><time datetime="2021-08-03T07:41:40-05:00">August 3, 2021 at 7:41 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Will the two bugs related to AMD GPU users be eliminated in the &#8220;Next Generation&#8221; Xplane? Since AMD has been asked to resolve the issue and not done so to date. The flickering continues. Will the usage of OpenGl from other plugins still cause this issue? Sorry I am not a coder so have to ask. Thanks!</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40299" class="comment byuser comment-author-justsid bypostauthor even depth-2 parent">
+			<article id="div-comment-40299" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40299"><time datetime="2021-08-03T10:50:23-05:00">August 3, 2021 at 10:50 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Unfortunately this is something AMD has to fix in their driver, I have tried a lot of things to work around it and unfortunately nothing works. I am under the impression that RDNA based GPUs don&#8217;t have this issue, although I do also fully understand that new GPUs do not grow on trees. AMD has gotten plenty of repro applications with source code from us, as well as numerous X-Plane builds with various debug options. So far they have been unable to reproduce it in their lab, despite numerous attempts at getting this fixed.</p>
+<p>I fully understand just how incredibly frustrating that is. Additionally because AMD so heavily benefits from Vulkan in the first place. Unfortunately this puts is between a rock and a hard place. On the one hand I hate to take away options from users, on the other it just isn&#8217;t feasible for us to simply stop iterating on the product because an IHV can&#8217;t fix their drivers.</p>
+<p>This is with regards to the flickering anyways, what&#8217;s the second bug? Is it the broken GUI rendering that some users experienced with plugins? If so, I spoke to the AMD driver team in June and they promised it would be fixed with a recent driver (I believe 21.7.2 ships with the fix, but this is of the top of my head). Although this is obviously frustrating as well, since this represents the second time a driver update broke the plugin interop.</p>
+<p>So, errr, overall, all I can say is that I very much sympathize with you on this. We have some very longterm plans to move away from the IHV OpenGL driver for our plugin bridge needs. Unfortunately that isn&#8217;t super easy either, since most projects that run OpenGL on top of Vulkan target newer versions of OpenGL, while most plugins use a very old version of OpenGL. The one project that I am aware of that could potentially be used is Zink, a Mesa backend that runs OpenGL on top of Vulkan. Sadly that one isn&#8217;t really meant to run as a cute library integrated into an application, since it&#8217;s really more of an actual graphics driver. The long story short, this is all incredibly complicated and also incredibly frustrating.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40303" class="comment odd alt depth-3 parent">
+			<article id="div-comment-40303" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/198e1456d019017bf193d652c35a0041d29802b229a9c4ec54efaa2dddb2bb28?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/198e1456d019017bf193d652c35a0041d29802b229a9c4ec54efaa2dddb2bb28?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Jonathan</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40303"><time datetime="2021-08-03T11:58:56-05:00">August 3, 2021 at 11:58 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Thank you for responding. Happy to sign an NDA and test the &#8221; Next Generation&#8221; with my AMD 6900XT GPU&#8230;. LOL :). I do have 21.7.2 and all previous versions dating back to 12/2020. It happens with certain aircraft with certain weather add on products. It does not happen with standard XP weather. It is frustrating because I use XP11 for IRL proficiency simulation. Hopefully, a fix is implemented in the future.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40307" class="comment byuser comment-author-justsid bypostauthor even depth-4 parent">
+			<article id="div-comment-40307" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40307"><time datetime="2021-08-03T12:19:07-05:00">August 3, 2021 at 12:19 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Hold up&#8230; You got an RDNA2 card AND you see the flickering? Mind if I ping you privately at the email address you used to comment with?</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40312" class="comment odd alt depth-5">
+			<article id="div-comment-40312" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/198e1456d019017bf193d652c35a0041d29802b229a9c4ec54efaa2dddb2bb28?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/198e1456d019017bf193d652c35a0041d29802b229a9c4ec54efaa2dddb2bb28?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Jonathan</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40312"><time datetime="2021-08-03T15:26:00-05:00">August 3, 2021 at 3:26 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Yes sir! I have an RDNA2 6900XT and an AMD 5900X. Feel free to email me. Happy to help! Thanks.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40339" class="comment even depth-5">
+			<article id="div-comment-40339" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/06ed78ca382ad11ea79ad44e655626c85b2626ad4494d6ce79284dec65db5767?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/06ed78ca382ad11ea79ad44e655626c85b2626ad4494d6ce79284dec65db5767?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Joachim</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40339"><time datetime="2021-08-05T14:59:53-05:00">August 5, 2021 at 2:59 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Same here! 6900XT, constant flickering with certain planes &amp; xEnviro&#8230;</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40323" class="comment odd alt depth-3">
+			<article id="div-comment-40323" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/d7b8706f7393b8e23b094f1eb935a3e523f71cadacb2f8d184dfcc18d3f0058e?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/d7b8706f7393b8e23b094f1eb935a3e523f71cadacb2f8d184dfcc18d3f0058e?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Daniel</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40323"><time datetime="2021-08-04T10:21:38-05:00">August 4, 2021 at 10:21 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Hi Sidney also, are you aware of the checkboard distortion with VR+Vulkan issue?, Is this only AMD side? From what I know I can easy play with Vulkan in &#8220;flat screen&#8221; on any OS, but when I start the VR mode, the screen becomes totally noisy T.T</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40305" class="comment even thread-odd thread-alt depth-1 parent">
+			<article id="div-comment-40305" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/aca0f5f80c9210d6ec332aa794b47635483d00bb5abeef7d2481d95398bcd72b?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/aca0f5f80c9210d6ec332aa794b47635483d00bb5abeef7d2481d95398bcd72b?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">SLWS</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40305"><time datetime="2021-08-03T12:11:32-05:00">August 3, 2021 at 12:11 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>RDNA2 &#8211; at the moment &#8211; runs best in Linux in OpenGL (3x faster than OpenGL in W10 &#8211; as long as FPS test goes). Vulkan is currently INOP outside stock planes.<br />
+MESA-team is developing Zink really fast. No word about fixing OpenGL-Vulkan bridge X-Plane uses in MESA.<br />
+AMDVLK + OGLPRO (combination nobody uses) was promised to be fixed and sholud be in similar shape to W10 driver.<br />
+Please use Zink!</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40306" class="comment byuser comment-author-justsid bypostauthor odd alt depth-2 parent">
+			<article id="div-comment-40306" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40306"><time datetime="2021-08-03T12:18:20-05:00">August 3, 2021 at 12:18 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Using Zink isn&#8217;t just a small change. Zink is a proper Mesa backend, requiring the whole Mesa frontend to do anything useful, which we can&#8217;t just grab and just kinda jam into X-Plane. I would love to ditch the IHV based Vulkan/GL interop code and replace it with Zink, it&#8217;s actually ideal for that. But that&#8217;ll require quite a bit of work on Zink and Mesa first, which we just don&#8217;t have time for right now.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40309" class="comment even depth-3">
+			<article id="div-comment-40309" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/f88f06b8871092624ea067a983571754e6d39cc44e066bb758f477849637039f?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/f88f06b8871092624ea067a983571754e6d39cc44e066bb758f477849637039f?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Björn</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40309"><time datetime="2021-08-03T13:38:26-05:00">August 3, 2021 at 1:38 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>I&#8217;m in the same boat regarding Linux with AMD (RDNA2) on RADV or AMDVLK and quite frankly, the outlook of ever seeing a driver-side fix for the OGL-Vulkan synchronization in RADV or AMDVLK is nothing but bleak at the moment because it&#8217;s such a niche issue.<br />
+It would be nice if you could offer some additional technical insight on the thread in the respective issue tracker about what exactly the OGL/VLK bridge does in terms of extension(?) calls as this might make it easier for the driver devs to pinpoint where things go awry.</p>
+<p>Otherwise, my only hope is that there&#8217;s Vulkan support in XPNG&#8217;s SDK and that third party plugin devs are going to use it. </p>
+<p>P.S:<br />
+Regardless of that and unless you have some qualified in-house candidates by now, I herewith volunteer for compatiblity testing XPNG on Linux with AMD and RADV/AMDVLK. Hint, hint, nudge, nudge. 😉</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40319" class="comment odd alt thread-even depth-1 parent">
+			<article id="div-comment-40319" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/fe977e6041e48828fc4dd6f24574c11a1060a3899600c151972a556963741bd1?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/fe977e6041e48828fc4dd6f24574c11a1060a3899600c151972a556963741bd1?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">John</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40319"><time datetime="2021-08-03T19:22:07-05:00">August 3, 2021 at 7:22 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Until I saw Austin&#8217;s talk, I thought you guys had most of this locked down but were being stingy with screenshots and stuff.. but it turns out all of this is in very active development!</p>
+<p>To that end, and in regard to the trees first, The way it works now is say, there is a dirt/grass texture, and then trees over that, so a mountain 20 miles away is basically a dirt/grass mountain because the trees don&#8217;t render because of the LOD. Any thought to having like a low res &#8220;filled in&#8221; texture for far away, that will cross fade with the trees? Maybe combined with some sort of bump map or tessellation so far away mountains don&#8217;t look like 4 polygons&#8230; but don&#8217;t hit the cpu hard? I know it seems nitpicky, but we spend a lot of time looking at the high contrast area right at the horizon. I think I&#8217;d refer to this as sort of an &#8220;orthophoto like, inverse LOD kind of thing&#8221; &#8211; not literally ortho photos, but something that tries to maintain the same angular sharpness from the camera.. like close in textures should have grass and dirt, but far away mountain texture should have like&#8230; trees and major features&#8230; maybe at a far distance, the autogen can be rendered isometrically from above into a texture, and that can be used for far off stuff&#8230; sort of like an on-the-fly ortho photo kinda thing. To avoid having that huge, you could like&#8230; render color to like 512&#215;512 tiles, but the street lights could be 4096&#215;4096 b/w and just make the white channel be &#8220;this is a sodium white light&#8221; or something.</p>
+<p>I feel like there are ways to sort of lower the fidelity where it doesn&#8217;t need it, and trade it for the few places its really needed, besides just geometry LOD.</p>
+<p>I guess I have just thinking about this because I notice sometimes like&#8230; if I am at KLGA and want to see Manhattan, I need to see every freaking building in queens, and it probably takes a lot of work to render that grocery store at the corner of Astoria blvd, and x-plane goes &#8220;ok, guys&#8230; get rid of the Manhattan skyline, this grocery store is more important!&#8221; and thats&#8230; kinda weird. Maybe I am looking for a LOD based not on distance, but on importance. Like there is a middle distance where it can just be super low detail, as long as close by is sharp, and far away and huge is sharp. Or far away and *high contrast* is sharp (skyscrapers, lights). Or a lod based on speed and importance. Like in a Cessna, up close and very far away makes sense, but in an airliner, in internal views, the clouds and the horizon matter the most, followed by skyscrapers and generic city textures&#8230;</p>
+<p>This is all said with a tremendous amount of love and appreciation. I just feel like at the moment, the rendering engine seems to render a gnats butt at 1km with high priority, but honking huge things at a distance as an afterthought. </p>
+<p>The other answer, which we had in x-plane 10 and I think with 3rd party tools is possible in 11 is to just set the LOD to render everything and use an overclocked computer in a bath of mineral oil 😛 &#8211; not super realistic, I know.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40330" class="comment even depth-2">
+			<article id="div-comment-40330" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/b3bd6b5029b2f98bfa3561f40643e261380d0235a95acb1918532a56a91d8e86?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/b3bd6b5029b2f98bfa3561f40643e261380d0235a95acb1918532a56a91d8e86?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">ima pseudonym</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40330"><time datetime="2021-08-05T08:04:34-05:00">August 5, 2021 at 8:04 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>I think what you want can be achieved by using building HEIGHT and maybe also VOLUME to prioritize what to draw, not just distance.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40322" class="comment odd alt thread-odd thread-alt depth-1">
+			<article id="div-comment-40322" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/aca0f5f80c9210d6ec332aa794b47635483d00bb5abeef7d2481d95398bcd72b?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/aca0f5f80c9210d6ec332aa794b47635483d00bb5abeef7d2481d95398bcd72b?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">SLWS</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40322"><time datetime="2021-08-04T09:27:41-05:00">August 4, 2021 at 9:27 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>I understand &#8211; thank you!<br />
+I have RX6800 and don´t see a reason to install W10 just now. According to GravityMark(pure GPU benchmark) performance advantage in Vulkan is only 9%. This time &#8211; AMD outperforms NVIDIA in OpenGL (Mesa 21.2-devel vs NVIDIA 465.31). One wonders what is going on with W10 OGL performance??? It will flicker. No way it can be synced properly.<br />
+We are well served in Linux now but may get stranded without OpenGL &#8211; if VLK/OGL bug persists.<br />
+Best regards,<br />
+S</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40326" class="comment even thread-even depth-1 parent">
+			<article id="div-comment-40326" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/50e3d1bf273f4cb2be715442ac59bd988ea45bb17d93421a2b8e86a34f995059?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/50e3d1bf273f4cb2be715442ac59bd988ea45bb17d93421a2b8e86a34f995059?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">jörn-jören jörensön</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40326"><time datetime="2021-08-04T15:52:43-05:00">August 4, 2021 at 3:52 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Great stuff, can&#8217;t wait to see all next gen stuff come together in a final teaser.  : )</p>
+<p>Out of curiosity: How will the lowest LOD tree billboards work when viewed from (high) above?<br />
+You wrote there will be a billboard always facing the camera. I assume it will be a side view of the tree, rotating only on the y-axis (up-down). Will there be another non-rotating billboard parallel to the ground for the view from top?</p>
+<p>Thanks for the great work and giving us these insights!</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40336" class="comment odd alt depth-2">
+			<article id="div-comment-40336" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/5199be39e37203210af995d15dd79c9d6b056691439eb37072d99bbe255ef774?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Steve.Wilson</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40336"><time datetime="2021-08-05T11:36:19-05:00">August 5, 2021 at 11:36 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>This is an interesting question!  It goes to whether the LOD distance should be/could be/or *is* the slant line &#8220;absolute&#8221; distance to an object when said object is part of the world depiction, or to simply be the 2D &#8220;lat/lon&#8221; distance to an object.  In an advanced simulation, is there any use for different kinds of LOD?</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40346" class="comment even thread-odd thread-alt depth-1">
+			<article id="div-comment-40346" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/ccb6708cf44cff27fc82cb172dbbd3f5228be39b6032869dc28f1975a8f25282?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/ccb6708cf44cff27fc82cb172dbbd3f5228be39b6032869dc28f1975a8f25282?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Marko</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40346"><time datetime="2021-08-06T06:03:56-05:00">August 6, 2021 at 6:03 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>This looks amazing! I have been siming, for a long time, since mfs 2004, XP11 is the best user experience and the most realistic simulator ever made! What I didn&#8217;t understand, is this going to be a part of some future update? Also, I read that some 3d vegetation has already existed in current version&#8230; I am using 11.55 ver, but I can see only 2d default vegetation. Does that mean to make any modification to some files to be able to see 3d trees?<br />
+Thank you so much for your great work and all effort you put in this simulator. It is great to see that your intention is to make it even better in the future.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40347" class="comment odd alt thread-even depth-1 parent">
+			<article id="div-comment-40347" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/70ad2fae42749e4da5a56c5fd704cc7c117c89318ce6d7ea7354cf86a7dd1b98?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/70ad2fae42749e4da5a56c5fd704cc7c117c89318ce6d7ea7354cf86a7dd1b98?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Saar Nagar</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40347"><time datetime="2021-08-06T06:26:06-05:00">August 6, 2021 at 6:26 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>One question regarding OpenGL compatibility in plugins and Metal.<br />
+Will METAL allow OpenGL rendering from plugins using the draw callback or is this still an open issue that won&#8217;t be solved any time soon (meaning, it is what it is).</p>
+<p>Thanks</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40350" class="comment byuser comment-author-justsid bypostauthor even depth-2">
+			<article id="div-comment-40350" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/a81a9619d4a07918d92eeaf55796c3d2e0b3176104c6b0572a89d154b5b1d987?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://x-plane.com" class="url" rel="ugc external nofollow">Sidney Just</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40350"><time datetime="2021-08-06T10:54:16-05:00">August 6, 2021 at 10:54 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>I&#8217;m a bit confused, Metal already has support for draw callbacks. The only one unsupported is the modern 3D drawing phase that Vulkan has, due to limitations in how Metal and GL interop works. If you are asking about the modern 3D drawing phase, then no, Metal will not gain that one. But at the moment, there also isn&#8217;t a clear future for the modern 3D drawing phase under Vulkan either, given how the scene is rendered now.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40366" class="comment odd alt thread-odd thread-alt depth-1">
+			<article id="div-comment-40366" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/dcb4b898573af5cfc31640e06ffd262756de5dd9b558d111c671c528a63c4fe1?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/dcb4b898573af5cfc31640e06ffd262756de5dd9b558d111c671c528a63c4fe1?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Nathan</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40366"><time datetime="2021-08-07T15:44:51-05:00">August 7, 2021 at 3:44 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>&#8220;The billboards are just flat tree quads that always face the camera&#8221;<br />
+So that also improves on XP11&#8217;s &#8216;trees are a thin x when viewed from above&#8217;, right?<br />
+If so, that&#8217;s great.  (and answers JJJ&#8217;s question I think)</p>
+<p>Johns question above &#8211; about using an even smaller forest LOD &#8211; a single (draped) polygon for the furthest away forests.  Sounds like a reasonable idea to extend distant visual accuracy??</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+		<li id="comment-40373" class="comment even thread-even depth-1 parent">
+			<article id="div-comment-40373" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/8ec3d871f7782fb02b09c04d79d082fc8a7ddada3e9396182770dbaa2ed9fc7e?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/8ec3d871f7782fb02b09c04d79d082fc8a7ddada3e9396182770dbaa2ed9fc7e?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Kaseng41</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40373"><time datetime="2021-08-08T17:37:13-05:00">August 8, 2021 at 5:37 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>When will you guys fix the ATC and have AI traffic?</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40381" class="comment odd alt depth-2">
+			<article id="div-comment-40381" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/401c195d1eb93e1d4fc1e7023a4c1bbd7776ee1086d104280d3a198edea3ba0c?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/401c195d1eb93e1d4fc1e7023a4c1bbd7776ee1086d104280d3a198edea3ba0c?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">Dellanie Byron</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40381"><time datetime="2021-08-09T09:39:57-05:00">August 9, 2021 at 9:39 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Instead of commentating on something completely off-topic to what you&#8217;re asking for, here&#8217;s a video where such topics are already in discussion. (including AI traffic where Jim Kier of Traffic Global fame is working on it).</p>
+<p><a href="https://youtu.be/wBY4X6kQ0KY" rel="nofollow ugc">https://youtu.be/wBY4X6kQ0KY</a></p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		<li id="comment-40391" class="comment even thread-odd thread-alt depth-1 parent">
+			<article id="div-comment-40391" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/5d8d45a9587836302b57e5f3b976b0ef98563c0e3bfc725c7e413b1bcfc7fc4f?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/5d8d45a9587836302b57e5f3b976b0ef98563c0e3bfc725c7e413b1bcfc7fc4f?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn">SubSonic Sim</b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40391"><time datetime="2021-08-10T14:46:33-05:00">August 10, 2021 at 2:46 pm</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>This is truly amazing!</p>
+<p>I would like to ask, if there will be a feature where you can reduce the draw distance through the settings, so less trees will be drawn. Possibly even changing to 2d trees after a certain distance?</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		<ol class="children">
+		<li id="comment-40396" class="comment byuser comment-author-bsupnik odd alt depth-2">
+			<article id="div-comment-40396" class="comment-body">
+				<footer class="comment-meta">
+					<div class="comment-author vcard">
+						<img alt='' src='https://secure.gravatar.com/avatar/49220b6b5ec21e513b16458bf06128e170f833f027aaca5ba0959378a3c394e4?s=50&#038;d=mm&#038;r=g' srcset='https://secure.gravatar.com/avatar/49220b6b5ec21e513b16458bf06128e170f833f027aaca5ba0959378a3c394e4?s=100&#038;d=mm&#038;r=g 2x' class='avatar avatar-50 photo' height='50' width='50' decoding='async'/>						<b class="fn"><a href="http://www.x-plane.com" class="url" rel="ugc external nofollow">Ben Supnik</a></b> <span class="says">says:</span>					</div><!-- .comment-author -->
+
+					<div class="comment-metadata">
+						<a href="https://developer.x-plane.com/2021/08/next-generation-trees-and-opengl/#comment-40396"><time datetime="2021-08-11T08:11:06-05:00">August 11, 2021 at 8:11 am</time></a>					</div><!-- .comment-metadata -->
+
+									</footer><!-- .comment-meta -->
+
+				<div class="comment-content">
+					<p>Yes &#8211; the tree LOD is managed dynamically by the GPU, so we can tune the parameters to provide different settings, including possibly a low-end &#8220;all 2-d&#8221; mode for users who want to get by with older hardware.</p>
+				</div><!-- .comment-content -->
+
+							</article><!-- .comment-body -->
+		</li><!-- #comment-## -->
+</ol><!-- .children -->
+</li><!-- #comment-## -->
+		</ol><!-- .comment-list -->
+
+		
+		<p class="no-comments">Comments are closed.</p>
+	
+</div><!-- #comments -->
+
+			</div><!-- #main -->
+			<div class="small-12 large-4 columns">
+				<aside id="secondary" class="widget-area sidebar-1" role="complementary">
+	<aside id="archives-2" class="widget widget_archive"><h2 class="widget-title">Archives</h2>		<label class="screen-reader-text" for="archives-dropdown-2">Archives</label>
+		<select id="archives-dropdown-2" name="archive-dropdown">
+			
+			<option value="">Select Month</option>
+				<option value='https://developer.x-plane.com/2026/10/'> October 2026 </option>
+	<option value='https://developer.x-plane.com/2026/05/'> May 2026 </option>
+	<option value='https://developer.x-plane.com/2026/04/'> April 2026 </option>
+	<option value='https://developer.x-plane.com/2026/03/'> March 2026 </option>
+	<option value='https://developer.x-plane.com/2026/02/'> February 2026 </option>
+	<option value='https://developer.x-plane.com/2026/01/'> January 2026 </option>
+	<option value='https://developer.x-plane.com/2025/12/'> December 2025 </option>
+	<option value='https://developer.x-plane.com/2025/11/'> November 2025 </option>
+	<option value='https://developer.x-plane.com/2025/09/'> September 2025 </option>
+	<option value='https://developer.x-plane.com/2025/07/'> July 2025 </option>
+	<option value='https://developer.x-plane.com/2025/05/'> May 2025 </option>
+	<option value='https://developer.x-plane.com/2025/04/'> April 2025 </option>
+	<option value='https://developer.x-plane.com/2025/02/'> February 2025 </option>
+	<option value='https://developer.x-plane.com/2025/01/'> January 2025 </option>
+	<option value='https://developer.x-plane.com/2024/09/'> September 2024 </option>
+	<option value='https://developer.x-plane.com/2024/08/'> August 2024 </option>
+	<option value='https://developer.x-plane.com/2024/07/'> July 2024 </option>
+	<option value='https://developer.x-plane.com/2024/06/'> June 2024 </option>
+	<option value='https://developer.x-plane.com/2024/03/'> March 2024 </option>
+	<option value='https://developer.x-plane.com/2024/02/'> February 2024 </option>
+	<option value='https://developer.x-plane.com/2023/09/'> September 2023 </option>
+	<option value='https://developer.x-plane.com/2023/08/'> August 2023 </option>
+	<option value='https://developer.x-plane.com/2023/07/'> July 2023 </option>
+	<option value='https://developer.x-plane.com/2023/02/'> February 2023 </option>
+	<option value='https://developer.x-plane.com/2022/10/'> October 2022 </option>
+	<option value='https://developer.x-plane.com/2022/09/'> September 2022 </option>
+	<option value='https://developer.x-plane.com/2022/05/'> May 2022 </option>
+	<option value='https://developer.x-plane.com/2022/03/'> March 2022 </option>
+	<option value='https://developer.x-plane.com/2022/02/'> February 2022 </option>
+	<option value='https://developer.x-plane.com/2021/11/'> November 2021 </option>
+	<option value='https://developer.x-plane.com/2021/10/'> October 2021 </option>
+	<option value='https://developer.x-plane.com/2021/09/'> September 2021 </option>
+	<option value='https://developer.x-plane.com/2021/08/'> August 2021 </option>
+	<option value='https://developer.x-plane.com/2021/06/'> June 2021 </option>
+	<option value='https://developer.x-plane.com/2021/04/'> April 2021 </option>
+	<option value='https://developer.x-plane.com/2021/03/'> March 2021 </option>
+	<option value='https://developer.x-plane.com/2021/02/'> February 2021 </option>
+	<option value='https://developer.x-plane.com/2021/01/'> January 2021 </option>
+	<option value='https://developer.x-plane.com/2020/12/'> December 2020 </option>
+	<option value='https://developer.x-plane.com/2020/11/'> November 2020 </option>
+	<option value='https://developer.x-plane.com/2020/10/'> October 2020 </option>
+	<option value='https://developer.x-plane.com/2020/09/'> September 2020 </option>
+	<option value='https://developer.x-plane.com/2020/08/'> August 2020 </option>
+	<option value='https://developer.x-plane.com/2020/07/'> July 2020 </option>
+	<option value='https://developer.x-plane.com/2020/06/'> June 2020 </option>
+	<option value='https://developer.x-plane.com/2020/05/'> May 2020 </option>
+	<option value='https://developer.x-plane.com/2020/04/'> April 2020 </option>
+	<option value='https://developer.x-plane.com/2020/03/'> March 2020 </option>
+	<option value='https://developer.x-plane.com/2020/02/'> February 2020 </option>
+	<option value='https://developer.x-plane.com/2020/01/'> January 2020 </option>
+	<option value='https://developer.x-plane.com/2019/12/'> December 2019 </option>
+	<option value='https://developer.x-plane.com/2019/11/'> November 2019 </option>
+	<option value='https://developer.x-plane.com/2019/10/'> October 2019 </option>
+	<option value='https://developer.x-plane.com/2019/09/'> September 2019 </option>
+	<option value='https://developer.x-plane.com/2019/08/'> August 2019 </option>
+	<option value='https://developer.x-plane.com/2019/07/'> July 2019 </option>
+	<option value='https://developer.x-plane.com/2019/06/'> June 2019 </option>
+	<option value='https://developer.x-plane.com/2019/05/'> May 2019 </option>
+	<option value='https://developer.x-plane.com/2019/04/'> April 2019 </option>
+	<option value='https://developer.x-plane.com/2019/03/'> March 2019 </option>
+	<option value='https://developer.x-plane.com/2019/02/'> February 2019 </option>
+	<option value='https://developer.x-plane.com/2019/01/'> January 2019 </option>
+	<option value='https://developer.x-plane.com/2018/12/'> December 2018 </option>
+	<option value='https://developer.x-plane.com/2018/11/'> November 2018 </option>
+	<option value='https://developer.x-plane.com/2018/10/'> October 2018 </option>
+	<option value='https://developer.x-plane.com/2018/09/'> September 2018 </option>
+	<option value='https://developer.x-plane.com/2018/08/'> August 2018 </option>
+	<option value='https://developer.x-plane.com/2018/07/'> July 2018 </option>
+	<option value='https://developer.x-plane.com/2018/06/'> June 2018 </option>
+	<option value='https://developer.x-plane.com/2018/05/'> May 2018 </option>
+	<option value='https://developer.x-plane.com/2018/04/'> April 2018 </option>
+	<option value='https://developer.x-plane.com/2018/03/'> March 2018 </option>
+	<option value='https://developer.x-plane.com/2018/02/'> February 2018 </option>
+	<option value='https://developer.x-plane.com/2018/01/'> January 2018 </option>
+	<option value='https://developer.x-plane.com/2017/12/'> December 2017 </option>
+	<option value='https://developer.x-plane.com/2017/11/'> November 2017 </option>
+	<option value='https://developer.x-plane.com/2017/10/'> October 2017 </option>
+	<option value='https://developer.x-plane.com/2017/09/'> September 2017 </option>
+	<option value='https://developer.x-plane.com/2017/08/'> August 2017 </option>
+	<option value='https://developer.x-plane.com/2017/07/'> July 2017 </option>
+	<option value='https://developer.x-plane.com/2017/06/'> June 2017 </option>
+	<option value='https://developer.x-plane.com/2017/05/'> May 2017 </option>
+	<option value='https://developer.x-plane.com/2017/04/'> April 2017 </option>
+	<option value='https://developer.x-plane.com/2017/03/'> March 2017 </option>
+	<option value='https://developer.x-plane.com/2017/02/'> February 2017 </option>
+	<option value='https://developer.x-plane.com/2017/01/'> January 2017 </option>
+	<option value='https://developer.x-plane.com/2016/12/'> December 2016 </option>
+	<option value='https://developer.x-plane.com/2016/11/'> November 2016 </option>
+	<option value='https://developer.x-plane.com/2016/10/'> October 2016 </option>
+	<option value='https://developer.x-plane.com/2016/09/'> September 2016 </option>
+	<option value='https://developer.x-plane.com/2016/08/'> August 2016 </option>
+	<option value='https://developer.x-plane.com/2016/07/'> July 2016 </option>
+	<option value='https://developer.x-plane.com/2016/06/'> June 2016 </option>
+	<option value='https://developer.x-plane.com/2016/05/'> May 2016 </option>
+	<option value='https://developer.x-plane.com/2016/04/'> April 2016 </option>
+	<option value='https://developer.x-plane.com/2016/03/'> March 2016 </option>
+	<option value='https://developer.x-plane.com/2016/02/'> February 2016 </option>
+	<option value='https://developer.x-plane.com/2016/01/'> January 2016 </option>
+	<option value='https://developer.x-plane.com/2015/12/'> December 2015 </option>
+	<option value='https://developer.x-plane.com/2015/11/'> November 2015 </option>
+	<option value='https://developer.x-plane.com/2015/10/'> October 2015 </option>
+	<option value='https://developer.x-plane.com/2015/09/'> September 2015 </option>
+	<option value='https://developer.x-plane.com/2015/08/'> August 2015 </option>
+	<option value='https://developer.x-plane.com/2015/07/'> July 2015 </option>
+	<option value='https://developer.x-plane.com/2015/06/'> June 2015 </option>
+	<option value='https://developer.x-plane.com/2015/05/'> May 2015 </option>
+	<option value='https://developer.x-plane.com/2015/04/'> April 2015 </option>
+	<option value='https://developer.x-plane.com/2015/03/'> March 2015 </option>
+	<option value='https://developer.x-plane.com/2015/02/'> February 2015 </option>
+	<option value='https://developer.x-plane.com/2015/01/'> January 2015 </option>
+	<option value='https://developer.x-plane.com/2014/12/'> December 2014 </option>
+	<option value='https://developer.x-plane.com/2014/11/'> November 2014 </option>
+	<option value='https://developer.x-plane.com/2014/10/'> October 2014 </option>
+	<option value='https://developer.x-plane.com/2014/09/'> September 2014 </option>
+	<option value='https://developer.x-plane.com/2014/08/'> August 2014 </option>
+	<option value='https://developer.x-plane.com/2014/07/'> July 2014 </option>
+	<option value='https://developer.x-plane.com/2014/06/'> June 2014 </option>
+	<option value='https://developer.x-plane.com/2014/05/'> May 2014 </option>
+	<option value='https://developer.x-plane.com/2014/03/'> March 2014 </option>
+	<option value='https://developer.x-plane.com/2014/02/'> February 2014 </option>
+	<option value='https://developer.x-plane.com/2014/01/'> January 2014 </option>
+	<option value='https://developer.x-plane.com/2013/12/'> December 2013 </option>
+	<option value='https://developer.x-plane.com/2013/11/'> November 2013 </option>
+	<option value='https://developer.x-plane.com/2013/10/'> October 2013 </option>
+	<option value='https://developer.x-plane.com/2013/08/'> August 2013 </option>
+	<option value='https://developer.x-plane.com/2013/07/'> July 2013 </option>
+	<option value='https://developer.x-plane.com/2013/06/'> June 2013 </option>
+	<option value='https://developer.x-plane.com/2013/05/'> May 2013 </option>
+	<option value='https://developer.x-plane.com/2013/04/'> April 2013 </option>
+	<option value='https://developer.x-plane.com/2013/03/'> March 2013 </option>
+	<option value='https://developer.x-plane.com/2013/02/'> February 2013 </option>
+	<option value='https://developer.x-plane.com/2013/01/'> January 2013 </option>
+	<option value='https://developer.x-plane.com/2012/12/'> December 2012 </option>
+	<option value='https://developer.x-plane.com/2012/11/'> November 2012 </option>
+	<option value='https://developer.x-plane.com/2012/10/'> October 2012 </option>
+	<option value='https://developer.x-plane.com/2012/09/'> September 2012 </option>
+	<option value='https://developer.x-plane.com/2012/08/'> August 2012 </option>
+	<option value='https://developer.x-plane.com/2012/07/'> July 2012 </option>
+	<option value='https://developer.x-plane.com/2012/06/'> June 2012 </option>
+	<option value='https://developer.x-plane.com/2012/05/'> May 2012 </option>
+	<option value='https://developer.x-plane.com/2012/04/'> April 2012 </option>
+	<option value='https://developer.x-plane.com/2012/03/'> March 2012 </option>
+	<option value='https://developer.x-plane.com/2012/02/'> February 2012 </option>
+	<option value='https://developer.x-plane.com/2012/01/'> January 2012 </option>
+	<option value='https://developer.x-plane.com/2011/12/'> December 2011 </option>
+	<option value='https://developer.x-plane.com/2011/11/'> November 2011 </option>
+	<option value='https://developer.x-plane.com/2011/10/'> October 2011 </option>
+	<option value='https://developer.x-plane.com/2011/09/'> September 2011 </option>
+	<option value='https://developer.x-plane.com/2011/08/'> August 2011 </option>
+	<option value='https://developer.x-plane.com/2011/07/'> July 2011 </option>
+	<option value='https://developer.x-plane.com/2011/06/'> June 2011 </option>
+	<option value='https://developer.x-plane.com/2011/05/'> May 2011 </option>
+	<option value='https://developer.x-plane.com/2011/04/'> April 2011 </option>
+	<option value='https://developer.x-plane.com/2011/03/'> March 2011 </option>
+	<option value='https://developer.x-plane.com/2011/02/'> February 2011 </option>
+	<option value='https://developer.x-plane.com/2011/01/'> January 2011 </option>
+	<option value='https://developer.x-plane.com/2010/12/'> December 2010 </option>
+	<option value='https://developer.x-plane.com/2010/11/'> November 2010 </option>
+	<option value='https://developer.x-plane.com/2010/10/'> October 2010 </option>
+	<option value='https://developer.x-plane.com/2010/09/'> September 2010 </option>
+	<option value='https://developer.x-plane.com/2010/08/'> August 2010 </option>
+	<option value='https://developer.x-plane.com/2010/07/'> July 2010 </option>
+	<option value='https://developer.x-plane.com/2010/06/'> June 2010 </option>
+	<option value='https://developer.x-plane.com/2010/05/'> May 2010 </option>
+	<option value='https://developer.x-plane.com/2010/04/'> April 2010 </option>
+	<option value='https://developer.x-plane.com/2010/03/'> March 2010 </option>
+	<option value='https://developer.x-plane.com/2010/02/'> February 2010 </option>
+	<option value='https://developer.x-plane.com/2010/01/'> January 2010 </option>
+	<option value='https://developer.x-plane.com/2009/12/'> December 2009 </option>
+	<option value='https://developer.x-plane.com/2009/11/'> November 2009 </option>
+	<option value='https://developer.x-plane.com/2009/10/'> October 2009 </option>
+	<option value='https://developer.x-plane.com/2009/09/'> September 2009 </option>
+	<option value='https://developer.x-plane.com/2009/08/'> August 2009 </option>
+	<option value='https://developer.x-plane.com/2009/07/'> July 2009 </option>
+	<option value='https://developer.x-plane.com/2009/06/'> June 2009 </option>
+	<option value='https://developer.x-plane.com/2009/05/'> May 2009 </option>
+	<option value='https://developer.x-plane.com/2009/04/'> April 2009 </option>
+	<option value='https://developer.x-plane.com/2009/03/'> March 2009 </option>
+	<option value='https://developer.x-plane.com/2009/02/'> February 2009 </option>
+	<option value='https://developer.x-plane.com/2009/01/'> January 2009 </option>
+	<option value='https://developer.x-plane.com/2008/12/'> December 2008 </option>
+	<option value='https://developer.x-plane.com/2008/11/'> November 2008 </option>
+	<option value='https://developer.x-plane.com/2008/10/'> October 2008 </option>
+	<option value='https://developer.x-plane.com/2008/09/'> September 2008 </option>
+	<option value='https://developer.x-plane.com/2008/08/'> August 2008 </option>
+	<option value='https://developer.x-plane.com/2008/07/'> July 2008 </option>
+	<option value='https://developer.x-plane.com/2008/06/'> June 2008 </option>
+	<option value='https://developer.x-plane.com/2008/05/'> May 2008 </option>
+	<option value='https://developer.x-plane.com/2008/04/'> April 2008 </option>
+	<option value='https://developer.x-plane.com/2008/03/'> March 2008 </option>
+	<option value='https://developer.x-plane.com/2008/02/'> February 2008 </option>
+	<option value='https://developer.x-plane.com/2008/01/'> January 2008 </option>
+	<option value='https://developer.x-plane.com/2007/12/'> December 2007 </option>
+	<option value='https://developer.x-plane.com/2007/11/'> November 2007 </option>
+	<option value='https://developer.x-plane.com/2007/10/'> October 2007 </option>
+	<option value='https://developer.x-plane.com/2007/09/'> September 2007 </option>
+	<option value='https://developer.x-plane.com/2007/08/'> August 2007 </option>
+	<option value='https://developer.x-plane.com/2007/07/'> July 2007 </option>
+	<option value='https://developer.x-plane.com/2007/06/'> June 2007 </option>
+	<option value='https://developer.x-plane.com/2007/05/'> May 2007 </option>
+	<option value='https://developer.x-plane.com/2007/04/'> April 2007 </option>
+	<option value='https://developer.x-plane.com/2007/03/'> March 2007 </option>
+	<option value='https://developer.x-plane.com/2007/02/'> February 2007 </option>
+	<option value='https://developer.x-plane.com/2007/01/'> January 2007 </option>
+	<option value='https://developer.x-plane.com/2006/12/'> December 2006 </option>
+	<option value='https://developer.x-plane.com/2006/11/'> November 2006 </option>
+	<option value='https://developer.x-plane.com/2006/10/'> October 2006 </option>
+	<option value='https://developer.x-plane.com/2006/09/'> September 2006 </option>
+	<option value='https://developer.x-plane.com/2006/08/'> August 2006 </option>
+	<option value='https://developer.x-plane.com/2006/07/'> July 2006 </option>
+	<option value='https://developer.x-plane.com/2006/06/'> June 2006 </option>
+	<option value='https://developer.x-plane.com/2006/05/'> May 2006 </option>
+	<option value='https://developer.x-plane.com/2006/04/'> April 2006 </option>
+	<option value='https://developer.x-plane.com/2006/03/'> March 2006 </option>
+	<option value='https://developer.x-plane.com/2006/02/'> February 2006 </option>
+	<option value='https://developer.x-plane.com/2006/01/'> January 2006 </option>
+	<option value='https://developer.x-plane.com/2005/12/'> December 2005 </option>
+
+		</select>
+
+			<script>
+( ( dropdownId ) => {
+	const dropdown = document.getElementById( dropdownId );
+	function onSelectChange() {
+		setTimeout( () => {
+			if ( 'escape' === dropdown.dataset.lastkey ) {
+				return;
+			}
+			if ( dropdown.value ) {
+				document.location.href = dropdown.value;
+			}
+		}, 250 );
+	}
+	function onKeyUp( event ) {
+		if ( 'Escape' === event.key ) {
+			dropdown.dataset.lastkey = 'escape';
+		} else {
+			delete dropdown.dataset.lastkey;
+		}
+	}
+	function onClick() {
+		delete dropdown.dataset.lastkey;
+	}
+	dropdown.addEventListener( 'keyup', onKeyUp );
+	dropdown.addEventListener( 'click', onClick );
+	dropdown.addEventListener( 'change', onSelectChange );
+})( "archives-dropdown-2" );
+
+//# sourceURL=WP_Widget_Archives%3A%3Awidget
+</script>
+</aside><hr><aside id="text-3" class="widget widget_text"><h2 class="widget-title">Useful Links</h2>			<div class="textwidget"><ul>
+<li><a href="https://www.x-plane.com/support/landing/">X-Plane Support</a></li>
+<li><a href="https://dev.x-plane.com/support/bugreport.html">X-Plane Bug Report Form</a></li>
+<li><a href="https://www.x-plane.com/knowledgebase_category/release-notes/">Recent Release Notes</a></li>
+<li><a href="http://dashboard.x-plane.com">X-Plane 11 Usage Data</a></li>
+</ul></div>
+		</aside><hr><aside id="categories-2" class="widget widget_categories"><h2 class="widget-title">Categories</h2>
+			<ul>
+					<li class="cat-item cat-item-4"><a href="https://developer.x-plane.com/category/air-traffic-control/">Air Traffic Control</a>
+</li>
+	<li class="cat-item cat-item-72"><a href="https://developer.x-plane.com/category/aircraft_and_modeling/">Aircraft &amp; Modeling</a>
+<ul class='children'>
+	<li class="cat-item cat-item-37"><a href="https://developer.x-plane.com/category/aircraft_and_modeling/aircraft-2/">Aircraft</a>
+</li>
+	<li class="cat-item cat-item-40"><a href="https://developer.x-plane.com/category/aircraft_and_modeling/cockpits-2/">Cockpits</a>
+</li>
+	<li class="cat-item cat-item-55"><a href="https://developer.x-plane.com/category/aircraft_and_modeling/modeling-2/">Modeling</a>
+</li>
+	<li class="cat-item cat-item-58"><a href="https://developer.x-plane.com/category/aircraft_and_modeling/panels-2/">Panels</a>
+</li>
+</ul>
+</li>
+	<li class="cat-item cat-item-73"><a href="https://developer.x-plane.com/category/development/">Development</a>
+<ul class='children'>
+	<li class="cat-item cat-item-75"><a href="https://developer.x-plane.com/category/development/blooper-reel/">Blooper Reel</a>
+</li>
+	<li class="cat-item cat-item-118"><a href="https://developer.x-plane.com/category/development/documentation/">Documentation</a>
+</li>
+</ul>
+</li>
+	<li class="cat-item cat-item-76"><a href="https://developer.x-plane.com/category/hardware-2/">Hardware</a>
+</li>
+	<li class="cat-item cat-item-134"><a href="https://developer.x-plane.com/category/hiring/">Hiring</a>
+</li>
+	<li class="cat-item cat-item-66"><a href="https://developer.x-plane.com/category/mobile-devices/">Mobile Devices</a>
+<ul class='children'>
+	<li class="cat-item cat-item-12"><a href="https://developer.x-plane.com/category/mobile-devices/android/">Android</a>
+</li>
+	<li class="cat-item cat-item-51"><a href="https://developer.x-plane.com/category/mobile-devices/ipad-2/">iPad</a>
+</li>
+	<li class="cat-item cat-item-52"><a href="https://developer.x-plane.com/category/mobile-devices/iphone-2/">iPhone</a>
+</li>
+	<li class="cat-item cat-item-57"><a href="https://developer.x-plane.com/category/mobile-devices/palm-pre-2/">Palm Pre</a>
+</li>
+</ul>
+</li>
+	<li class="cat-item cat-item-74"><a href="https://developer.x-plane.com/category/news/">News</a>
+</li>
+	<li class="cat-item cat-item-97"><a href="https://developer.x-plane.com/category/plugins-2/">Plugins</a>
+</li>
+	<li class="cat-item cat-item-120"><a href="https://developer.x-plane.com/category/really-really-really-really-boring-stuff/">Really Really Really Really Boring Stuff</a>
+</li>
+	<li class="cat-item cat-item-98"><a href="https://developer.x-plane.com/category/rfc/">RFC</a>
+</li>
+	<li class="cat-item cat-item-62"><a href="https://developer.x-plane.com/category/scenery/">Scenery</a>
+<ul class='children'>
+	<li class="cat-item cat-item-43"><a href="https://developer.x-plane.com/category/scenery/file-formats-2/">File Formats</a>
+</li>
+	<li class="cat-item cat-item-63"><a href="https://developer.x-plane.com/category/scenery/tools-2/">Tools</a>
+</li>
+</ul>
+</li>
+	<li class="cat-item cat-item-85"><a href="https://developer.x-plane.com/category/screencasts/">Screencasts</a>
+</li>
+	<li class="cat-item cat-item-119"><a href="https://developer.x-plane.com/category/testing/">Testing</a>
+</li>
+	<li class="cat-item cat-item-70"><a href="https://developer.x-plane.com/category/uncategorized/">Uncategorized</a>
+</li>
+	<li class="cat-item cat-item-83"><a href="https://developer.x-plane.com/category/view-system/">View System</a>
+</li>
+	<li class="cat-item cat-item-127"><a href="https://developer.x-plane.com/category/vr/">VR</a>
+</li>
+	<li class="cat-item cat-item-109"><a href="https://developer.x-plane.com/category/x-plane-usage-data/">X-Plane Usage Data</a>
+</li>
+			</ul>
+
+			</aside><hr>
+		<aside id="recent-posts-3" class="widget widget_recent_entries">
+		<h2 class="widget-title">Recent Posts</h2>
+		<ul>
+											<li>
+					<a href="https://developer.x-plane.com/2026/10/on-hacking-our-engine-please-dont/">On Hacking Our Engine&#8230; Please Don&#8217;t</a>
+									</li>
+											<li>
+					<a href="https://developer.x-plane.com/2026/05/x-plane-gateway-update-12-4-3-may-2026/">X-Plane Gateway Update | 12.4.3 &#8211; May 2026</a>
+									</li>
+											<li>
+					<a href="https://developer.x-plane.com/2026/04/x-plane-sdk-roadmap-user-interface-and-avionics/">X-Plane SDK Roadmap | User Interface and Avionics</a>
+									</li>
+											<li>
+					<a href="https://developer.x-plane.com/2026/04/x-plane-gateway-update-12-4-2-april-2026/">X-Plane Gateway Update | 12.4.2 &#8211; April 2026</a>
+									</li>
+											<li>
+					<a href="https://developer.x-plane.com/2026/04/plugin-developers-we-are-done-stabbing-you-with-a-fork/">Plugin Developers: We Are Done Stabbing You With a Fork</a>
+									</li>
+					</ul>
+
+		</aside><hr><aside id="recent-comments-2" class="widget widget_recent_comments"><h2 class="widget-title">Recent Comments</h2><ul id="recentcomments"><li class="recentcomments"><span class="comment-author-link">K.</span> on <a href="https://developer.x-plane.com/2026/10/on-hacking-our-engine-please-dont/#comment-43286">On Hacking Our Engine&#8230; Please Don&#8217;t</a></li><li class="recentcomments"><span class="comment-author-link">Luke</span> on <a href="https://developer.x-plane.com/2026/10/on-hacking-our-engine-please-dont/#comment-43285">On Hacking Our Engine&#8230; Please Don&#8217;t</a></li><li class="recentcomments"><span class="comment-author-link">Luke</span> on <a href="https://developer.x-plane.com/2026/10/on-hacking-our-engine-please-dont/#comment-43284">On Hacking Our Engine&#8230; Please Don&#8217;t</a></li><li class="recentcomments"><span class="comment-author-link">GUSTAVO BONIFACIO RODRIGUES</span> on <a href="https://developer.x-plane.com/2026/10/on-hacking-our-engine-please-dont/#comment-43283">On Hacking Our Engine&#8230; Please Don&#8217;t</a></li><li class="recentcomments"><span class="comment-author-link"><a href="http://www.x-plane.com" class="url" rel="ugc external nofollow">Ben Supnik</a></span> on <a href="https://developer.x-plane.com/2026/04/x-plane-sdk-roadmap-user-interface-and-avionics/#comment-43255">X-Plane SDK Roadmap | User Interface and Avionics</a></li></ul></aside><hr></aside><!-- #secondary -->
+			</div>
+		</div><!-- #primary -->
+	</section>
+</div>
+<!-- footer.php -->
+<footer class="site-footer">
+	<div class="row">     <div class="small-12 large-6 columns">
+        <p><img src="//developer.x-plane.com/wp-content/uploads/2017/12/x-plane-developer-logo-web.svg" alt="X-Plane" style="width:60%"></p>
+        <p>Developer resources for the X-Plane flight simulator</p>
+        <p class="social-icons" data-facebook="https://www.facebook.com/XPlaneOfficial/" data-twitter="https://twitter.com/XPlaneOfficial" data-youtube="https://www.youtube.com/user/XPlaneOfficial">
+            <a href='https://www.facebook.com/XPlaneOfficial/'><img src='https://developer.x-plane.com/wp-content/themes/xplane/images/facebook.svg' alt='Facebook'></a><a href='https://twitter.com/XPlaneOfficial'><img src='https://developer.x-plane.com/wp-content/themes/xplane/images/twitter.svg' alt='Twitter'></a><a href='https://www.youtube.com/user/XPlaneOfficial'><img src='https://developer.x-plane.com/wp-content/themes/xplane/images/youtube.svg' alt='YouTube'></a>
+        </p>
+    </div>    <div class="small-12 large-5 large-offset-1 columns email-container" id="footer-email-signup">
+        <h3 class="email-block-title">Never miss an update</h3>
+        <p class="email-block-subheading">Sign up for email updates below to get the latest X&#8209;Plane news in your inbox.</p>
+        <form action="/thanks-for-signing-up/" method="post" class="subscribe-form">
+            <input type="hidden" name="form-type" class="form-type" value="dev">
+            <div class="row collapse">
+                <div class="small-12 large-7 columns">
+                    <input type="email" name="EMAIL" class="full-width subscribe-input" placeholder="you@domain.com">
+                </div>
+                <div class="small-12 large-5 columns">
+                    <p><button type="submit" name="subscribe" class="full-width subscribe-button">Sign Up</button></p>
+                </div>
+            </div>
+        </form>
+                    <div class="gdpr">
+                <p>We will never sell or share your email address; we&rsquo;ll only use it to send you X&#8209;Plane-related emails. (More info in our <a href="/privacy-policy/">privacy policy</a>.)</p>
+                <p>You&rsquo;ll receive about one email a month, and you can unsubscribe at any time.</p>
+            </div>
+    </div>	</div>
+</footer><footer class="site-colophon">
+	<div class="row">
+		<div class="large-6 columns">
+			&copy; X-Plane 2026<br>
+            <nav><a href="/privacy-policy/" style="opacity:0.6; font-size:0.8rem; position: relative; top: -0.5rem;">Privacy Policy</a></nav>
+		</div>
+		<div class="large-6 columns large-text-right">
+			<nav class="footer-nav">
+							</nav>
+		</div>
+	</div>
+</footer>
+<script type="speculationrules">
+{"prefetch":[{"source":"document","where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":["/wp-*.php","/wp-admin/*","/wp-content/uploads/*","/wp-content/*","/wp-content/plugins/*","/wp-content/themes/xplane/*","/*\\?(.+)"]}},{"not":{"selector_matches":"a[rel~=\"nofollow\"]"}},{"not":{"selector_matches":".no-prefetch, .no-prefetch a"}}]},"eagerness":"conservative"}]}
+</script>
+	<script type="text/javascript">
+        function ga_ready() {
+            return ga && ga.hasOwnProperty('loaded') && ga.loaded === true;
+        }
+
+		jQuery(document).ready(function($) {
+			var filetypes = /\.(zip|exe|dmg|pdf|doc.*|xls.*|ppt.*|mp3|txt|rar|wma|mov|avi|wmv|flv|wav)$/i;
+			$('a').on('click', function(event) {
+				var el = $(this);
+				var href = (typeof(el.attr('href')) != 'undefined' ) ? el.attr('href') : "";
+				if(ga_ready() && !href.match(/^javascript:/i) && href.match(filetypes)) {
+					var extension = (/[.]/.exec(href)) ? /[^.]+$/.exec(href) : undefined;
+					// Setting the transport method to 'beacon' lets the hit be sent using 'navigator.sendBeacon' in browsers that support it.
+					ga('send', 'event', "download", "File (" + extension[0] + ")", href, {
+						transport: 'beacon',
+						hitCallback: function(){ document.location = href; }
+					});
+					return false; // prevent the link from transporting you until the hitCallback gets called
+				}
+			});
+		});
+	</script>
+<!-- Tracking code easily added by NK Google Analytics -->
+<script type="text/javascript"> 
+(function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){ 
+(i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o), 
+m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m) 
+})(window,document,'script','https://www.google-analytics.com/analytics.js','ga'); 
+ga('create', 'G-TLEY7BTH3N', { 'storage': 'none', 'clientId': new Fingerprint().get()}); 
+ga('set', 'anonymizeIp', true); 
+ga('send', 'pageview'); 
+</script> 
+<script id="google_cse_v2-js-extra">
+var scriptParams = {"google_search_engine_id":"007831620928223713148:yjc2x8tviui"};
+//# sourceURL=google_cse_v2-js-extra
+</script>
+<script id="google_cse_v2-js" src="https://developer.x-plane.com/wp-content/plugins/wp-google-search/assets/js/google_cse_v2.js?ver=1"></script>
+<script id="prism_js-js" src="https://developer.x-plane.com/wp-content/plugins/code-sample-generation/lib/paulund-syntax-highlighter/js/prism-xplane.js?ver=1.0.1"></script>
+<script id="toc-front-js-extra">
+var tocplus = {"visibility_show":"show","visibility_hide":"hide","width":"Auto"};
+//# sourceURL=toc-front-js-extra
+</script>
+<script id="toc-front-js" src="https://developer.x-plane.com/wp-content/plugins/table-of-contents-plus/front.min.js?ver=1509"></script>
+<script id="js-cookie-js" src="https://developer.x-plane.com/wp-content/themes/xplane/js/js.cookie.js?ver=2.2.0"></script>
+<script id="magnific-js" src="https://developer.x-plane.com/wp-content/themes/xplane/js/magnific.js?ver=1.1.0"></script>
+<script id="custom-js" src="https://developer.x-plane.com/wp-content/themes/xplane/js/custom.js?ver=1.1.2"></script>
+<script id="email_signup-js" src="https://developer.x-plane.com/wp-content/themes/xplane/js/email_signup.js?ver=1.3.04"></script>
+<script id="fingerprintjs-js" src="https://developer.x-plane.com/wp-content/themes/xplane/js/fingerprint.min.js?ver=4.9.8"></script>
+<script id="wp-emoji-settings" type="application/json">
+{"baseUrl":"https://s.w.org/images/core/emoji/17.0.2/72x72/","ext":".png","svgUrl":"https://s.w.org/images/core/emoji/17.0.2/svg/","svgExt":".svg","source":{"concatemoji":"https://developer.x-plane.com/wp-includes/js/wp-emoji-release.min.js?ver=7.1.4"}}
+</script>
+<script type="module">
+/*! This file is auto-generated */
+var e="script#wp-emoji-settings",t=document.querySelector(e);if(!(t instanceof HTMLScriptElement))throw new Error("Element missing: "+e);const r=JSON.parse(t.text),s=(window._wpemojiSettings=r,"wpEmojiSettingsSupports"),o=["flag","emoji"];function i(e){try{var t={supportTests:e,timestamp:(new Date).valueOf()};sessionStorage.setItem(s,JSON.stringify(t))}catch(e){}}function c(e,t,n){e.clearRect(0,0,e.canvas.width,e.canvas.height),e.fillText(t,0,0);t=new Uint32Array(e.getImageData(0,0,e.canvas.width,e.canvas.height).data);e.clearRect(0,0,e.canvas.width,e.canvas.height),e.fillText(n,0,0);const r=new Uint32Array(e.getImageData(0,0,e.canvas.width,e.canvas.height).data);return t.every((e,t)=>e===r[t])}function p(e,t){e.clearRect(0,0,e.canvas.width,e.canvas.height),e.fillText(t,0,0);var n=e.getImageData(16,16,1,1);for(let e=0;e<n.data.length;e++)if(0!==n.data[e])return!1;return!0}function u(e,t,n,r){switch(t){case"flag":return n(e,"\ud83c\udff3\ufe0f\u200d\u26a7\ufe0f","\ud83c\udff3\ufe0f\u200b\u26a7\ufe0f")?!1:!n(e,"\ud83c\udde8\ud83c\uddf6","\ud83c\udde8\u200b\ud83c\uddf6")&&!n(e,"\ud83c\udff4\udb40\udc67\udb40\udc62\udb40\udc65\udb40\udc6e\udb40\udc67\udb40\udc7f","\ud83c\udff4\u200b\udb40\udc67\u200b\udb40\udc62\u200b\udb40\udc65\u200b\udb40\udc6e\u200b\udb40\udc67\u200b\udb40\udc7f");case"emoji":return!r(e,"\ud83e\u1fac8")}return!1}function f(e,t,n,r){let a;const s=(a="undefined"!=typeof WorkerGlobalScope&&self instanceof WorkerGlobalScope?new OffscreenCanvas(300,150):document.createElement("canvas")).getContext("2d",{willReadFrequently:!0}),o=(s.textBaseline="top",s.font="600 32px Arial",{});return e.forEach(e=>{o[e]=t(s,e,n,r)}),o}function a(e){var t=document.createElement("script");t.src=e,t.defer=!0,document.head.appendChild(t)}r.supports={everything:!0,everythingExceptFlag:!0},new Promise(t=>{let n=function(){try{var e=JSON.parse(sessionStorage.getItem(s));if("object"==typeof e&&"number"==typeof e.timestamp&&(new Date).valueOf()<e.timestamp+604800&&"object"==typeof e.supportTests)return e.supportTests}catch(e){}return null}();if(!n){if("undefined"!=typeof Worker&&"undefined"!=typeof OffscreenCanvas&&"undefined"!=typeof URL&&URL.createObjectURL&&"undefined"!=typeof Blob)try{var e="postMessage("+f.toString()+"("+[JSON.stringify(o),u.toString(),c.toString(),p.toString()].join(",")+"));",r=new Blob([e],{type:"text/javascript"});const a=new Worker(URL.createObjectURL(r),{name:"wpTestEmojiSupports"});return void(a.onmessage=e=>{i(n=e.data),a.terminate(),t(n)})}catch(e){}i(n=f(o,u,c,p))}t(n)}).then(e=>{for(const n in e)r.supports[n]=e[n],r.supports.everything=r.supports.everything&&r.supports[n],"flag"!==n&&(r.supports.everythingExceptFlag=r.supports.everythingExceptFlag&&r.supports[n]);var t;r.supports.everythingExceptFlag=r.supports.everythingExceptFlag&&!r.supports.flag,r.supports.everything||((t=r.source||{}).concatemoji?a(t.concatemoji):t.wpemoji&&t.twemoji&&(a(t.twemoji),a(t.wpemoji)))});
+//# sourceURL=https://developer.x-plane.com/wp-includes/js/wp-emoji-loader.min.js
+</script>
+<div class="small-12 medium-2" id="medium-less-than-full-width"></div>
+<div class="medium-12 large-2" id="large-less-than-full-width"></div>
+</body>
+</html>

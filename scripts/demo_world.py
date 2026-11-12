@@ -72,7 +72,7 @@ from world_builder.atmosphere import AtmosphereParams  # noqa: E402
 from world_builder.clouds.cirrus import CirrusSpec  # noqa: E402
 from world_builder.depth import SplitDepthCameras  # noqa: E402
 from world_builder.settings import WorldSettings  # noqa: E402
-from world_builder.terrain.level import DEMO_LEVEL, load_level  # noqa: E402
+from world_builder.terrain.level import DEMO_LEVEL, level_for, load_level  # noqa: E402
 from world_builder.terrain.planet import PRESETS  # noqa: E402
 from world_builder.world import (  # noqa: E402
     BodyLook,
@@ -166,10 +166,11 @@ class WorldDemo(TerrainDemo):
         self.speed = SPEED
 
         spec, self.start_pose = load_level(
-            level_path, preset=preset, seed=seed, radius=radius
+            level_for(level_path, preset), preset=preset, seed=seed, radius=radius
         )
         self.start_pose = start_pose(spec, self.start_pose, start)
         self.world = settings or WorldSettings()
+        clouds = clouds and spec.has_clouds  # the tiny test planet: none
         self._clouds_on = clouds
         self._cloud_debug = cloud_debug
         self._sun = start_sun(spec, self.start_pose)

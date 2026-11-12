@@ -27,9 +27,33 @@ uniform mat4 p3d_ProjectionMatrixInverse;
 in vec2 vNdc;
 out vec4 fragColor;
 
+// Whether the near camera may draw a surface at this view pixel. The depth
+// pass is coarser than the view: tested at this pixel's own texel alone, a
+// pixel at the edge of the near range's surfaces (the ground where it crosses
+// the split, a tree there) could hold a surface the texel missed. The far card
+// laid the cloud there, the near camera then drew its surface over it: a
+// dotted line of unclouded ground along the split, seen through a cloud. Any
+// texel about it counts; the near card, laying a pixel the near camera leaves
+// empty, puts the same cloud over the same far pass.
+bool nearSurfaceAt(ivec2 pixel) {
+    if (uNearDepthOn == 0) {
+        return false;
+    }
+    ivec2 last = textureSize(uNearDepth, 0) - 1;
+    ivec2 texel = pixel / uDepthScale;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 tap = clamp(texel + ivec2(x, y), ivec2(0), last);
+            if (texelFetch(uNearDepth, tap, 0).r < 1.0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void main() {
-    bool nearSurface = uNearDepthOn != 0
-                    && texelFetch(uNearDepth, ivec2(gl_FragCoord.xy) / uDepthScale, 0).r < 1.0;
+    bool nearSurface = nearSurfaceAt(ivec2(gl_FragCoord.xy));
     if (nearSurface != (uNearCard != 0)) {
         discard;
     }

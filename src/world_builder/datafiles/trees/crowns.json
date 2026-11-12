@@ -1,0 +1,130 @@
+{
+ "forest_tree_near_0": {
+  "area": 13.007,
+  "height": 11.866
+ },
+ "forest_tree_near_1": {
+  "area": 11.55,
+  "height": 18.458
+ },
+ "forest_tree_near_2": {
+  "area": 11.428,
+  "height": 25.413
+ },
+ "forest_tree_near_3": {
+  "area": 3.54,
+  "height": 10.338
+ },
+ "forest_rock_0": {
+  "area": 0.386,
+  "height": 0.437
+ },
+ "forest_rock_1": {
+  "area": 0.855,
+  "height": 0.611
+ },
+ "forest_rock_2": {
+  "area": 1.534,
+  "height": 0.914
+ },
+ "forest_rock_3": {
+  "area": 1.266,
+  "height": 0.574
+ },
+ "forest_rock_4": {
+  "area": 0.627,
+  "height": 0.63
+ },
+ "forest_rock_5": {
+  "area": 0.469,
+  "height": 0.393
+ },
+ "forest_rock_6": {
+  "area": 1.276,
+  "height": 0.85
+ },
+ "forest_rock_7": {
+  "area": 1.594,
+  "height": 1.072
+ },
+ "forest_rock_8": {
+  "area": 0.241,
+  "height": 0.376
+ },
+ "forest_plant_0": {
+  "area": 0.383,
+  "height": 2.577
+ },
+ "forest_plant_1": {
+  "area": 0.936,
+  "height": 2.038
+ },
+ "forest_plant_2": {
+  "area": 0.552,
+  "height": 2.242
+ },
+ "forest_plant_3": {
+  "area": 4.909,
+  "height": 5.507
+ },
+ "forest_plant_4": {
+  "area": 0.0,
+  "height": 2.207
+ },
+ "forest_tree_far_0": {
+  "area": 17.729,
+  "height": 26.013
+ },
+ "forest_tree_far_1": {
+  "area": 15.111,
+  "height": 25.775
+ },
+ "forest_tree_far_2": {
+  "area": 26.178,
+  "height": 33.268
+ },
+ "forest_tree_far_3": {
+  "area": 50.883,
+  "height": 24.545
+ },
+ "forest_tree_far_4": {
+  "area": 17.68,
+  "height": 26.013
+ },
+ "forest_tree_far_5": {
+  "area": 23.498,
+  "height": 18.222
+ },
+ "forest_tree_far_6": {
+  "area": 28.359,
+  "height": 29.264
+ },
+ "forest_tree_far_7": {
+  "area": 19.346,
+  "height": 26.013
+ },
+ "birch_tree_0": {
+  "area": 10.741,
+  "height": 17.376
+ },
+ "birch_tree_1": {
+  "area": 9.766,
+  "height": 14.398
+ },
+ "birch_tree_2": {
+  "area": 12.315,
+  "height": 16.626
+ },
+ "snowy_tree_0": {
+  "area": 30.586,
+  "height": 12.74
+ },
+ "snowy_tree_1": {
+  "area": 26.685,
+  "height": 19.018
+ },
+ "snowy_tree_2": {
+  "area": 18.371,
+  "height": 10.504
+ }
+}

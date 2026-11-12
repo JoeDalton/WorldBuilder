@@ -1,0 +1,1681 @@
+<!DOCTYPE html>
+<html class="no-js" lang="en-US">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+        
+        <title>GPU-Based Procedural Placement in Horizon Zero Dawn - Guerrilla Games</title>
+        <meta content="GPU-Based Procedural Placement in Horizon Zero Dawn - Guerrilla Games" name="title" />
+<meta content="Jaap van Muijden describes the GPU based procedural placement system that dynamically creates the world of Horizon Zero Dawn around the player." name="description" />
+<meta content="website" name="og:type" />
+<meta content="https://www.guerrilla-games.com/read/gpu-based-procedural-placement-in-horizon-zero-dawn" name="og:url" />
+<meta content="GPU-Based Procedural Placement in Horizon Zero Dawn - Guerrilla Games" name="og:title" />
+<meta content="Jaap van Muijden describes the GPU based procedural placement system that dynamically creates the world of Horizon Zero Dawn around the player." name="og:description" />
+<meta content="https://www.guerrilla-games.com/media/News/gpuprocedural-1200w.jpg?width=1200&height=630&rmode=crop" name="og:image" />
+<meta content="https://www.guerrilla-games.com/media/News/gpuprocedural-1200w.jpg?width=1200&height=630&rmode=crop" name="image" property="og:image" />
+<meta content="summary_large_image" name="twitter:card" />
+<meta content="https://www.guerrilla-games.com/read/gpu-based-procedural-placement-in-horizon-zero-dawn" name="twitter:url" />
+<meta content="GPU-Based Procedural Placement in Horizon Zero Dawn - Guerrilla Games" name="twitter:title" />
+<meta content="Jaap van Muijden describes the GPU based procedural placement system that dynamically creates the world of Horizon Zero Dawn around the player." name="twitter:description" />
+<meta content="https://www.guerrilla-games.com/media/News/gpuprocedural-1200w.jpg?width=1200&height=630&rmode=crop" name="twitter:image" />
+<meta content="#eae8e5" name="msapplication-TileColor" />
+<meta content="#eae8e5" name="theme-color" />
+
+        <script>
+            // Picture element HTML5 shiv
+            document.createElement( "picture" );
+        </script>
+
+        <link rel="preload" href="/GuerrillaGames.Website.StudioTheme/fonts/AkkuratStd-Regular.woff" as="font" type="font/woff" crossorigin="anonymous">
+        <link rel="preload" href="/GuerrillaGames.Website.StudioTheme/fonts/AkkuratStd-Regular.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+        <link rel="preload" href="/GuerrillaGames.Website.StudioTheme/fonts/AkkuratStd-Bold.woff" as="font" type="font/woff" crossorigin="anonymous">
+        <link rel="preload" href="/GuerrillaGames.Website.StudioTheme/fonts/AkkuratStd-Bold.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+        <link rel="preload" href="/GuerrillaGames.Website.StudioTheme/fonts/AkkuratStd-Italic.woff" as="font" type="font/woff" crossorigin="anonymous">
+        <link rel="preload" href="/GuerrillaGames.Website.StudioTheme/fonts/AkkuratStd-Italic.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+        <link rel="preload" href="/GuerrillaGames.Website.StudioTheme/fonts/AkkuratStd-BoldItalic.woff" as="font" type="font/woff" crossorigin="anonymous">
+        <link rel="preload" href="/GuerrillaGames.Website.StudioTheme/fonts/AkkuratStd-BoldItalic.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+
+        <link href="//cloud.typenetwork.com/projects/6278/fontface.css/" rel="stylesheet" type="text/css">
+
+        
+            <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('consent','default',{'ad_storage': 'denied','analytics_storage': 'denied'});</script>
+
+            <!-- Google Tag Manager -->
+            <script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+            new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+            j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+            'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+            })(window,document,'script','dataLayer','GTM-NLHW7K7');</script>
+            <!-- End Google Tag Manager -->
+        
+
+        <script src="https://www.youtube.com/iframe_api" async></script>
+
+		
+		<script async="true" src="/GuerrillaGames.Website.StudioTheme/js/scripts.js?v=biB2BZKSfWuWnkroJiZ6OWk7uvATJ7l_gUrU_GAQpPw"></script>
+
+        <link href="/apple-touch-icon.png" rel="apple-touch-icon" sizes="180x180" />
+<link href="/favicon-16x16.png" rel="icon" sizes="16x16" type="image/png" />
+<link href="/favicon-32x32.png" rel="icon" sizes="32x32" type="image/png" />
+<link href="/site.webmanifest" rel="manifest" />
+<link color="#37343d" href="/safari-pinned-tab.svg" rel="mask-icon" />
+        <link href="/GuerrillaGames.Website.StudioTheme/css/styles.css?v=BUuhHTmCmluJi7KQOBYjThXx0Wk49REAFEF9KGrPmqQ" rel="stylesheet" type="text/css" />
+        <script>window.loadCivic=function(){var config = {
+  "apiKey": "9e23b3612bdd94303e04c30489b6cd95a2bc7550",
+  "product": "COMMUNITY",
+  "necessaryCookies": [],
+  "initialState": "open",
+  "notifyOnce": false,
+  "rejectButton": true,
+  "acceptBehaviour": "all",
+  "closeOnGlobalChange": true,
+  "layout": "slideout",
+  "position": "left",
+  "theme": "dark",
+  "toggleType": "slider",
+  "closeStyle": "icon",
+  "settingsStyle": "button",
+  "subDomains": true,
+  "text": {
+    "intro": "Some of these cookies are essential, while others help us to improve your experience by providing insights into how the site is being used. "
+  },
+  "optionalCookies": [
+    {
+      "name": "analytics",
+      "label": "Analytics",
+      "description": "We use analytics cookies to understand website usage and improve the experience.",
+      "cookies": [
+        "_ga*",
+        "_gid",
+        "_gat",
+        "_utma",
+        "_utmb",
+        "_utmc",
+        "_utmz",
+        "_utmv"
+      ],
+      "onAccept": function () { gtag('consent', 'update', { 'analytics_storage': 'granted' });
+ },
+      "onRevoke": function () { gtag('consent', 'update', { 'analytics_storage': 'denied' });
+ }
+    }
+  ],
+  "statement": {
+    "description": "Find out more about",
+    "name": "how we use cookies",
+    "url": "https://www.guerrilla-games.com/how-we-use-cookies",
+    "updated": "27/03/2024"
+  }
+};CookieControl.load(config);}</script><script src="https://cc.cdn.civiccomputing.com/9/cookieControl-9.x.min.js" onload="window.loadCivic()" async></script>
+    </head>
+    <body class="animate">
+        <div id="top"></div>
+
+        
+            <!-- Google Tag Manager (noscript) -->
+            <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-NLHW7K7"
+            height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+            <!-- End Google Tag Manager (noscript) -->
+        
+
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+    
+    
+
+
+
+
+
+    
+    
+
+
+
+
+
+
+
+    
+
+
+
+
+
+<header class="header" style="--headerBackgroundColor:#ffffff; --headerMobileBackgroundColor:#ffffff; ">
+    <div class="header__content constrain constrain--full">
+        
+            <div class="header__logo-wrapper">
+                <a class="header__logo" href="/">
+                    <picture>
+                        
+                            <source srcset="/media/Logos/logo-guerrilla-games.svg" media="(min-width: 768px)">
+                            <img src="/media/Logos/logo-guerrilla-games.svg" alt="Logo for Guerrilla Games" />
+                        
+                    </picture>
+                </a>
+            </div>
+        
+
+        
+
+            <button type="button" class="header__nav-button js-nav-button">Menu</button>
+            <button type="button" class="header__nav-button header__nav-button--close js-nav-button"><span class="visually-hidden">Close</span></button>
+
+            <div class="header__nav">
+
+                
+                <nav class="nav nav--primary">
+                    <ul class="nav__items js-nav list-reset">
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/explore" class="link--default" >
+    
+    <span class="link-text">
+        Explore
+    </span>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/games" class="link--default" >
+    
+    <span class="link-text">
+        Games
+    </span>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+    
+
+
+
+
+<li class="nav__item nav__item--parent nav__item--html-menu-item">
+    
+    
+    <a href="/decima"><a href="/decima" class="link--default"><span class="link-text">Decima</span></a></a>
+
+
+    
+        <div class="nav__sub">
+            <ul class="nav__sub-items">
+                
+                    
+
+
+
+
+
+
+<li class="nav__item nav__item--link-menu-item">
+    
+    
+    
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+
+<a href="/decima#about" class="link--default"  >
+    
+    <span class="link-text">
+        About
+        
+    </span>
+    
+</a>
+
+
+    
+</li>
+                
+                    
+
+
+
+
+
+
+<li class="nav__item nav__item--link-menu-item">
+    
+    
+    
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+
+<a href="/decima#powered-by-decima" class="link--default"  >
+    
+    <span class="link-text">
+        Powered By Decima
+        
+    </span>
+    
+</a>
+
+
+    
+</li>
+                
+                    
+
+
+
+
+
+
+<li class="nav__item nav__item--link-menu-item">
+    
+    
+    
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+
+<a href="/decima#news-events" class="link--default"  >
+    
+    <span class="link-text">
+        News &amp; Events
+        
+    </span>
+    
+</a>
+
+
+    
+</li>
+                
+                    
+
+
+
+
+
+
+<li class="nav__item nav__item--link-menu-item">
+    
+    
+    
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+
+<a href="/decima#join-the-team" class="link--default"  >
+    
+    <span class="link-text">
+        Join The Team
+        
+    </span>
+    
+</a>
+
+
+    
+</li>
+                
+            </ul>
+        </div>
+        <div class="nav__sub-background"></div>
+    
+</li>
+    
+        
+
+
+
+    
+
+
+
+
+<li class="nav__item nav__item--parent nav__item--notification-menu-item">
+    
+    
+    
+
+
+    <a href="/join"
+        class="nav__item-link nav__item-link--notification link--default"
+        
+        target="_self"
+        
+        >
+        Join
+   </a>
+
+
+    
+        <div class="nav__sub">
+            <ul class="nav__sub-items">
+                
+                    
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/join/working-at-guerrilla" class="link--default" >
+    
+    <span class="link-text">
+        Working at Guerrilla
+    </span>
+</a>
+
+
+    
+</li>
+                
+                    
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/join/life-at-guerrilla" class="link--default" >
+    
+    <span class="link-text">
+        Life at Guerrilla
+    </span>
+</a>
+
+
+    
+</li>
+                
+                    
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/join/benefits" class="link--default" >
+    
+    <span class="link-text">
+        What We Offer
+    </span>
+</a>
+
+
+    
+</li>
+                
+                    
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/join/where-we-work" class="link--default" >
+    
+    <span class="link-text">
+        Where We Work
+    </span>
+</a>
+
+
+    
+</li>
+                
+                    
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/join/relocation" class="link--default" >
+    
+    <span class="link-text">
+        Relocation
+    </span>
+</a>
+
+
+    
+</li>
+                
+            </ul>
+        </div>
+        <div class="nav__sub-background"></div>
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/read" class="link--default" >
+    
+    <span class="link-text">
+        Read
+    </span>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/contact" class="link--default" >
+    
+    <span class="link-text">
+        Contact
+    </span>
+</a>
+
+
+    
+</li>
+    
+</ul>
+                    <div class="nav__background"></div>
+                </nav>
+                
+
+                
+            </div>
+
+        
+
+        
+    </div>
+</header>
+
+
+
+
+
+
+
+        <main>
+            
+            
+
+
+
+
+
+
+
+
+
+
+
+
+
+<article class="news-post">
+    <section class="section section--padding-top-large section--padding-bottom-none section--spaced-after-none shape--remove-sides">
+         <div class="section__shape">
+             <div class="section__content constrain constrain--default">
+                <h1 class="news-post__title">GPU-Based Procedural Placement in Horizon Zero Dawn</h1>
+                <div class="news-post__meta">
+                    <span class="news-post__info">
+                        01 March 2017
+                    </span>
+                    <div class="news-post__share share-options">
+                        <span class="news-post__share-label share-options__label">
+                            Share page
+                        </span>
+                        <ul class="share-options__list">
+                            <li class="share-options__item">
+                                <a href="http://www.linkedin.com/shareArticle?mini=true&amp;url=https%3A%2F%2Fwww.guerrilla-games.com%2Fread%2Fgpu-based-procedural-placement-in-horizon-zero-dawn" class="share-options__link" target="_blank" rel="noopener noreferrer">
+                                    <svg role="img" class="share-options__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm-2 16H8v-6h2v6zM9 9.109c-.607 0-1.1-.496-1.1-1.109 0-.612.492-1.109 1.1-1.109s1.1.497 1.1 1.109c0 .613-.493 1.109-1.1 1.109zM17 16h-1.998v-2.861c0-1.881-2.002-1.722-2.002 0V16h-2v-6h2v1.093c.872-1.616 4-1.736 4 1.548V16z"/>
+                                        <title>LinkedIn social share icon</title>
+                                    </svg>
+                                    <span class="visually-hidden">LinkedIn</span>
+                                </a>
+                            </li>
+                            <li class="share-options__item">
+                                <a href="https://twitter.com/intent/tweet?text=GPU-Based&#x2B;Procedural&#x2B;Placement&#x2B;in&#x2B;Horizon&#x2B;Zero&#x2B;Dawn&amp;url=https%3A%2F%2Fwww.guerrilla-games.com%2Fread%2Fgpu-based-procedural-placement-in-horizon-zero-dawn" class="share-options__link" target="_blank" rel="noopener noreferrer">
+                                    <svg role="img" class="share-options__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm6.066 9.645c.183 4.04-2.83 8.544-8.164 8.544A8.127 8.127 0 0 1 5.5 16.898a5.778 5.778 0 0 0 4.252-1.189 2.879 2.879 0 0 1-2.684-1.995 2.88 2.88 0 0 0 1.298-.049c-1.381-.278-2.335-1.522-2.304-2.853.388.215.83.344 1.301.359a2.877 2.877 0 0 1-.889-3.835 8.153 8.153 0 0 0 5.92 3.001 2.876 2.876 0 0 1 4.895-2.62 5.73 5.73 0 0 0 1.824-.697 2.884 2.884 0 0 1-1.263 1.589 5.73 5.73 0 0 0 1.649-.453 5.765 5.765 0 0 1-1.433 1.489z"/>
+                                        <title>Twitter social share icon</title>
+                                    </svg>
+                                    <span class="visually-hidden">Twitter</span>
+                                </a>
+                            </li>
+                            <li class="share-options__item">
+                                <a href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fwww.guerrilla-games.com%2Fread%2Fgpu-based-procedural-placement-in-horizon-zero-dawn" class="share-options__link" target="_blank" rel="noopener noreferrer">
+                                    <svg role="img" class="share-options__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm3 8h-1.35c-.538 0-.65.221-.65.778V10h2l-.209 2H13v7h-3v-7H8v-2h2V7.692C10 5.923 10.931 5 13.029 5H15v3z"/>
+                                        <title>Facebook social share icon</title>
+                                    </svg>
+                                    <span class="visually-hidden">Facebook</span>
+                                </a>
+                            </li>
+                            <li class="share-options__item">
+                                <a href="mailto:?subject=GPU-Based&#x2B;Procedural&#x2B;Placement&#x2B;in&#x2B;Horizon&#x2B;Zero&#x2B;Dawn&amp;body=https%3A%2F%2Fwww.guerrilla-games.com%2Fread%2Fgpu-based-procedural-placement-in-horizon-zero-dawn" class="share-options__link" target="_blank" rel="noopener noreferrer">
+                                    <svg role="img" class="share-options__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 .02c-6.627 0-12 5.373-12 12s5.373 12 12 12 12-5.373 12-12-5.373-12-12-12zM18.99 7 12 12.666 5.009 7H18.99zM19 17H5V8.495l7 5.673 7-5.672V17z"/>
+                                        <title>Email share icon</title>
+                                    </svg>
+                                    <span class="visually-hidden">Email</span>
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    
+
+
+
+
+<div class="flow">
+    <div class="flow__content">
+            <div class="width--100">
+                
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+    
+    
+
+
+
+
+    
+    
+
+
+
+
+    
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+    
+    
+
+
+
+
+<section  class="hero js-in-viewport hero--desktop-ratio-16-9 hero--tablet-ratio-16-9 hero--mobile-ratio-16-9 hero--horizontal-left hero--vertical-center hero--vertical-mobile-none interlay--small-bottom-left-triangle-light " style="--heroBackgroundColor:transparent;  " >
+    <div class="hero__body constrain constrain--default">
+        
+    </div>
+            
+    
+        
+
+        <picture class="hero-responsive-media hero-responsive-media--background-image">
+                <source srcset="/media/News/gpuprocedural-2560w.webp" media="(min-width: 1920px)" />
+                <source srcset="/media/News/gpuprocedural-2560w.webp?width=1920" media="(min-width: 1440px)" />
+                <source srcset="/media/News/gpuprocedural-2560w.webp?width=1440" media="(min-width: 1280px)" />
+                <source srcset="/media/News/gpuprocedural-2560w.webp?width=1280" media="(min-width: 1024px)" />
+                <source srcset="/media/News/gpuprocedural-2560w.webp?width=1024" media="(min-width: 768px)" />
+                <source srcset="/media/News/gpuprocedural-2560w.webp?width=768" media="(min-width: 600px)" />
+                <source srcset="/media/News/gpuprocedural-2560w.webp?width=600" media="(min-width: 425px)" />
+                <source srcset="/media/News/gpuprocedural-2560w.webp?width=425" media="(min-width: 375px)" />
+
+            <img src="/media/News/gpuprocedural-2560w.webp?width=375" loading=eager alt="" />
+        </picture>
+
+    
+
+    
+
+    <div class="hero__space"></div>
+</section>
+
+            </div>
+            <div class="width--100">
+                
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+    
+
+
+
+    
+
+
+
+
+
+
+
+    
+    
+
+
+
+
+<section  class="section js-in-viewport section--spaced-after-none default section--no-vertical-flow-gutter section--stacked-vertical-flow-gutter-not-specified shape--remove-sides interlay--none pull-up--none " style="--sectionBackgroundColor:#eae8e5;  " >
+    <div class="section__shape">
+        <div class="section__content constrain constrain--thin">
+            
+
+
+<div class="flow">
+    <div class="flow__content">
+            <div class="width--100">
+                
+
+
+    <p>Jaap van Muijden describes the GPU based procedural placement system that dynamically creates the world of Horizon Zero Dawn around the player. Not limited to just rocks and trees, the procedural system assembles fully-fledged environments while the player walks through them, complete with sounds, effects, wildlife and game-play elements. Van Muijden shows the entire pipeline, from the graph editor where artists can define the procedural placement rules to the GPU algorithms that create a dense world around the player on the fly. He demonstrates the power of this procedural approach by showing how painting in a tree line and redirecting roads can be just as easy as moving mountains and changing a desert into a tropical swamp.</p>
+
+    <br />
+
+
+            </div>
+            <div class="width--33">
+                
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+    
+
+
+
+    
+
+
+
+
+<a href="/media/News/Files/GDC2017_VanMuijden_GPUBasedProceduralPlacementInHorizonZeroDawn.pdf"  class="btn btn--primary btn--raquo " style=""  >
+    
+    <span class="link-text">
+        Download PDF Presentation
+        
+            <span class="link__chevron"></span>
+        
+    </span>
+</a>
+
+            </div>
+            <div class="width--33">
+                
+
+
+
+
+
+
+
+
+
+
+
+    
+
+
+
+    
+
+
+
+    
+
+
+
+
+<a href="/media/News/Files/GDC2017_VanMuijden_GPUBasedProceduralPlacementInHorizonZeroDawn.pptx"  class="btn btn--primary btn--raquo " style=""  >
+    
+    <span class="link-text">
+        Download PPT Presentation
+        
+            <span class="link__chevron"></span>
+        
+    </span>
+</a>
+
+            </div>
+    </div>
+</div>
+
+        </div>
+    </div>
+
+    
+
+
+
+
+</section>
+
+            </div>
+    </div>
+</div>
+
+
+    <section class="section section--padding-top-none section--padding-bottom-none section--spaced-after-none shape--remove-sides">
+         <div class="section__shape">
+             <div class="section__content constrain constrain--default">
+                <div class="news-post__content-foot">
+                    
+                        <ul class="news-post__tags list list--horizontal-spaced">
+                            
+                                <li class="news-post__tag">
+                                    <a class="news-post__tag-link" href="/tags/horizon">Horizon</a>
+                                </li>
+                            
+                                <li class="news-post__tag">
+                                    <a class="news-post__tag-link" href="/tags/publication">Publication</a>
+                                </li>
+                            
+                        </ul>
+                    
+
+                    <div class="news-post__share share-options">
+                        <span class="news-post__share-label share-options__label">
+                            Share page
+                        </span>
+                        <ul class="share-options__list">
+                            <li class="share-options__item">
+                                <a href="http://www.linkedin.com/shareArticle?mini=true&amp;url=https%3A%2F%2Fwww.guerrilla-games.com%2Fread%2Fgpu-based-procedural-placement-in-horizon-zero-dawn" class="share-options__link" target="_blank" rel="noopener noreferrer">
+                                    <svg role="img" class="share-options__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm-2 16H8v-6h2v6zM9 9.109c-.607 0-1.1-.496-1.1-1.109 0-.612.492-1.109 1.1-1.109s1.1.497 1.1 1.109c0 .613-.493 1.109-1.1 1.109zM17 16h-1.998v-2.861c0-1.881-2.002-1.722-2.002 0V16h-2v-6h2v1.093c.872-1.616 4-1.736 4 1.548V16z"/>
+                                        <title>LinkedIn social share icon</title>
+                                    </svg>
+                                    <span class="visually-hidden">LinkedIn</span>
+                                </a>
+                            </li>
+                            <li class="share-options__item">
+                                <a href="https://twitter.com/intent/tweet?text=GPU-Based&#x2B;Procedural&#x2B;Placement&#x2B;in&#x2B;Horizon&#x2B;Zero&#x2B;Dawn&amp;url=https%3A%2F%2Fwww.guerrilla-games.com%2Fread%2Fgpu-based-procedural-placement-in-horizon-zero-dawn" class="share-options__link" target="_blank" rel="noopener noreferrer">
+                                    <svg role="img" class="share-options__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm6.066 9.645c.183 4.04-2.83 8.544-8.164 8.544A8.127 8.127 0 0 1 5.5 16.898a5.778 5.778 0 0 0 4.252-1.189 2.879 2.879 0 0 1-2.684-1.995 2.88 2.88 0 0 0 1.298-.049c-1.381-.278-2.335-1.522-2.304-2.853.388.215.83.344 1.301.359a2.877 2.877 0 0 1-.889-3.835 8.153 8.153 0 0 0 5.92 3.001 2.876 2.876 0 0 1 4.895-2.62 5.73 5.73 0 0 0 1.824-.697 2.884 2.884 0 0 1-1.263 1.589 5.73 5.73 0 0 0 1.649-.453 5.765 5.765 0 0 1-1.433 1.489z"/>
+                                        <title>Twitter social share icon</title>
+                                    </svg>
+                                    <span class="visually-hidden">Twitter</span>
+                                </a>
+                            </li>
+                            <li class="share-options__item">
+                                <a href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fwww.guerrilla-games.com%2Fread%2Fgpu-based-procedural-placement-in-horizon-zero-dawn" class="share-options__link" target="_blank" rel="noopener noreferrer">
+                                    <svg role="img" class="share-options__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm3 8h-1.35c-.538 0-.65.221-.65.778V10h2l-.209 2H13v7h-3v-7H8v-2h2V7.692C10 5.923 10.931 5 13.029 5H15v3z"/>
+                                        <title>Facebook social share icon</title>
+                                    </svg>
+                                    <span class="visually-hidden">Facebook</span>
+                                </a>
+                            </li>
+                            <li class="share-options__item">
+                                <a href="mailto:?subject=GPU-Based&#x2B;Procedural&#x2B;Placement&#x2B;in&#x2B;Horizon&#x2B;Zero&#x2B;Dawn&amp;body=https%3A%2F%2Fwww.guerrilla-games.com%2Fread%2Fgpu-based-procedural-placement-in-horizon-zero-dawn" class="share-options__link" target="_blank" rel="noopener noreferrer">
+                                    <svg role="img" class="share-options__icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 .02c-6.627 0-12 5.373-12 12s5.373 12 12 12 12-5.373 12-12-5.373-12-12-12zM18.99 7 12 12.666 5.009 7H18.99zM19 17H5V8.495l7 5.673 7-5.672V17z"/>
+                                        <title>Email social share icon</title>
+                                    </svg>
+                                    <span class="visually-hidden">Email</span>
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+                
+            </div>
+        </div>
+    </section>
+</article>
+
+
+            
+        </main>
+
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+    
+
+
+
+
+
+
+
+    
+
+
+
+    
+
+
+
+
+<footer class="footer shape--remove-sides interlay--none" style="--footerBackgroundColor:#eae8e5; ">
+    <div class="footer__content constrain">
+        
+
+
+<div class="flow">
+    <div class="flow__content">
+            <div class="width--20">
+                
+
+
+
+
+
+
+
+
+    
+    
+
+
+
+
+
+
+<a href="/"  class="image image--link " style="" >
+    <img src="/media/Logos/logo-guerrilla-full.svg?width=2560&amp;rmode=min&amp;token=59x%2FVdDysXb7qQObjxUHvUgwEuCrNBeE44AYG5C%2FUe4%3D" alt="Guerrilla Games Logo" loading="lazy" />
+</a>
+
+            </div>
+            <div class="width--20">
+                
+
+
+
+
+
+
+
+
+    
+    
+
+
+
+
+
+
+<a href="https://www.playstation.com/en-gb/corporate/playstation-studios/"  class="image image--link " style="" >
+    <img src="/media/Logos/PlayStation_Studios_logo_resized.svg?width=2560&amp;rmode=min&amp;token=59x%2FVdDysXb7qQObjxUHvUgwEuCrNBeE44AYG5C%2FUe4%3D" alt="Logo for PlayStation Studios" loading="lazy" />
+</a>
+
+            </div>
+            <div class="width--20">
+                
+
+
+
+
+
+
+
+
+    
+    
+
+
+
+
+
+
+<a href="/decima"  class="image image--link " style="" >
+    <img src="/media/Logos/Decima-Stacked-LightBG-tm.svg?width=2560&amp;rmode=min&amp;token=59x%2FVdDysXb7qQObjxUHvUgwEuCrNBeE44AYG5C%2FUe4%3D" alt="Decima logo" loading="lazy" />
+</a>
+
+            </div>
+            <div class="width--20">
+                
+
+
+
+
+
+
+
+
+
+<nav class="nav  nav--footer nav--display-vertical nav--display-mobile-vertical" role="navigation">
+    <ul class="nav__items js-nav list-reset">
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/explore" class="link--default" >
+    
+    <span class="link-text">
+        Explore
+    </span>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/games" class="link--default" >
+    
+    <span class="link-text">
+        Games
+    </span>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/decima" class="link--default" >
+    
+    <span class="link-text">
+        Decima
+    </span>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/join" class="link--default" >
+    
+    <span class="link-text">
+        Join
+    </span>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--content-menu-item">
+    
+    
+    
+
+
+
+<a href="/contact" class="link--default" >
+    
+    <span class="link-text">
+        Contact
+    </span>
+</a>
+
+
+    
+</li>
+    
+</ul>
+</nav>
+            </div>
+            <div class="width--20">
+                
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+    
+
+
+
+
+
+    
+
+
+    
+
+
+<div class="group js-in-viewport shape--none interlay--none " style="--groupBackgroundColor:transparent;  " >
+    
+    
+
+
+
+
+    <p class="" style="" >Connect</p>
+
+
+    
+
+
+
+
+
+
+
+
+
+<nav class="nav  nav--social-row-1 nav--display-horizontal nav--display-mobile-horizontal" role="navigation">
+    <ul class="nav__items js-nav list-reset">
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--s-v-g-menu-item">
+    
+    
+    
+
+<a href="https://twitter.com/guerrilla" 
+   class="nav__item-link nav__item-link--svg"
+   
+   target="_blank"
+   
+   
+   title="Twitter logo - click to view our Twitter profile"
+   aria-label="Twitter logo - click to view our Twitter profile">
+    <svg role="img" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <title>Twitter logo</title>
+<path d="M23.706 5.18952C22.871 5.55952 21.974 5.80952 21.031 5.92252C22.004 5.34031 22.7319 4.42398 23.079 3.34452C22.1648 3.88751 21.1643 4.26971 20.121 4.47452C19.4194 3.72538 18.4901 3.22884 17.4773 3.06199C16.4646 2.89514 15.4251 3.06731 14.5202 3.55177C13.6154 4.03623 12.8958 4.80588 12.4732 5.74122C12.0505 6.67656 11.9485 7.72527 12.183 8.72452C10.3307 8.63151 8.51863 8.15007 6.86442 7.31142C5.21022 6.47278 3.75084 5.29568 2.581 3.85652C2.181 4.54652 1.951 5.34652 1.951 6.19852C1.95055 6.96551 2.13943 7.72076 2.50088 8.39725C2.86232 9.07374 3.38516 9.65056 4.023 10.0765C3.28328 10.053 2.55987 9.8531 1.913 9.49352V9.55352C1.91293 10.6293 2.28503 11.6719 2.96618 12.5045C3.64733 13.3371 4.59557 13.9084 5.65 14.1215C4.96378 14.3072 4.24434 14.3346 3.546 14.2015C3.8435 15.1271 4.423 15.9365 5.20337 16.5164C5.98374 17.0963 6.92592 17.4177 7.898 17.4355C6.24783 18.7309 4.20989 19.4336 2.112 19.4305C1.74038 19.4306 1.36908 19.4089 1 19.3655C3.12948 20.7347 5.60834 21.4613 8.14 21.4585C16.71 21.4585 21.395 14.3605 21.395 8.20452C21.395 8.00452 21.39 7.80252 21.381 7.60252C22.2923 6.94349 23.0789 6.12741 23.704 5.19252L23.706 5.18952Z"/>
+</svg>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--s-v-g-menu-item">
+    
+    
+    
+
+<a href="https://www.facebook.com/GuerrillaGames/" 
+   class="nav__item-link nav__item-link--svg"
+   
+   target="_blank"
+   
+   
+   title="Facebook logo - click to view our Facebook page"
+   aria-label="Facebook logo - click to view our Facebook page">
+    <svg role="img" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <title>Facebook logo</title>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M0 12.067C0 18.033 4.333 22.994 10 24V15.333H7V12H10V9.333C10 6.333 11.933 4.667 14.667 4.667C15.533 4.667 16.467 4.8 17.333 4.933V8H15.8C14.333 8 14 8.733 14 9.667V12H17.2L16.667 15.333H14V24C19.667 22.994 24 18.034 24 12.067C24 5.43 18.6 0 12 0C5.4 0 0 5.43 0 12.067Z"/>
+</svg>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--s-v-g-menu-item">
+    
+    
+    
+
+<a href="https://www.instagram.com/guerrillagames/" 
+   class="nav__item-link nav__item-link--svg"
+   
+   target="_blank"
+   
+   
+   title="Instagram logo - click to view our Instagram page"
+   aria-label="Instagram logo - click to view our Instagram page">
+    <svg role="img" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <title>Instagram logo</title>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M7.465 1.066C8.638 1.012 9.012 1 12 1C14.988 1 15.362 1.013 16.534 1.066C17.706 1.119 18.506 1.306 19.206 1.577C19.939 1.854 20.604 2.287 21.154 2.847C21.714 3.396 22.146 4.06 22.422 4.794C22.694 5.494 22.88 6.294 22.934 7.464C22.988 8.639 23 9.013 23 12C23 14.988 22.987 15.362 22.934 16.535C22.881 17.705 22.694 18.505 22.422 19.205C22.146 19.9391 21.7133 20.6042 21.154 21.154C20.604 21.714 19.939 22.146 19.206 22.422C18.506 22.694 17.706 22.88 16.536 22.934C15.362 22.988 14.988 23 12 23C9.012 23 8.638 22.987 7.465 22.934C6.295 22.881 5.495 22.694 4.795 22.422C4.06092 22.146 3.39582 21.7133 2.846 21.154C2.28638 20.6047 1.85331 19.9399 1.577 19.206C1.306 18.506 1.12 17.706 1.066 16.536C1.012 15.361 1 14.987 1 12C1 9.012 1.013 8.638 1.066 7.466C1.119 6.294 1.306 5.494 1.577 4.794C1.85372 4.06008 2.28712 3.39531 2.847 2.846C3.39604 2.2865 4.06047 1.85344 4.794 1.577C5.494 1.306 6.294 1.12 7.464 1.066H7.465ZM16.445 3.046C15.285 2.993 14.937 2.982 12 2.982C9.063 2.982 8.715 2.993 7.555 3.046C6.482 3.095 5.9 3.274 5.512 3.425C4.999 3.625 4.632 3.862 4.247 4.247C3.88205 4.60205 3.60118 5.03428 3.425 5.512C3.274 5.9 3.095 6.482 3.046 7.555C2.993 8.715 2.982 9.063 2.982 12C2.982 14.937 2.993 15.285 3.046 16.445C3.095 17.518 3.274 18.1 3.425 18.488C3.601 18.965 3.882 19.398 4.247 19.753C4.602 20.118 5.035 20.399 5.512 20.575C5.9 20.726 6.482 20.905 7.555 20.954C8.715 21.007 9.062 21.018 12 21.018C14.938 21.018 15.285 21.007 16.445 20.954C17.518 20.905 18.1 20.726 18.488 20.575C19.001 20.375 19.368 20.138 19.753 19.753C20.118 19.398 20.399 18.965 20.575 18.488C20.726 18.1 20.905 17.518 20.954 16.445C21.007 15.285 21.018 14.937 21.018 12C21.018 9.063 21.007 8.715 20.954 7.555C20.905 6.482 20.726 5.9 20.575 5.512C20.375 4.999 20.138 4.632 19.753 4.247C19.3979 3.88207 18.9657 3.60121 18.488 3.425C18.1 3.274 17.518 3.095 16.445 3.046ZM10.595 15.391C11.3797 15.7176 12.2534 15.7617 13.0669 15.5157C13.8805 15.2697 14.5834 14.7489 15.0556 14.0422C15.5278 13.3356 15.7401 12.4869 15.656 11.6411C15.572 10.7953 15.197 10.005 14.595 9.405C14.2112 9.02148 13.7472 8.72781 13.2363 8.54515C12.7255 8.36248 12.1804 8.29536 11.6405 8.34862C11.1006 8.40187 10.5792 8.57418 10.1138 8.85313C9.64845 9.13208 9.25074 9.51074 8.9493 9.96185C8.64786 10.413 8.45019 10.9253 8.37052 11.462C8.29084 11.9986 8.33115 12.5463 8.48854 13.0655C8.64593 13.5847 8.91648 14.0626 9.28072 14.4647C9.64496 14.8668 10.0938 15.1832 10.595 15.391ZM8.002 8.002C8.52702 7.47697 9.15032 7.0605 9.8363 6.77636C10.5223 6.49222 11.2575 6.34597 12 6.34597C12.7425 6.34597 13.4777 6.49222 14.1637 6.77636C14.8497 7.0605 15.473 7.47697 15.998 8.002C16.523 8.52702 16.9395 9.15032 17.2236 9.8363C17.5078 10.5223 17.654 11.2575 17.654 12C17.654 12.7425 17.5078 13.4777 17.2236 14.1637C16.9395 14.8497 16.523 15.473 15.998 15.998C14.9377 17.0583 13.4995 17.654 12 17.654C10.5005 17.654 9.06234 17.0583 8.002 15.998C6.94166 14.9377 6.34597 13.4995 6.34597 12C6.34597 10.5005 6.94166 9.06234 8.002 8.002ZM18.908 7.188C19.0381 7.06527 19.1423 6.91768 19.2143 6.75397C19.2863 6.59027 19.3248 6.41377 19.3274 6.23493C19.33 6.05609 19.2967 5.87855 19.2295 5.71281C19.1622 5.54707 19.0624 5.39651 18.936 5.27004C18.8095 5.14357 18.6589 5.04376 18.4932 4.97652C18.3275 4.90928 18.1499 4.87598 17.9711 4.87858C17.7922 4.88119 17.6157 4.91965 17.452 4.9917C17.2883 5.06374 17.1407 5.1679 17.018 5.298C16.7793 5.55103 16.6486 5.88712 16.6537 6.23493C16.6588 6.58274 16.7992 6.91488 17.0452 7.16084C17.2911 7.40681 17.6233 7.54723 17.9711 7.5523C18.3189 7.55737 18.655 7.42669 18.908 7.188Z"/>
+</svg>
+</a>
+
+
+    
+</li>
+    
+</ul>
+</nav>
+
+    
+
+
+
+
+
+
+
+
+
+<nav class="nav  nav--social-row-2 nav--display-horizontal nav--display-mobile-horizontal" role="navigation">
+    <ul class="nav__items js-nav list-reset">
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--s-v-g-menu-item">
+    
+    
+    
+
+<a href="https://www.linkedin.com/company/guerrilla-games/" 
+   class="nav__item-link nav__item-link--svg"
+   
+   target="_blank"
+   
+   
+   title="LinkedIn logo - click to view our LinkedIn page"
+   aria-label="LinkedIn logo - click to view our LinkedIn page">
+    <svg role="img" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <title>LinkedIn logo</title>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M1 2.838C1 2.35053 1.19365 1.88303 1.53834 1.53834C1.88303 1.19365 2.35053 1 2.838 1H21.16C21.4016 0.999608 21.6409 1.04687 21.8641 1.13907C22.0874 1.23127 22.2903 1.36661 22.4612 1.53734C22.6322 1.70807 22.7677 1.91083 22.8602 2.13401C22.9526 2.3572 23.0001 2.59643 23 2.838V21.16C23.0003 21.4016 22.9529 21.6409 22.8606 21.8642C22.7683 22.0875 22.6328 22.2904 22.462 22.4613C22.2912 22.6322 22.0884 22.7678 21.8651 22.8602C21.6419 22.9526 21.4026 23.0001 21.161 23H2.838C2.59655 23 2.35746 22.9524 2.1344 22.86C1.91134 22.7676 1.70867 22.6321 1.53798 22.4613C1.3673 22.2905 1.23193 22.0878 1.13962 21.8647C1.04731 21.6416 0.999869 21.4025 1 21.161V2.838ZM9.708 9.388H12.687V10.884C13.117 10.024 14.217 9.25 15.87 9.25C19.039 9.25 19.79 10.963 19.79 14.106V19.928H16.583V14.822C16.583 13.032 16.153 12.022 15.061 12.022C13.546 12.022 12.916 13.111 12.916 14.822V19.928H9.708V9.388ZM4.208 19.791H7.416V9.25H4.208V19.79V19.791ZM7.875 5.812C7.88105 6.08668 7.83217 6.35979 7.73124 6.61532C7.63031 6.87084 7.47935 7.10364 7.28723 7.30003C7.09511 7.49643 6.8657 7.65248 6.61246 7.75901C6.35921 7.86554 6.08724 7.92042 5.8125 7.92042C5.53776 7.92042 5.26579 7.86554 5.01255 7.75901C4.7593 7.65248 4.52989 7.49643 4.33777 7.30003C4.14565 7.10364 3.99469 6.87084 3.89376 6.61532C3.79283 6.35979 3.74395 6.08668 3.75 5.812C3.76187 5.27286 3.98439 4.75979 4.36989 4.38269C4.75539 4.00558 5.27322 3.79442 5.8125 3.79442C6.35178 3.79442 6.86961 4.00558 7.25512 4.38269C7.64062 4.75979 7.86313 5.27286 7.875 5.812Z"/>
+</svg>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--s-v-g-menu-item">
+    
+    
+    
+
+<a href="https://www.twitch.tv/guerrilla/videos" 
+   class="nav__item-link nav__item-link--svg"
+   
+   target="_blank"
+   
+   
+   title="Twitch logo - watch our latest streams"
+   aria-label="Twitch logo - watch our latest streams">
+    <svg role="img" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <title>Twitch logo</title>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M2.547 1L1 4.776V20.209H6.5V23H9.593L12.515 20.209H16.985L23 14.462V1H2.547ZM20.937 13.478L17.499 16.761H12L9.078 19.552V16.762H4.438V2.97H20.937V13.478ZM17.499 6.747V12.487H15.437V6.747H17.5H17.499ZM12 6.747V12.487H9.938V6.747H12Z"/>
+</svg>
+</a>
+
+
+    
+</li>
+    
+        
+
+
+
+
+
+
+<li class="nav__item nav__item--s-v-g-menu-item">
+    
+    
+    
+
+<a href="https://www.youtube.com/guerrillagames" 
+   class="nav__item-link nav__item-link--svg"
+   
+   target="_blank"
+   
+   
+   title="YouTube logo - watch our latest videos"
+   aria-label="YouTube logo - watch our latest videos">
+    <svg role="img" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <title>YouTube logo</title>
+<g clip-path="url(#clip0_26_367)">
+<path d="M23.5 6.50701C23.3641 6.02225 23.0994 5.58336 22.734 5.23702C22.3583 4.88002 21.8978 4.62465 21.396 4.49501C19.518 4.00001 11.994 4.00002 11.994 4.00002C8.85734 3.96433 5.72144 4.12129 2.60401 4.47001C2.1022 4.60923 1.64257 4.8703 1.26601 5.23002C0.896007 5.58601 0.628007 6.02502 0.488007 6.50602C0.1517 8.31776 -0.0117011 10.1574 6.83166e-06 12C-0.0119932 13.841 0.151007 15.68 0.488007 17.494C0.625007 17.973 0.892007 18.41 1.26301 18.763C1.63401 19.116 2.09601 19.371 2.60401 19.506C4.50701 20 11.994 20 11.994 20C15.1347 20.0358 18.2746 19.8788 21.396 19.53C21.8978 19.4004 22.3583 19.145 22.734 18.788C23.104 18.435 23.367 17.996 23.499 17.518C23.8441 15.707 24.0119 13.8666 24 12.023C24.026 10.1716 23.8584 8.32258 23.5 6.50602V6.50701ZM9.60201 15.424V8.57701L15.862 12.001L9.60201 15.424Z"/>
+</g>
+<defs>
+<clipPath id="clip0_26_367">
+<rect width="24" height="24" fill="white"/>
+</clipPath>
+</defs>
+</svg>
+</a>
+
+
+    
+</li>
+    
+</ul>
+</nav>
+
+</div>
+
+            </div>
+            <div class="width--40">
+                
+
+
+    <p>©2026 Sony Interactive Entertainment Europe. Decima, Horizon, Horizon Zero Dawn, Horizon Forbidden West, Horizon Call of the Mountain, Horizon Hunters Gathering, Horizon Steel Frontiers, Horizon Adventures and PS Studios logo are trademarks or registered trademarks of Sony Interactive Entertainment LLC. The Decima logo, Guerrilla, Guerrilla logo and Killzone are trademarks or registered trademarks of Sony Interactive Entertainment Europe.&nbsp;©2025 KOJIMA PRODUCTIONS Co., Ltd. / HIDEO KOJIMA. Produced by Sony Interactive Entertainment Inc.</p>
+
+    <p><a href="https://www.playstation.com/en-gb/legal/privacy-policy/">Privacy policy</a>. <a href="/website-terms">Website terms</a>. <a href="/how-we-use-cookies">How we use cookies</a>.<br></p>
+
+
+            </div>
+    </div>
+</div>
+
+    </div>
+
+    
+</footer>
+
+<div class="scroll-top js-scroll-top">
+	<div class="scroll-top__content">
+		<a href="#top" class="scroll-top__btn js-scroll-top-btn">
+      <svg role="img" class="scroll-top__icon" xmlns="http://www.w3.org/2000/svg" fill-rule="evenodd" clip-rule="evenodd" viewBox="0 0 24 24">
+		  <title>Scroll to top icon</title>
+        <path d="M11 2.206 4.765 9.734 4 9.089l7.521-9 7.479 9-.764.646L12 2.205v21.884h-1V2.206z"/>
+      </svg>
+
+			<span class="visually-hidden">
+				Back to top
+			</span>
+
+      <span class="scroll-top__bg"></span>
+		</a>
+	</div>
+</div>
+
+
+
+
+
+
+
+        
+    </body>
+</html>
