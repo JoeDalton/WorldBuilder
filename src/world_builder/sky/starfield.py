@@ -22,7 +22,6 @@ reads), so :func:`cube_directions` gives the direction of every texel.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -327,8 +326,3 @@ def _filtered(tex: Texture) -> None:
     tex.set_magfilter(SamplerState.FT_linear)
     tex.set_wrap_u(SamplerState.WM_clamp)
     tex.set_wrap_v(SamplerState.WM_clamp)
-
-
-def angular_texel(size: int) -> float:
-    """:returns: the angle a texel spans at a face centre, radians"""
-    return 2.0 * math.atan(1.0 / size)

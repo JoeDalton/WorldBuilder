@@ -715,19 +715,6 @@ def _cirrus_compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate
     return np.clip(cover + spec.cirrus_meso * meso, 0.0, 1.0)
 
 
-def cirrus_cover_at(
-    spec: WeatherSpec, dirs: np.ndarray, planet: Planet | None = None
-) -> np.ndarray:
-    """The cirrus's cover at arbitrary directions (no cube map; the climate
-    sampled directly).
-
-    :param dirs: (N, 3) unit directions
-    :returns: (N,) in [0, 1]
-    """
-    planet = planet or Planet(spec.planet)
-    return _cirrus_compose(spec, dirs, planet, _climate_direct(spec, planet))
-
-
 @functools.cache
 def cirrus_cover_map(spec: WeatherSpec, size: int = CIRRUS_SIZE) -> np.ndarray:
     """The cirrus's cover as a cube map (cached per process): the share of

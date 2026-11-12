@@ -135,10 +135,9 @@ class Group:
     altitude: Ramp | None = None
 
 
-#: What grows, by biome
-# The order is forest, grass, desert, rock, snow:
-# (instances per hectare: a dense conifer forest
-#: ~400; the packs' crowns are sparse cards, ~15 m^2 seen from above).
+#: What grows, by biome: instances per hectare, in the order forest, grass,
+#: desert, rock, snow (a dense conifer forest ~400; the packs' crowns are
+#: sparse cards, ~15 m^2 seen from above).
 SPECIES: tuple[Group, ...] = (
     Group(
         "conifers",

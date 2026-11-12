@@ -40,12 +40,12 @@ its ramps; the groups of one grid share its cells (their sum capped at 1). Today
 
 | Group | Grid | Per hectare (forest, grass, desert, rock, snow) | Rules |
 |---|---|---|---|
-| conifers (far) | tree | 420, 5, 0, 6, 0 | not on slopes past 26-40°, thinner on sharp crests |
-| birches (far) | tree | 30, 12, 0, 0, 0 | in hollows rather than on crests; clumped |
-| snowy pines (far) | tree | 0, 0, 0, 4, 90 | not on slopes past 24-36° |
-| bushes | small | 60, 140, 0, 30, 0 | not past 30-45°, fewer on crests |
-| dry bushes | small | 0, 0, 20, 0, 0 | scorched tint |
-| rocks | small | 0, 4, 6, 60, 4 | more on slopes and crests |
+| conifers (far) | tree | 420, 0, 0, 0.2, 0 | not on slopes past 26-40°, thinner on sharp crests |
+| birches (far) | tree | 50, 1, 0, 0, 0 | in hollows rather than on crests; clumped |
+| snowy pines (far) | tree | 0, 0, 0, 0, 6 | not on slopes past 24-36° |
+| bushes | small | 0, 10, 0, 5, 0 | not past 30-45°, fewer on crests |
+| dry bushes | small | 0, 0, 1, 0, 0 | scorched tint |
+| rocks | small | 0, 4, 6, 60, 0 | more on slopes and crests |
 
 A model swap changes the crowns (baked), hence the cells and the far forest's cover; what a new model may still
 need by hand is a group's instances per hectare.

@@ -89,7 +89,8 @@ def test_one_tree_per_cell_at_most():
     ],
 )
 def test_each_biome_grows_its_own(biome, groups):
-    plants, _ = _place(biome, key=(0, 2, 600, 800))
+    # The desert is sparse (a bush a hectare): a chunk that holds some.
+    plants, _ = _place(biome, key=(1, 2, 300, 400))
     assert plants is not None
     names = {forest.ASSETS[int(a)] for a in plants[:, 5]}
     allowed = set()
