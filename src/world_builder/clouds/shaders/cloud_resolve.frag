@@ -15,7 +15,8 @@
 // traced pixels would show as a grid.
 //
 // Depth-aware: each sample weighs by how near its scene (where its march
-// stopped: the depth passes at its own pixel) is to this pixel's own. A
+// stopped: cloud_march.frag keeps its distance in the distance's g) is to
+// this pixel's own (the depth passes here, the same measure). A
 // sample that stopped at a thin thing in front (a tree, a ridge's rim) holds
 // only the air before it: blended into the pixels around, it showed as a halo
 // of sky round the tree in a cloud; those pixels now take the samples that
@@ -92,7 +93,8 @@ const float SKY_DISTANCE = 1.0e9;
 
 // The distance of the scene at a view pixel, metres, as the march stopped at
 // it (the near range's surface, else the far range's, else none): from the
-// near range's near plane, the same for both ranges.
+// near range's near plane, the same for both ranges (cloud_march.frag's
+// sceneKm, there for each sample).
 float sceneDistance(ivec2 viewPixel) {
     ivec2 depthPixel = viewPixel / uDepthScale;
     vec2 ndc = (vec2(viewPixel) + 0.5) / uViewSize * 2.0 - 1.0;
@@ -178,7 +180,9 @@ void main() {
             }
             ivec2 clamped = clamp(tap, ivec2(0), last);
             vec4 v = texelFetch(uMarch, clamped, 0);
-            float dw = depthWeight(sceneDistance(clamped * uBlock + uOffset), own);
+            vec2 tapDistance = texelFetch(uMarchDistance, clamped, 0).rg;
+            float tapScene = tapDistance.g > 0.0 ? tapDistance.g * 1000.0 : SKY_DISTANCE;
+            float dw = depthWeight(tapScene, own);
             float g = bump * bump * max(dw, DEPTH_FLOOR);
             if (dw > closestWeight) {
                 closestWeight = dw;
@@ -193,7 +197,7 @@ void main() {
             square += g * v * v;
             total += g;
             if (v.a > 0.0) {
-                float tapKm = texelFetch(uMarchDistance, clamp(tap, ivec2(0), last), 0).r;
+                float tapKm = tapDistance.r;
                 if (tapKm > 0.0) {
                     kmSum += g * v.a * tapKm;
                     kmTotal += g * v.a;

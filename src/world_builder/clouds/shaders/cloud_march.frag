@@ -256,6 +256,10 @@ void main() {
              : farDepth < 1.0 ? unprojectFar(vec3(ndc, farDepth * 2.0 - 1.0))
              : farPoint;
     float tEnd = length(end - uCamRender);
+    // The scene this sample stopped at, km from the near plane (0: none, the
+    // sky), in the distance's g: cloud_resolve.frag weighs the samples by it
+    // against each pixel's own (its sceneDistance, the same measure).
+    float sceneKm = nearDepth < 1.0 || farDepth < 1.0 ? length(end - nearPoint) / KM : 0.0;
 
     // Each family's slab between two spheres, less the planet: up to two
     // segments (a ray from above, or skimming the slab's underside, leaves and
@@ -297,7 +301,10 @@ void main() {
         }
     }
     if (count == 0) {
-        discard;
+        // No cloud on this ray, but its scene for the resolve.
+        fragColor = vec4(0.0);
+        fragDistance = vec4(0.0, sceneKm, 0.0, 1.0);
+        return;
     }
     // Sorted by where they start (at most four).
     for (int i = 1; i < 4; ++i) {
@@ -463,18 +470,20 @@ void main() {
         float taken = max(float(steps), 1.0);
         fragColor = vec4(float(emptySteps) / taken, float(steps - emptySteps) / taken,
                          float(steps) / float(uMarchSteps), 1.0);
-        fragDistance = vec4(0.001, 0.0, 0.0, 1.0);
+        fragDistance = vec4(0.001, sceneKm, 0.0, 1.0);
         return;
     }
     if ((uCloudDebug & 16) != 0) {
         // The march's work: red its steps over the budget.
         fragColor = vec4(float(steps) / float(uMarchSteps), 0.0, 0.0, 1.0);
-        fragDistance = vec4(0.001, 0.0, 0.0, 1.0);
+        fragDistance = vec4(0.001, sceneKm, 0.0, 1.0);
         return;
     }
     float alpha = transmittance <= OPAQUE ? 1.0 : 1.0 - transmittance;
     if (alpha < 1.0 / 512.0) {
-        discard;
+        fragColor = vec4(0.0);
+        fragDistance = vec4(0.0, sceneKm, 0.0, 1.0);
+        return;
     }
     float covered = 1.0 - transmittance;
     vec3 colour = light / covered;  // the cloud's mean radiance
@@ -487,5 +496,5 @@ void main() {
         colour = displayColour(colour * exposure);
     }
     fragColor = vec4(colour * alpha, alpha);  // premultiplied "over"
-    fragDistance = vec4(weightedDistance / covered / KM, 0.0, 0.0, 1.0);
+    fragDistance = vec4(weightedDistance / covered / KM, sceneKm, 0.0, 1.0);
 }
