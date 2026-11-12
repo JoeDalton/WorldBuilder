@@ -21,6 +21,7 @@ flat in vec3 vSky;
 flat in vec3 vAirT;
 flat in vec3 vAirS;
 flat in float vTint;
+flat in vec2 vScreenUp;
 flat in float vFadeIn;
 flat in float vFadeOut;
 
@@ -31,8 +32,15 @@ void main() {
     if (dither > vFadeIn || dither > vFadeOut) {
         discard;
     }
-    // The sprite's point, y up, in its view's tile.
-    vec2 at = vec2(gl_PointCoord.x, 1.0 - gl_PointCoord.y);
+    // The sprite's point, y up, in its view's tile: turned so that the
+    // tile's up (the tree's vertical in its baked view) follows the
+    // vertical on screen (tree_impostor.vert's vScreenUp: a rolled camera).
+    // The tile is the tree's bounding sphere: turned, the tree stays in it.
+    vec2 offset = vec2(gl_PointCoord.x, 1.0 - gl_PointCoord.y) - 0.5;
+    vec2 at = vec2(dot(offset, vec2(vScreenUp.y, -vScreenUp.x)), dot(offset, vScreenUp)) + 0.5;
+    if (any(lessThan(at, vec2(0.0))) || any(greaterThan(at, vec2(1.0)))) {
+        discard;
+    }
     vec2 uv = (vTile + at) / float(uFrames);
     vec4 base = texture(uImpostorAlbedo, vec3(uv, float(vLayer)));
     if (base.a < 0.5) {

@@ -15,6 +15,7 @@ in vec4 p3d_Vertex;   // its base, from its chunk's centre (planet axes)
 in vec4 plant;        // turn, scale, asset, tint
 
 uniform mat4 p3d_ModelViewProjectionMatrix;
+uniform mat4 p3d_ProjectionMatrix;
 uniform mat4 p3d_ModelMatrix;     // the chunk -> render
 uniform vec3 uPlanetCentre;       // render frame
 uniform float uPlanetRadius;
@@ -38,6 +39,8 @@ flat out vec3 vSky;
 flat out vec3 vAirT;
 flat out vec3 vAirS;
 flat out float vTint;
+flat out vec2 vScreenUp;  // the tree's vertical on screen (pixels, unit): the
+                          // sprite is turned to it (a rolled camera)
 
 vec2 hemiOct(vec3 d) {
     vec2 p = d.xy / (abs(d.x) + abs(d.y) + d.z);
@@ -56,6 +59,14 @@ void main() {
     float dist = length(relPos);
     vec3 local = transpose(rotation) * (centre - p3d_ModelMatrix[3].xyz);
     gl_Position = p3d_ModelViewProjectionMatrix * vec4(local, 1.0);
+    // Its vertical on screen, in pixels (the projection's aspect: square
+    // pixels): a point sprite stands upright on the screen, the tree on its
+    // ground, whatever the camera's roll.
+    vec4 above = p3d_ModelViewProjectionMatrix
+               * vec4(local + transpose(rotation) * up * (info.y * scale * 0.25), 1.0);
+    vec2 screenUp = (above.xy / above.w - gl_Position.xy / gl_Position.w)
+                  * vec2(p3d_ProjectionMatrix[1][1] / p3d_ProjectionMatrix[0][0], 1.0);
+    vScreenUp = dot(screenUp, screenUp) > 1e-12 ? normalize(screenUp) : vec2(0.0, 1.0);
     if (info.x < 0.0 || dist < 0.85 * uMeshRange || dist > uTreeRange) {
         gl_Position = vec4(0.0, 0.0, 0.0, -1.0);  // the meshes' or none
     }
