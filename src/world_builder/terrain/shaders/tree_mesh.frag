@@ -19,6 +19,7 @@ in vec3 vAirS;
 in float vFade;
 in float vTint;
 in float vHeight;
+in vec3 vView;
 
 out vec4 fragColor;
 
@@ -29,6 +30,6 @@ void main() {
     }
     vec3 N = normalize(vNormal) * (gl_FrontFacing ? 1.0 : -1.0);
     vec3 albedo = treeAlbedo(base.rgb, vTint);
-    fragColor = treeColor(albedo, N, normalize(vUp), vSun, vSky, vAirT, vAirS,
+    fragColor = treeColor(albedo, N, normalize(vView), normalize(vUp), vSun, vSky, vAirT, vAirS,
                           clamp(vHeight / 12.0, 0.0, 1.0));
 }

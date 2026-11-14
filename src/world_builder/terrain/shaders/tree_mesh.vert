@@ -31,6 +31,7 @@ out vec3 vAirT;
 out vec3 vAirS;
 out float vTint;
 out float vHeight;    // the vertex's height in the model, metres
+out vec3 vView;       // toward the camera (its specular, tree_common.glsl)
 
 void main() {
     vec4 a = texelFetch(uPlants, 2 * gl_InstanceID);
@@ -61,6 +62,7 @@ void main() {
     vHeight = p3d_Vertex.z * scale;
 
     vec3 relPos = world - uCamPos;
+    vView = -relPos / max(length(relPos), 1e-3);
     vec3 L = normalize(uSunDir);
     vec3 planetPos = transpose(rotation) * (world - uPlanetCentre);
     float height = length(planetPos) - uPlanetRadius;

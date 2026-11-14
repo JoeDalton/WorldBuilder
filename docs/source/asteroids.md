@@ -274,7 +274,11 @@ sits at `position` with `orientation` (world from field) in the world.
   (the full-detail shape) turned with the rock, the terrain's snow textures
   on the rock's ice patches and its rock textures elsewhere
   (`terrain_material.glsl`: rock projected from the sides on steep flanks), lit as the terrain lights its
-  ground (`object_light.glsl`), in the bodies' shadows (`shadows.glsl`'s
+  ground: by the physically based BRDF the ground and the models take
+  (`terrain/shaders/pbr_light.glsl`, a dielectric with the textures'
+  roughness and occlusion, the sky light from every side as the
+  environment; `AsteroidSettings.pbr`, live, on at every preset), or by
+  `object_light.glsl`'s gloss, in the bodies' shadows (`shadows.glsl`'s
   `eclipseVisibility`: a planet's across its ring, with `World`'s
   `Shadows` bound). Then either the world's exposure
   and ACES tonemap, or, with `tonemap=False`, a plain display encoding to

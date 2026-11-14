@@ -7,6 +7,12 @@ one (`terrain.trees`: each asset's model out to `VegetationSettings.mesh_range`,
 `tree_range`, both from the first trials, now fed by part V1's placement), and past them the far forest (part
 V2). The ray-marched canopy trial was removed on 2026-11-12. The settings are `terrain.vegetation`'s.
 
+The trees one by one (meshes and impostors, `tree_common.glsl`'s `treeColor`) keep their own diffuse light
+(translucent: the sun wraps past the leaf's terminator; less sky deep in the crown). With the ground's BRDF on
+(`TerrainSettings.pbr`, set on the terrain's root, which the trees hang under) they add a leaf's waxy specular
+from it (`terrain/shaders/pbr_light.glsl`'s `pbrSunSpecular` and `pbrEnvSpecular`, a dielectric of roughness
+0.55): the sun's glint, and the sky's sheen at grazing angles. The far forest's crowns keep their tables' light.
+
 ## Placement (part V1)
 
 `world_builder.terrain.forest`, in the terrain's worker processes, chunk by chunk (Serious Sam 4's jittered

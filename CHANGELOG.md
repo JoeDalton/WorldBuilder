@@ -24,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Physically based ground (`TerrainSettings.pbr`, on at every preset):
   the land lit by the models' BRDF (now `terrain/shaders/pbr_light.glsl`),
   a dielectric with its biome textures' roughness and occlusion; nothing
-  measurable in cost.
+  measurable in cost. The trees take the same switch (a leaf's waxy
+  specular over their translucent diffuse), the asteroids their own
+  (`AsteroidSettings.pbr`, on at every preset).
 - `QualitySettings.DISTINCT_PRESETS`: a section whose cheaper presets
   coincide reads as the highest level it equals.
 - `terrain_shots.py --model PATH`: the `ship` and `ship_fill` poses, a

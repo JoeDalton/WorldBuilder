@@ -66,7 +66,9 @@ vec3 pbrEnvironmentBrdf(vec3 f0, float roughness, float NoV) {
 
 // The sunlight a surface sends to the camera: diffuse and specular, in
 // objectLight's units (the sunlight arriving, N toward the camera's side).
-vec3 pbrSun(PbrSurface s, vec3 N, vec3 L, vec3 V, vec3 sunlight) {
+// The sunlight a surface reflects specularly (pbrSun's specular term
+// alone: a leaf keeps its own translucent diffuse, tree_common.glsl).
+vec3 pbrSunSpecular(PbrSurface s, vec3 N, vec3 L, vec3 V, vec3 sunlight) {
     float NoL = dot(N, L);
     if (NoL <= 0.0) {
         return vec3(0.0);
@@ -76,7 +78,15 @@ vec3 pbrSun(PbrSurface s, vec3 N, vec3 L, vec3 V, vec3 sunlight) {
     float a = s.roughness * s.roughness;
     vec3 F = pbrFresnel(s.f0, clamp(dot(V, H), 0.0, 1.0));
     float DV = pbrDistribution(clamp(dot(N, H), 0.0, 1.0), a) * pbrVisibility(NoL, NoV, a);
-    return (s.diffuse + F * (DV * PBR_PI)) * sunlight * NoL;
+    return F * (DV * PBR_PI) * sunlight * NoL;
+}
+
+vec3 pbrSun(PbrSurface s, vec3 N, vec3 L, vec3 V, vec3 sunlight) {
+    float NoL = dot(N, L);
+    if (NoL <= 0.0) {
+        return vec3(0.0);
+    }
+    return s.diffuse * sunlight * NoL + pbrSunSpecular(s, N, L, V, sunlight);
 }
 
 // How much of the environment's reflection an occluded surface keeps
@@ -85,15 +95,21 @@ float pbrSpecularOcclusion(float NoV, float ao, float roughness) {
     return clamp(pow(NoV + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
 }
 
+// The environment env (the light along the reflected ray) a surface
+// reflects specularly, occluded (pbrAmbient's specular term alone).
+vec3 pbrEnvSpecular(PbrSurface s, vec3 N, vec3 V, vec3 env) {
+    float NoV = clamp(abs(dot(N, V)), 1e-4, 1.0);
+    return env * pbrEnvironmentBrdf(s.f0, s.roughness, NoV)
+           * pbrSpecularOcclusion(NoV, s.ao, s.roughness);
+}
+
 // The sky light a surface sends to the camera: diffuse from the sky as
 // objectLight takes it (all of it facing up, a tenth facing down), and
 // the environment env (the light along the reflected ray) reflected; the
 // occlusion on both.
 vec3 pbrAmbient(PbrSurface s, vec3 N, vec3 V, vec3 up, vec3 skylight, vec3 env) {
-    float NoV = clamp(abs(dot(N, V)), 1e-4, 1.0);
     return s.diffuse * skylight * (0.55 + 0.45 * dot(N, up)) * s.ao
-           + env * pbrEnvironmentBrdf(s.f0, s.roughness, NoV)
-             * pbrSpecularOcclusion(NoV, s.ao, s.roughness);
+           + pbrEnvSpecular(s, N, V, env);
 }
 
 // A tangent frame from the screen derivatives (Schüler, "Followup: normal

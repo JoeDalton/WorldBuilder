@@ -39,6 +39,7 @@ flat out vec3 vSky;
 flat out vec3 vAirT;
 flat out vec3 vAirS;
 flat out float vTint;
+flat out vec3 vView;      // toward the camera (its specular, tree_common.glsl)
 flat out vec2 vScreenUp;  // the tree's vertical on screen (pixels, unit): the
                           // sprite is turned to it (a rolled camera)
 flat out float vSpriteScale;  // the tree's share of the sprite, across (1 in
@@ -97,6 +98,7 @@ void main() {
     vec3 t2 = -s * east + c * north;
     // The view's direction (toward the camera) in its frame, over the horizon.
     vec3 V = -relPos / max(dist, 1e-3);
+    vView = V;
     vec3 d = vec3(dot(V, t1), dot(V, t2), max(dot(V, up), 0.02));
     vec2 o = hemiOct(normalize(d));
     vTile = clamp(floor((o * 0.5 + 0.5) * float(uFrames)), 0.0, float(uFrames - 1));

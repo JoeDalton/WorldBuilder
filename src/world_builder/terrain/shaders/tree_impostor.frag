@@ -21,6 +21,7 @@ flat in vec3 vSky;
 flat in vec3 vAirT;
 flat in vec3 vAirS;
 flat in float vTint;
+flat in vec3 vView;
 flat in vec2 vScreenUp;
 flat in float vFadeIn;
 flat in float vFadeOut;
@@ -88,5 +89,5 @@ void main() {
     vec3 n = texture(uImpostorNormal, vec3(uv, float(vLayer))).xyz * 2.0 - 1.0;
     vec3 N = normalize(vT1 * n.x + vT2 * n.y + vUp * n.z);
     vec3 albedo = treeAlbedo(base.rgb, vTint);
-    fragColor = treeColor(albedo, N, vUp, vSun, vSky, vAirT, vAirS, at.y);
+    fragColor = treeColor(albedo, N, vView, vUp, vSun, vSky, vAirT, vAirS, at.y);
 }

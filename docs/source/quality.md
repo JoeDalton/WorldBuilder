@@ -214,6 +214,7 @@ HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
 | `instance_budget` | Rocks drawn (in view) | live | 1000 to 200000 | 15000 | 40000 | 80000 | 150000 |
 | `held_budget` (advanced) | Rocks kept (every direction, CPU) | live | 1000 to 2000000 | 80000 | 150000 | 300000 | 600000 |
 | `detail_far` | Rock texture distance | live | 500 to 10000 m | 1000 | 2000 | 3000 | 5000 |
+| `pbr` | Physically based rocks | live | on / off | on | on | on | on |
 | `texture_size` | Rock texture size | restart | 256, 512, 1024, 2048 px | 256 | 512 | 1024 | 2048 |
 | `terrain_min_radius` (advanced) | Detailed rocks from | live | 50 to 5000 m | 200 | 200 | 200 | 200 |
 | `max_terrain_rocks` | Detailed rocks | live | 0 to 32 | 0 | 4 | 8 | 16 |

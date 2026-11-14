@@ -332,7 +332,9 @@ the sunlight *above any air* and the sky light, both linear.
   a sheen at grazing angles and at a low sun, glints on smooth ground.
   Off, `objectLight`'s gloss. The forest's ground keeps its sun and sky
   shares apart (`groundLight`, for `forestLight`); the far water keeps its
-  own light and Fresnel either way.
+  own light and Fresnel either way. The trees take the same switch (their
+  leaves' specular, [Vegetation](vegetation.md)); the asteroids their own,
+  `AsteroidSettings.pbr`.
 
   On at every preset: it costs nothing measurable. `terrain_shots.py`'s
   `ground` and `coast` at 2560 x 1440 (the ground over most of the frame),
