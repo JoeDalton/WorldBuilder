@@ -304,6 +304,25 @@ breakdown above predates them: frames are 1–3 ms shorter now.
   count is asked for, which made the start view 40 ms. Exact counts need an
   offscreen buffer (tried, works); the user chose no MSAA.
 - **Lower reflection resolution:** 0.5 → 0.25 saved under 1 ms (see above).
+- **The sea without its mirror** (2026-11-14): no reflection pass, the sea
+  reflecting the sky-view table along the reflected ray (blurred by the
+  unresolved slopes through the table's mipmaps), the clouds where the ray
+  meets their layer (the field's density 300 m above its base within 20
+  km, the weather's cover beyond), and the sun as a PBR glint (the
+  sunlight at the sea passed in). It looked close to the mirror from
+  altitude and a little dimmer along the coast, without the coast itself.
+  `terrain_shots.py` at 2560 x 1440, three rounds, median frame ms
+  (planar / sky), `open_sea`, `coast`, `swell`:
+  - LOW: 4.80-4.85 / 4.75-5.23, 5.47-5.49 / 5.58-5.65, 5.49-5.53 / 5.82-5.89
+  - MID: 5.79-5.87 / 5.44-6.04, 7.06-7.10 / 6.59-6.62, 6.95-7.03 / 6.91-6.92
+  - HIGH: 6.67-6.72 / 6.27-6.91, 9.11-9.13 / 8.64-8.69, 8.35-8.39 / 8.37-8.41
+
+  About 0.5 ms saved along a coast (the mirror's terrain), nothing over
+  open water or from altitude, and 0.1-0.35 ms *more* at LOW, whose mirror
+  already draws the sky alone at a quarter of the resolution (the clouds'
+  density per sea pixel cost more than that pass). Not worth a setting:
+  removed. The mirror's cost is no longer the 0.8-1.1 ms measured earlier
+  (§ above) at these poses.
 
 ## Sea
 
