@@ -7,7 +7,7 @@
 // The body of every shading tier (ModelSettings.shading): an entry file
 // (model_<tier>.frag) defines the tier's features and includes it.
 //   (none)                as the terrain lights its ground (objectLight)
-//   MODEL_PBR             metal and roughness (model_pbr.glsl), emission
+//   MODEL_PBR             metal and roughness (terrain/shaders/pbr_light.glsl), emission
 //   MODEL_NORMAL_MAP      the models' normal maps
 //   MODEL_SKY_REFLECTION  the sky reflected from the sky-view table
 //   MODEL_FULL            glTF's occlusion maps, the sky's reflection
@@ -19,7 +19,7 @@
 #pragma include "../../terrain/shaders/object_light.glsl"
 #pragma include "model_light.glsl"
 #ifdef MODEL_PBR
-#pragma include "model_pbr.glsl"
+#pragma include "../../terrain/shaders/pbr_light.glsl"
 #endif
 #ifdef MODEL_SKY_REFLECTION
 #pragma include "../../atmosphere/shaders/sky_view.glsl"

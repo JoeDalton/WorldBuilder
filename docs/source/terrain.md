@@ -321,6 +321,25 @@ the sunlight *above any air* and the sky light, both linear.
 - **Shadows.** Other bodies' eclipses, the planet's clouds' shadow and the
   mountains' (a shadow map per body, `terrain.shadow_map.ShadowMap`) dim the
   sunlight: see [Shadows](shadows.md).
+- **The ground's BRDF.** With `TerrainSettings.pbr` (live, a uniform), land
+  is lit by the physically based BRDF the game's models take
+  (`terrain/shaders/pbr_light.glsl`, derived from panda3d-simplepbr's; see
+  [Lighting on objects](object_lighting.md)): GGX, Smith-GGX visibility,
+  Schlick's Fresnel, a dielectric (metal 0), the biomes' roughness and
+  ambient occlusion from their texture sets, and the sky light reflected
+  through Karis' analytic split-sum fit. Its units are `objectLight`'s, so
+  a rough ground is as bright either way: what changes is the specular,
+  a sheen at grazing angles and at a low sun, glints on smooth ground.
+  Off, `objectLight`'s gloss. The forest's ground keeps its sun and sky
+  shares apart (`groundLight`, for `forestLight`); the far water keeps its
+  own light and Fresnel either way.
+
+  On at every preset: it costs nothing measurable. `terrain_shots.py`'s
+  `ground` and `coast` at 2560 x 1440 (the ground over most of the frame),
+  four rounds each way, median frame ms: off 9.53, 9.59, 9.98, 9.59 and
+  9.05, 9.07, 9.38, 9.13; on 9.62, 9.62, 9.60, 9.62 and 9.14, 9.14, 9.11,
+  9.12. The frame's ground is about 1% brighter on average (at most 7/255
+  of display colour), from the specular's grazing sheen.
 
 ## Several planets
 
@@ -410,7 +429,7 @@ planet's surface by day the moon is a pale disc in a blue sky (see
 
 ## Textures
 
-Put PBR sets in `src/world_builder/terrain/textures/<biome>/` for the six biomes: snow, rock, grass, forest, desert and beach. Files are recognised by name, case-insensitively (`*color*` / `*diff*` / `*albedo*`, `*normal*` / `*nor_gl*`, `*displacement*` / `*height*` / `*bump*`, `*rough*`, `*AO*` / `*AmbientOcclusion*`); names with preview, metal, spec or opacity are skipped.
+Put PBR sets in `src/world_builder/terrain/textures/<biome>/` for the six biomes: snow, rock, grass, forest, desert and beach. Files are recognised by name, case-insensitively (`*color*` / `*diff*` / `*albedo*`, `*normal*` / `*nor_gl*`, `*displacement*` / `*height*` / `*bump*`, `*rough*`, `*AO*` / `*AmbientOcclusion*`); names with preview, metal, spec or opacity are skipped. The roughness and the occlusion feed the ground's BRDF (`TerrainSettings.pbr`, [Lighting](#lighting)); ground is a dielectric, so a metal map has nothing to add.
 
 The ambientCG and Poly Haven naming schemes both work, and a DirectX normal map is detected from `dx` in its name. Any biome or map that is missing falls back to a procedural placeholder. `textures/textures.yaml` sets each biome's tile size (`tile_m`, a power of two up to 512 m), normal convention (`normal: gl | dx`) and albedo `tint`, and the layer size cap (`max_size`).
 

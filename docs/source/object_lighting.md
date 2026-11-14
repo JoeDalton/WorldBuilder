@@ -157,7 +157,8 @@ panda3d-simplepbr cannot draw the models as it is: `simplepbr.init()` puts
 its own shader on all of `render`, tonemaps in a post-process pass of its
 own, and lights by Panda3D lights alone: no world shadows, no air, a second
 tonemap over the world's. Its BRDF and its glTF material inputs are
-derived instead (`objects/shaders/model_pbr.glsl`, after simplepbr 0.13,
+derived instead (`terrain/shaders/pbr_light.glsl`, shared with the ground's
+own BRDF, `TerrainSettings.pbr`; after simplepbr 0.13,
 itself after Khronos' glTF-Sample-Viewer), inside the model shader, so the
 sun, the shadows, the air and the tonemap stay the world's:
 

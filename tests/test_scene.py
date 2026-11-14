@@ -760,6 +760,7 @@ def test_terrain_settings_apply_live(terrain):
             split_factor=1.6,
             textured=False,
             reflected=False,
+            pbr=False,
         )
         terrain.set_settings(new)
         assert terrain.settings == new
@@ -767,6 +768,7 @@ def test_terrain_settings_apply_live(terrain):
         assert terrain.min_level == terrain.query.level == 2
         assert _input(terrain.root, "uDetailFar")[0] == pytest.approx(1500.0)
         assert _input(terrain.root, "uTextured")[0] == 0
+        assert _input(terrain.root, "uPbrGround")[0] == 0
         assert all(t.get_anisotropic_degree() == 2 for t in terrain._textures)
         assert terrain.root.is_hidden(REFLECTION_CAMERA_MASK)
         terrain.set_spec(terrain.spec)

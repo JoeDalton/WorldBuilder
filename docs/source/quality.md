@@ -137,6 +137,7 @@ labels and ranges below are what the schema gives.
 | `detail_far` | Texture distance | live | 500 to 10000 m | 1500 | 2500 | 4000 | 6000 |
 | `anisotropy` | Texture filtering | live | 1x, 2x, 4x, 8x, 16x | 2x | 4x | 8x | 16x |
 | `textured` | Textures | live | on / off | on | on | on | on |
+| `pbr` | Physically based ground | live | on / off | on | on | on | on |
 | `reflected` | In reflections | live | on / off | off | on | on | on |
 | `node_cache_size` (advanced) | Chunks kept on the GPU | live | 300 to 4000 chunks | 800 | 1000 | 1200 | 1800 |
 | `store_size` (advanced) | Chunks kept in memory | live | 500 to 6000 chunks | 1200 | 1600 | 2000 | 3000 |

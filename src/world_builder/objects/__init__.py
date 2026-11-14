@@ -5,7 +5,7 @@ part G of the shadows' plan), not by Panda3D's fixed-function lighting.
 ``model_main.glsl`` takes the model's colour (its texture, vertex colour,
 colour scale and material's base colour) in linear light, lights it, as the
 terrain lights its ground (``object_light.glsl``) or physically based
-(``model_pbr.glsl``, see below), by:
+(``terrain/shaders/pbr_light.glsl``, see below), by:
 
 - the sunlight at each pixel (``model_light.glsl``'s ``modelSunlight``):
   through its body's air, in every world shadow (the other bodies'
@@ -37,7 +37,7 @@ Usage, by hand (``World`` does all of it)::
 
 How a model is shaded is a quality knob (:class:`ModelSettings`'s
 ``shading``): the terrain's light (:data:`SIMPLE`), or physically based,
-derived from panda3d-simplepbr's (``model_pbr.glsl``: glTF's metal and
+derived from panda3d-simplepbr's (``terrain/shaders/pbr_light.glsl``: glTF's metal and
 roughness, emission), with the models' normal maps, and the sky reflected
 from the sky-view table. One shader per tier (``model_<tier>.frag``).
 
@@ -104,7 +104,7 @@ __all__ = [
 #: As the terrain lights its ground (``object_light.glsl``).
 SIMPLE = 0
 #: Physically based: glTF's metal and roughness, emission
-#: (``model_pbr.glsl``, derived from panda3d-simplepbr).
+#: (``terrain/shaders/pbr_light.glsl``, derived from panda3d-simplepbr).
 PBR = 1
 #: :data:`PBR` and the models' normal maps.
 PBR_NORMAL = 2

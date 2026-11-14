@@ -372,7 +372,7 @@ def _texture(rgb, srgb=False):
 def _pbr_twin(
     albedo, metallic, roughness, emission=(0.0, 0.0, 0.0), up=None, ground=0.0, ao=1.0
 ):
-    """model_pbr.glsl on the CPU for _card_pixel's card: its display colour.
+    """pbr_light.glsl on the CPU for _card_pixel's card: its display colour.
 
     :param up: the body's vertical; None = open space (the normal)
     :param ground: the ground's albedo (PBR_FULL's bounce); 0 = none
@@ -457,7 +457,7 @@ def test_the_model_shader_lights_and_tonemaps_as_the_terrain(window):
 )
 def test_the_pbr_tiers_are_the_ported_brdf(window, shading, base, metallic, roughness):
     """A glTF-like card (a PBR material, its base colour linear) at every
-    PBR tier is model_pbr.glsl's BRDF in the world's units: a dielectric,
+    PBR tier is pbr_light.glsl's BRDF in the world's units: a dielectric,
     a metal (its reflections tinted), a rough one. Without a sky-view table
     the sky tier reflects the even sky, as the others."""
     got = _card_pixel(

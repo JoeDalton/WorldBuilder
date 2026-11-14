@@ -1,8 +1,9 @@
-// Physically based light on a game's model (world_builder.objects, the
-// PBR tiers of ModelSettings.shading): simplepbr's BRDF (panda3d-simplepbr
-// 0.13, after Khronos' glTF-Sample-Viewer): GGX distribution, height-
-// correlated Smith-GGX visibility, Schlick's Fresnel; glTF's metal and
-// roughness. Include once per shader with #pragma include.
+// Physically based light on an opaque surface: the ground
+// (TerrainSettings.pbr, terrain_frag.glsl) and a game's models (the PBR
+// tiers of ModelSettings.shading, world_builder.objects). simplepbr's BRDF
+// (panda3d-simplepbr 0.13, after Khronos' glTF-Sample-Viewer): GGX
+// distribution, height-correlated Smith-GGX visibility, Schlick's Fresnel;
+// glTF's metal and roughness. Include once per shader with #pragma include.
 //
 // In the world's units, not simplepbr's: objectLight (object_light.glsl)
 // lights a white Lambert surface to the sunlight itself (no 1/pi), so the
