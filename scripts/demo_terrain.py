@@ -16,7 +16,7 @@ either. Run it from an environment where world_builder is importable::
         [--backend process|thread|inline] [--quality low|mid|high|ultra]
         [--terrain-quality L] [--atmosphere-quality L] [--sky-quality L]
         [--clouds-quality L] [--ocean-quality L] [--asteroids-quality L]
-        [--no-clouds] [--ring]
+        [--no-clouds] [--ring] [--test-ship PATH] [--no-test-ship]
 
     --level          the planet's level file (default: the demo level)
     --planet         overrides the level's planet preset: earthlike, desert,
@@ -43,6 +43,11 @@ either. Run it from an environment where world_builder is importable::
     --no-clouds      no clouds at all (neither cumulus nor cirrus)
     --ring           a small ring around the planet (off by default, so
                      runs compare with earlier ones)
+    --test-ship      a model hung beside the white test ball, lit by the
+                     model shader (default: SpaceFlight's tie-interceptor,
+                     ../SpaceFlight next to this repository; left out if
+                     missing). F8 cycles its shading tier
+    --no-test-ship   the test balls alone
 
 The default backend generates terrain in spawned worker processes, which
 re-import this script: keep the ``if __name__ == "__main__"`` guard. All
@@ -84,6 +89,9 @@ Controls (AZERTY):
     C               show / hide the high cirrus
     F7              cycle the shadows' preset (the clouds' shadow on the
                     ground: off at low, more samples above)
+    F8              cycle the models' preset (the test balls' and ship's
+                    shading: high, PBR with sky reflections; ultra, with
+                    occlusion maps, the blurred sky and the ground's bounce)
     M               the test balls: the world's model shader / Panda3D's
                     lighting
     F               print the camera pose and terrain stats
@@ -125,6 +133,7 @@ import functools
 import math
 import sys
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import numpy as np
 from direct.gui.OnscreenText import OnscreenText
@@ -133,9 +142,11 @@ from panda3d.core import (
     AmbientLight,
     ClockObject,
     DirectionalLight,
+    Filename,
     GraphicsWindow,
     LMatrix3f,
     LQuaternionf,
+    NodePath,
     TextNode,
     Vec3,
     loadPrcFileData,
@@ -217,6 +228,17 @@ HUD_PERIOD = 0.2  # seconds between HUD refreshes
 TEST_BALL_DIAMETER = 20.0
 TEST_BALL_DISTANCE = 150.0  # metres ahead of the start pose, level with it
 TEST_BALL_SPACING = 30.0  # the textured ball, this far right of the white one
+#: The test ship, beside the white ball (left of it, TEST_BALL_SPACING): a
+#: game's glTF model (metal, roughness, normal map, emission), to judge the
+#: model shader's PBR tiers. SpaceFlight's, when it is checked out next to
+#: this repository (--test-ship, --no-test-ship).
+TEST_SHIP = (
+    Path(__file__).resolve().parents[2]
+    / "SpaceFlight/src/space_flight/datafiles/models/ships/tie-interceptor/exterior"
+    / "scene.gltf"
+)
+#: Its scale (SpaceFlight's for this model: about 9 m across).
+TEST_SHIP_SCALE = 4.1
 
 _ROTATIONS = (
     ("s", "z", "pitch", 40.0),
@@ -235,8 +257,8 @@ _CONTROLS = (
     "shift",
     *(key for row in (*_ROTATIONS, *_TRANSLATIONS, *_SUN_KEYS) for key in row[:2]),
 )
-#: F1 - F5 and F7 cycle these parts' presets (WorldSettings sections), F6
-#: all.
+#: F1 - F5, F7 and F8 cycle these parts' presets (WorldSettings sections),
+#: F6 all.
 QUALITY_KEYS = (
     ("f1", "terrain"),
     ("f2", "atmosphere"),
@@ -244,6 +266,7 @@ QUALITY_KEYS = (
     ("f4", "clouds"),
     ("f5", "ocean"),
     ("f7", "shadows"),
+    ("f8", "models"),
 )
 QUALITY_ALL_KEY = "f6"
 _DEBUG_VIEWS = (
@@ -422,6 +445,7 @@ class TerrainDemo(ShowBase):
         seed: int | None = None,
         start: tuple[float, float] | None = None,
         ring: bool = False,
+        test_ship: str | Path | None = None,
     ) -> None:
         """
         :param level_path: the planet's level file
@@ -435,6 +459,8 @@ class TerrainDemo(ShowBase):
             (:meth:`PlanetClouds.set_debug`)
         :param ocean_debug: the sea's debug view (:meth:`Sea.set_debug_mode`)
         :param preset: overrides the level's planet preset (PRESETS)
+        :param test_ship: a model hung beside the white test ball (the
+            demo's own default: :data:`TEST_SHIP`); None = none
         :param seed: overrides the level's seed
         :param start: (lat, lon) in degrees to start over instead of the
             level's start (:func:`start_pose`)
@@ -536,7 +562,9 @@ class TerrainDemo(ShowBase):
         self.casters = CasterMap(self.win, self.render, world.shadows.caster_size)
         for index, body in enumerate(self.bodies):
             body.models = ModelLighting(
-                atmosphere=0 if body.atmosphere else None, terrain=body.terrain
+                atmosphere=0 if body.atmosphere else None,
+                terrain=body.terrain,
+                settings=world.models,
             )
             self.atmospheres.bind(body.models.inputs)
             self.shadows.bind(body.models.inputs, index)
@@ -571,6 +599,8 @@ class TerrainDemo(ShowBase):
         self.shadows.bind(self.sky.node)
         self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it, first
         self.sky.attach_view(self.win, self.shadows)
+        for body in self.bodies:  # the sky reflected in the models
+            self.sky.view.bind(body.models.inputs)
         self.atmospheres.attach_aerial(
             self.win, self.cam, self.camLens, self.sky.sun_input, self.shadows
         )
@@ -648,6 +678,7 @@ class TerrainDemo(ShowBase):
         )
         self._hud_time = -1.0
         self._reset_camera()
+        self._test_ship = test_ship
         self._test_balls = self._make_test_balls()
         # Lit where they are, by their own lights (_update_lights), drawn by
         # the model shader (_shade_models).
@@ -711,7 +742,8 @@ class TerrainDemo(ShowBase):
     def _make_test_balls(self) -> list:
         """A white ball and the textured smiley, hung ahead of the camera
         (the start pose: :meth:`_test_ball_points`), each lit where it is:
-        for judging how objects are lit.
+        for judging how objects are lit. And the test ship beside them,
+        when there is one.
 
         :returns: [(node, its position in the planet frame)]
         """
@@ -724,18 +756,47 @@ class TerrainDemo(ShowBase):
             ball.set_scale(TEST_BALL_DIAMETER / 2.0)  # the model is a unit sphere
             ball.reparent_to(self.render)
             nodes.append(ball)
+        ship = self._make_test_ship()
+        if ship is not None:
+            nodes.append(ship)
         return list(zip(nodes, self._test_ball_points()))
+
+    def _make_test_ship(self) -> NodePath | None:
+        """The test ship (``test_ship``), centred on its node; None without
+        one, or when it does not load (a warning)."""
+        if self._test_ship is None:
+            return None
+        path = Path(self._test_ship)
+        if not path.is_file():
+            print(f"test ship: no {path}, left out")
+            return None
+        try:
+            model = self.loader.load_model(Filename.from_os_specific(str(path)))
+        except OSError as error:  # no glTF loader (panda3d-gltf)
+            print(f"test ship: {error}, left out")
+            return None
+        holder = self.render.attach_new_node("test_ship")
+        model.reparent_to(holder)
+        model.set_scale(TEST_SHIP_SCALE)
+        low, high = model.get_tight_bounds(holder)
+        model.set_pos(-(low + high) / 2.0)  # its centre where the node is
+        return holder
 
     def _test_ball_points(self) -> list[np.ndarray]:
         """Where the balls hang for the camera as it is (planet frame): the
         white one TEST_BALL_DISTANCE ahead, level with it, the textured one
-        TEST_BALL_SPACING to its right."""
+        TEST_BALL_SPACING to its right, the test ship as far to its left."""
         start = self._relative(self.home)
         up = start / np.linalg.norm(start)
         ahead = self._forward() - up * float(self._forward() @ up)
         ahead /= max(np.linalg.norm(ahead), 1e-9)
         white = start + ahead * TEST_BALL_DISTANCE
-        return [white, white + np.cross(ahead, up) * TEST_BALL_SPACING]
+        right = np.cross(ahead, up)
+        return [
+            white,
+            white + right * TEST_BALL_SPACING,
+            white - right * TEST_BALL_SPACING,
+        ]
 
     def _place_test_balls(self) -> None:
         """The balls where they hang, this frame (before their light is set:
@@ -1197,6 +1258,7 @@ class TerrainDemo(ShowBase):
             self.sky,
             self.ocean,
             self.frame_cap,
+            *(body.models for body in self.bodies),
         )
         if self.cloud_maps is not None:
             self.cloud_maps.set_size(world.shadows.cloud_map_size)
@@ -1360,6 +1422,15 @@ def main() -> None:
         choices=("process", "thread", "inline"),
         help="where chunks and cloud tiles are generated",
     )
+    parser.add_argument(
+        "--test-ship",
+        default=str(TEST_SHIP),
+        help="a model hung beside the white test ball (default: SpaceFlight's "
+        "tie-interceptor, when checked out next to this repository)",
+    )
+    parser.add_argument(
+        "--no-test-ship", action="store_true", help="the test balls alone"
+    )
     add_planet_arguments(parser)
     add_world_arguments(parser)
     args = parser.parse_args()
@@ -1378,6 +1449,7 @@ def main() -> None:
         seed=args.seed,
         start=args.start,
         ring=args.ring,
+        test_ship=None if args.no_test_ship else args.test_ship,
     ).run()
 
 

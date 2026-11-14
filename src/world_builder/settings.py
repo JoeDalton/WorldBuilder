@@ -18,6 +18,7 @@ Usage::
             ...  # knob["label"], ["kind"], ["range"] / ["choices"], ["apply"]
     settings = settings.with_value(section["id"], knob["id"], value)
     settings.apply(terrain, atmospheres, sky, clouds, ocean)  # each its own
+    # (World.set_settings gives every part of a world its own)
     config["world"] = settings.to_dict()  # {"version", "preset", "overrides"}
 
 A preset (:meth:`WorldSettings.preset`) sets every section to the same
@@ -40,6 +41,7 @@ from world_builder.asteroids.settings import AsteroidSettings
 from world_builder.atmosphere import AtmosphereSettings
 from world_builder.clouds.cloud import CloudSettings
 from world_builder.display import DisplaySettings
+from world_builder.objects import ModelSettings
 from world_builder.ocean.ocean import OceanSettings
 from world_builder.quality import Knob, QualityLevel, QualitySettings
 from world_builder.shadows import ShadowSettings
@@ -63,6 +65,7 @@ SECTIONS: dict[str, type[QualitySettings]] = {
     "clouds": CloudSettings,
     "ocean": OceanSettings,
     "asteroids": AsteroidSettings,
+    "models": ModelSettings,
     "shadows": ShadowSettings,
     "display": DisplaySettings,
 }
@@ -84,6 +87,7 @@ class WorldSettings:
     clouds: CloudSettings = field(default_factory=CloudSettings)
     ocean: OceanSettings = field(default_factory=OceanSettings)
     asteroids: AsteroidSettings = field(default_factory=AsteroidSettings)
+    models: ModelSettings = field(default_factory=ModelSettings)
     shadows: ShadowSettings = field(default_factory=ShadowSettings)
     display: DisplaySettings = field(default_factory=DisplaySettings)
 

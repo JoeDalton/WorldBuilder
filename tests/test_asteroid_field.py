@@ -527,3 +527,26 @@ def test_the_rocks_held_keep_to_their_budget(showbase):
     finally:
         field.destroy()
         executor.shutdown()
+
+
+def test_pbr_rocks_are_as_bright_as_the_gloss_lit_ones(window, built_field):
+    """AsteroidSettings.pbr swaps the rocks' light for the ground's PBR BRDF
+    (live, uPbr), in the same units: a rough rock keeps its brightness and
+    colour, the specular aside."""
+    field, _ = built_field
+    window.set_background_color(0, 0, 0, 1)
+    field.set_sun((0.0, -1.0, 0.3), (2.4, 2.25, 2.0), (0.03, 0.03, 0.035))
+    camera = _look_at_rock(window, field)
+    kept = field.settings
+    try:
+        field.set_settings(replace(kept, pbr=True))
+        pbr = _frame(window, field, camera)
+        field.set_settings(replace(kept, pbr=False))
+        gloss = _frame(window, field, camera)
+    finally:
+        field.set_settings(kept)
+    rock = (pbr.sum(axis=2) > 0) & (gloss.sum(axis=2) > 0)
+    assert rock.sum() > 50
+    a, b = pbr[rock].mean(axis=0), gloss[rock].mean(axis=0)
+    np.testing.assert_allclose(a, b, rtol=0.1)
+    assert not np.array_equal(pbr, gloss)  # the specular differs

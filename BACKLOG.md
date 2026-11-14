@@ -9,19 +9,24 @@ the asteroid fields', [docs/source/asteroids_backlog.md](docs/source/asteroids_b
 
 The model shader (`world_builder.objects`, [Lighting on
 objects](docs/source/object_lighting.md)) lights a model's colour, normal
-and roughness. Left out:
+and roughness, and at the PBR tiers (`ModelSettings.shading`) its
+metalness, normal map and emission; at the full tier its glTF occlusion
+map, the sky blurred by its roughness and the ground's bounce. Left out:
 
-- **Normal maps.** A model's normal map (Panda's `p3d_Texture1` with a
-  normal-map texture stage) is ignored: the vertex normal lights it.
-- **Emission.** `p3d_Material.emission` is ignored: a ship's lights or a
-  glowing panel are lit like the rest.
-- **Metalness.** `p3d_Material.metallic` is ignored: a metal is lit as a
-  dielectric (the gloss highlight takes the sun's colour, not the
-  albedo's).
-- **Light bounced off the ground.** The sky light falls to a tenth on a
-  face turned down (`objectLight`'s `0.55 + 0.45 N.up`, the terrain's): a
-  ball's underside is near black over bright ground. A term of the ground's
-  albedo under the sun, from below, would lift it.
+- **Occlusion without a map.** Only a model with a glTF occlusion map has
+  any (3 of SpaceFlight's 15 ships). A per-vertex bake on the GPU when a
+  model is tracked, or a screen-space pass, would cover the others.
+- **An occlusion map in a .glb, or embedded in a buffer.**
+  `objects.gltf_occlusion` reads .gltf files and their image files only.
+- **The ground under a model.** Its bounce takes one albedo per body
+  (`GROUND_ALBEDO`, 0.2): the biome or the sea under the model, and its
+  height above the ground (the bounce fades with it), would refine it.
+- **The blurred sky's horizon.** The sky-view table is warped (crowded at
+  the horizon and toward the sun), so its mipmaps blur unevenly, and below
+  the horizon a reflection takes the even sky and the ground's light.
+- **Emission's scale.** glTF's emissive colour is added as linear light
+  as it is (1 is a white surface's light under a dim sun): no exposure of
+  its own, no bloom.
 - **The clouds' half-resolution pass.** There a shaded model is drawn whole
   as an occluder (only its depth is kept), where the terrain swaps in a
   depth-only fragment stage (the `PASS_TAG` tag state). A tag and a

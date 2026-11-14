@@ -13,11 +13,13 @@ in vec4 p3d_Vertex;
 in vec3 p3d_Normal;
 in vec2 p3d_MultiTexCoord0;
 in vec4 p3d_Color;
+in vec4 p3d_Tangent;                   // glTF's (0 without: model_main.glsl's frame from the screen)
 
 out vec3 vRelPos;   // from the camera, render frame
 out vec3 vNormal;   // render frame
 out vec2 vUv;
 out vec4 vColor;
+out vec4 vTangent;  // render frame, w its handedness
 
 void main() {
     gl_Position = p3d_ModelViewProjectionMatrix * p3d_Vertex;
@@ -28,4 +30,5 @@ void main() {
     vNormal = transpose(inverse(mat3(p3d_ModelMatrix))) * p3d_Normal;
     vUv = (p3d_TextureMatrix[0] * vec4(p3d_MultiTexCoord0, 0.0, 1.0)).xy;
     vColor = p3d_Color;
+    vTangent = vec4(mat3(p3d_ModelMatrix) * p3d_Tangent.xyz, p3d_Tangent.w);
 }

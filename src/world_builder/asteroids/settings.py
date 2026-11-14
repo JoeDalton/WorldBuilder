@@ -29,6 +29,9 @@ class AsteroidSettings(QualitySettings):
         others fading into the haze
     :ivar detail_far: textures fade to the materials' mean colours by this
         distance, metres
+    :ivar pbr: the rocks lit by the physically based BRDF the ground and the
+        models take (``terrain/shaders/pbr_light.glsl``), or by
+        ``object_light.glsl``'s gloss
     :ivar texture_size: the rock and ice textures' size, texels
     :ivar terrain_min_radius: rocks this big and more turn into terrain near
         the camera (the terrain's level of detail), metres
@@ -87,6 +90,12 @@ class AsteroidSettings(QualitySettings):
         unit="m",
         range=(500.0, 10000.0),
         help="Textures fade to flat colours by this distance.",
+    )
+    pbr: bool = knob(
+        True,
+        "Physically based rocks",
+        help="The rocks lit as the ground and the ships are (GGX, Fresnel): "
+        "a sheen at grazing angles, glints on the ice. Off: the simpler gloss.",
     )
     texture_size: int = knob(
         1024,

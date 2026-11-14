@@ -239,6 +239,7 @@ class AsteroidField:
         self._min_pixels = settings.min_pixels
         self.root.set_shader_input("uDetailFar", float(settings.detail_far))
         self.root.set_shader_input("uNormalSize", float(settings.normal_size))
+        self.root.set_shader_input("uPbr", int(settings.pbr))
         if "max_lod" in changes or "normal_size" in changes:
             self._clear_draws()
             self._request_prototypes()
@@ -652,6 +653,7 @@ class AsteroidField:
         root.set_shader_input("uNormalSize", float(s.normal_size))
         root.set_shader_input("uBlendDepth", 0.3)
         root.set_shader_input("uDetailFar", float(s.detail_far))
+        root.set_shader_input("uPbr", int(s.pbr))
         root.set_shader_input("uExposure", float(exposure))
         root.set_shader_input("uTonemap", 1 if tonemap else 0)
         # No body's shadow until a Shadows is bound (World: a planet's

@@ -4,10 +4,17 @@
 // #pragma include.
 
 #pragma include "../../atmosphere/shaders/display.glsl"
+#pragma include "pbr_light.glsl"
 
 uniform vec3  uSunDir;     // toward the sun, render frame
 uniform float uExposure;
 uniform int   uTonemap;
+// 1: a leaf's waxy specular too (pbr_light.glsl), as the ground's BRDF
+// (TerrainSettings.pbr: the terrain's root, which the trees hang under).
+uniform int   uPbrGround;
+
+// A leaf's cuticle: a dielectric, between glossy and matte.
+const float LEAF_ROUGHNESS = 0.55;
 
 // Interleaved gradient noise: a stable dither per pixel, in [0, 1).
 float treeDither() {
@@ -30,13 +37,22 @@ vec3 treeAlbedo(vec3 authored, float tint) {
 
 // The light on a leaf (translucent: the sun wraps past the terminator), its
 // sky light by how high in the tree it is (inner lower crowns see little),
-// then the air to the camera, the exposure and the display encoding.
-vec4 treeColor(vec3 albedo, vec3 N, vec3 up, vec3 sun, vec3 sky, vec3 airT, vec3 airS,
-               float heightShare) {
+// with uPbrGround its surface's specular (pbr_light.glsl: the sun's glint
+// and the sky's sheen at grazing angles; the diffuse stays the translucent
+// one), then the air to the camera, the exposure and the display encoding.
+// V: toward the camera.
+vec4 treeColor(vec3 albedo, vec3 N, vec3 V, vec3 up, vec3 sun, vec3 sky, vec3 airT,
+               vec3 airS, float heightShare) {
     vec3 L = normalize(uSunDir);
     float wrap = clamp((dot(N, L) + 0.5) / 1.5, 0.0, 1.0);
     float ao = mix(0.65, 1.0, heightShare);
     vec3 C = albedo * (sun * wrap + sky * (0.7 + 0.3 * dot(N, up)) * ao);
+    if (uPbrGround == 1) {
+        PbrSurface s = pbrSurface(albedo, 0.0, LEAF_ROUGHNESS, ao);
+        vec3 R = reflect(-V, N);
+        C += pbrSunSpecular(s, N, L, V, sun)
+           + pbrEnvSpecular(s, N, V, sky * (0.7 + 0.3 * dot(R, up)));
+    }
     C = C * airT + airS;
     C *= uExposure;
     return vec4(uTonemap == 1 ? aces_tonemap(C) : pow(clamp(C, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);

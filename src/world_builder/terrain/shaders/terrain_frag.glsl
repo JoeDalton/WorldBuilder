@@ -3,6 +3,7 @@
 // the chunks with water while a Sea shows it).
 
 #pragma include "terrain_light.glsl"
+#pragma include "pbr_light.glsl"  // fragment only (derivatives)
 #pragma include "../../ocean/shaders/water.glsl"
 #pragma include "terrain_material.glsl"
 #pragma include "vegetation_far.glsl"
@@ -44,6 +45,7 @@ uniform sampler2D uNoise;         // four tiling noises, breaks up biome edges
 uniform vec3  uMeanAlbedo[6];     // linear; drawn instead of textures far away
 uniform vec3  uFlatAlbedo[6];     // linear; untextured mode and the biome view
 uniform int   uTextured;
+uniform int   uPbrGround;         // 1: pbr_light.glsl's BRDF (TerrainSettings.pbr)
 uniform float uDetailFar;         // textures fade to the mean colour by here
 
 uniform int   uSeaSurface;
@@ -73,6 +75,24 @@ vec3 hue(float t) {
 
 float cloudShade(vec3 L, float footprint) {
     return cloudShade(L, footprint, vRelPos, vMirror != 0);
+}
+
+// The land's light, under the sun and under the sky apart (the forest
+// weighs them apart): objectLight, or pbr_light.glsl's BRDF for a
+// dielectric (uPbrGround), in the same units. The sky the ground reflects
+// is the sky light, as on a surface facing the reflected ray.
+void groundLight(vec3 albedo, vec3 N, float roughness, float ao, vec3 up, vec3 L, vec3 V,
+                 vec3 sunlight, float sunDay, vec3 skylight,
+                 out vec3 sun, out vec3 sky) {
+    if (uPbrGround == 1) {
+        PbrSurface s = pbrSurface(albedo, 0.0, roughness, ao);
+        sun = pbrSun(s, N, L, V, sunlight * sunDay);
+        vec3 R = reflect(-V, N);
+        sky = pbrAmbient(s, N, V, up, skylight, skylight * (0.55 + 0.45 * dot(R, up)));
+    } else {
+        sun = objectLight(albedo, N, roughness, ao, up, L, V, sunlight, sunDay, vec3(0.0));
+        sky = objectLight(albedo, N, roughness, ao, up, L, V, vec3(0.0), sunDay, skylight);
+    }
 }
 
 void main() {
@@ -208,10 +228,9 @@ void main() {
     vec3 C;
     if (!water && uDebugMode == 0) {
         // The forest: the ground between its trees, and its far look.
-        vec3 groundSun = objectLight(albedo, surfaceN, roughness, ao, lightUp, L, V,
-                                     sunlight, sunDay, vec3(0.0));
-        vec3 groundSky = objectLight(albedo, surfaceN, roughness, ao, lightUp, L, V,
-                                     vec3(0.0), sunDay, skylight);
+        vec3 groundSun, groundSky;
+        groundLight(albedo, surfaceN, roughness, ao, lightUp, L, V, sunlight, sunDay,
+                    skylight, groundSun, groundSky);
         float variation = 0.7 + 0.35 * (nearNoise.b + farNoise.g);
         C = forestLight(vForest, vForestK, vForestA, vForestH, dist, groundSun, groundSky,
                         sunlight * sunDay, skylight, variation);

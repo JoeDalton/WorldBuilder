@@ -171,6 +171,8 @@ class TerrainSettings(QualitySettings):
     :ivar anisotropy: the textures' anisotropic filtering (sharpness at
         grazing angles)
     :ivar textured: textures, or flat biome colours (cheapest)
+    :ivar pbr: the ground lit by the physically based BRDF the models take
+        (``shaders/pbr_light.glsl``), or by ``object_light.glsl``'s gloss
     :ivar reflected: drawn in the ocean's reflection
     :ivar node_cache_size: uploaded chunks kept on the GPU, at most (at most
         ``store_size``)
@@ -217,6 +219,13 @@ class TerrainSettings(QualitySettings):
         help="Anisotropic filtering: sharp ground at grazing angles.",
     )
     textured: bool = knob(True, "Textures", help="Off: flat biome colours.")
+    pbr: bool = knob(
+        True,
+        "Physically based ground",
+        help="The ground lit as the models are (GGX, Fresnel): sheen at "
+        "grazing angles and at a low sun, glints on snow and sand. Off: the "
+        "simpler gloss. Per pixel of ground: nearly the whole screen.",
+    )
     reflected: bool = knob(
         True,
         "In reflections",
@@ -520,6 +529,7 @@ class Terrain:
         for texture in self._textures:
             texture.set_anisotropic_degree(settings.anisotropy)
         self.root.set_shader_input("uTextured", int(settings.textured))
+        self.root.set_shader_input("uPbrGround", int(settings.pbr))
         # The reflection pass draws the terrain a second time; it clips at
         # the water plane (the vertex shader writes gl_ClipDistance).
         if settings.reflected:
@@ -890,6 +900,7 @@ class Terrain:
         root.set_shader_input("uMeanAlbedo", mean)
         root.set_shader_input("uFlatAlbedo", flat)
         root.set_shader_input("uTextured", 1)
+        root.set_shader_input("uPbrGround", 1)
         root.set_shader_input("uDetailFar", 4000.0)
         root.set_shader_input("uBlendDepth", self.blend_depth)
         root.set_shader_input("uExposure", float(exposure))

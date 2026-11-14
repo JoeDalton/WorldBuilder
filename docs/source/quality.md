@@ -137,6 +137,7 @@ labels and ranges below are what the schema gives.
 | `detail_far` | Texture distance | live | 500 to 10000 m | 1500 | 2500 | 4000 | 6000 |
 | `anisotropy` | Texture filtering | live | 1x, 2x, 4x, 8x, 16x | 2x | 4x | 8x | 16x |
 | `textured` | Textures | live | on / off | on | on | on | on |
+| `pbr` | Physically based ground | live | on / off | on | on | on | on |
 | `reflected` | In reflections | live | on / off | off | on | on | on |
 | `node_cache_size` (advanced) | Chunks kept on the GPU | live | 300 to 4000 chunks | 800 | 1000 | 1200 | 1800 |
 | `store_size` (advanced) | Chunks kept in memory | live | 500 to 6000 chunks | 1200 | 1600 | 2000 | 3000 |
@@ -213,9 +214,16 @@ HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
 | `instance_budget` | Rocks drawn (in view) | live | 1000 to 200000 | 15000 | 40000 | 80000 | 150000 |
 | `held_budget` (advanced) | Rocks kept (every direction, CPU) | live | 1000 to 2000000 | 80000 | 150000 | 300000 | 600000 |
 | `detail_far` | Rock texture distance | live | 500 to 10000 m | 1000 | 2000 | 3000 | 5000 |
+| `pbr` | Physically based rocks | live | on / off | on | on | on | on |
 | `texture_size` | Rock texture size | restart | 256, 512, 1024, 2048 px | 256 | 512 | 1024 | 2048 |
 | `terrain_min_radius` (advanced) | Detailed rocks from | live | 50 to 5000 m | 200 | 200 | 200 | 200 |
 | `max_terrain_rocks` | Detailed rocks | live | 0 to 32 | 0 | 4 | 8 | 16 |
+
+### `models`: Models (`ModelSettings`)
+
+| Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
+|---|---|---|---|---|---|---|---|
+| `shading` | Model shading | live | Simple, PBR, PBR + normal maps, PBR + sky reflections, Full PBR | PBR + sky reflections | PBR + sky reflections | PBR + sky reflections | Full PBR |
 
 ### `shadows`: Shadows (`ShadowSettings`)
 
@@ -231,6 +239,17 @@ HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
 | `caster_map_size` | Objects' shadow detail | rebuild | 512, 1024, 2048, 4096 px | 512 | 1024 | 2048 | 4096 |
 
 ## Notes
+
+- **The models' shading** (`ModelSettings.shading`) picks one of five
+  shaders for the game's models drawn by the model shader
+  (`World.track_light(node, shader=True)`; see
+  [Lighting on objects](object_lighting.md)). It costs per pixel a model
+  covers, so it matters most where a cockpit fills the screen. The cheaper
+  tiers cost too little to set LOW to HIGH apart: they share one, and only
+  ULTRA adds the occlusion maps, the blurred sky and the ground's bounce.
+  The section is the one whose presets coincide
+  (`QualitySettings.DISTINCT_PRESETS` False): it reads as the highest level
+  it equals.
 
 - **The terrain's finest detail** (`min_level`) counts levels dropped below
   the finest. Level 0 is about 2 m of vertex spacing at any planet radius,

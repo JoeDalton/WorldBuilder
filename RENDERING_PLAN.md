@@ -207,7 +207,7 @@ at planet scale; two atmospheres; memory (two 8 MB atlases at HIGH).
 
 A: `scripts/flight_bench.py`, `terrain_shots.py`, `cloud_bench.py`, new `docs/source/frame_profile.md`.
 B: `atmosphere/shaders/atmosphere.glsl`, `atmosphere/__init__.py`, new `atmosphere/tables.py` and bake shaders,
-`sky/shaders/sky.frag`, `terrain/shaders/terrain_frag.glsl`, `objects/shaders/model.frag`, the ocean's reflection,
+`sky/shaders/sky.frag`, `terrain/shaders/terrain_frag.glsl`, `objects/shaders/model_main.glsl`, the ocean's reflection,
 `tests/test_atmosphere_sky.py`, `docs/source/atmosphere.md`.
 C: `clouds/shadow_map.py` (pattern, chart), new `clouds/light_volume.py` and its shader, `cloud_field.glsl`
 (`cloudSunDepthIn`), `cloud_shading.glsl` (`skyReach`), `clouds/march.py`, `world.py` (update order), the

@@ -5,8 +5,8 @@
 // (the normal map's fourth channel, shape.IcePatches: ice on the share of
 // the surface ranked above 1 - its ice; terrain_material.glsl: rock
 // projected from the sides on steep flanks),
-// lit as the terrain lights its ground (object_light.glsl), in the bodies'
-// shadows (shadows.glsl: a planet's across its ring), then either the
+// lit as the terrain lights its ground (object_light.glsl, or with uPbr
+// pbr_light.glsl's BRDF, a dielectric), in the bodies' shadows (shadows.glsl: a planet's across its ring), then either the
 // world's exposure and tonemap or a plain display encoding (for scenes lit
 // by Panda's fixed-function lights). The field's haze between the camera
 // and the rock veils it (haze.glsl): far rocks melt into the haze they leave
@@ -16,6 +16,7 @@
 #pragma include "../../shadows/shaders/shadows.glsl"
 #pragma include "../../terrain/shaders/terrain_material.glsl"
 #pragma include "../../terrain/shaders/object_light.glsl"
+#pragma include "../../terrain/shaders/pbr_light.glsl"
 
 uniform sampler2DArray uRockNormals;  // six layers per prototype
 uniform mat3 uFieldRot;
@@ -27,6 +28,7 @@ uniform vec3 uSunColor;
 uniform vec3 uAmbient;
 uniform float uExposure;
 uniform int uTonemap;                 // 1: aces_tonemap, 0: plain encoding
+uniform int uPbr;                     // 1: pbr_light.glsl (AsteroidSettings.pbr)
 uniform float uRockUvPeriod;          // rock.ROCK_UV_PERIOD
 uniform int uVeil;                    // 1: veiled by the field's haze
 
@@ -111,8 +113,16 @@ void main() {
     // A rock has no "up" for the sky light: it lights every face alike. The
     // bodies' shadows (a planet's across its ring) hide its sun.
     vec3 sunlight = uSunColor * eclipseVisibility(vRelPos, L, -1);
-    vec3 C = objectLight(albedo, surfaceN, roughness, ao, surfaceN, L, V,
-                         sunlight, 1.0, uAmbient);
+    vec3 C;
+    if (uPbr == 1) {
+        // The sky light from every side alike: the environment too.
+        PbrSurface s = pbrSurface(albedo, 0.0, roughness, ao);
+        C = pbrSun(s, surfaceN, L, V, sunlight)
+          + pbrAmbient(s, surfaceN, V, surfaceN, uAmbient, uAmbient);
+    } else {
+        C = objectLight(albedo, surfaceN, roughness, ao, surfaceN, L, V,
+                        sunlight, 1.0, uAmbient);
+    }
     C *= uExposure;
     vec3 rgb = uTonemap == 1 ? aces_tonemap(C) : pow(clamp(C, 0.0, 1.0), vec3(1.0 / 2.2));
     if (uVeil == 1) {

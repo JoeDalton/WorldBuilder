@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] 2026-11-14
+
+### Added
+
+- Physically based shading for the game's models (`World.track_light(node,
+  shader=True)`), derived from panda3d-simplepbr's BRDF (GGX, Smith-GGX,
+  Schlick) in the world's units, with every world shadow, the air and the
+  tonemap as before: glTF's metal and roughness, emission, normal maps (or a
+  frame from the screen without tangents), and the sky reflected from the
+  sky-view table. A quality knob, `ModelSettings.shading` (the new `models`
+  section): LOW to HIGH PBR with normal maps and sky reflections; ULTRA
+  (`PBR_FULL`) adds glTF's occlusion maps (read back from the .gltf:
+  panda3d-gltf drops them), the sky's reflection blurred by the roughness
+  (the sky-view table is now mipmapped) and the light the ground bounces
+  up. The cheaper tiers (the terrain's light, PBR, PBR with normal maps)
+  stay choices of the knob.
+- Physically based ground (`TerrainSettings.pbr`, on at every preset):
+  the land lit by the models' BRDF (now `terrain/shaders/pbr_light.glsl`),
+  a dielectric with its biome textures' roughness and occlusion; nothing
+  measurable in cost. The trees take the same switch (a leaf's waxy
+  specular over their translucent diffuse), the asteroids their own
+  (`AsteroidSettings.pbr`, on at every preset).
+- `QualitySettings.DISTINCT_PRESETS`: a section whose cheaper presets
+  coincide reads as the highest level it equals.
+- `terrain_shots.py --model PATH`: the `ship` and `ship_fill` poses, a
+  game's model whole and filling the screen; the terrain demo's F8 cycles
+  the models' preset, and it hangs SpaceFlight's tie-interceptor beside the
+  white test ball (`--test-ship`, `--no-test-ship`).
+
+### Changed
+
+- The far sea is no longer a sharp mirror (#55): the rough fresnel and the
+  reflection's blur take the unresolved slopes the grazing flattening hid
+  (capped at 0.4), so far water reflects less and blurrier, its colour
+  showing through, and the seam with the rippled near water fades. LOW
+  (no fresnel table) takes them as a steeper Schlick look.
+
+### Fixed
+
+- glTF models were decoded to linear light twice: panda3d-gltf loads their
+  colour textures as sRGB, and the model shader decoded them again (too
+  dark, too saturated). `objects.mark_model` marks the parts authored in
+  linear light (on each geom's state); the base colour is now a PBR
+  material's `baseColor` (its `diffuse` is darkened by its metalness).
+
 ## [0.4.0] 2026-11-12
 
 ### Added

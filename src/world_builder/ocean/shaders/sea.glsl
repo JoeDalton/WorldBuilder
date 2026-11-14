@@ -114,6 +114,14 @@ uniform float     uFoamStrength;
 #define C_WAVE            0.1076346
 // Slope spread at the fresnel table's last row (ocean.py's FRESNEL_LUT_SLOPE_MAX).
 #define FRESNEL_SLOPE_MAX 2.0
+// The far water's unresolved spread at most (seaShade's farSpread). A real
+// sea's rms slope in a moderate wind is about 0.2 (Cox and Munk, 7 m/s), but
+// the near water's stylised resolved slopes are steeper: at 0.25 the far
+// water was a mirror again, uncapped (0.5-0.7) a dark band at the horizon.
+#define FAR_SPREAD_MAX    0.4
+// Without the rough fresnel's table (LOW), Schlick's at N.V raised by this
+// many times the far water's added spread: the table's least-squares fit.
+#define FAR_SCHLICK_GAIN  0.53
 #define FRESNEL_LUT_SIZE  32.0
 
 // ---------------------------------------------------------------------------
@@ -417,16 +425,31 @@ vec3 seaShade(vec3 P, vec4 swell, vec3 Vr, float dist, float depth, float spacin
     float spread = flattenSlope(sqrt(waveVar), detailAngle);
     spread = sqrt(spread * spread + swellVar);
     spread = flattenSlope(flattenSlope(spread, calm), detailAngle);
+    // The far water (issue #55): the normal flattens toward a mirror at
+    // grazing angles (no facet turned away from the eye), but the slopes it
+    // leaves unresolved do not vanish there. The fresnel and the blur take
+    // them whole: rough water seen low reflects less (its facets turned to
+    // the eye) and blurrier, its own colour showing through, where the
+    // flattened spread made it a sharp, warped mirror.
+    // Capped (FAR_SPREAD_MAX): their whole spread near the horizon (0.5-0.7)
+    // darkened it to a deep blue band, where a sea brightens toward its
+    // horizon.
+    float roughSpread = min(flattenSlope(sqrt(waveVar + swellVar), calm), FAR_SPREAD_MAX);
+    float farSpread = mix(max(roughSpread, spread), spread, detailAngle);
 
     float NdotV = max(0.0, dot(N, -V));
     float fresnel;
     if (uRoughFresnel == 1) {
         // The fresnel averaged over the facets the pixel covers.
-        vec2 lut = clamp(vec2(NdotV, spread / FRESNEL_SLOPE_MAX), 0.0, 1.0);
+        vec2 lut = clamp(vec2(NdotV, farSpread / FRESNEL_SLOPE_MAX), 0.0, 1.0);
         fresnel  = texture(uFresnelLUT,
                            (lut * (FRESNEL_LUT_SIZE - 1.0) + 0.5) / FRESNEL_LUT_SIZE).r;
     } else {
-        fresnel = 0.04 + 0.96 * pow(1.0 - NdotV, 5.0);
+        // Schlick, the far water's rough share taken as a steeper look
+        // (FAR_SCHLICK_GAIN: the table's fit, within ~0.1 for spreads to
+        // FAR_SPREAD_MAX); the near water's as it was (farSpread = spread).
+        float rough = FAR_SCHLICK_GAIN * (farSpread - spread);
+        fresnel = 0.04 + 0.96 * pow(1.0 - clamp(NdotV + rough, 0.0, 1.0), 5.0);
     }
 
     // The reflection: the fragment's footprint on the mirror plane, projected
@@ -438,8 +461,8 @@ vec3 seaShade(vec3 P, vec4 swell, vec3 Vr, float dist, float depth, float spacin
     // far as they would have moved its sample.
     float reflLod = 0.0;
     if (uReflBlur > 0.0) {
-        float tilt   = spread / sqrt(1.0 + spread * spread);
-        float texels = tilt * detailAngle * iRippleStrength
+        float tilt   = farSpread / sqrt(1.0 + farSpread * farSpread);
+        float texels = tilt * iRippleStrength
                      * float(textureSize(iReflectionTex, 0).x) * uReflBlur;
         reflLod = log2(max(texels, 1.0));
     }
@@ -502,8 +525,8 @@ vec3 seaShade(vec3 P, vec4 swell, vec3 Vr, float dist, float depth, float spacin
         return vec3(0.5 + 0.5 * sin(fmPhase));
     } else if (uSeaDebug == 9) { // share of the octaves resolved (white = all)
         return vec3(gResolved / float(max(iIterationsNormal, 1)));
-    } else if (uSeaDebug == 10) { // unresolved slope spread (white = the table's max)
-        return vec3(spread / FRESNEL_SLOPE_MAX);
+    } else if (uSeaDebug == 10) { // the fresnel's unresolved spread (farSpread; white = the table's max)
+        return vec3(farSpread / FRESNEL_SLOPE_MAX);
     } else if (uSeaDebug == 11) { // octaves evaluated, of the 36 HIGH has (cost)
         return vec3(gEvaluated / 36.0);
     } else if (uSeaDebug == 12) { // depth: black at the waterline, white at 50 m
