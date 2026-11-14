@@ -9,15 +9,20 @@ the asteroid fields', [docs/source/asteroids_backlog.md](docs/source/asteroids_b
 
 The model shader (`world_builder.objects`, [Lighting on
 objects](docs/source/object_lighting.md)) lights a model's colour, normal
-and roughness. Left out:
+and roughness, and at the PBR tiers (`ModelSettings.shading`) its
+metalness, normal map and emission. Left out:
 
-- **Normal maps.** A model's normal map (Panda's `p3d_Texture1` with a
-  normal-map texture stage) is ignored: the vertex normal lights it.
-- **Emission.** `p3d_Material.emission` is ignored: a ship's lights or a
-  glowing panel are lit like the rest.
-- **Metalness.** `p3d_Material.metallic` is ignored: a metal is lit as a
-  dielectric (the gloss highlight takes the sun's colour, not the
-  albedo's).
+- **glTF's occlusion.** The metal-roughness texture's red channel (an
+  ORM texture's occlusion) and a separate `occlusionTexture` are ignored:
+  panda3d-gltf does not load the latter, and many models leave the former
+  unset (0, which would black them out).
+- **Blurred sky reflections.** The sky tier reads the sky-view table along
+  the reflected ray and fades to the even sky with roughness: the table has
+  no blurred levels (a mip chain, or a small prefiltered cube from it,
+  would give rough metals their sky's gradient).
+- **Emission's scale.** glTF's emissive colour is added as linear light
+  as it is (1 is a white surface's light under a dim sun): no exposure of
+  its own, no bloom.
 - **Light bounced off the ground.** The sky light falls to a tenth on a
   face turned down (`objectLight`'s `0.55 + 0.45 N.up`, the terrain's): a
   ball's underside is near black over bright ground. A term of the ground's

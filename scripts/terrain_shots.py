@@ -13,7 +13,7 @@ times a few frames, then saves a screenshot::
         [--size "1600 900"] [--offscreen]
         [--quality low|mid|high|ultra] [--<part>-quality LEVEL] [--no-clouds]
         [--workers N] [--cloud-debug BITS] [--frames N] [--ocean-debug MODE]
-        [--ring] [--panda-lights]
+        [--ring] [--panda-lights] [--model PATH]
 
     --out            where the PNGs go (default ./terrain_shots)
     --level          the planet's level file (default: the demo level)
@@ -45,6 +45,11 @@ times a few frames, then saves a screenshot::
                      slope spread, 12 depth, ...; default 0)
     --panda-lights   the test balls lit by Panda3D's lighting, not the
                      world's model shader (to compare)
+    --model          a model (a game's glTF ship) for the ship poses:
+                     ship (it whole, across the sun) and ship_fill (the
+                     camera inside its bounds: it covers the screen, the
+                     model shader's worst case, as a cockpit). Compare
+                     --models-quality low / mid / high / ultra
 
 No multisampling, vsync off. Once a pose has settled, N frames are timed,
 each waiting for the GPU to finish (a one-pixel read back): CPU and GPU time
@@ -574,6 +579,39 @@ def _casters_scene(demo: TerrainDemo, name: str, extra: list) -> None:
     _look_across_sun(demo, world + target, *view)
 
 
+#: The poses of --model (_ship_scene).
+SHIP_POSES = ("ship", "ship_fill")
+
+
+def _ship_scene(demo: TerrainDemo, name: str, extra: list, path: str) -> None:
+    """Set a model (--model) out above the ground where the white ball
+    hangs, the balls hidden, and look at it: whole (ship), or from inside
+    its bounds (ship_fill).
+
+    :param extra: models added for the pose, to remove after it (appended)
+    """
+    planet = demo.home.terrain.planet
+    _, white_point = demo._test_balls[0]
+    up = white_point / np.linalg.norm(white_point)
+    ground = float(planet.sample_dirs(up[None, :], apply_stamps=True)[0][0])
+    model = demo.loader.load_model(path)
+    model.reparent_to(demo.render)
+    low, high = model.get_tight_bounds()
+    centre = np.array((low + high) / 2.0)  # its axes are render's (unturned)
+    radius = max(float((high - low).length()) / 2.0, 1.0)
+    point = up * (demo.radius + max(ground, 0.0) + radius + 20.0)  # planet frame
+    target = demo.home.position + point + centre
+    extra.append(model)
+    for node, _ in demo._test_balls:
+        node.hide()
+    demo._test_balls.append((model, point))
+    demo.tracked.track(model, cast=True, shader=demo._model_shader)
+    if name == "ship":
+        _look_across_sun(demo, target, 2.2 * radius, 0.5 * radius, 30.0)
+    else:
+        _look_across_sun(demo, target, 0.6 * radius, 0.1 * radius, 30.0)
+
+
 def _settle(demo: TerrainDemo, timeout: float) -> bool:
     """Step frames until nothing is wanted or generating for 10 frames.
 
@@ -645,6 +683,9 @@ def main() -> None:
         action="store_true",
         help="the test balls by Panda3D's lighting, not the model shader",
     )
+    parser.add_argument(
+        "--model", default=None, help="a model for the ship poses (a glTF ship)"
+    )
     args = parser.parse_args()
     window_config("Terrain shots", args.size, args.offscreen, vsync=False)
     args.out.mkdir(parents=True, exist_ok=True)
@@ -672,6 +713,9 @@ def main() -> None:
     poses = _poses(demo)
     if args.at is not None:
         poses["at"] = (*args.at, 0, 0)
+    if args.model is not None:
+        for name in SHIP_POSES:
+            poses[name] = poses["ground"]
     balls = list(demo._test_balls)  # where they hang (edge poses move them)
     extra: list = []  # models a pose added
     for name in args.pose or list(poses):
@@ -697,6 +741,8 @@ def main() -> None:
             demo.set_local_sun(*sun)
         if name in CASTER_POSES:
             _casters_scene(demo, name, extra)
+        if name in SHIP_POSES:
+            _ship_scene(demo, name, extra, args.model)
         settled = _settle(demo, args.timeout)
         if name in BALL_EDGES:
             if not _balls_on_edge(demo, BALL_EDGES[name]):

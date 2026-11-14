@@ -644,6 +644,11 @@ class World:
         self.tracked = TrackedLights(render)
         #: The model shader's inputs in open space (no body)
         self.space_models = self._model_lighting(0.9, None, None, None, light_scale)
+        # The sky reflected in the models (ModelSettings' PBR_SKY): the
+        # sky's own table, baked inside an air
+        if self.sky is not None and self.sky.view is not None:
+            for lighting in self._model_lightings():
+                self.sky.view.bind(lighting.inputs)
         self.sun_light = self.ambient_light = None
         if lights:
             self.sun_light = render.attach_new_node(DirectionalLight("world_sun"))
@@ -666,7 +671,9 @@ class World:
     ) -> ModelLighting:
         """The model shader's inputs near a body (or none), with the air
         and the eclipses; its maps and clouds are bound by the caller."""
-        lighting = ModelLighting(exposure, atmosphere, terrain, light_scale)
+        lighting = ModelLighting(
+            exposure, atmosphere, terrain, light_scale, self.settings.models
+        )
         self.atmospheres.bind(lighting.inputs)
         self.shadows.bind(lighting.inputs, body)
         if self.casters is not None:
@@ -985,6 +992,7 @@ class World:
         for body in self.bodies:
             parts += body.parts()
         parts += self.fields
+        parts += self._model_lightings()
         settings.apply(*parts)
         for body in self.bodies:
             if body.shadow_map is not None:
@@ -1000,6 +1008,11 @@ class World:
         if self.casters is not None:
             self.casters.set_size(settings.shadows.caster_size)
         self._sync_half_res()
+
+    def _model_lightings(self) -> list[ModelLighting]:
+        """The model shader's inputs: every body's, and open space's."""
+        lightings = [body.models for body in self.bodies if body.models is not None]
+        return lightings + [self.space_models]
 
     def _bind_god_rays(self) -> None:
         """The god rays (``AtmosphereSettings.god_rays``) of the first body

@@ -4,6 +4,7 @@ arguments, its checks, its per-frame wiring and maths on stand-ins, and one
 whole world built on an offscreen window.
 """
 
+import dataclasses
 import inspect
 import math
 from dataclasses import fields, replace
@@ -26,7 +27,7 @@ from world_builder.depth import (
     SplitDepthCameras,
 )
 from world_builder.lights import TrackedLights
-from world_builder.objects import ModelLighting, model_shader
+from world_builder.objects import PBR_SKY, ModelLighting, ModelSettings, model_shader
 from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
 from world_builder.shadows import ECLIPSE_SKY_FLOOR, SUN_ANGULAR_RADIUS, Shadows
@@ -719,7 +720,19 @@ def test_a_whole_world(window, monkeypatch):
             world.update(origin, far=depth.far)
             window.graphicsEngine.render_frame()
         assert world.casters._on[0] == 1
-        assert ball.get_attrib(ShaderAttrib).get_shader() == model_shader()
+        shading = world.settings.models.shading
+        assert ball.get_attrib(ShaderAttrib).get_shader() == model_shader(shading)
+        # The sky's table reaches the models (the sky-reflection tier)
+        assert planet.models.inputs.get_shader_input("uSkyView").get_texture() == (
+            world.sky.view.texture
+        )
+        # The models' tier is live: the next update gives the ball its shader
+        world.set_settings(
+            dataclasses.replace(world.settings, models=ModelSettings(PBR_SKY))
+        )
+        world.update(origin, far=depth.far)
+        assert ball.get_attrib(ShaderAttrib).get_shader() == model_shader(PBR_SKY)
+        window.graphicsEngine.render_frame()
         world.untrack_light(ball)
         ball.remove_node()
 

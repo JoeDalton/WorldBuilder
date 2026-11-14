@@ -217,6 +217,12 @@ HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
 | `terrain_min_radius` (advanced) | Detailed rocks from | live | 50 to 5000 m | 200 | 200 | 200 | 200 |
 | `max_terrain_rocks` | Detailed rocks | live | 0 to 32 | 0 | 4 | 8 | 16 |
 
+### `models`: Models (`ModelSettings`)
+
+| Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
+|---|---|---|---|---|---|---|---|
+| `shading` | Model shading | live | Simple, PBR, PBR + normal maps, PBR + sky reflections | Simple | PBR | PBR + normal maps | PBR + sky reflections |
+
 ### `shadows`: Shadows (`ShadowSettings`)
 
 | Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
@@ -231,6 +237,12 @@ HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
 | `caster_map_size` | Objects' shadow detail | rebuild | 512, 1024, 2048, 4096 px | 512 | 1024 | 2048 | 4096 |
 
 ## Notes
+
+- **The models' shading** (`ModelSettings.shading`) picks one of four
+  shaders for the game's models drawn by the model shader
+  (`World.track_light(node, shader=True)`; see
+  [Lighting on objects](object_lighting.md)). It costs per pixel a model
+  covers, so it matters most where a cockpit fills the screen.
 
 - **The terrain's finest detail** (`min_level`) counts levels dropped below
   the finest. Level 0 is about 2 m of vertex spacing at any planet radius,

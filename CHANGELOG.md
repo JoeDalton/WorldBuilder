@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Physically based shading for the game's models (`World.track_light(node,
+  shader=True)`), derived from panda3d-simplepbr's BRDF (GGX, Smith-GGX,
+  Schlick) in the world's units, with every world shadow, the air and the
+  tonemap as before: glTF's metal and roughness, emission, normal maps (or a
+  frame from the screen without tangents), and the sky reflected from the
+  sky-view table. A quality knob, `ModelSettings.shading` (the new `models`
+  section): LOW the terrain's light as before, MID PBR, HIGH with normal
+  maps, ULTRA with sky reflections.
+- `terrain_shots.py --model PATH`: the `ship` and `ship_fill` poses, a
+  game's model whole and filling the screen; the terrain demo's F8 cycles
+  the models' preset, and it hangs SpaceFlight's tie-interceptor beside the
+  white test ball (`--test-ship`, `--no-test-ship`).
+
+### Fixed
+
+- glTF models were decoded to linear light twice: panda3d-gltf loads their
+  colour textures as sRGB, and the model shader decoded them again (too
+  dark, too saturated). `objects.mark_linear` marks the parts authored in
+  linear light; the base colour is now a PBR material's `baseColor` (its
+  `diffuse` is darkened by its metalness).
+
 ## [0.4.0] 2026-11-12
 
 ### Added

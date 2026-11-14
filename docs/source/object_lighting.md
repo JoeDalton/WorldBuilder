@@ -89,16 +89,23 @@ Textured models would also need their textures decoded to linear light first
 
 ## The model shader
 
-`world_builder.objects` is that shader (`model.vert`, `model.frag`), with
-every world shadow per pixel:
+`world_builder.objects` is that shader (`model.vert`, `model_main.glsl`
+through one `model_<tier>.frag` per shading tier, see
+[PBR](#physically-based-shading) below), with every world shadow per pixel:
 
-- **Colour.** `p3d_Texture0` (white without a texture) times the vertex
-  colour (or `set_color`), the colour scale and the material's diffuse
-  (1 without a material), authored as displayed: decoded with
-  `pow(2.2)`. The alpha is kept.
-- **Light.** `objectLight`, as the terrain lights its ground, with the
-  material's roughness (1, matte, without a material: no highlight) and
-  the body's vertical for the sky light's "up" (the normal in open space).
+- **Colour.** The base colour's texture (`p3d_TextureModulate`, white
+  without one) times the vertex colour (or `set_color`), the colour scale
+  and the material's base colour (the larger of `baseColor` and `diffuse`:
+  1 without a material, `baseColor` for a PBR one, whose `diffuse` its
+  metalness darkens). A model authored as displayed is decoded with
+  `pow(2.2)`; a glTF one is in linear light already (its colour textures
+  are sRGB, which the GPU decodes), so `World.track_light` marks its parts
+  (`objects.mark_linear`, a `uBaseLinear` input) and they are not decoded
+  again. The alpha is kept.
+- **Light.** At the simple tier, `objectLight`, as the terrain lights its
+  ground, with the material's roughness (1, matte, without a material: no
+  highlight) and the body's vertical for the sky light's "up" (the normal
+  in open space). At the PBR tiers, below.
 - **The sun** at each pixel (`model_light.glsl`'s `modelSunlight`): the sun
   above the air, through the body's air (`atmoSunlight`: reddened low, gone
   past its terminator), the other bodies' eclipses, an airless body's own
@@ -140,9 +147,81 @@ thousand pixels. `flight_bench.py --flight low`, four alternating pairs
 9.9 / 16.7: within the runs' spread (on average 0.2 / 0.5 ms more with the
 shader). The shots' timed frames differ by less than their noise.
 
-Not done (logged in the repository's `BACKLOG.md`): normal maps, emission
-and metalness (the material's other fields), light bounced off the ground,
-and a depth-only stage in the clouds' half-resolution pass.
+Not done (logged in the repository's `BACKLOG.md`): glTF's occlusion,
+blurred sky reflections, light bounced off the ground, and a depth-only
+stage in the clouds' half-resolution pass.
+
+## Physically based shading
+
+panda3d-simplepbr cannot draw the models as it is: `simplepbr.init()` puts
+its own shader on all of `render`, tonemaps in a post-process pass of its
+own, and lights by Panda3D lights alone: no world shadows, no air, a second
+tonemap over the world's. Its BRDF and its glTF material inputs are
+derived instead (`objects/shaders/model_pbr.glsl`, after simplepbr 0.13,
+itself after Khronos' glTF-Sample-Viewer), inside the model shader, so the
+sun, the shadows, the air and the tonemap stay the world's:
+
+- **The sun**: GGX distribution, height-correlated Smith-GGX visibility,
+  Schlick's Fresnel (simplepbr's spherical-gaussian form), the roughness
+  floored at Filament's 0.045. In the world's units: `objectLight` lights a
+  white Lambert surface to the sunlight itself, so the diffuse term drops
+  simplepbr's 1/pi and the specular term takes pi. A rough dielectric is as
+  bright as at the simple tier (`test_a_rough_dielectric_looks_alike_at_every_tier`).
+- **The material**, glTF's as panda3d-gltf loads it: `baseColor`,
+  `metallic` and `roughness` times the metal-roughness texture
+  (`p3d_TextureSelector`: G roughness, B metal), `emission` times its
+  texture (`p3d_TextureEmission`), added as linear light before the air.
+- **The sky light**: diffuse as `objectLight` takes it (all of it facing up,
+  a tenth facing down); specular, the environment along the reflected ray
+  through Karis' analytic split-sum fit (`EnvBRDFApprox`: no lookup
+  texture). The environment is the sky light, as on a surface facing the
+  ray, so a metal never reflects black under a sky.
+- **Normal maps** (`p3d_TextureNormal`, two-channel ones too), in the
+  model's tangents (`p3d_Tangent`: panda3d-gltf computes them), or a frame
+  from the screen's derivatives (Schüler's) where a model has none.
+- **The sky's reflection** (the top tier): inside an air, the sky-view
+  table (`atmosphere/shaders/sky_view.glsl`, one read) along the reflected
+  ray, sharp on a smooth surface, the even sky on a rough one and below the
+  horizon (the table holds the air there, not the ground); the even sky in
+  space.
+
+The tiers (`ModelSettings.shading`, the `models` section, live: the next
+`World.update` gives each model the new shader):
+
+| Tier | Preset | What |
+|---|---|---|
+| `SIMPLE` | LOW | `objectLight`, as the terrain lights its ground |
+| `PBR` | MID | the BRDF, metal, roughness, emission |
+| `PBR_NORMAL` | HIGH | and normal maps |
+| `PBR_SKY` | ULTRA | and the sky's reflection |
+
+To look at them: `terrain_shots.py --model .../scene.gltf --pose ship
+ship_fill --models-quality low|mid|high|ultra` (the model whole, and the
+camera inside its bounds); F8 in the terrain demo cycles the test balls'
+tier.
+
+Cost, the worst case: SpaceFlight's a-wing cockpit (metal-roughness,
+normal map and emission) covering about 95% of a 2560 x 1440 frame
+(`terrain_shots.py --offscreen --size "2560 1440" --pose ship_fill --model
+.../a-wing/cockpit/scene.gltf --models-quality L --frames 300`, RTX 3070),
+four rounds through the tiers in turn, the median frame in ms:
+
+| Tier | Rounds | Mean |
+|---|---|---|
+| LOW | 10.02, 9.95, 10.74, 9.96 | 10.2 |
+| MID | 11.50, 12.00, 10.62, 10.63 | 11.2 |
+| HIGH | 9.95, 9.87, 10.64, 10.77 | 10.3 |
+| ULTRA | 11.08, 11.06, 10.02, 10.94 | 10.8 |
+
+MID above HIGH (which does all MID does) puts the noise at about 1 ms: the
+PBR tiers cost at most 0.5-1 ms with a model over the whole screen, and
+nothing measurable at a ship's usual size (the tie-interceptor whole, the
+`ship` pose, within the same noise). Most of the model shader's time is
+still its world shadows (`modelSunlight`), at every tier.
+
+The terrain demo hangs the tie-interceptor beside the white test ball
+(`--test-ship`, SpaceFlight's when it is checked out next to this
+repository; `--no-test-ship`), lit by the model shader: F8 cycles its tier.
 
 A model tracked with `cast=True` also casts shadows (part H of
 [Shadows](shadows.md)): on the terrain and the sea, on the other shaded

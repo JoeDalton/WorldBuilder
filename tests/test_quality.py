@@ -40,6 +40,7 @@ COST_FIELDS = {
     "vegetation": ["mesh_range", "tree_range"],
     "atmosphere": ["steps", "vertex_steps"],
     "sky": ["star_fraction", "glow_size"],
+    "models": ["shading"],
     "clouds": [
         "count_scale",
         "march_scale",
