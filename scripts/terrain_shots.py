@@ -583,12 +583,15 @@ def _casters_scene(demo: TerrainDemo, name: str, extra: list) -> None:
 SHIP_POSES = ("ship", "ship_fill")
 
 
-def _ship_scene(demo: TerrainDemo, name: str, extra: list, path: str) -> None:
+def _ship_scene(demo: TerrainDemo, name: str, extra: list, path: str):
     """Set a model (--model) out above the ground where the white ball
     hangs, the balls hidden, and look at it: whole (ship), or from inside
     its bounds (ship_fill).
 
     :param extra: models added for the pose, to remove after it (appended)
+    :returns: what aims the camera at it again: the demo's clearance lifts
+        the camera over the coarse ground before it refines (100 m and more
+        above the fine ground), so the pose is aimed again once settled
     """
     planet = demo.home.terrain.planet
     _, white_point = demo._test_balls[0]
@@ -607,9 +610,15 @@ def _ship_scene(demo: TerrainDemo, name: str, extra: list, path: str) -> None:
     demo._test_balls.append((model, point))
     demo.tracked.track(model, cast=True, shader=demo._model_shader)
     if name == "ship":
-        _look_across_sun(demo, target, 2.2 * radius, 0.5 * radius, 30.0)
+        view = (2.2 * radius, 0.5 * radius, 30.0)
     else:
-        _look_across_sun(demo, target, 0.6 * radius, 0.1 * radius, 30.0)
+        view = (0.6 * radius, 0.1 * radius, 30.0)
+
+    def aim() -> None:
+        _look_across_sun(demo, target, *view)
+
+    aim()
+    return aim
 
 
 def _settle(demo: TerrainDemo, timeout: float) -> bool:
@@ -741,9 +750,13 @@ def main() -> None:
             demo.set_local_sun(*sun)
         if name in CASTER_POSES:
             _casters_scene(demo, name, extra)
+        aim = None
         if name in SHIP_POSES:
-            _ship_scene(demo, name, extra, args.model)
+            aim = _ship_scene(demo, name, extra, args.model)
         settled = _settle(demo, args.timeout)
+        if aim is not None:  # over the refined ground now
+            aim()
+            settled = _settle(demo, args.timeout)
         if name in BALL_EDGES:
             if not _balls_on_edge(demo, BALL_EDGES[name]):
                 print(f"{name}: no shadow edge found, the balls stay")

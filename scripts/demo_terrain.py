@@ -89,8 +89,9 @@ Controls (AZERTY):
     C               show / hide the high cirrus
     F7              cycle the shadows' preset (the clouds' shadow on the
                     ground: off at low, more samples above)
-    F8              cycle the models' preset (the test balls' shading:
-                    simple, PBR, normal maps, sky reflections)
+    F8              cycle the models' preset (the test balls' and ship's
+                    shading: high, PBR with sky reflections; ultra, with
+                    occlusion maps, the blurred sky and the ground's bounce)
     M               the test balls: the world's model shader / Panda3D's
                     lighting
     F               print the camera pose and terrain stats

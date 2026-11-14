@@ -157,9 +157,14 @@ class QualitySettings:
         knob keeps its saved value
     :cvar LEVELLED: False for a section of choices only (its knobs all
         kept, no presets: the display's frame cap): no level of its own
+    :cvar DISTINCT_PRESETS: False for a section whose cheaper presets
+        coincide (the models': only ULTRA costs more): its settings read as
+        the highest level they equal (:meth:`level_of`), so a menu's cycle
+        moves on
     """
 
     LEVELLED: ClassVar[bool] = True
+    DISTINCT_PRESETS: ClassVar[bool] = True
     LABEL: ClassVar[str] = ""
     PRESETS: ClassVar[dict[QualityLevel, dict[str, Any]]] = {}
     RENAMED: ClassVar[dict[str, str]] = {}
@@ -238,11 +243,12 @@ class QualitySettings:
 
     @classmethod
     def level_of(cls: type[S], settings: S) -> QualityLevel | None:
-        """:returns: the preset *settings* equals, whatever its kept knobs;
+        """:returns: the preset *settings* equals, whatever its kept knobs
+        (the highest, where presets coincide: :attr:`DISTINCT_PRESETS`);
         None = custom, or a section with no levels (:attr:`LEVELLED`)"""
         if not cls.LEVELLED:
             return None
-        for level in QualityLevel:
+        for level in reversed(QualityLevel):
             if settings.at_level(level) == settings:
                 return level
         return None

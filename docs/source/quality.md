@@ -221,7 +221,7 @@ HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
 
 | Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
 |---|---|---|---|---|---|---|---|
-| `shading` | Model shading | live | Simple, PBR, PBR + normal maps, PBR + sky reflections | Simple | PBR | PBR + normal maps | PBR + sky reflections |
+| `shading` | Model shading | live | Simple, PBR, PBR + normal maps, PBR + sky reflections, Full PBR | PBR + sky reflections | PBR + sky reflections | PBR + sky reflections | Full PBR |
 
 ### `shadows`: Shadows (`ShadowSettings`)
 
@@ -238,11 +238,16 @@ HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
 
 ## Notes
 
-- **The models' shading** (`ModelSettings.shading`) picks one of four
+- **The models' shading** (`ModelSettings.shading`) picks one of five
   shaders for the game's models drawn by the model shader
   (`World.track_light(node, shader=True)`; see
   [Lighting on objects](object_lighting.md)). It costs per pixel a model
-  covers, so it matters most where a cockpit fills the screen.
+  covers, so it matters most where a cockpit fills the screen. The cheaper
+  tiers cost too little to set LOW to HIGH apart: they share one, and only
+  ULTRA adds the occlusion maps, the blurred sky and the ground's bounce.
+  The section is the one whose presets coincide
+  (`QualitySettings.DISTINCT_PRESETS` False): it reads as the highest level
+  it equals.
 
 - **The terrain's finest detail** (`min_level`) counts levels dropped below
   the finest. Level 0 is about 2 m of vertex spacing at any planet radius,

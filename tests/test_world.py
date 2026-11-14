@@ -27,7 +27,7 @@ from world_builder.depth import (
     SplitDepthCameras,
 )
 from world_builder.lights import TrackedLights
-from world_builder.objects import PBR_SKY, ModelLighting, ModelSettings, model_shader
+from world_builder.objects import PBR_FULL, ModelLighting, ModelSettings, model_shader
 from world_builder.ocean import Sea
 from world_builder.settings import WorldSettings
 from world_builder.shadows import ECLIPSE_SKY_FLOOR, SUN_ANGULAR_RADIUS, Shadows
@@ -728,10 +728,10 @@ def test_a_whole_world(window, monkeypatch):
         )
         # The models' tier is live: the next update gives the ball its shader
         world.set_settings(
-            dataclasses.replace(world.settings, models=ModelSettings(PBR_SKY))
+            dataclasses.replace(world.settings, models=ModelSettings(PBR_FULL))
         )
         world.update(origin, far=depth.far)
-        assert ball.get_attrib(ShaderAttrib).get_shader() == model_shader(PBR_SKY)
+        assert ball.get_attrib(ShaderAttrib).get_shader() == model_shader(PBR_FULL)
         window.graphicsEngine.render_frame()
         world.untrack_light(ball)
         ball.remove_node()

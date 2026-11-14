@@ -78,13 +78,21 @@ vec3 pbrSun(PbrSurface s, vec3 N, vec3 L, vec3 V, vec3 sunlight) {
     return (s.diffuse + F * (DV * PBR_PI)) * sunlight * NoL;
 }
 
+// How much of the environment's reflection an occluded surface keeps
+// (Lagarde and de Rousiers, "Moving Frostbite to PBR"): 1 unoccluded.
+float pbrSpecularOcclusion(float NoV, float ao, float roughness) {
+    return clamp(pow(NoV + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
+}
+
 // The sky light a surface sends to the camera: diffuse from the sky as
 // objectLight takes it (all of it facing up, a tenth facing down), and
-// the environment env (the light along the reflected ray) reflected.
+// the environment env (the light along the reflected ray) reflected; the
+// occlusion on both.
 vec3 pbrAmbient(PbrSurface s, vec3 N, vec3 V, vec3 up, vec3 skylight, vec3 env) {
     float NoV = clamp(abs(dot(N, V)), 1e-4, 1.0);
-    return (s.diffuse * skylight * (0.55 + 0.45 * dot(N, up))
-            + env * pbrEnvironmentBrdf(s.f0, s.roughness, NoV)) * s.ao;
+    return s.diffuse * skylight * (0.55 + 0.45 * dot(N, up)) * s.ao
+           + env * pbrEnvironmentBrdf(s.f0, s.roughness, NoV)
+             * pbrSpecularOcclusion(NoV, s.ao, s.roughness);
 }
 
 // A tangent frame from the screen derivatives (Schüler, "Followup: normal

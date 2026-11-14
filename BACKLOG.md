@@ -10,23 +10,23 @@ the asteroid fields', [docs/source/asteroids_backlog.md](docs/source/asteroids_b
 The model shader (`world_builder.objects`, [Lighting on
 objects](docs/source/object_lighting.md)) lights a model's colour, normal
 and roughness, and at the PBR tiers (`ModelSettings.shading`) its
-metalness, normal map and emission. Left out:
+metalness, normal map and emission; at the full tier its glTF occlusion
+map, the sky blurred by its roughness and the ground's bounce. Left out:
 
-- **glTF's occlusion.** The metal-roughness texture's red channel (an
-  ORM texture's occlusion) and a separate `occlusionTexture` are ignored:
-  panda3d-gltf does not load the latter, and many models leave the former
-  unset (0, which would black them out).
-- **Blurred sky reflections.** The sky tier reads the sky-view table along
-  the reflected ray and fades to the even sky with roughness: the table has
-  no blurred levels (a mip chain, or a small prefiltered cube from it,
-  would give rough metals their sky's gradient).
+- **Occlusion without a map.** Only a model with a glTF occlusion map has
+  any (3 of SpaceFlight's 15 ships). A per-vertex bake on the GPU when a
+  model is tracked, or a screen-space pass, would cover the others.
+- **An occlusion map in a .glb, or embedded in a buffer.**
+  `objects.gltf_occlusion` reads .gltf files and their image files only.
+- **The ground under a model.** Its bounce takes one albedo per body
+  (`GROUND_ALBEDO`, 0.2): the biome or the sea under the model, and its
+  height above the ground (the bounce fades with it), would refine it.
+- **The blurred sky's horizon.** The sky-view table is warped (crowded at
+  the horizon and toward the sun), so its mipmaps blur unevenly, and below
+  the horizon a reflection takes the even sky and the ground's light.
 - **Emission's scale.** glTF's emissive colour is added as linear light
   as it is (1 is a white surface's light under a dim sun): no exposure of
   its own, no bloom.
-- **Light bounced off the ground.** The sky light falls to a tenth on a
-  face turned down (`objectLight`'s `0.55 + 0.45 N.up`, the terrain's): a
-  ball's underside is near black over bright ground. A term of the ground's
-  albedo under the sun, from below, would lift it.
 - **The clouds' half-resolution pass.** There a shaded model is drawn whole
   as an occluder (only its depth is kept), where the terrain swaps in a
   depth-only fragment stage (the `PASS_TAG` tag state). A tag and a

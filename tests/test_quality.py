@@ -134,8 +134,13 @@ def test_presets_are_distinct(section):
     one a part is at, and cycling must move on)."""
     kind = SECTIONS[section]
     presets = [kind.preset(level) for level in LEVELS]
-    assert len(set(presets)) == len(presets)
-    assert [kind.level_of(p) for p in presets] == LEVELS
+    if kind.DISTINCT_PRESETS:
+        assert len(set(presets)) == len(presets)
+        assert [kind.level_of(p) for p in presets] == LEVELS
+    else:  # coinciding presets read as the highest of them; ULTRA its own
+        highest = [max(i for i, q in enumerate(presets) if q == p) for p in presets]
+        assert [kind.level_of(p) for p in presets] == [LEVELS[i] for i in highest]
+        assert presets[-1] != presets[-2]
 
 
 @pytest.mark.parametrize("section", LEVELLED)

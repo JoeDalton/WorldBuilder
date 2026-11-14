@@ -5,6 +5,7 @@ mountains in the body's own axes), and the whole shader lights and
 tonemaps as the terrain does.
 """
 
+import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,8 @@ import pytest
 from panda3d.core import (
     AmbientLight,
     CardMaker,
+    DirectionalLight,
+    Filename,
     Geom,
     GeomNode,
     GeomPoints,
@@ -23,29 +26,35 @@ from panda3d.core import (
     LMatrix4f,
     LVecBase3f,
     Material,
+    ModelRoot,
     NodePath,
     OmniBoundingVolume,
+    PandaNode,
+    PNMImage,
     Shader,
     ShaderAttrib,
     Texture,
     TextureStage,
+    Vec3,
 )
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
 from world_builder.clouds.weather import sample_cube
 from world_builder.lights import TrackedLights
 from world_builder.objects import (
-    LINEAR_TAG,
+    GROUND_ALBEDO,
     PBR,
+    PBR_FULL,
     PBR_NORMAL,
     PBR_SKY,
     SHADER_PATH,
     SIMPLE,
     ModelLighting,
     ModelSettings,
-    mark_linear,
+    gltf_occlusion,
+    mark_model,
     model_shader,
-    unmark_linear,
+    unmark_model,
 )
 from world_builder.ocean import aces_tonemap
 from world_builder.shadows import SUN_ANGULAR_RADIUS, Shadows
@@ -280,36 +289,54 @@ _CARD_SUN = (2.6, 2.4, 2.2)
 _CARD_SKY = np.array([0.3, 0.4, 0.6])  # the world's, at light scale 0.5
 
 
-def _card_pixel(window, shading, setup=None, sun=None, mark=False, size=16):
-    """A card 2 m ahead of a camera at the origin, facing it (-y), in open
-    space under the sun *sun* (toward it) of colour _CARD_SUN and the sky
-    light _CARD_SKY, drawn by the model shader at tier *shading*: its centre
-    pixel (display colour).
+def _card_pixel(
+    window, shading, setup=None, sun=None, mark=False, size=16, body=False, gltf=None
+):
+    """A card 2 m ahead of a camera at the origin, facing it (-y), under the
+    sun *sun* (toward it) of colour _CARD_SUN and the sky light _CARD_SKY,
+    drawn by the model shader at tier *shading*: its centre pixel (display
+    colour). In open space, or 100 m over an airless body (its vertical +z).
 
     :param setup: given the card, before it is drawn (its colour, material,
         textures)
-    :param mark: mark_linear the card (as World.track_light does)"""
+    :param mark: mark_model the card (as World.track_light does)
+    :param body: over a body: its ground bounces light up (PBR_FULL)
+    :param gltf: the card under a ModelRoot loaded from this .gltf (its
+        occlusion maps, mark_model)"""
     if sun is None:
         sun = np.array([0.0, -1.0, 1.0]) / math.sqrt(2.0)  # 45 degrees off it
     lighting = ModelLighting(
         exposure=0.9, light_scale=0.5, settings=ModelSettings(shading=shading)
     )
+    if body:
+        shadows = Shadows()
+        planet = shadows.add(1e5, (0.0, 0.0, -1e5 - 100.0))
+        shadows.set_sun(sun)
+        shadows.update(np.zeros(3))
+        shadows.bind(lighting.inputs, planet)
     lighting.set_sun(sun, _CARD_SUN)
     lighting.update((0.0, 0.0, 0.0))
 
     root = NodePath("model_check")
+    model = root.attach_new_node(ModelRoot("model") if gltf else PandaNode("model"))
+    if gltf:
+        model.node().set_fullpath(Filename.from_os_specific(str(gltf)))
     maker = CardMaker("card")
     maker.set_frame(-1.0, 1.0, -1.0, 1.0)
-    card = root.attach_new_node(maker.generate())  # faces -y, toward the camera
-    card.set_pos(0.0, 2.0, 0.0)
+    card = model.attach_new_node(maker.generate())  # faces -y, toward the camera
+    model.set_pos(0.0, 2.0, 0.0)
     if setup is not None:
         setup(card)
     if mark:
-        mark_linear(card)
+        mark_model(model)
     sky = root.attach_new_node(AmbientLight("sky"))
     sky.node().set_color((*(_CARD_SKY * 0.5), 1.0))
-    card.set_light(sky)
-    lighting.apply(card)
+    model.set_light(sky)
+    direct = root.attach_new_node(DirectionalLight("sun"))  # as TrackedLights
+    direct.node().set_color((*(np.array(_CARD_SUN) * 0.5), 1.0))
+    direct.node().set_direction(Vec3(*(-sun)))
+    model.set_light(direct)
+    lighting.apply(model)
 
     texture = Texture("model_check")
     buffer = window.win.make_texture_buffer("model_check", size, size, texture, True)
@@ -342,12 +369,18 @@ def _texture(rgb, srgb=False):
     return texture
 
 
-def _pbr_twin(albedo, metallic, roughness, emission=(0.0, 0.0, 0.0)):
-    """model_pbr.glsl on the CPU for _card_pixel's card (open space: the
-    vertical is the normal, the environment the sky light): its display
-    colour."""
+def _pbr_twin(
+    albedo, metallic, roughness, emission=(0.0, 0.0, 0.0), up=None, ground=0.0, ao=1.0
+):
+    """model_pbr.glsl on the CPU for _card_pixel's card: its display colour.
+
+    :param up: the body's vertical; None = open space (the normal)
+    :param ground: the ground's albedo (PBR_FULL's bounce); 0 = none
+    :param ao: its occlusion (PBR_FULL's)"""
     albedo = np.asarray(albedo, dtype=np.float64)
+    sun_colour = np.array(_CARD_SUN)
     N = np.array([0.0, -1.0, 0.0])
+    up = N if up is None else np.asarray(up, dtype=np.float64)
     # The centre pixel's centre: half a pixel right of and above the axis
     # (16 pixels over 60 degrees).
     off = math.tan(math.radians(30.0)) * 0.5 / 8.0
@@ -366,13 +399,23 @@ def _pbr_twin(albedo, metallic, roughness, emission=(0.0, 0.0, 0.0)):
     )
     vis = 0.5 / ggx
     F = f0 + (1.0 - f0) * 2.0 ** ((-5.55473 * VoH - 6.98316) * VoH)
-    sun = (diffuse + F * D * vis * math.pi) * np.array(_CARD_SUN) * NoL
+    sun = (diffuse + F * D * vis * math.pi) * sun_colour * NoL
     c0 = np.array([-1.0, -0.0275, -0.572, 0.022])
     c1 = np.array([1.0, 0.0425, 1.04, -0.04])
     r = roughness * c0 + c1
     a004 = min(r[0] * r[0], 2.0 ** (-9.28 * NoV)) * r[0] + r[1]
     env_brdf = f0 * (-1.04 * a004 + r[2]) + (1.04 * a004 + r[3])
-    ambient = diffuse * _CARD_SKY + _CARD_SKY * env_brdf
+    bounce = ground * (sun_colour * max(L @ up, 0.0) + _CARD_SKY)
+    R = 2.0 * (N @ V) * N - V
+    env = _CARD_SKY * (0.55 + 0.45 * (R @ up)) + bounce * (0.5 - 0.5 * (R @ up))
+    spec_ao = min(
+        max((NoV + ao) ** (2.0 ** (-16.0 * roughness - 1.0)) - 1.0 + ao, 0), 1
+    )
+    ambient = (
+        diffuse * _CARD_SKY * (0.55 + 0.45 * (N @ up)) * ao
+        + env * env_brdf * spec_ao
+        + diffuse * bounce * (0.5 - 0.5 * (N @ up)) * ao
+    )
     return aces_tonemap(sun + ambient + np.asarray(emission), 0.9)
 
 
@@ -403,7 +446,7 @@ def test_the_model_shader_lights_and_tonemaps_as_the_terrain(window):
     np.testing.assert_allclose(got, expected, atol=2.5 / 255.0)
 
 
-@pytest.mark.parametrize("shading", [PBR, PBR_NORMAL, PBR_SKY])
+@pytest.mark.parametrize("shading", [PBR, PBR_NORMAL, PBR_SKY, PBR_FULL])
 @pytest.mark.parametrize(
     "base, metallic, roughness",
     [
@@ -500,9 +543,17 @@ def test_emission_glows_in_the_dark(window):
     assert glow[1] > expected[1]
 
 
-def test_mark_linear_marks_the_gltf_parts_only():
-    """Parts with an sRGB texture or a PBR material are marked linear; the
-    others are not; unmarking clears the input."""
+def _has_input(part, name, index=0):
+    state = part.node().get_geom_state(index)
+    return state.has_attrib(ShaderAttrib) and state.get_attrib(
+        ShaderAttrib
+    ).has_shader_input(name)
+
+
+def test_mark_model_marks_the_gltf_parts_only():
+    """Parts with an sRGB texture or a PBR material are marked linear, on
+    their geoms' states (under the shader state apply sets); the others
+    are not; unmarking puts the states back."""
     root = NodePath("model")
     maker = CardMaker("part")
     textured = root.attach_new_node(maker.generate())
@@ -511,37 +562,124 @@ def test_mark_linear_marks_the_gltf_parts_only():
     _pbr_material((0.5, 0.5, 0.5), 0.0, 1.0)(pbr)
     plain = root.attach_new_node(maker.generate())
     plain.set_texture(_texture((0.5, 0.5, 0.5)))
-    marked = mark_linear(root)
-    assert set(marked) == {textured, pbr}
-    assert textured.get_attrib(ShaderAttrib).has_shader_input("uBaseLinear")
-    assert not plain.has_attrib(ShaderAttrib)
-    unmark_linear(marked)
-    assert not textured.get_attrib(ShaderAttrib).has_shader_input("uBaseLinear")
-    # A model that is itself the part: tagged, as apply replaces its state
-    marked = mark_linear(textured)
-    assert marked == [textured] and textured.has_tag(LINEAR_TAG)
+    before = textured.node().get_geom_state(0)
+    marks = mark_model(root)
+    assert {part for part, _, _ in marks} == {textured, pbr}
+    assert _has_input(textured, "uBaseLinear") and not _has_input(plain, "uBaseLinear")
+    # A model that is itself the part: apply sets its node's state, the
+    # mark stays on its geom's.
     lighting = ModelLighting()
     lighting.apply(textured)
-    assert textured.get_attrib(ShaderAttrib).has_shader_input("uBaseLinear")
+    assert _has_input(textured, "uBaseLinear")
     state = textured.get_state()
     lighting.apply(textured)
     assert textured.get_state() == state  # no churn
-    unmark_linear(marked)
-    assert not textured.has_tag(LINEAR_TAG)
+    unmark_model(marks)
+    assert textured.node().get_geom_state(0) == before
 
 
-def test_tracked_lights_mark_and_unmark_linear_parts():
+def test_tracked_lights_mark_and_unmark_the_parts():
     lights = TrackedLights(NodePath("render"))
     ship = lights.render.attach_new_node("ship")
     hull = ship.attach_new_node(CardMaker("hull").generate())
     hull.set_texture(_texture((0.5, 0.5, 0.5), srgb=True))
     lights.track(ship, shader=True)
-    assert hull.get_attrib(ShaderAttrib).has_shader_input("uBaseLinear")
+    assert _has_input(hull, "uBaseLinear")
     lights.track(ship, shader=False)
-    assert not hull.get_attrib(ShaderAttrib).has_shader_input("uBaseLinear")
+    assert not _has_input(hull, "uBaseLinear")
     lights.track(ship, shader=True)
     lights.untrack(ship)
-    assert not hull.get_attrib(ShaderAttrib).has_shader_input("uBaseLinear")
+    assert not _has_input(hull, "uBaseLinear")
+
+
+def _write_gltf(directory):
+    """A .gltf with two materials: "hull" its occlusion packed in its
+    metal-roughness texture (strength 0.8), "panel" a map of its own (0.25
+    grey); "bare" none."""
+    image = PNMImage(1, 1)
+    image.fill(0.25)
+    image.write(Filename.from_os_specific(str(directory / "ao.png")))
+    gltf = {
+        "asset": {"version": "2.0"},
+        "images": [{"uri": "orm.png"}, {"uri": "ao.png"}],
+        "textures": [{"source": 0}, {"source": 1}],
+        "materials": [
+            {
+                "name": "hull",
+                "pbrMetallicRoughness": {"metallicRoughnessTexture": {"index": 0}},
+                "occlusionTexture": {"index": 0, "strength": 0.8},
+            },
+            {"name": "panel", "occlusionTexture": {"index": 1}},
+            {"name": "bare"},
+        ],
+    }
+    path = directory / "ship.gltf"
+    path.write_text(json.dumps(gltf))
+    return path
+
+
+def test_gltf_occlusion_reads_the_maps_panda3d_gltf_drops(tmp_path):
+    root = NodePath(ModelRoot("ship"))
+    assert gltf_occlusion(root) == {}  # not from a .gltf
+    root.node().set_fullpath(Filename.from_os_specific(str(_write_gltf(tmp_path))))
+    found = gltf_occlusion(NodePath("holder").attach_new_node(root.node()).get_parent())
+    assert set(found) == {"hull", "panel"}
+    assert found["hull"].texture is None and found["hull"].strength == 0.8
+    assert found["panel"].texture is not None and found["panel"].strength == 1.0
+
+
+def _named_material(name, base, metallic, roughness, selector=None):
+    def setup(card):
+        material = Material(name)
+        material.set_base_color((*base, 1.0))
+        material.set_metallic(metallic)
+        material.set_roughness(roughness)
+        card.set_material(material)
+        if selector is not None:
+            stage = TextureStage("metal_rough")
+            stage.set_mode(TextureStage.M_selector)
+            card.set_texture(stage, _texture(selector))
+
+    return setup
+
+
+def test_occlusion_maps_at_the_full_tier(window, tmp_path):
+    """PBR_FULL darkens the sky light by a part's glTF occlusion: packed in
+    its metal-roughness texture's red (at its strength) or a map of its
+    own; the cheaper tiers leave it out; the sun is not occluded."""
+    gltf = _write_gltf(tmp_path)
+    base = (0.6, 0.6, 0.6)
+    # Packed: red 0.3 (G roughness 1, B metal 0), strength 0.8
+    hull = _named_material("hull", base, 0.0, 0.7, selector=(0.3, 1.0, 0.0))
+    got = _card_pixel(window, PBR_FULL, hull, mark=True, gltf=gltf)
+    ao = 1.0 + (0.3 - 1.0) * 0.8
+    np.testing.assert_allclose(got, _pbr_twin(base, 0.0, 0.7, ao=ao), atol=3 / 255.0)
+    sky = _card_pixel(window, PBR_SKY, hull, mark=True, gltf=gltf)
+    np.testing.assert_allclose(sky, _pbr_twin(base, 0.0, 0.7), atol=3 / 255.0)
+    # Its own map, 0.25
+    panel = _named_material("panel", base, 0.0, 0.7)
+    got = _card_pixel(window, PBR_FULL, panel, mark=True, gltf=gltf)
+    np.testing.assert_allclose(got, _pbr_twin(base, 0.0, 0.7, ao=0.25), atol=3 / 255.0)
+    bare = _named_material("bare", base, 0.0, 0.7)
+    got = _card_pixel(window, PBR_FULL, bare, mark=True, gltf=gltf)
+    np.testing.assert_allclose(got, _pbr_twin(base, 0.0, 0.7), atol=3 / 255.0)
+
+
+@pytest.mark.parametrize("metallic", [0.0, 1.0])
+def test_the_ground_bounces_light_up_at_the_full_tier(window, metallic):
+    """Over a body, PBR_FULL adds the ground's light from below (its albedo
+    under the sun where the model is and the sky) to the diffuse and the
+    reflected environment; PBR_SKY has none."""
+    up = (0.0, 0.0, 1.0)
+    setup = _pbr_material((0.7, 0.6, 0.5), metallic, 0.5)
+    full = _card_pixel(window, PBR_FULL, setup, mark=True, body=True)
+    sky = _card_pixel(window, PBR_SKY, setup, mark=True, body=True)
+    expected = _pbr_twin((0.7, 0.6, 0.5), metallic, 0.5, up=up, ground=GROUND_ALBEDO)
+    np.testing.assert_allclose(full, expected, atol=3 / 255.0)
+    np.testing.assert_allclose(
+        sky, _pbr_twin((0.7, 0.6, 0.5), metallic, 0.5, up=up), atol=3 / 255.0
+    )
+    assert full.sum() > sky.sum() + 0.02
 
 
 def test_the_settings_swap_the_shader_live():
@@ -560,9 +698,8 @@ def test_the_settings_swap_the_shader_live():
     attrib = ship.get_attrib(ShaderAttrib)
     assert attrib.get_shader() == model_shader(SIMPLE)
     assert attrib.has_shader_input("uExposure")
-    assert {
-        model_shader(tier) for tier in (SIMPLE, PBR, PBR_NORMAL, PBR_SKY)
-    }.__len__() == 4
+    tiers = (SIMPLE, PBR, PBR_NORMAL, PBR_SKY, PBR_FULL)
+    assert len({model_shader(tier) for tier in tiers}) == 5
 
 
 def test_apply_leaves_a_node_with_the_inputs_already_alone():

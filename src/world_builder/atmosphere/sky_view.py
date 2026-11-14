@@ -93,7 +93,10 @@ class SkyView:
             width, 2 * height, Texture.T_half_float, Texture.F_rgba16
         )
         self.texture.set_magfilter(SamplerState.FT_linear)
-        self.texture.set_minfilter(SamplerState.FT_linear)
+        # Mipmapped (made after each bake): the models' rough metal reads
+        # it blurred (objects' PBR_FULL); the sky and the stars read its
+        # first level (textureLod 0).
+        self.texture.set_minfilter(SamplerState.FT_linear_mipmap_linear)
         self.texture.set_wrap_u(SamplerState.WM_repeat)  # around the azimuth
         self.texture.set_wrap_v(SamplerState.WM_clamp)
         props = FrameBufferProperties()

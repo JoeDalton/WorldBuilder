@@ -25,7 +25,8 @@ A node tracked with ``shader=True`` is drawn by the world's model shader
 (:mod:`world_builder.objects`) instead of Panda3D's fixed-function lighting:
 its owner gives it the shader's state every frame; its ambient light is the
 sky light the shader reads. Its parts authored in linear light (glTF's) are
-marked for the shader (:func:`world_builder.objects.mark_linear`).
+marked for the shader, with their glTF occlusion maps
+(:func:`world_builder.objects.mark_model`).
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ from panda3d.core import (
     Vec3,
 )
 
-from world_builder.objects import mark_linear, unmark_linear
+from world_builder.objects import Marks, mark_model, unmark_model
 
 
 @dataclass
@@ -55,7 +56,7 @@ class _Tracked:
     before: LightAttrib | None  # the node's own light attrib, put back on untrack
     shader: bool = False  # drawn by the world's model shader
     shader_before: ShaderAttrib | None = None  # its own, put back
-    linear: list[NodePath] = field(default_factory=list)  # mark_linear's parts
+    marks: Marks = field(default_factory=list)  # mark_model's
 
 
 class TrackedLights:
@@ -91,7 +92,7 @@ class TrackedLights:
                     self._release_shader(tracked)
                 elif shader and not tracked.shader:
                     tracked.shader_before = self._shader_attrib(node)
-                    tracked.linear = mark_linear(node)
+                    tracked.marks = mark_model(node)
                 tracked.shader = shader
                 return
         name = node.get_name() or "tracked"
@@ -102,9 +103,9 @@ class TrackedLights:
         node.set_light(sun)
         node.set_light(ambient)
         shader_before = self._shader_attrib(node) if shader else None
-        linear = mark_linear(node) if shader else []
+        marks = mark_model(node) if shader else []
         self._tracked.append(
-            _Tracked(node, cast, sun, ambient, before, shader, shader_before, linear)
+            _Tracked(node, cast, sun, ambient, before, shader, shader_before, marks)
         )
 
     def untrack(self, node: NodePath) -> None:
@@ -192,8 +193,8 @@ class TrackedLights:
 
     @staticmethod
     def _release_shader(tracked: _Tracked) -> None:
-        unmark_linear(tracked.linear)
-        tracked.linear = []
+        unmark_model(tracked.marks)
+        tracked.marks = []
         if not tracked.node.is_empty():
             if tracked.shader_before is None:
                 tracked.node.clear_attrib(ShaderAttrib)

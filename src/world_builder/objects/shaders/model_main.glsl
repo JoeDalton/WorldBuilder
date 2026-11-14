@@ -10,6 +10,8 @@
 //   MODEL_PBR             metal and roughness (model_pbr.glsl), emission
 //   MODEL_NORMAL_MAP      the models' normal maps
 //   MODEL_SKY_REFLECTION  the sky reflected from the sky-view table
+//   MODEL_FULL            glTF's occlusion maps, the sky's reflection
+//                         blurred by the roughness, the ground's bounce
 
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/display.glsl"
@@ -59,6 +61,24 @@ uniform sampler2D p3d_TextureNormal;     // flat without
 in vec4 vTangent;                         // render frame, w its handedness
 #endif
 
+#ifdef MODEL_FULL
+// The part's glTF occlusion (world_builder.objects.mark_model): 0 none, 1
+// the metal-roughness texture's red (glTF's ORM), 2 uOcclusion's red.
+uniform int uOcclusionMode;
+uniform sampler2D uOcclusion;
+uniform float uOcclusionStrength;
+uniform float uGroundAlbedo;  // the ground under the model (its bounce)
+// The node's own sun (TrackedLights): the sunlight where the model is, in
+// every world shadow, times uLightScale.
+uniform struct p3d_LightSourceParameters {
+    vec4 color;
+} p3d_LightSource[1];
+// The sky-view table's mip levels a fully rough reflection reads: a 256
+// texel table blurred to 8 texels (level 5); further, its two halves (the
+// in-scatter, the transmittance) would meet.
+const float SKY_VIEW_BLUR_LEVELS = 5.0;
+#endif
+
 in vec3 vRelPos;
 in vec3 vNormal;
 in vec2 vUv;
@@ -72,13 +92,41 @@ out vec4 fragColor;
 // on a rough one (the table has no blurred levels) and below the horizon
 // (the table holds the air there, not the ground).
 vec3 skyReflection(vec3 R, vec3 up, vec3 L, float roughness, vec3 hemi) {
+    float above = smoothstep(-0.02, 0.05, dot(R, up));
+#ifdef MODEL_FULL
+    // Blurred by the roughness, through the table's mipmaps: the sky's
+    // gradient stays in rough metal, the even sky only at the roughest.
+    if (uSkyViewOn == 0) {
+        return hemi;
+    }
+    int a = skyViewAtmosphere();
+    if (a < 0) {
+        return hemi;
+    }
+    vec2 uv = skyViewUv(a, R, L);
+    float v = 0.5 * clamp(uv.y, 0.5 / SKY_VIEW_SIZE.y, 1.0 - 0.5 / SKY_VIEW_SIZE.y);
+    vec3 inscatter = textureLod(uSkyView, vec2(uv.x, v), roughness * SKY_VIEW_BLUR_LEVELS).rgb;
+    float sharp = (1.0 - smoothstep(0.75, 1.0, roughness)) * above;
+#else
     vec3 transmittance, inscatter;
     if (!skyViewAlong(R, L, transmittance, inscatter)) {
         return hemi;
     }
-    float sharp = (1.0 - smoothstep(0.15, 0.75, roughness))
-                * smoothstep(-0.02, 0.05, dot(R, up));
+    float sharp = (1.0 - smoothstep(0.15, 0.75, roughness)) * above;
+#endif
     return mix(hemi, inscatter, sharp);
+}
+#endif
+
+#ifdef MODEL_FULL
+// The light the ground under the model sends up (Lambert, uGroundAlbedo):
+// lit by the sun where the model is and by the sky; none in open space.
+vec3 groundLight(vec3 up, vec3 L, vec3 skylight) {
+    if (uShadowSelf < 0) {
+        return vec3(0.0);
+    }
+    vec3 sun = p3d_LightSource[0].color.rgb / uLightScale;
+    return uGroundAlbedo * (sun * max(dot(L, up), 0.0) + skylight);
 }
 #endif
 
@@ -120,15 +168,32 @@ void main() {
     vec3 up = modelUp(vRelPos, N);
 #ifdef MODEL_PBR
     vec4 metalRough = texture(p3d_TextureSelector, vUv);
+    float ao = 1.0;
+#ifdef MODEL_FULL
+    if (uOcclusionMode == 1) {
+        ao = metalRough.r;
+    } else if (uOcclusionMode == 2) {
+        ao = texture(uOcclusion, vUv).r;
+    }
+    ao = mix(1.0, ao, uOcclusionStrength);
+#endif
     PbrSurface s = pbrSurface(albedo, clamp(p3d_Material.metallic * metalRough.b, 0.0, 1.0),
-                              p3d_Material.roughness * metalRough.g, 1.0);
+                              p3d_Material.roughness * metalRough.g, ao);
     vec3 R = reflect(-V, N);
     // The environment: the sky light, as on a surface facing the ray.
     vec3 env = skylight * (0.55 + 0.45 * dot(R, up));
+#ifdef MODEL_FULL
+    // And the ground's, below.
+    vec3 ground = groundLight(up, L, skylight);
+    env += ground * (0.5 - 0.5 * dot(R, up));
+#endif
 #ifdef MODEL_SKY_REFLECTION
     env = skyReflection(R, up, L, s.roughness, env);
 #endif
     vec3 C = pbrSun(s, N, L, V, sunlight) + pbrAmbient(s, N, V, up, skylight, env);
+#ifdef MODEL_FULL
+    C += s.diffuse * ground * (0.5 - 0.5 * dot(N, up)) * ao;
+#endif
     // A glowing part: its emission as linear light, before the air.
     C += p3d_Material.emission.rgb * texture(p3d_TextureEmission, vUv).rgb;
 #else

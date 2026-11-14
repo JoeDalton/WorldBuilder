@@ -100,7 +100,7 @@ through one `model_<tier>.frag` per shading tier, see
   metalness darkens). A model authored as displayed is decoded with
   `pow(2.2)`; a glTF one is in linear light already (its colour textures
   are sRGB, which the GPU decodes), so `World.track_light` marks its parts
-  (`objects.mark_linear`, a `uBaseLinear` input) and they are not decoded
+  (`objects.mark_model`, a `uBaseLinear` input on each geom's state) and they are not decoded
   again. The alpha is kept.
 - **Light.** At the simple tier, `objectLight`, as the terrain lights its
   ground, with the material's roughness (1, matte, without a material: no
@@ -147,9 +147,9 @@ thousand pixels. `flight_bench.py --flight low`, four alternating pairs
 9.9 / 16.7: within the runs' spread (on average 0.2 / 0.5 ms more with the
 shader). The shots' timed frames differ by less than their noise.
 
-Not done (logged in the repository's `BACKLOG.md`): glTF's occlusion,
-blurred sky reflections, light bounced off the ground, and a depth-only
-stage in the clouds' half-resolution pass.
+Not done (logged in the repository's `BACKLOG.md`): occlusion for models
+without a glTF occlusion map, the ground's own albedo under a model, and a
+depth-only stage in the clouds' half-resolution pass.
 
 ## Physically based shading
 
@@ -190,10 +190,40 @@ The tiers (`ModelSettings.shading`, the `models` section, live: the next
 
 | Tier | Preset | What |
 |---|---|---|
-| `SIMPLE` | LOW | `objectLight`, as the terrain lights its ground |
-| `PBR` | MID | the BRDF, metal, roughness, emission |
-| `PBR_NORMAL` | HIGH | and normal maps |
-| `PBR_SKY` | ULTRA | and the sky's reflection |
+| `SIMPLE` | | `objectLight`, as the terrain lights its ground |
+| `PBR` | | the BRDF, metal, roughness, emission |
+| `PBR_NORMAL` | | and normal maps |
+| `PBR_SKY` | LOW, MID, HIGH | and the sky's reflection |
+| `PBR_FULL` | ULTRA | and occlusion maps, the blurred sky, the ground's bounce |
+
+The cheaper tiers cost too little to set the presets apart (see the cost
+below), so LOW to HIGH share `PBR_SKY` and stay choices of the knob; the
+section reads as the highest preset it equals
+(`QualitySettings.DISTINCT_PRESETS`), so its menu and F8 toggle High and
+Ultra.
+
+`PBR_FULL` adds:
+
+- **glTF's occlusion maps**, which panda3d-gltf does not load:
+  `objects.gltf_occlusion` reads them back from the model's .gltf (its
+  `ModelRoot`'s path) by material name. A map that is the material's
+  metal-roughness texture is its red channel (glTF's ORM packing); another
+  is loaded on its own. `mark_model` gives each geom its map, mode and
+  strength; the occlusion darkens the sky light, and the reflected one by
+  Lagarde's specular occlusion. A model without a map has none (of
+  SpaceFlight's ships: the tie-interceptor and tie-bomber packed, the
+  y-wing's exterior on its own).
+- **The sky blurred by the roughness**: the sky-view table is mipmapped
+  after each bake (`SkyView`; the sky and the stars read its first level),
+  and a reflection reads it at level `roughness x 5` (a 256-texel table
+  blurred to 8 texels; past it, its two halves would meet). Rough metal
+  keeps its sky's gradient, the even sky only at the roughest.
+- **The ground's bounce**: the ground under a model, of albedo
+  `ModelLighting.set_ground_albedo` (`GROUND_ALBEDO`, 0.2), lit by the
+  sunlight where the model is (its own Panda3D sun, which `TrackedLights`
+  sets in every world shadow) and the sky, sends its light up: on the
+  diffuse from below (`0.5 - 0.5 N.up`) and in the environment a
+  downward reflection sees. None in open space.
 
 To look at them: `terrain_shots.py --model .../scene.gltf --pose ship
 ship_fill --models-quality low|mid|high|ultra` (the model whole, and the
@@ -212,6 +242,12 @@ four rounds through the tiers in turn, the median frame in ms:
 | MID | 11.50, 12.00, 10.62, 10.63 | 11.2 |
 | HIGH | 9.95, 9.87, 10.64, 10.77 | 10.3 |
 | ULTRA | 11.08, 11.06, 10.02, 10.94 | 10.8 |
+
+Those rounds were run with LOW to ULTRA as `SIMPLE`, `PBR`, `PBR_NORMAL`
+and `PBR_SKY`. `PBR_FULL` (ULTRA now) against `PBR_SKY` (HIGH now), the same
+pose, four rounds in turn: HIGH 12.93, 10.92, 11.35, 11.05 (mean 11.6),
+ULTRA 11.74, 11.27, 10.85, 11.16 (mean 11.3): no difference past the noise.
+The cockpit has no occlusion map; one map is one more texture read.
 
 MID above HIGH (which does all MID does) puts the noise at about 1 ms: the
 PBR tiers cost at most 0.5-1 ms with a model over the whole screen, and
