@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] 2026-11-14
+
 ### Added
 
 - Physically based shading for the game's models (`World.track_light(node,
@@ -34,13 +36,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the models' preset, and it hangs SpaceFlight's tie-interceptor beside the
   white test ball (`--test-ship`, `--no-test-ship`).
 
+### Changed
+
+- The far sea is no longer a sharp mirror (#55): the rough fresnel and the
+  reflection's blur take the unresolved slopes the grazing flattening hid
+  (capped at 0.4), so far water reflects less and blurrier, its colour
+  showing through, and the seam with the rippled near water fades. LOW
+  (no fresnel table) takes them as a steeper Schlick look.
+
 ### Fixed
 
 - glTF models were decoded to linear light twice: panda3d-gltf loads their
   colour textures as sRGB, and the model shader decoded them again (too
   dark, too saturated). `objects.mark_model` marks the parts authored in
-  linear light (on each geom's state); the base colour is now a PBR material's `baseColor` (its
-  `diffuse` is darkened by its metalness).
+  linear light (on each geom's state); the base colour is now a PBR
+  material's `baseColor` (its `diffuse` is darkened by its metalness).
 
 ## [0.4.0] 2026-11-12
 

@@ -79,6 +79,30 @@ and no look gets the far look only.
     them before.
 - **Domain warp and grazing.** The domain warp and the flattening toward a
   mirror at grazing angles (`detailAngle`) are kept.
+- **The far water** (issue #55). That flattening keeps a facet from turning
+  away from the eye, but it flattened the unresolved slopes' spread too: the
+  rough fresnel and the reflection's blur took a mirror's there, and the
+  far water was a sharp, warped mirror of the sky past a seam with the
+  rippled near water. They now take the spread whole (`farSpread`: the
+  unflattened one as the view grazes, the flattened one where the detail is
+  full, so the near water is as it was), capped at `FAR_SPREAD_MAX` (0.4).
+  Rough water seen low reflects less (its facets turned to the eye) and
+  blurrier, its own colour showing through, continuing the near water's.
+  - The cap: a real sea's rms slope is about 0.2 in a moderate wind (Cox and
+    Munk), but the near water's stylised slopes are steeper: at 0.25 the far
+    water was a mirror again; uncapped (0.5-0.7 near the horizon) a dark
+    band, where a sea brightens toward its horizon. At `open_sea` the
+    horizon's band reads 0.71 of display white before, 0.48 now (0.37
+    uncapped); the near water is unchanged.
+  - Without the rough fresnel's table (LOW), Schlick's fresnel takes the
+    far share as a steeper look: N.V raised by 0.53 times the spread added
+    (`FAR_SCHLICK_GAIN`, the table's least-squares fit, within about 0.1).
+    LOW has no reflection blur: its far water keeps the mirror's sharpness,
+    with its colour.
+  - The blur no longer fades with `detailAngle`: the far reflection is
+    blurred by the far spread (as far as `reflection_blur` goes). The night
+    sea's blocky far reflections (the mirror's coarse texels) soften.
+  - Debug view 10 shows `farSpread`.
 
 ## Swell
 
