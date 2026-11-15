@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from panda3d.core import NodePath, Vec3
+from panda3d.core import LVecBase4f, NodePath, PTA_LVecBase4f, Vec3
 
 from world_builder.atmosphere import bind_defaults
 from world_builder.clouds.cloud import PRESETS, CloudType
@@ -19,8 +19,9 @@ from world_builder.clouds.field_setup import SHADE_CACHE_SIZE, _noise
 from world_builder.clouds.noise import (
     CLOUD_SHADOW_STEP_SCALE,
     DECK_LIGHT_COS_MIN,
-    LAYER_VEC4S,
-    MAX_LAYERS,
+    DETAIL_LEVELS,
+    GENUS_VEC4S,
+    MAX_GENERA,
     NOISE_FEATURE,
     NOISE_SIZE,
     build_deck_light_texture,
@@ -165,6 +166,13 @@ def test_more_cover_more_shadow(field, table):
         assert np.all(more >= less - 1e-12)
     assert depths[0].mean() < depths[-1].mean()
     assert 0.0 < (depths[1] > 0).mean() < 1.0  # broken cover: some sun, some shade
+
+
+def _level_octaves(octaves: int) -> PTA_LVecBase4f:
+    """``detailOctaves`` with level 0 at *octaves* (getField(0)'s)."""
+    levels = PTA_LVecBase4f.empty_array(DETAIL_LEVELS // 4)
+    levels[0] = LVecBase4f(float(octaves), 0.0, 0.0, 0.0)
+    return levels
 
 
 # ── cloudShadowDepth read back ─────────────────────────────────────────────────
@@ -356,7 +364,7 @@ void main() {
     fragColor = vec4(r, g, v - r * 65536.0 - g * 256.0, 255.0) / 255.0;
 }
 """
-    params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
+    params = PTA_LVecBase4f.empty_array((MAX_GENERA + 1) * GENUS_VEC4S)
     packed = pack_layer_params(
         field,
         extinction=field.density,
@@ -377,6 +385,9 @@ void main() {
         noiseOffset=Vec3(0.0, 0.0, 0.0),
         sunDir=Vec3(0.0, 0.0, 1.0),
         layerParams=params,
+        # Layer 0: genus 0 at level 0, its two octaves, no threshold offset
+        genusLevelOffset=PTA_LVecBase4f.empty_array(MAX_GENERA * DETAIL_LEVELS // 4),
+        detailOctaves=_level_octaves(2),
         planetRadius=R,
         weatherMap=build_weather_texture(cube),
         uCloudDebug=0,
@@ -760,7 +771,7 @@ void main() {
     fragColor = vec4(r, g, v - r * 65536.0 - g * 256.0, 255.0) / 255.0;
 }
 """
-    params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
+    params = PTA_LVecBase4f.empty_array((MAX_GENERA + 1) * GENUS_VEC4S)
     packed = pack_layer_params(
         field,
         extinction=field.density,
@@ -781,6 +792,9 @@ void main() {
         noiseOffset=Vec3(0.0, 0.0, 0.0),
         sunDir=Vec3(0.0, 0.0, 1.0),
         layerParams=params,
+        # Layer 0: genus 0 at level 0, its two octaves, no threshold offset
+        genusLevelOffset=PTA_LVecBase4f.empty_array(MAX_GENERA * DETAIL_LEVELS // 4),
+        detailOctaves=_level_octaves(2),
         planetRadius=R,
         weatherMap=build_weather_texture(cube),
         uCloudDebug=0,

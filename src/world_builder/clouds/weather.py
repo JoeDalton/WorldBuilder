@@ -255,6 +255,42 @@ def build_weather_texture(cube: np.ndarray) -> Texture:
     return tex
 
 
+def build_coverage_texture(cube: np.ndarray) -> Texture:
+    """A (6, n, n, 4) coverage cube (:func:`genera.coverage_cube`) as an
+    RGBA16F cube map, linearly filtered: each channel one genus's coverage."""
+    size = cube.shape[1]
+    tex = Texture("cloud_genus_coverage")
+    tex.setup_cube_map(size, Texture.T_float, Texture.F_rgba16)
+    # Panda keeps an RGBA texture's RAM image as BGRA.
+    data = np.ascontiguousarray(cube[..., [2, 1, 0, 3]], dtype=np.float32)
+    tex.set_ram_image(data.tobytes())
+    tex.set_magfilter(SamplerState.FT_linear)
+    tex.set_minfilter(SamplerState.FT_linear)
+    tex.set_wrap_u(SamplerState.WM_clamp)
+    tex.set_wrap_v(SamplerState.WM_clamp)
+    return tex
+
+
+def build_shift_texture(tables: list) -> Texture:
+    """The genera's coverage-to-shift tables (:func:`shift_table`) as one
+    R32F texture, a row each (``genusShift``: x the coverage, linearly
+    filtered as :func:`coverage_to_shift` interpolates; y the genus's row,
+    read at its centre), :data:`noise.MAX_GENERA` rows, unused ones 0."""
+    from world_builder.clouds.noise import MAX_GENERA
+
+    rows = np.zeros((MAX_GENERA, SHIFT_TABLE_SIZE), dtype=np.float32)
+    for row, table in enumerate(tables):
+        rows[row] = np.asarray(table, dtype=np.float32)
+    tex = Texture("cloud_genus_shift")
+    tex.setup_2d_texture(SHIFT_TABLE_SIZE, MAX_GENERA, Texture.T_float, Texture.F_r32)
+    tex.set_ram_image(rows.tobytes())
+    tex.set_magfilter(SamplerState.FT_linear)
+    tex.set_minfilter(SamplerState.FT_linear)
+    tex.set_wrap_u(SamplerState.WM_clamp)
+    tex.set_wrap_v(SamplerState.WM_clamp)
+    return tex
+
+
 # ── Coverage to the field's shift ──────────────────────────────────────────────
 
 

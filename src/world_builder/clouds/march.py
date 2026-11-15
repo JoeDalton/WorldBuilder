@@ -123,8 +123,12 @@ from world_builder.clouds.field_setup import (
 )
 from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
 from world_builder.clouds.noise import (
+    DECK_LAYER,
     DECK_LIGHT_COS_MIN,
+    DETAIL_LEVELS,
+    GENUS_VEC4S,
     LAYER_VEC4S,
+    MAX_GENERA,
     MAX_LAYERS,
     NOISE_FEATURE,
     NOISE_SIZE,
@@ -289,6 +293,55 @@ def family_segments(
         for t0, t1 in slab_segments(origin, direction, radius, slab, t_start, t_end):
             if t1 > t0:
                 out.append((float(t0), float(t1), family))
+    return sorted(out)
+
+
+#: The most sky bands the march takes a ray through (each up to two
+#: stretches: cloud_march.frag's eight segments). MUST match the shader.
+MAX_SKY_BANDS = 4
+
+
+def sky_bands(slabs: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """The genera's slabs merged into the disjoint bands of sky the march
+    takes a ray through (overlapping or touching slabs are one band; a gap
+    between two costs no steps), lowest first.
+
+    :param slabs: each genus's (base, thickness) above sea level, metres
+    :returns: each band's (base, thickness)
+    :raises ValueError: for more than :data:`MAX_SKY_BANDS` bands
+    """
+    bands: list[list[float]] = []
+    for base, thickness in sorted(slabs):
+        top = base + thickness
+        if bands and base <= bands[-1][1]:
+            bands[-1][1] = max(bands[-1][1], top)
+        else:
+            bands.append([base, top])
+    if len(bands) > MAX_SKY_BANDS:
+        raise ValueError(f"{len(bands)} bands of sky; the march takes {MAX_SKY_BANDS}")
+    return [(float(b), float(t - b)) for b, t in bands]
+
+
+def band_segments(
+    origin: ArrayLike,
+    direction: ArrayLike,
+    radius: float,
+    slabs: list[tuple[float, float]],
+    t_start: float = 0.0,
+    t_end: float = math.inf,
+) -> list[tuple[float, float, int]]:
+    """The stretches of a ray in the genera's bands of sky (:func:`sky_bands`
+    of *slabs*), sorted along the ray (the shader's eight segments).
+
+    :param slabs: each genus's (base, thickness) above sea level, metres
+    :returns: (t0, t1, band) of each non-empty stretch, the band its index in
+        :func:`sky_bands`
+    """
+    out = []
+    for band, slab in enumerate(sky_bands(slabs)):
+        for t0, t1 in slab_segments(origin, direction, radius, slab, t_start, t_end):
+            if t1 > t0:
+                out.append((float(t0), float(t1), band))
     return sorted(out)
 
 
@@ -1467,8 +1520,12 @@ class CloudMarch:
         self._map_binders: list[Any] = []
         self._casters = [_FamilyCaster(self, i) for i in range(len(self._families))]
         self._family_textures: list[tuple[Any, Any]] = []
-        self._layer_far = PTA_float.empty_array(MAX_LAYERS)
-        self._layer_params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
+        self._layer_far = PTA_float.empty_array(DETAIL_LEVELS)
+        self._layer_params = PTA_LVecBase4f.empty_array((MAX_GENERA + 1) * GENUS_VEC4S)
+        self._level_offsets = PTA_LVecBase4f.empty_array(
+            MAX_GENERA * DETAIL_LEVELS // 4
+        )
+        self._level_octaves = PTA_LVecBase4f.empty_array(DETAIL_LEVELS // 4)
         params, self._deck_jobs = self._configure(settings)
         self._write_params(params)
 
@@ -1505,6 +1562,8 @@ class CloudMarch:
         self._layer_count[0] = self._layers_used
         self._inputs: dict[str, Any] = {
             "layerParams": self._layer_params,
+            "genusLevelOffset": self._level_offsets,
+            "detailOctaves": self._level_octaves,
             "cloudNoise": build_noise_texture(volume),
             "noiseSize": float(NOISE_SIZE),
             "noiseOffset": Vec3(0, 0, 0),
@@ -1542,8 +1601,8 @@ class CloudMarch:
             "uCurlNoise": _curl_texture(),
             "uCurlStrength": CURL_STRENGTH,
             "uCurlFrequency": CURL_FREQUENCY,
-            # The deck's (cloud_deck.vert, cloud.frag)
-            "uDeckLayer": self._layers_used - 1,
+            # The deck's (cloud_deck.vert, cloud.frag): its own entry
+            "uDeckLayer": DECK_LAYER,
         }
         self._nodes: list[NodePath] = []
         self._bind(self.root)
@@ -1694,7 +1753,7 @@ class CloudMarch:
         self._settings = settings
         params, deck_jobs = self._configure(settings)
         self._write_params(params)
-        self._set_inputs(uDeckLayer=self._layers_used - 1)
+        self._set_inputs(uDeckLayer=DECK_LAYER)
         if old.shell_octaves[-1:] != settings.shell_octaves[-1:]:
             names = ("deckLight", "otherDeckLight")
             for index, job in enumerate(deck_jobs):
@@ -1722,29 +1781,44 @@ class CloudMarch:
             self.root.hide(REFLECTION_CAMERA_MASK)
 
     def _configure(self, settings: CloudSettings) -> tuple[np.ndarray, list[Any]]:
-        """Pack the march's layers: for each family, one per billboard
-        shell's distance band (its octaves), then its far one, which the
-        reflection's deck shares (the first family's). The families share the
-        bands' distances; with two, the layers (at most :data:`MAX_LAYERS`
-        between them) are fewer bands each.
+        """Pack the march's parameters: an entry per family (its field at
+        its full octaves), each detail level's octaves and, per family, the
+        threshold offset that keeps its coverage with them (the octave bands
+        by distance, then the far level, which the shadows are marched in),
+        and the deck's own entry (the first family's far level, its optical
+        depth capped). The families share the levels' distances; with two,
+        they take fewer bands each (as when every level was an entry of its
+        own: the same look).
 
-        :returns: the packed layer parameters, and each family's far layer's
-            light table being made in the pool (futures)
+        :returns: the packed parameters, and each family's far level's light
+            table being made in the pool (futures)
         """
         seed = self._seed
         families = len(self._families)
         shells = max(min(settings.octave_bands, MAX_LAYERS // families - 1), 1)
         schedule = settings.shell_octaves
         _, bands = octave_bands(self.grid, shells)
-        params = np.zeros((MAX_LAYERS, LAYER_VEC4S, 4), dtype=np.float32)
-        far = np.zeros(MAX_LAYERS, dtype=np.float32)
+        params = np.zeros((MAX_GENERA + 1, GENUS_VEC4S, 4), dtype=np.float32)
+        offsets = np.zeros(MAX_GENERA * DETAIL_LEVELS, dtype=np.float32)
+        octave_counts = np.zeros(DETAIL_LEVELS, dtype=np.float32)
+        far = np.zeros(DETAIL_LEVELS, dtype=np.float32)
         stride = shells + 1
         jobs = []
+        for k in range(stride):
+            octave_counts[k] = schedule[min(k, len(schedule) - 1)]
+            if k < shells:
+                far[k] = 0.5 * sum(bands[k])  # mid-band: where the levels cross
         for index, family in enumerate(self._families):
             field, peaks = family.field, family.peaks
             optics = scale_march(family.preset, settings.march_scale).optics
+            # Per metre of the view's path
+            extinction = field.density * VIEW_EXTINCTION_SCALE
+            params[index, :LAYER_VEC4S] = pack_layer_params(
+                field, extinction=extinction, octave_mean=self._octave_mean,
+                optics=optics, octaves=4,
+            )  # fmt: skip
             for k in range(stride):
-                octaves = schedule[min(k, len(schedule) - 1)]
+                octaves = int(octave_counts[k])
                 layer = OctaveBand(
                     0,
                     (0.0, 0.0),
@@ -1752,23 +1826,15 @@ class CloudMarch:
                     octaves,
                     octave_offset(peaks, _peaks(seed, field, self.radius, octaves)),
                 )
-                # The far layer is the reflection's deck too: its cap, no fade.
-                layer_optics = (
-                    replace(optics, max_optical_depth=DECK_MAX_OPTICAL_DEPTH)
-                    if k == shells
-                    else optics
-                )
-                params[index * stride + k] = pack_layer_params(
-                    layer.field_of(field),
-                    # Per metre of the view's path
-                    extinction=field.density * VIEW_EXTINCTION_SCALE,
-                    octave_mean=self._octave_mean,
-                    optics=layer_optics,
-                    octaves=octaves,
-                )
-                if k < shells and index == 0:
-                    far[k] = 0.5 * sum(bands[k])  # mid-band: where the shells cross
+                offsets[index * DETAIL_LEVELS + k] = layer.threshold_offset
+            # The far level is the reflection's deck too: its cap, no fade.
+            layer_optics = replace(optics, max_optical_depth=DECK_MAX_OPTICAL_DEPTH)
             deck = layer.field_of(field)
+            if index == 0:
+                params[MAX_GENERA, :LAYER_VEC4S] = pack_layer_params(
+                    deck, extinction=extinction, octave_mean=self._octave_mean,
+                    optics=layer_optics, octaves=octaves,
+                )  # fmt: skip
             # The deck's field and optics: the one its shadow is marched in.
             family.deck_field = deck
             family.deck_optics = layer_optics
@@ -1785,6 +1851,8 @@ class CloudMarch:
             )
         self._layers_used = stride
         self._far_values = far
+        self._offset_values = offsets
+        self._octave_values = octave_counts
         return params, jobs
 
     def _write_params(self, params: np.ndarray) -> None:
@@ -1792,6 +1860,10 @@ class CloudMarch:
             self._layer_params[i] = LVecBase4f(*(float(v) for v in row))
         for i, value in enumerate(self._far_values):
             self._layer_far[i] = float(value)
+        for i, row in enumerate(self._offset_values.reshape(-1, 4)):
+            self._level_offsets[i] = LVecBase4f(*(float(v) for v in row))
+        for i, row in enumerate(self._octave_values.reshape(-1, 4)):
+            self._level_octaves[i] = LVecBase4f(*(float(v) for v in row))
         if hasattr(self, "_layer_count"):
             self._layer_count[0] = self._layers_used
 
@@ -1833,6 +1905,8 @@ class CloudMarch:
         node.set_shader_inputs(
             cloudNoise=self._inputs["cloudNoise"],
             layerParams=self._layer_params,
+            genusLevelOffset=self._level_offsets,
+            detailOctaves=self._level_octaves,
             planetRadius=self.radius,
             sunDir=self._sun,
             noiseSize=float(NOISE_SIZE),
@@ -1860,7 +1934,7 @@ class CloudMarch:
         ready = self.weather is not None
         stride = self._layers_used
         for index, layer in enumerate(self._shadow_layers):
-            layer[0] = index * stride + stride - 1 if ready else -1
+            layer[0] = index * DETAIL_LEVELS + stride - 1 if ready else -1
         self._shadow_nodes = [n for n in self._shadow_nodes if not n[0].is_empty()]
         if ready:
             for node, first, other in self._shadow_nodes:

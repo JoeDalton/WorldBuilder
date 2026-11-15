@@ -280,7 +280,7 @@ void main() {
         if (i >= uFamilies) {
             break;
         }
-        Field slabField = getField(i * uLayerCount);
+        Field slabField = getField(i * DETAIL_LEVELS);
         float rBase = planetRadius + slabField.slabBase;
         vec2 top = sphereInterval(camPos, dir, rBase + slabField.slabThickness);
         vec2 base = sphereInterval(camPos, dir, rBase);
@@ -408,7 +408,7 @@ void main() {
             }
             float t = a + dt * jitter;
             steps++;
-            int layer = fam * uLayerCount + layerAt(t);
+            int layer = fam * DETAIL_LEVELS + layerAt(t);
             if (layer != current) {
                 lf = getField(layer);
                 current = layer;

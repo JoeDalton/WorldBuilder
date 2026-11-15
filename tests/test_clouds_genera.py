@@ -33,6 +33,7 @@ from world_builder.clouds.noise import (
     ANVIL_SMOOTH_BAND,
     CELL_OFFSET,
     CELL_SCALE,
+    DETAIL_LEVELS,
     SHELF_BAND,
     SHELF_CLEAR,
     SHELF_COVERAGE,
@@ -513,7 +514,7 @@ def test_the_raymarch_marches_both_families_and_casts_both_shadows(
         stride = march._layers_used
         assert [march.shadow_caster(i).shadow_layer for i in (0, 1)] == [
             stride - 1,
-            2 * stride - 1,
+            DETAIL_LEVELS + stride - 1,  # genus * DETAIL_LEVELS + its far level
         ]
         # Both families shade a point under them, and bind as their own maps'
         # bake does (the stratus's alone as the first)

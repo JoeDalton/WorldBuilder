@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.noise import (
     DensityField,
     _smoothstep,
@@ -108,6 +109,30 @@ class Feature:
     coverage: float = 0.6
 
 
+@dataclass(frozen=True)
+class GenusPreset:
+    """A genus of the union march (:class:`noise.GenusField`'s source):
+    its cloud type (the preset's field and optics), where its coverage comes
+    from, its far shadow, and its slab when not the type's.
+
+    :ivar slab: (base, thickness) above sea level, metres; None = the type's
+        (the stratus's base is :attr:`GeneraSpec.stratus_altitude`)
+    """
+
+    cloud_type: CloudType
+    coverage: tuple = ("weather", 0)
+    far_shadow: float = 0.0
+    slab: tuple | None = None
+
+
+#: The genera by name: the primary one (the convective clouds) reads the
+#: weather cube, the others a channel of a coverage cube.
+GENUS_PRESETS = {
+    "convective": GenusPreset(CloudType.CONVECTIVE),
+    "stratus": GenusPreset(CloudType.STRATUS, ("A", 0), far_shadow=1.0),
+}
+
+
 #: The demo's: within view of the demo's start, a cumulonimbus 40 km north
 #: ringed by congestus, another 70 km north-east, a line of congestus to the
 #: west, and a stratus deck to the south.
@@ -139,6 +164,7 @@ class GeneraSpec:
     features: tuple[Feature, ...] = field(default=DEFAULT_FEATURES)
     stratus_altitude: float = 900.0
     wind: tuple[float, float] | None = None
+    genera: tuple[str, ...] = ("convective", "stratus")
 
 
 def _feature_dirs(spec: GeneraSpec) -> list[tuple[Feature, np.ndarray, float]]:
@@ -337,3 +363,40 @@ def genus_cube(
     else:
         raise ValueError(f"unknown family {family!r}")
     return np.stack([c.astype(np.float32) for c in channels], axis=-1)
+
+
+def coverage_cube(
+    spec: GeneraSpec, cube: str = "A", size: int = GENUS_SIZE
+) -> np.ndarray:
+    """A coverage cube of the union march: each genus of *spec* whose
+    coverage is a channel of *cube* (:attr:`GenusPreset.coverage`) has its
+    coverage map there, the others' channels 0. The shift comes from each
+    genus's own table (:func:`genus_weather_at`, ``genusShift`` on the GPU).
+
+    :param cube: ``"A"`` or ``"B"``
+    :returns: (6, size, size, 4) float32
+    """
+    planes = genus_planes(spec, size)
+    out = np.zeros(planes.shape[:-1] + (4,), dtype=np.float32)
+    maps = {"stratus": planes[..., 2]}
+    for name in spec.genera:
+        source, channel = GENUS_PRESETS[name].coverage
+        if source == cube and name in maps:
+            out[..., channel] = maps[name]
+    return out
+
+
+def genus_weather_at(
+    cube: np.ndarray, channel: int, table: np.ndarray, points: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """A genus's weather at *points* from a coverage cube (the shader's
+    ``genusWeather``): the coverage filtered off its channel, then the shift
+    its table gives that coverage.
+
+    :param cube: (6, n, n, 4) :func:`coverage_cube`
+    :param table: its shift table (:func:`weather.shift_table`)
+    :param points: (..., 3) planet frame
+    :returns: (coverage, shift), each (...)
+    """
+    coverage = sample_cube(cube[..., channel], points)
+    return coverage, coverage_to_shift(coverage, np.asarray(table))

@@ -326,39 +326,97 @@ Approach:
 
 ---
 
-## Phase 3: The union-march genus framework (refined when phase 2 lands)
+## Phase 3: The union-march genus framework (refined 2026-11-15)
 
-### Task 8: `GenusField` and the genus registry
-`noise.py`: a `GenusField` dataclass. Its fields:
+Design (Plan-agent review of the code, accepted):
+- **Sky bands.** Genus slabs merge in Python into at most 4 disjoint sky
+  bands (`sky_bands`). The shader keeps today's segment code per *band*
+  (≤ 2 segments each, ≤ 8, insertion-sorted), so `SEGMENT_SAMPLES`,
+  `stretch`, `boundary` and the jitter are unchanged and gaps between bands
+  cost no steps. Inside a segment, each genus whose slab holds the sample and
+  whose coverage > 0 adds its density.
+- **One light volume and one shadow-map pair** of the summed density
+  (`SLICES` 64, the chart over the union slab). Each genus has a
+  `far_shadow` weight: the light volume's depth beyond the genus's sun window
+  is added (stratus 1: today's full chord from the Cb; convective 0).
+- **Weather.** Genus 0, the primary genus, keeps the full weather cube
+  (coverage, shift, depth, spread): planets without genera are one genus and
+  unchanged. The others read the coverage cubes (`genusCoverA`: St, Sc, Ns,
+  As; later `genusCoverB`: Ac, Ci, Cs, Cc), RGBA16F, each turned into an fbm
+  shift by a row of `genusShift` (256 × `MAX_GENERA`, R32F).
+- **Parameters.** There is one `layerParams` entry per genus
+  (`LAYER_VEC4S` 16; row 13 is `(coverageSource, coverageChannel, shiftRow,
+  farShadow)`). The octave bands become detail levels: `uDetailFar`,
+  `uDetailOctaves` and `genusLevelOffset[genus*8+level]`. There is also a
+  deck slot at `MAX_GENERA`. `MAX_GENERA` is 10, about 205 vec4 in all.
+- **Deck.** Genus 0's only, as today.
+- **API.** `PlanetClouds.shadow_families` and `uCloudShadowOther` go. One
+  caster (`_UnionCaster`) computes `sun_visibility = exp2(-Σ depth_g)`.
+- **Performance.** Expected within ±0.2 ms. Later phases must skip genera at
+  zero coverage before any noise, and light once per sample.
 
-- slab base and top;
-- `bottom_profile` and `top_profile` as (shape, softness) pairs;
-- `noise_kind` in {`"value"`, `"worley"`, `"streaks"`};
-- `feature_size`, `anisotropy` (along-wind, across, vertical) and octave count;
-- `erosion_kind` in {`"billowy"`, `"wispy"`}, `erosion` and `skin`;
-- window, extinction, `optics`, and `coverage_channel`.
+### Task 8: Genus model and CPU geometry (pure Python)
+- `noise.GenusField` is frozen: `name`, `field`, `optics`, `coverage`
+  (`("weather", 0)` or `("A", ch)`), `far_shadow`, `noise_kind="value"`.
+- `noise.pack_genus_params(genus, extinction, octave_mean, octaves)` packs
+  rows 0–12 as now, plus row 13.
+- `genera.GENUS_PRESETS` holds `GenusPreset(cloud_type, coverage,
+  far_shadow, slab=None)` for `"convective"` and `"stratus"`;
+  `GeneraSpec.genera = ("convective", "stratus")`.
+- In march.py, `sky_bands(slabs) -> list[(base, top)]` and
+  `band_segments(...)` replace `family_segments`; there are per-level
+  threshold offsets.
+- Tests:
+  - band merging for overlapping, disjoint and nested slabs;
+  - `band_segments` equals the old `family_segments` on disjoint slabs;
+  - the row contract of `pack_genus_params`;
+  - the uniform total is ≤ 256 vec4.
 
-It comes with a NumPy density mirror and `pack_genus_params`.
+### Task 9: Coverage cubes, shift texture, deck light array (not wired)
+- `genera.coverage_cube(spec, "A")`, `weather.build_shift_texture(tables)`,
+  `noise.build_deck_light_array`, `genus_weather_at` (CPU).
+- Tests:
+  - stratus coverage within 5 % through coverage + table;
+  - convective cube unchanged;
+  - `test_the_families_cubes` becomes a cube-A test.
 
-The existing convective and stratus fields are expressed as genera, the convective one keeping
-its depth, cell and shelf. Tests check each genus's mirror against hand-computed points and its
-slab bounds.
+### Task 10: Uniform layout swap, no behaviour change
+- The new `layerParams` layout and `genusField(g, level)` go into every
+  shader and bake. The families and `other*` samplers stay for now.
+- Verify: shots at `genera_cb`, `genera_congestus`, `clouds_noon` and
+  `night_sea` (`--start 29.7159 29.8232`) are pixel-identical before and
+  after, as a numeric image diff. Adapt the layer-packing and family tests.
 
-### Task 9: Genus cubes and per-genus shift tables
-In `genera.py`, three RGBA cubes:
+### Task 11: Union light resources (riskiest)
+- Covers: one volume, one map pair, summed bakes (`genusSampleDensity`,
+  `skyChord`), `far_shadow`, the receivers (`ground_shadow.frag`,
+  `terrain_light.glsl`, `model_light.glsl`, `god_rays.glsl`), the CPU
+  `sun_visibility`, and `light_depth_on_sphere` for a list of genera.
+- Tests:
+  - one bake checked against the CPU over both feature sites;
+  - the union map against the CPU twin;
+  - the ground-shadow twin;
+  - `sun_visibility` equals the old product.
+- Shots: a diff where only small stratus-lighting differences are allowed;
+  `--cloud-debug 512` and `1024`.
 
-- convective: coverage, shift, depth, spread;
-- stratiform: St, Sc, Ns, As;
-- mid/high: Ac, Ci, Cs, Cc.
+### Task 12: Union view march (risky)
+- Sky-band segments, the genus loop, the stratus from cube A + `genusShift`,
+  `genusDeckLight` as a 2D array. `otherWeather`, `otherDeckLight`,
+  `uFamilies` and `cloudRadianceOther` go.
+- Tests:
+  - shader constants against the CPU;
+  - a GPU smoke test with a synthetic third genus (a stratus copy at 3–4 km,
+    inside the convective slab, in cube A's G channel) that renders finite.
+- Shots: `--cloud-debug 8`, near-identical except at stratus edges, then
+  normal shots.
 
-Plus a per-genus 1D coverage→shift texture. Tests: coverage within 5 % for every genus.
-
-### Task 10: `genusDensity` and the union march
-In `cloud_field.glsl`, `genusDensity(p)` adds up the active genera. `cloud_march.frag` clips each
-ray to the union of the band slabs, replacing the per-family sorted segments. `march.py` gets the
-NumPy mirror of the new segment clipping, with tests. The sun march, `cloud_light_bake.frag`
-and `cloud_shadow_map.frag` call `genusDensity`. Shots must match phase 2 for the convective and
-stratus genera.
+### Task 13: API cleanup, docs, performance
+- `PlanetClouds`, `CloudShadowMaps` and `CloudLightVolumes` become single
+  resources. `check_layers` drops the stratus-under rule and checks
+  genera ≤ `MAX_GENERA`, sky bands ≤ 4, and the cirrus against the union top.
+- Update `clouds.md` ("Genera", "The raymarch", "The passes").
+- Add the timing rows to `performance.md` §37.
 
 ## Phase 4: Showcase demo
 

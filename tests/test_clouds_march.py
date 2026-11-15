@@ -438,9 +438,21 @@ def test_the_march_packs_a_layer_per_shell_and_the_far_one(showbase, executor):
     try:
         march = clouds.volume
         assert march._layers_used == 3
-        assert march._inputs["uDeckLayer"] == 2
+        # The deck's own entry, after the genera's
+        from world_builder.clouds.noise import DECK_LAYER, MAX_GENERA
+
+        assert march._inputs["uDeckLayer"] == DECK_LAYER
         far = [march._layer_far[i] for i in range(2)]
         assert 0.0 < far[0] < far[1]
+        # A level's octaves and offset: the far level's are the deck's
+        levels = [march._level_octaves[0][i] for i in range(3)]
+        assert all(2 <= o <= 4 for o in levels)
+        deck = MAX_GENERA * 16  # its rows' start (GENUS_VEC4S each)
+        assert march._layer_params[deck + 9][2] == levels[2]
+        offset = march._level_offsets[0][2]
+        assert march._layer_params[deck][3] == pytest.approx(
+            march._layer_params[0][3] + offset
+        )
         # The steps are live
         clouds.set_settings(replace(clouds.settings, march_steps=17))
         assert march._steps[0] == 17

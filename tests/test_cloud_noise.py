@@ -26,7 +26,6 @@ from world_builder.clouds.noise import (
     COVERAGE_LEVELS,
     FORWARD_ANISOTROPY_MAX,
     LAYER_VEC4S,
-    MAX_LAYERS,
     NOISE_FEATURE,
     NOISE_LATTICE,
     NOISE_SIZE,
@@ -809,18 +808,30 @@ def test_both_shaders_size_layerparams_for_every_layer():
 
     Every stage (cloud.frag, cloud_deck.vert, ...) declares it through their
     shared include, cloud_field.glsl, which must hold exactly
-    MAX_LAYERS * LAYER_VEC4S.
+    (MAX_GENERA + 1) * GENUS_VEC4S: every genus's entry and the deck's; and
+    the level arrays their sizes.
     """
-    expected = MAX_LAYERS * LAYER_VEC4S
+    from world_builder.clouds.noise import DETAIL_LEVELS, GENUS_VEC4S, MAX_GENERA
+
+    expected = (MAX_GENERA + 1) * GENUS_VEC4S
     for name in ("cloud_field.glsl",):
         source = Path(_SHADERS / name).read_text()
         match = re.search(r"uniform\s+vec4\s+layerParams\[(\d+)\]", source)
         assert match, f"layerParams declaration not found in {name}"
         assert int(match.group(1)) == expected, (
             f"{name} declares layerParams[{match.group(1)}], "
-            f"expected {expected} = MAX_LAYERS({MAX_LAYERS}) * "
-            f"LAYER_VEC4S({LAYER_VEC4S})"
+            f"expected {expected} = (MAX_GENERA + 1) * GENUS_VEC4S"
         )
+        offsets = re.search(r"uniform\s+vec4\s+genusLevelOffset\[(\d+)\]", source)
+        assert int(offsets.group(1)) == MAX_GENERA * DETAIL_LEVELS // 4
+        octaves = re.search(r"uniform\s+vec4\s+detailOctaves\[(\d+)\]", source)
+        assert int(octaves.group(1)) == DETAIL_LEVELS // 4
+        for name, value in (
+            ("GENUS_VEC4S", GENUS_VEC4S),
+            ("MAX_GENERA", MAX_GENERA),
+            ("DETAIL_LEVELS", DETAIL_LEVELS),
+        ):
+            assert re.search(rf"const int {name} = {value};", source), name
         # And the stride constant the accessors index with must agree too.
         stride = re.search(r"LAYER_VEC4S\s*=\s*(\d+)", source)
         assert stride, f"LAYER_VEC4S constant not found in {name}"

@@ -11,10 +11,18 @@ uniform vec3  noiseOffset;       // wind advection, in METRES
 uniform float noiseSize;         // volume resolution, for the coord → uvw divide
 uniform vec3  sunDir;            // FROM the scene TOWARD the sun, normalised
 
-// LAYER_VEC4S per cloud type, mirroring noise.pack_layer_params. Size is
-// MAX_LAYERS * LAYER_VEC4S (a test checks it): too small reads out of bounds,
-// and a mismatch with cloud_sphere.vert fails to link.
-uniform vec4 layerParams[104];
+// GENUS_VEC4S per genus of the union march (noise.pack_genus_params: its
+// field's LAYER_VEC4S rows, then its coverage row), MAX_GENERA of them, then
+// the deck's. Size (MAX_GENERA + 1) * GENUS_VEC4S (a test checks it): too
+// small reads out of bounds.
+uniform vec4 layerParams[176];
+// A genus's detail levels (the march's octave bands by distance, then its far
+// one): each level's threshold offset (genusLevelOffset, genus * DETAIL_LEVELS
+// + level, four a vec4: the coverage holds with fewer octaves) and octaves
+// (detailOctaves, four a vec4). getField(layer) reads layer = genus *
+// DETAIL_LEVELS + level; DECK_LAYER the deck's own entry, its level baked.
+uniform vec4 genusLevelOffset[20];
+uniform vec4 detailOctaves[2];
 
 uniform float planetRadius;      // sea-level radius
 // The weather (clouds.weather), by direction from the planet centre:
@@ -65,6 +73,10 @@ uniform vec4  otherFarChart[4];
 uniform int   otherShadowMapOn;
 
 const int LAYER_VEC4S = 13;
+const int GENUS_VEC4S = 16;           // noise.GENUS_VEC4S
+const int MAX_GENERA = 10;            // noise.MAX_GENERA
+const int DETAIL_LEVELS = 8;          // noise.DETAIL_LEVELS
+const int DECK_LAYER = MAX_GENERA * DETAIL_LEVELS;
 // A noise lattice cell, in noise coordinates (noise.NOISE_FEATURE).
 const float NOISE_FEATURE = 4.0;
 // The ground shadow's march steps, in the layer's sunStepLength
@@ -124,7 +136,9 @@ struct Field {
 };
 
 Field getField(int layer) {
-    int b = layer * LAYER_VEC4S;
+    int genus = layer / DETAIL_LEVELS;
+    int level = layer - genus * DETAIL_LEVELS;
+    int b = genus * GENUS_VEC4S;
     vec4 v0 = layerParams[b + 0];
     vec4 v3 = layerParams[b + 3];
     vec4 v4 = layerParams[b + 4];
@@ -166,6 +180,15 @@ Field getField(int layer) {
     f.forwardAnisotropy = v9.y;
     f.octaves         = int(v9.z + 0.5);
     f.octaveMean      = v9.w;
+    if (genus < MAX_GENERA) {
+        // The level's octaves and the threshold offset that keeps the
+        // coverage with them (the deck's entry has its own baked in).
+        int k = genus * DETAIL_LEVELS + level;
+        float offset = genusLevelOffset[k / 4][k - (k / 4) * 4];
+        f.threshLo += offset;
+        f.threshHi += offset;
+        f.octaves = int(detailOctaves[level / 4][level - (level / 4) * 4] + 0.5);
+    }
     if ((uCloudDebug & 4) != 0) {
         f.octaves = min(f.octaves, 2);
     }

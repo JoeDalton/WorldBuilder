@@ -12,7 +12,12 @@ import functools
 import numpy as np
 from panda3d.core import NodePath, PTA_LVecBase4f, Texture, Vec3
 
-from world_builder.clouds.noise import LAYER_VEC4S, MAX_LAYERS, build_deck_light_texture
+from world_builder.clouds.noise import (
+    DETAIL_LEVELS,
+    GENUS_VEC4S,
+    MAX_GENERA,
+    build_deck_light_texture,
+)
 
 
 @functools.cache
@@ -43,12 +48,14 @@ def cloud_shadow_defaults(node: NodePath) -> None:
     """Give a node "no clouds overhead" inputs for cloud_field.glsl's
     ``cloudShadowDepth`` (``uCloudShadowLayer`` -1), so a shader that
     includes it (the terrain's) runs without clouds, until
-    :meth:`sphere.CloudVolume.bind_shadow_inputs` overrides them.
+    :meth:`march.CloudMarch.bind_shadow_inputs` overrides them.
     """
-    params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
+    params = PTA_LVecBase4f.empty_array((MAX_GENERA + 1) * GENUS_VEC4S)
     node.set_shader_inputs(
         cloudNoise=_no_noise(),
         layerParams=params,
+        genusLevelOffset=PTA_LVecBase4f.empty_array(MAX_GENERA * DETAIL_LEVELS // 4),
+        detailOctaves=PTA_LVecBase4f.empty_array(DETAIL_LEVELS // 4),
         weatherMap=_no_weather(),
         deckLight=_no_deck_light(),
         deckLightCosMin=0.0,

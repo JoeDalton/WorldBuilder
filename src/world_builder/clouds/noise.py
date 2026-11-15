@@ -947,6 +947,76 @@ def pack_layer_params(
     )
 
 
+#: The union march's genera (clouds.march): at most this many, each one
+#: entry of the layer parameters (:func:`pack_genus_params`, this many vec4s;
+#: :data:`LAYER_VEC4S` of the field's, then its coverage row), plus the
+#: deck's. MUST match cloud_field.glsl.
+MAX_GENERA = 10
+GENUS_VEC4S = 16
+#: The march's detail levels (its octave bands by distance, then the far
+#: one): a threshold offset each per genus.
+DETAIL_LEVELS = 8
+#: Where a genus's coverage comes from: the primary genus's weather cube
+#: (coverage, shift, depth, spread), or a channel of a coverage cube.
+COVERAGE_SOURCES = {"weather": 0, "A": 1, "B": 2}
+#: The deck's entry of the layer parameters (after the genera's), as the
+#: layer index the shaders' ``getField`` reads it by: its level baked in.
+DECK_LAYER = MAX_GENERA * DETAIL_LEVELS
+
+
+@dataclass(frozen=True)
+class GenusField:
+    """One genus of the union march: a density field over its own slab (which
+    may overlap another genus's), its optics, where its coverage comes from,
+    and how much of the light volume's depth beyond its sun window shades it.
+
+    :ivar name: the genus's name (:data:`genera.GENUS_PRESETS`' key)
+    :ivar field: its resolved density field (slab, noise, profile)
+    :ivar optics: its optics
+    :ivar coverage: (source, channel): ``("weather", 0)`` for the primary
+        genus (the weather cube's coverage, shift, depth and spread), else a
+        coverage cube's channel (``"A"`` or ``"B"``, 0-3), its shift from a
+        table row of its own
+    :ivar far_shadow: the share of the clouds' depth beyond its sun window
+        (the light volume's, toward the sun) that shades it: 1 for a genus
+        under deep clouds (the stratus under a cumulonimbus), 0 for the
+        convective clouds (their own window carries their form)
+    :ivar noise_kind: its base noise (``"value"``: the field's fbm)
+    """
+
+    name: str
+    field: DensityField
+    optics: CloudOptics
+    coverage: tuple = ("weather", 0)
+    far_shadow: float = 0.0
+    noise_kind: str = "value"
+
+
+def pack_genus_params(
+    genus: GenusField,
+    extinction: float,
+    octave_mean: float = 0.5,
+    octaves: int = 4,
+    shift_row: int = 0,
+) -> np.ndarray:
+    """One genus's :data:`GENUS_VEC4S` rows of the layer parameters: its
+    field's (:func:`pack_layer_params`), then (coverage source, channel, its
+    shift table's row, far shadow), then rows reserved for the genus recipes
+    to come (zero).
+
+    :returns: a (GENUS_VEC4S, 4) float32 array
+    """
+    rows = np.zeros((GENUS_VEC4S, 4), dtype=np.float32)
+    field = pack_layer_params(
+        genus.field, extinction, octave_mean=octave_mean, optics=genus.optics,
+        octaves=octaves,
+    )  # fmt: skip
+    rows[: len(field)] = field
+    source, channel = genus.coverage
+    rows[LAYER_VEC4S] = (COVERAGE_SOURCES[source], channel, shift_row, genus.far_shadow)
+    return rows
+
+
 # ── On a planet ────────────────────────────────────────────────────────────────
 
 
@@ -1759,6 +1829,25 @@ def build_deck_light_texture(table: np.ndarray) -> Texture:
     elif channels == 4:
         table = table[..., [2, 1, 0, 3]]
     tex.set_ram_image(np.ascontiguousarray(table, dtype=np.float32).tobytes())
+    tex.set_magfilter(SamplerState.FT_linear)
+    tex.set_minfilter(SamplerState.FT_linear)
+    tex.set_wrap_u(SamplerState.WM_clamp)
+    tex.set_wrap_v(SamplerState.WM_clamp)
+    return tex
+
+
+def build_deck_light_array(tables: list) -> Texture:
+    """The genera's far averages (:func:`deck_light_table`, four channels
+    each, the same shape) as one RGBA32F 2D array texture, a page per genus
+    (``genusDeckLight``), linearly filtered and clamped."""
+    coverages, cosines, _ = np.shape(tables[0])
+    tex = Texture("cloud_genus_deck_light")
+    tex.setup_2d_texture_array(
+        cosines, coverages, len(tables), Texture.T_float, Texture.F_rgba32
+    )
+    data = np.stack([np.asarray(t, dtype=np.float32) for t in tables])
+    # Panda keeps an RGBA texture's RAM image as BGRA
+    tex.set_ram_image(np.ascontiguousarray(data[..., [2, 1, 0, 3]]).tobytes())
     tex.set_magfilter(SamplerState.FT_linear)
     tex.set_minfilter(SamplerState.FT_linear)
     tex.set_wrap_u(SamplerState.WM_clamp)
