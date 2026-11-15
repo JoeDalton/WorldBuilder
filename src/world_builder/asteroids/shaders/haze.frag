@@ -5,7 +5,8 @@
 // quadrature in numpy). Drawn where the ray leaves the field's hull: the
 // interval that ends there, from this camera's near plane on (the far
 // camera of a split starts at the split) to where it leaves the field, past
-// the far plane if it must. The bodies' shadows across the field (a
+// the far plane if it must (the near camera of a split stops at its far
+// plane: the far camera draws beyond). The bodies' shadows across the field (a
 // planet's on its ring) dim each sample's sunlight.
 
 #pragma include "../../atmosphere/shaders/display.glsl"
@@ -24,6 +25,12 @@ uniform int uTonemap;
 // radius from the field's origin, 0: no clouds (all in pass 1).
 uniform int uHazePass;
 uniform float uCloudTop;
+// A split view (FieldHaze.set_split): 1 the near camera's pass, which
+// draws up to the split, 0 the far camera's, from the split on; the split
+// as a plane (xyz the cameras' forward axis, render frame; w its distance
+// along it; 0 unsplit).
+uniform int uHazeToFar;
+uniform vec4 uHazeSplit;
 
 #pragma include "haze.glsl"
 
@@ -105,6 +112,16 @@ void main() {
     }
     float a = max(span.x, max(tNear, 0.0));
     float e = span.y;
+    if (uHazeSplit.w > 0.0) {
+        // Both passes cut at the same plane, not at their lenses': they meet
+        float along = dot(dirRender, uHazeSplit.xyz);
+        float tSplit = along > 0.0 ? uHazeSplit.w / along : 1e30;
+        if (uHazeToFar == 1) {
+            e = min(e, tSplit);
+        } else {
+            a = max(span.x, tSplit);
+        }
+    }
     if (uHazePass == 2) {
         a = max(a, split);
     } else {

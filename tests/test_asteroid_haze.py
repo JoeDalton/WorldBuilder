@@ -292,7 +292,7 @@ def test_rocks_appear_out_of_the_haze(window, ring):
 
 def test_rocks_fade_into_the_haze_at_far(window, ring):
     """A far just past the ring, 20 km under the camera: the rocks of its
-    last fifth fade out, the haze takes them in, as the model has it."""
+    last FAR_FADE fade out, the haze takes them in, as the model has it."""
     camera = np.array([0.0, 2.5e6, 2.0e4])
     ring.far = 2.15e4
     try:
@@ -338,17 +338,19 @@ def test_dust_is_haze_from_the_camera_on():
 
 
 def test_the_haze_takes_the_rocks_faded_out_by_far():
-    """Past far every rock is haze; over its last fifth, as many as the
-    shader fades out (linearly); nearer, only those too small."""
+    """Past far every rock is haze; over its last FAR_FADE, as many as the
+    shader fades out (linearly in 1 / t); nearer, only those too small."""
     from world_builder.asteroids.population import FAR_FADE
 
     model = HazeModel(RING)
     ppr, min_pixels, far = 1000.0, 2.0, 5.0e5
     every = model.extinction(RING.sizes.hi)
-    small = model.extinction(model.r_cut(3.0e5, ppr, min_pixels))
-    assert model.missing(3.0e5, ppr, min_pixels, far) == pytest.approx(small)
+    before = 0.9 * (1.0 - FAR_FADE) * far  # nearer than the band
+    small = model.extinction(model.r_cut(before, ppr, min_pixels))
+    assert model.missing(before, ppr, min_pixels, far) == pytest.approx(small)
     assert model.missing(6.0e5, ppr, min_pixels, far) == pytest.approx(every)
-    middle = (1.0 - 0.5 * FAR_FADE) * far
+    # half drawn: linear in 1 / t from (1 - FAR_FADE) * far to far
+    middle = far / (1.0 + 0.5 * (1.0 / (1.0 - FAR_FADE) - 1.0))
     under = model.extinction(model.r_cut(middle, ppr, min_pixels))
     assert model.missing(middle, ppr, min_pixels, far) == pytest.approx(
         0.5 * (under + every)
