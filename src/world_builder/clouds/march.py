@@ -45,7 +45,7 @@ of), the far range's over the rest in the far pass's clouds' slot (after
 the sky, before the cirrus). The near range's depth pass and card run only
 while the slab reaches into it.
 
-The sea's reflection sees the deck alone (:func:`sphere.deck_mesh`, the
+The sea's reflection sees the deck alone (:func:`deck.deck_mesh`, the
 billboards' far field), the far layer packed for it.
 
 Design notes: docs/source/clouds.md, "The raymarch".
@@ -98,11 +98,30 @@ from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.clouds.cloud import (
     CloudSettings,
     CloudType,
-    load_cloud_atlas,
     scale_march,
 )
+from world_builder.clouds.deck import (
+    CLOUD_BIN,
+    _ensure_bin,
+    deck_mesh,
+    deck_shader,
+)
+from world_builder.clouds.field_setup import (
+    DECK_MAX_OPTICAL_DEPTH,
+    OctaveBand,
+    _deck_light,
+    _depth_tables,
+    _genus_weather,
+    _noise,
+    _peaks,
+    _weather,
+    octave_bands,
+    octave_offset,
+    planet_field,
+    planet_weather,
+    sun_visibility,
+)
 from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
-from world_builder.clouds.half_res import composite_card, pass_camera, pass_states
 from world_builder.clouds.noise import (
     DECK_LIGHT_COS_MIN,
     LAYER_VEC4S,
@@ -116,29 +135,11 @@ from world_builder.clouds.noise import (
     curl_noise_volume,
     pack_layer_params,
 )
+from world_builder.clouds.passes import composite_card, pass_camera, pass_states
 from world_builder.clouds.shadow_defaults import (
     _no_deck_light,
     _no_weather,
     cloud_shadow_defaults,
-)
-from world_builder.clouds.sphere import (
-    CLOUD_BIN,
-    DECK_MAX_OPTICAL_DEPTH,
-    CloudVolume,
-    ShellSpec,
-    _deck_light,
-    _depth_tables,
-    _ensure_bin,
-    _genus_weather,
-    _noise,
-    _peaks,
-    _shaders,
-    _weather,
-    deck_mesh,
-    octave_offset,
-    planet_field,
-    planet_weather,
-    shell_bands,
 )
 from world_builder.clouds.weather import WeatherSpec, build_weather_texture, shift_table
 from world_builder.depth import (
@@ -1364,7 +1365,7 @@ class _FamilyCaster:
     def bind_shadow_inputs(self, node: NodePath) -> None:
         self._march.bind_shadow_inputs(node, family=self._index)
 
-    sun_visibility = CloudVolume.sun_visibility
+    sun_visibility = sun_visibility
 
 
 class CloudMarch:
@@ -1407,23 +1408,18 @@ class CloudMarch:
         sky_strength: float = 0.35,
         sky_occlusion: float = 0.55,
         exposure: float = 0.9,
-        near_fade_radii: float = 2.5,
-        channel: str | None = None,
-        game: Any = None,
         genera: GeneraSpec | None = None,
-        family: str | None = None,
     ):
-        """As :class:`sphere.CloudVolume`'s (*near_fade_radii* and
-        *channel* are unused: nothing fades near the camera, nothing is
-        generated per tile). With *genera* it marches both families, the
-        convective clouds and the stratus under them (*family* is unused)."""
+        """As :class:`planet.PlanetClouds`' arguments of the same names
+        (without the cirrus). With *genera* it marches both families, the
+        convective clouds and the stratus under them."""
         settings = settings or CloudSettings()
         _ensure_bin()
         self.radius = float(radius)
         self.position = np.asarray(position, dtype=np.float64)
         self.executor = executor
         self.grid = grid_for(self.radius)
-        self.stats = {"tiles": 0, "billboards": 0, "pending": 1, "gen_ms": 0.0}
+        self.stats = {"pending": 1}
         self._atmospheres = atmospheres
 
         volume = _noise(seed)
@@ -1483,9 +1479,8 @@ class CloudMarch:
         self.deck = self.root.attach_new_node(
             deck_mesh(self.radius + self.field.slab[0] + 0.5 * self.field.slab[1])
         )
-        self.deck.set_shader(_shaders()[1])
+        self.deck.set_shader(deck_shader())
         self.deck.set_two_sided(True)
-        self.deck.set_texture(load_cloud_atlas(game)[0])
         self.root.set_transparency(TransparencyAttrib.M_none)
         self.root.set_depth_test(True)
         self.root.set_depth_write(False)
@@ -1548,7 +1543,6 @@ class CloudMarch:
             "uCurlStrength": CURL_STRENGTH,
             "uCurlFrequency": CURL_FREQUENCY,
             # The deck's (cloud_deck.vert, cloud.frag)
-            "uDeck": 1,
             "uDeckLayer": self._layers_used - 1,
         }
         self._nodes: list[NodePath] = []
@@ -1739,9 +1733,9 @@ class CloudMarch:
         """
         seed = self._seed
         families = len(self._families)
-        shells = max(min(settings.shells, MAX_LAYERS // families - 1), 1)
+        shells = max(min(settings.octave_bands, MAX_LAYERS // families - 1), 1)
         schedule = settings.shell_octaves
-        _, bands = shell_bands(self.grid, shells)
+        _, bands = octave_bands(self.grid, shells)
         params = np.zeros((MAX_LAYERS, LAYER_VEC4S, 4), dtype=np.float32)
         far = np.zeros(MAX_LAYERS, dtype=np.float32)
         stride = shells + 1
@@ -1751,7 +1745,7 @@ class CloudMarch:
             optics = scale_march(family.preset, settings.march_scale).optics
             for k in range(stride):
                 octaves = schedule[min(k, len(schedule) - 1)]
-                layer = ShellSpec(
+                layer = OctaveBand(
                     0,
                     (0.0, 0.0),
                     1.0,

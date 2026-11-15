@@ -217,8 +217,7 @@ then the default) is measured, not built. What is left:
     in `cloud.frag`: the local shadow map is a square around the camera, and
     the reflection views the deck from below). Alternatives: a cube-face seam
     of the weather map, the reflection camera's culling margin. To confirm:
-    the same pose with `--shadows-quality low`, then with
-    `--cloud-renderer billboards`. Fix idea: the deck takes the global
+    the same pose with `--shadows-quality low`. Fix idea: the deck takes the global
     terrain shadow only.
   - *Fine diagonal hatching* at the bottom: the ripples undersampled by the
     half-resolution reflection buffer (`reflection_scale`, 0.5 at HIGH); the

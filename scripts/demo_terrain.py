@@ -102,7 +102,7 @@ preset, seed and radius) and the finest detail drawn; altitude, height above
 the ground, latitude/longitude, cube face, heading, pitch and speed factor;
 the biomes under the camera and the other bodies' distances; chunk counts
 and generation, upload and LOD timings; the depth split and far plane; the
-clouds' tiles and billboards; each part's quality preset ("custom" when it
+clouds' set-up still pending; each part's quality preset ("custom" when it
 differs from every preset).
 
 Lighting: the sun is one direction for the whole system, a disc as wide as
@@ -160,7 +160,6 @@ from world_builder.asteroids.spec import Annulus, Clumping, Density, FieldSpec
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.genera import GeneraSpec
-from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.clouds.shadow_map import CloudShadowMaps
@@ -630,8 +629,6 @@ class TerrainDemo(ShowBase):
         self.sky.node.hide(HIDE_FROM_CLOUD_PASS)  # hides no cloud
         if self.clouds is not None:
             self.clouds.use_split_depth(self, self.depth)
-        self.half_res = None  # the clouds' half-resolution pass, if asked for
-        self._sync_half_res()
         self._debug = 0
         # Panda3D lights for anything not drawn by the world's own shaders
         # (models, ships): the sun and the sky as they are at the camera.
@@ -846,8 +843,6 @@ class TerrainDemo(ShowBase):
             # As far as the ring's rocks are drawn (World.depth_ranges)
             far = max(far, self.ring.reach(self.cam_world))
         self.depth.update(split, far)
-        if self.half_res is not None:
-            self.half_res.update()
 
         self.atmospheres.update(self.cam_world)
         self.shadows.update(self.cam_world)
@@ -860,10 +855,7 @@ class TerrainDemo(ShowBase):
                 terrain.trees.set_pixel_angle(fov_y / max(self.win.get_y_size(), 1))
         if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
-            scale = self.half_res.pixel_scale if self.half_res is not None else 1.0
-            self.clouds.set_pixel_angle(
-                fov / max(self.win.get_y_size(), 1), volume_scale=scale
-            )
+            self.clouds.set_pixel_angle(fov / max(self.win.get_y_size(), 1))
             self.clouds.update(self.cam_world)
             if self.cloud_maps is not None:
                 steps = self.shadows.settings.cloud_shadow_steps
@@ -1070,9 +1062,7 @@ class TerrainDemo(ShowBase):
         split_km, far_km = self.depth.split / 1e3, self.depth.far / 1e3
         cs = self.clouds.stats if self.clouds is not None else None
         clouds = (
-            f"clouds: {cs['tiles']} tiles, "
-            f"{cs['billboards']:,} billboards, {cs['pending']} generating "
-            f"({cs['gen_ms']:.0f} ms/tile)"
+            f"clouds: raymarched, {cs['pending']} setting up"
             if cs is not None
             else "clouds off"
         )
@@ -1152,7 +1142,6 @@ class TerrainDemo(ShowBase):
             genera=self._genera_spec(),
             planet=self.terrain.spec,
             settings=self.world.clouds,
-            channel="clouds",
         )
         self.clouds.bind_inputs(functools.partial(self.shadows.bind, body=0))
         self.clouds.bind_shadow_inputs(self.terrain.root)  # their shadow on it
@@ -1193,8 +1182,6 @@ class TerrainDemo(ShowBase):
         self.clouds.set_sun(self._sun)
         if getattr(self, "depth", None) is not None:
             self.clouds.use_split_depth(self, self.depth)
-        if getattr(self, "half_res", None) is not None:
-            self.clouds.use_half_res(self.half_res)
 
     def _genera_spec(self) -> GeneraSpec | None:
         """The low clouds by genus (--genera), around the start pose: a
@@ -1220,22 +1207,6 @@ class TerrainDemo(ShowBase):
             root.show()
         else:
             root.hide()
-
-    def _sync_half_res(self) -> None:
-        """Build or remove the clouds' half-resolution pass as the settings
-        ask (CloudSettings.half_resolution)."""
-        clouds = self.world.clouds
-        wanted = clouds.half_resolution and clouds.renderer == "billboards"
-        if wanted and self.half_res is None:
-            self.half_res = HalfResClouds(self, self.depth)
-            self.half_res.exclude(self.sky.node)
-            if self.clouds is not None:
-                self.clouds.use_half_res(self.half_res)
-        elif not wanted and self.half_res is not None:
-            if self.clouds is not None:
-                self.clouds.use_half_res(None)
-            self.half_res.destroy()
-            self.half_res = None
 
     def _cycle_quality(self, section: str) -> None:
         """One part (a WorldSettings section) to its next preset."""
@@ -1278,7 +1249,6 @@ class TerrainDemo(ShowBase):
             world.apply(self.clouds)
         if self.ring is not None:
             world.apply(self.ring)
-        self._sync_half_res()
 
     def set_debug_view(self, view: int) -> None:
         """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts, 6 the
@@ -1546,23 +1516,12 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         "--ring", action="store_true", help="a small ring around the planet"
     )
     parser.add_argument(
-        "--half-res-clouds",
-        action="store_true",
-        help="clouds at half resolution (CloudSettings.half_resolution)",
-    )
-    parser.add_argument(
         "--genera",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="the low clouds by genus: cumulonimbus, congestus and stratus "
         "around the start (clouds.genera's placeholder maps); on by default, "
         "--no-genera for the plain field",
-    )
-    parser.add_argument(
-        "--cloud-renderer",
-        default=None,
-        choices=["billboards", "march"],
-        help="the low clouds' renderer (CloudSettings.renderer)",
     )
 
 
@@ -1576,10 +1535,6 @@ def settings_from_args(args: argparse.Namespace) -> WorldSettings:
             settings = settings.with_section_level(section, level)
     if args.workers is not None:
         settings = settings.with_value("terrain", "workers", args.workers)
-    if args.half_res_clouds:
-        settings = settings.with_value("clouds", "half_resolution", True)
-    if args.cloud_renderer is not None:
-        settings = settings.with_value("clouds", "renderer", args.cloud_renderer)
     if args.frame_cap is not None:
         settings = settings.with_value("display", "frame_cap", args.frame_cap)
     return settings

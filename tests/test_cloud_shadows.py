@@ -15,6 +15,7 @@ from panda3d.core import NodePath, Vec3
 
 from world_builder.atmosphere import bind_defaults
 from world_builder.clouds.cloud import PRESETS, CloudType
+from world_builder.clouds.field_setup import SHADE_CACHE_SIZE, _noise
 from world_builder.clouds.noise import (
     CLOUD_SHADOW_STEP_SCALE,
     DECK_LIGHT_COS_MIN,
@@ -33,7 +34,6 @@ from world_builder.clouds.noise import (
     with_shelf,
     with_threshold,
 )
-from world_builder.clouds.sphere import SHADE_CACHE_SIZE, _noise
 from world_builder.clouds.weather import (
     WeatherSpec,
     build_weather_texture,
@@ -433,7 +433,7 @@ def test_the_shader_knows_the_twins_constants():
     assert scale in source
 
 
-# ── CloudVolume: the binding and the CPU side ─────────────────────────────────
+# ── The march's caster: the binding and the CPU side ─────────────────────────────────
 
 
 def test_clouds_shade_a_bound_node_once_ready_and_the_cpu_alike(showbase):
@@ -442,30 +442,32 @@ def test_clouds_shade_a_bound_node_once_ready_and_the_cpu_alike(showbase):
     the twin's at the point's cell, cached until the sun changes, and
     removing the clouds takes the shadow off the node."""
     from world_builder.clouds.cloud import CloudSettings
-    from world_builder.clouds.sphere import SHADE_CELL, CloudVolume
+    from world_builder.clouds.field_setup import SHADE_CELL
+    from world_builder.clouds.march import CloudMarch
     from world_builder.terrain.workers import ChunkExecutor
 
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    clouds = CloudVolume(
+    march = CloudMarch(
         showbase.render,
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2),
+        settings=CloudSettings(octave_bands=2),
         planet=PLANETS["forest"],
     )
+    clouds = march.shadow_caster(0)
     ground = NodePath("ground")
     try:
         clouds.bind_shadow_inputs(ground)
         bound = ground.get_shader_input("uCloudShadowLayer")
-        assert clouds._shadow_layer[0] == -1  # the set-up is not done
+        assert clouds.shadow_layer == -1  # the set-up is not done
         up = TangentFrame.at(20.0, 40.0).up
         points = up * (R + 30.0) + np.array([[0.0, 0.0, 0.0], [3e3, 0.0, 0.0]])
         sun = np.array([0.4, 0.3, 0.866])
         assert np.all(clouds.sun_visibility(points, sun, 8) == 1.0)  # not ready
-        clouds.update(up * (R + 1000.0))
+        march.update(up * (R + 1000.0))
         assert clouds.weather is not None
-        assert clouds._shadow_layer[0] == clouds._deck_layer >= 0
+        assert clouds.shadow_layer >= 0  # the deck's layer
         assert ground.get_shader_input("uCloudShadowLayer") == bound  # in place
         light = ground.get_shader_input("deckLight").get_texture()
         assert light.get_num_components() == 4  # deck r g, ground b, octave a
@@ -499,9 +501,8 @@ def test_clouds_shade_a_bound_node_once_ready_and_the_cpu_alike(showbase):
         assert clouds.sun_visibility(moved, -sun + 2 * up, 8).shape == (2,)
         assert len(clouds._shades) == 2
     finally:
-        clouds.remove()
+        march.remove()
         executor.shutdown()
-    assert clouds._shadow_layer[0] == -1
 
 
 # ── the cloud shadow maps (part E) ─────────────────────────────────────────────
@@ -513,23 +514,24 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
     CPU twin marches it; drawn again only when the sun turns or the camera
     moves a quarter of it."""
     from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.march import CloudMarch
     from world_builder.clouds.shadow_map import NEAR_SPACING, CloudShadowMaps
-    from world_builder.clouds.sphere import CloudVolume
     from world_builder.terrain.workers import ChunkExecutor
 
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    clouds = CloudVolume(
+    march = CloudMarch(
         window.render,
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2),
+        settings=CloudSettings(octave_bands=2),
         planet=PLANETS["forest"],
     )
+    clouds = march.shadow_caster(0)
     size, steps = 128, 8
     maps = CloudShadowMaps(window.win, clouds, size, to_ram=True)
     try:
-        clouds.update(TangentFrame.at(20.0, 40.0).up * (R + 1000.0))
+        march.update(TangentFrame.at(20.0, 40.0).up * (R + 1000.0))
         assert clouds.weather is not None
         # The cloudiest of a few places: a map with cloud in it.
         places = [(lat, lon) for lat in range(-60, 61, 20) for lon in range(0, 360, 30)]
@@ -539,9 +541,9 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
         ]
         frame = TangentFrame.at(*places[int(np.argmax(cover))])
         camera = frame.up * (R + 1000.0)
-        clouds.update(camera)
+        march.update(camera)
         sun = 0.8 * frame.up + 0.6 * frame.east
-        clouds.set_sun(sun)
+        march.set_sun(sun)
         maps.update(camera, sun / np.linalg.norm(sun), steps)
         assert maps._on[0][0] == 1 and maps.near.drawn is not None
         window.graphicsEngine.render_frame()
@@ -611,7 +613,7 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
         assert maps.near.drawn is not near and maps.far.drawn is far
     finally:
         maps.destroy()
-        clouds.remove()
+        march.remove()
         executor.shutdown()
 
 
@@ -869,45 +871,6 @@ def test_the_map_with_a_local_march_is_the_sun_march(field, table, elevation):
     assert np.median(error) <= np.median(march_error) + 0.02
 
 
-def test_a_change_of_renderer_gives_the_shadow_maps_the_new_volume(window):
-    """The maps' bake cards take their field's inputs from the clouds' volume:
-    a change of renderer makes a new volume, which they must take, or the
-    ground loses its cloud shadow (it was baked from the removed one)."""
-    from world_builder.clouds.cloud import CloudSettings
-    from world_builder.clouds.planet import PlanetClouds
-    from world_builder.clouds.shadow_map import CloudShadowMaps
-    from world_builder.terrain.workers import ChunkExecutor
-
-    executor = ChunkExecutor(backend="inline", inline_budget=64)
-    clouds = PlanetClouds(
-        window.render,
-        R,
-        executor,
-        altitude=2200.0,
-        settings=CloudSettings(shells=2, renderer="billboards"),
-        planet=PLANETS["forest"],
-    )
-    maps = CloudShadowMaps(window.win, clouds, 64)
-    camera = np.array([0.0, 0.0, R + 1000.0])
-    sun = np.array([0.0, 0.6, 0.8])
-    try:
-        clouds.update(camera)
-        maps.update(camera, sun, 8)
-        assert maps._casters_bound[0] is clouds.volume
-        clouds.set_settings(replace(clouds.settings, renderer="march"))
-        clouds.update(camera)
-        maps.near.drawn = ("drawn",)
-        maps.update(camera, sun, 8)
-        assert maps._casters_bound[0] is clouds.shadow_caster(0)
-        assert maps._casters_bound[0] is not clouds.volume
-        # Drawn again from the new volume, not kept
-        assert not isinstance(maps.near.drawn[0], str)
-    finally:
-        maps.destroy()
-        clouds.remove()
-        executor.shutdown()
-
-
 @pytest.mark.parametrize("family", [0, 1])
 def test_the_raymarchs_shadow_maps_match_the_cpu_twin_for_each_family(window, family):
     """With genera a raymarch bakes each family's map from its own deck layer
@@ -928,7 +891,7 @@ def test_the_raymarchs_shadow_maps_match_the_cpu_twin_for_each_family(window, fa
         window.render,
         R,
         executor,
-        settings=CloudSettings(shells=2, renderer="march"),
+        settings=CloudSettings(octave_bands=2),
         genera=genera,
     )
     size, steps = 128, 16

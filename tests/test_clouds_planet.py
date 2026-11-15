@@ -1,10 +1,8 @@
 """
 Unit tests for a planet's clouds as one part (world_builder.clouds.planet):
 the rule its two layers must keep, and the volume and the sheet driven as
-one. The layers themselves: test_clouds_sphere.py and test_clouds_cirrus.py.
+one. The layers themselves: test_clouds_march.py and test_clouds_cirrus.py.
 """
-
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -12,8 +10,8 @@ import pytest
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
 from world_builder.clouds.cirrus import CirrusSpec, CloudSheet, cirrus_stamps
 from world_builder.clouds.cloud import CloudSettings, CloudType
+from world_builder.clouds.march import CloudMarch
 from world_builder.clouds.planet import PlanetClouds, check_layers
-from world_builder.clouds.sphere import CloudVolume
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PRESETS as PLANETS
 from world_builder.terrain.workers import ChunkExecutor
@@ -55,7 +53,7 @@ def _clouds(showbase, executor, **kwargs):
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2, renderer="billboards"),
+        settings=CloudSettings(octave_bands=2),
         planet=PLANETS["forest"],
         **kwargs,
     )
@@ -79,7 +77,7 @@ def test_the_air_bounds_the_sheet_before_anything_is_built(showbase, executor):
 def test_no_cirrus_is_the_volume_alone(showbase, executor):
     clouds = _clouds(showbase, executor)
     try:
-        assert isinstance(clouds.volume, CloudVolume)
+        assert isinstance(clouds.volume, CloudMarch)
         assert clouds.sheet is None
         assert clouds.volume.root.get_parent() == clouds.root
     finally:
@@ -101,17 +99,13 @@ def test_both_layers_are_driven_as_one(showbase, executor):
         clouds.set_sky_light(0.7)
         assert volume._sky_light == sheet._sky_light == 0.7
 
-        # The volume may be at half resolution, the sheet never is (its
-        # atlas is mipmapped: it takes no pixel angle)
+        # The volume takes the pixel angle at its scale, the sheet none (its
+        # atlas is mipmapped)
         clouds.set_pixel_angle(0.001, volume_scale=2.0)
         assert volume._pixel_angle == pytest.approx(0.002)
-        half_res = MagicMock()
-        clouds.use_half_res(half_res)
-        half_res.add.assert_called_once_with(volume.root)
-        half_res.exclude.assert_called_once_with(sheet.root)
 
         # One settings section
-        reflected = CloudSettings(shells=2, reflected=False, renderer="billboards")
+        reflected = CloudSettings(octave_bands=2, reflected=False)
         clouds.set_settings(reflected)
         assert clouds.settings is reflected
         assert volume.settings is reflected and sheet.settings is reflected

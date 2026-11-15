@@ -3,8 +3,8 @@
 WorldBuilder procedurally builds worlds in Panda3D: cube-sphere planetary
 terrain seen from orbit to the ground, single-scattering atmospheres, a
 procedural sky (stars, nebulae, the sun), a reflective sea drawn on the terrain, and
-a planet's clouds (volumetric billboards following its weather, and high
-cirrus above them). It started inside
+a planet's clouds (raymarched volumetric clouds following its weather, and
+high cirrus above them). It started inside
 [SpaceFlight](https://github.com/JoeDalton/SpaceFlight), which uses it for its
 ocean and clouds.
 
@@ -28,7 +28,10 @@ it works.
 - [Asteroid fields](asteroids.md): fields and rings of rocks scattered from
   a spec, stored nowhere: sizes, density, clumping, spins, keep-outs,
   rock shapes; its [backlog](asteroids_backlog.md) lists what could be better.
-- [Clouds](clouds.md): billboard clouds, their density fields and shading.
+- [Clouds](clouds.md): raymarched clouds, their density fields and shading.
+- [Cloud genera: a literature review](cloud_genera_research.md): the ten WMO
+  genera (altitudes, sizes, looks) and the density functions the graphics
+  literature draws them with.
 - [Shadows](shadows.md): what hides the sun from a point (eclipses so far),
   on every receiver, with a CPU twin for what the CPU lights.
 - [Quality settings](quality.md): every cost/quality knob, the LOW to ULTRA
@@ -53,6 +56,7 @@ native_build
 asteroids
 asteroids_backlog
 clouds
+cloud_genera_research
 shadows
 quality
 performance

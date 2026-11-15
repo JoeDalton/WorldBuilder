@@ -115,6 +115,12 @@ struct Field {
     float anvil;
     float cellWeight;
     float shelfShift;
+    // The threshold's rise at depth 1 (noise.deep_profile: linear in depth
+    // from topExponent and topErosion), and the cell octave's growth with
+    // depth, depth ** cellPower.
+    float deepExponent;
+    float deepErosion;
+    float cellPower;
 };
 
 Field getField(int layer) {
@@ -168,7 +174,11 @@ Field getField(int layer) {
     f.minTop          = v12.x;
     f.anvil           = v12.y;
     f.cellWeight      = v12.z;
-    f.shelfShift      = layerParams[b + 10].y;
+    vec4 v10 = layerParams[b + 10];
+    f.shelfShift      = v10.y;
+    f.deepExponent = v10.z;
+    f.deepErosion = v10.w;
+    f.cellPower = v12.w;
     return f;
 }
 
@@ -190,11 +200,6 @@ const mat3 OCTAVE_4_TURN = mat3(0.6, 0.0, 0.8, 0.64, 0.6, -0.48, -0.48, 0.8, 0.3
 const float CELL_SCALE = 0.25;
 const vec3 CELL_OFFSET = vec3(0.13, 0.59, 0.37);
 
-float lowOctaves(Field f, vec3 coord) {
-    return sampleNoise(coord * f.octaveScales.x)                   * f.octaveWeights.x
-         + sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET) * f.octaveWeights.y;
-}
-
 // The two finest octaves; one not evaluated counts as its mean, so dropping
 // it keeps the coverage (noise.fbm's octaves).
 float highOctaves(Field f, vec3 coord) {
@@ -211,10 +216,6 @@ float highOctaves(Field f, vec3 coord) {
 float highOctavesMax(Field f) {
     return (f.octaves >= 3 ? 1.0 : f.octaveMean) * f.octaveWeights.z
          + (f.octaves >= 4 ? 1.0 : f.octaveMean) * f.octaveWeights.w;
-}
-
-float cloudFbm(Field f, vec3 coord) {
-    return lowOctaves(f, coord) + highOctaves(f, coord);
 }
 
 float hgPhase(float x, float g) {
@@ -251,11 +252,6 @@ float heightOf(vec3 p) {
     return length(p) - planetRadius;
 }
 
-// The weather's fbm shift at a planet-frame position.
-float weatherShift(vec3 p) {
-    return texture(weatherMap, p).g;
-}
-
 // The weather at a planet-frame position: (its fbm shift, the convective
 // depth, the anvil shelf's spread), one fetch.
 vec3 weatherAt(vec3 p) {
@@ -276,11 +272,55 @@ const float NO_CLOUD_LIFT = 1.0e9;
 float thresholdLift(Field f, float h, float depth) {
     float local = h / topFraction(f, depth);
     if (f.minTop < 1.0 && local >= 1.0) return NO_CLOUD_LIFT;
-    float lift = f.topErosion * pow(clamp(local, 0.0, 1.0), f.topExponent);
+    float d = clamp(depth, 0.0, 1.0);
+    float lift = mix(f.topErosion, f.deepErosion, d)
+               * pow(clamp(local, 0.0, 1.0), mix(f.topExponent, f.deepExponent, d));
     if (f.anvil > 0.0) {
         lift -= f.anvil * smoothstep(0.6, 1.0, depth) * smoothstep(0.7, 0.95, local);
     }
     return lift;
+}
+
+// How far into its anvil a point is, 0 to 1 (noise.anvil_weight), over a
+// band ahead of the threshold's fall (noise.ANVIL_SMOOTH_BAND) at slab height
+// h and convective depth; 0 for a field without one. The fine octaves (and the raymarch's billows) fade to
+// their means by it, and the threshold's window widens by ANVIL_SOFTEN of
+// itself: the anvil smooth and soft-edged, not the tower's cauliflower
+// spread sideways.
+const float ANVIL_SOFTEN = 1.0;
+
+float anvilWeight(Field f, float h, float depth) {
+    if (f.anvil <= 0.0) return 0.0;
+    float local = h / topFraction(f, depth);
+    return smoothstep(0.6, 1.0, depth) * smoothstep(0.5, 0.75, local);
+}
+
+// The anvil's (and its shelf's) two coarse octaves, read at ANVIL_SCALE of
+// the field's frequency from ANVIL_OFFSET (noise.anvil_coarse): features four
+// times wider, smooth over kilometres.
+const float ANVIL_SCALE = 0.25;
+const vec3 ANVIL_OFFSET = vec3(0.71, 0.29, 0.53);
+
+float anvilLow(Field f, vec3 coord) {
+    vec3 c = coord * ANVIL_SCALE + ANVIL_OFFSET;
+    return sampleNoise(c * f.octaveScales.x) * f.octaveWeights.x
+         + sampleNoise(c * f.octaveScales.y + OCTAVE_2_OFFSET) * f.octaveWeights.y;
+}
+
+// The column's fbm (noise.anvil_fbm), v its two coarse octaves (the cell's
+// shift in them), low the anvil's (the cell's in it too), mean the fine
+// octaves': its whole fbm, faded into the anvil's by its weight aw.
+float anvilColumnValue(Field f, vec3 coord, float v, float low, float mean, float aw) {
+    if (aw >= 1.0) return low + mean;
+    float full = v + highOctaves(f, coord);
+    return aw <= 0.0 ? full : mix(full, low + mean, aw);
+}
+
+// A column's raw value (its fbm less the threshold's lift, against threshLo)
+// with the window widened by ANVIL_SOFTEN in the anvil, as a value pulled
+// toward threshLo: smoothstep(lo, hi', x) == smoothstep(lo, hi, lo + (x - lo) / k).
+float anvilSoftened(Field f, float raw, float h, float depth) {
+    return f.threshLo + (raw - f.threshLo) / (1.0 + ANVIL_SOFTEN * anvilWeight(f, h, depth));
 }
 
 float thresholdLift(Field f, float h) {
@@ -332,7 +372,9 @@ vec3 fieldBias(Field f, float h, vec3 weather) {
 // coarse octaves, the others' mean, the cell octave's shift), its bias
 // given (noise._shelf_density).
 float shelfDensity(Field f, float h, float v, float bias) {
-    return smoothstep(f.threshLo, f.threshHi, v + bias)
+    // The anvil's soft edge: its window ANVIL_SOFTEN wider.
+    float hi = f.threshLo + (f.threshHi - f.threshLo) * (1.0 + ANVIL_SOFTEN);
+    return smoothstep(f.threshLo, hi, v + bias)
          * (1.0 - smoothstep(SHELF_BAND.z, SHELF_BAND.w, h));
 }
 
@@ -340,7 +382,7 @@ float shelfDensity(Field f, float h, float v, float bias) {
 // its noise about its mean, so the coverage barely moves.
 float cellShift(Field f, vec3 coord, float depth) {
     if (f.cellWeight <= 0.0) return 0.0;
-    return f.cellWeight * clamp(depth, 0.0, 1.0)
+    return f.cellWeight * pow(clamp(depth, 0.0, 1.0), f.cellPower)
          * (sampleNoise(coord * CELL_SCALE + CELL_OFFSET) - f.octaveMean);
 }
 
@@ -353,21 +395,26 @@ float cloudDensityAt(Field f, vec3 p, vec3 weather) {
     vec3 bias = fieldBias(f, h, weather);
     if (max(bias.x, bias.z) <= -NO_CLOUD_LIFT) return 0.0;  // no cloud here
     vec3 coord = p * f.noiseScale + f.noiseOrigin;
-    // Exact early-outs: the octaves still to come add at most their maxima
-    // (the shelf, their mean), and at or below the threshold the smoothstep
-    // is 0. Most of a billboard quad is clear air, which then costs one or
-    // two noise fetches, not four (plus the weather's, on a planet).
+    // Exact early-outs: the octaves still to come add at most their maxima,
+    // and at or below the threshold the smoothstep is 0. Clear air then costs
+    // one or two noise fetches, not four (plus the weather's, on a planet).
+    // The anvil and its shelf read their own low-frequency octaves (anvilLow),
+    // which the first two do not bound: no early-out in the anvil, and the
+    // shelf, where there is one, is evaluated whole.
     float rest = highOctavesMax(f);
     float mean = f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w);
-    float reach = max(bias.x + rest, bias.z + mean);
-    float v = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x
-            + cellShift(f, coord, weather.y);
-    if (v + f.octaveWeights.y + reach <= f.threshLo) return 0.0;
+    float cell = cellShift(f, coord, weather.y);
+    float aw = anvilWeight(f, h, weather.y);
+    bool sheet = bias.z > -NO_CLOUD_LIFT;
+    float low = aw > 0.0 || sheet ? anvilLow(f, coord) + cell : 0.0;
+    float shelf = sheet ? shelfDensity(f, h, low + mean, bias.z) : 0.0;
+    if (bias.x <= -NO_CLOUD_LIFT) return shelf;
+    float v = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x + cell;
+    if (aw <= 0.0 && v + f.octaveWeights.y + bias.x + rest <= f.threshLo) return shelf;
     v += sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET) * f.octaveWeights.y;
-    if (v + reach <= f.threshLo) return 0.0;
-    float shelf = shelfDensity(f, h, v + mean, bias.z);
-    if (v + bias.x + rest <= f.threshLo) return shelf;
-    float column = smoothstep(f.threshLo, f.threshHi, v + highOctaves(f, coord) + bias.x);
+    if (aw <= 0.0 && v + bias.x + rest <= f.threshLo) return shelf;
+    float column = smoothstep(f.threshLo, f.threshHi, anvilSoftened(
+        f, anvilColumnValue(f, coord, v, low, mean, aw) + bias.x, h, weather.y));
     return max(column * bias.y, shelf);
 }
 
@@ -387,25 +434,23 @@ bool cloudColumnAt(Field f, vec3 p, vec3 weather, out float raw, out float fill,
     vec3 bias = fieldBias(f, h, weather);
     if (max(bias.x, bias.z) <= -NO_CLOUD_LIFT) return false;
     vec3 coord = p * f.noiseScale + f.noiseOrigin;
+    // The early-outs and the anvil's octaves as cloudDensityAt's.
     float rest = highOctavesMax(f);
     float mean = f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w);
-    float reach = max(bias.x + rest, bias.z + mean);
-    float v = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x
-            + cellShift(f, coord, weather.y);
-    if (v + f.octaveWeights.y + reach <= f.threshLo) return false;
+    float cell = cellShift(f, coord, weather.y);
+    float aw = anvilWeight(f, h, weather.y);
+    bool sheet = bias.z > -NO_CLOUD_LIFT;
+    float low = aw > 0.0 || sheet ? anvilLow(f, coord) + cell : 0.0;
+    shelf = sheet ? shelfDensity(f, h, low + mean, bias.z) : 0.0;
+    if (bias.x <= -NO_CLOUD_LIFT) return shelf > 0.0;
+    float v = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x + cell;
+    if (aw <= 0.0 && v + f.octaveWeights.y + bias.x + rest <= f.threshLo) return shelf > 0.0;
     v += sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET) * f.octaveWeights.y;
-    if (v + reach <= f.threshLo) return false;
-    shelf = shelfDensity(f, h, v + mean, bias.z);
-    if (v + bias.x + rest <= f.threshLo) return shelf > 0.0;
-    raw = v + highOctaves(f, coord) + bias.x;
+    if (aw <= 0.0 && v + bias.x + rest <= f.threshLo) return shelf > 0.0;
+    raw = anvilSoftened(f, anvilColumnValue(f, coord, v, low, mean, aw) + bias.x, h,
+                        weather.y);
     fill = bias.y;
     return true;
-}
-
-// The density at p with only the weather's shift (no convective depth, no
-// shelf).
-float cloudDensityShifted(Field f, vec3 p, float shift) {
-    return cloudDensityAt(f, p, vec3(shift, 0.0, -NO_CLOUD_LIFT));
 }
 
 float cloudDensity(Field f, vec3 p) {
@@ -432,17 +477,27 @@ float slabSampleDensity(Field f, vec3 position, vec3 weather, float shift, float
         return 0.0;
     }
     vec3 coord = position * f.noiseScale + f.noiseOrigin;
+    // The anvil's and the shelf's octaves as cloudDensityAt's (mean and shift
+    // carry the cell's here).
+    float aw = anvilWeight(f, h, weather.y);
+    bool sheet = bias.z > -NO_CLOUD_LIFT;
+    float low = aw > 0.0 || sheet ? anvilLow(f, coord) : 0.0;
+    float shelf = sheet ? shelfDensity(f, h, low + mean, bias.z) : 0.0;
+    if (bias.x <= -NO_CLOUD_LIFT) {
+        return shelf;
+    }
     float first = sampleNoise(coord * f.octaveScales.x) * f.octaveWeights.x;
     // The same exact early-out as cloudDensity's (shadowGain > 0).
-    float most = first + f.octaveWeights.y;
-    if (max(most * f.shadowGain + shift + bias.x, most + mean + bias.z)
-            <= f.threshLo) {
-        return 0.0;
+    if (aw <= 0.0
+            && (first + f.octaveWeights.y) * f.shadowGain + shift + bias.x <= f.threshLo) {
+        return shelf;
     }
     float pair = first + sampleNoise(coord * f.octaveScales.y + OCTAVE_2_OFFSET)
                        * f.octaveWeights.y;
-    float column = smoothstep(f.threshLo, f.threshHi, pair * f.shadowGain + shift + bias.x);
-    return max(column * bias.y, shelfDensity(f, h, pair + mean, bias.z));
+    pair = mix(pair, low, aw);
+    float column = smoothstep(f.threshLo, f.threshHi,
+                              anvilSoftened(f, pair * f.shadowGain + shift + bias.x, h, weather.y));
+    return max(column * bias.y, shelf);
 }
 
 float slabOpticalDepthCell(Field f, vec3 start, vec3 dir, float stepLength,
@@ -502,15 +557,6 @@ float sunOpticalDepthAt(Field f, vec3 p, vec3 weather) {
         return 0.0;
     }
     return slabOpticalDepthAt(f, p, sunDir, f.sunStepLength, f.sunSteps, weather);
-}
-
-// With only the weather's shift (no convective depth, no shelf).
-float sunOpticalDepthShifted(Field f, vec3 p, float shift) {
-    return sunOpticalDepthAt(f, p, vec3(shift, 0.0, -NO_CLOUD_LIFT));
-}
-
-float sunOpticalDepth(Field f, vec3 p) {
-    return sunOpticalDepthAt(f, p, weatherAt(p));
 }
 
 // The chord a ray from p (planet frame) toward dir (unit) cuts through the
@@ -1011,11 +1057,6 @@ float cloudSunDepth(Field f, vec3 p, vec3 weather) {
     return sunOpticalDepthAt(f, p, weather);
 }
 #endif
-
-bool cloudMapsDepth(Field f, vec3 p, vec3 start, out float depth) {
-    return cloudMapsDepthIn(f, cloudShadowMapOn, cloudShadowNear, cloudNearChart,
-                            cloudShadowFar, cloudFarChart, p, start, depth);
-}
 
 // The clouds' shadow on what is under them (planet frame p), as a share of
 // the sun toward dir: the march (cloudShadowDepth: the field's maps where

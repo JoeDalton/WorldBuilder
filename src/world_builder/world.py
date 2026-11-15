@@ -81,7 +81,6 @@ from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.genera import GeneraSpec
-from world_builder.clouds.half_res import HalfResClouds
 from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.clouds.shadow_map import CloudShadowMaps
@@ -170,7 +169,6 @@ class CloudLook:
     sky_strength: float = 0.35
     sky_occlusion: float = 0.55
     exposure: float = 0.9
-    near_fade_radii: float = 2.5
     genera: GeneraSpec | None = None
 
 
@@ -348,10 +346,8 @@ class World:
     :ivar casters: the objects' shadow map (None without a window)
     """
 
-    #: The game's split cameras (:meth:`use_split_depth`), and the clouds'
-    #: half-resolution layers when the settings ask for them
+    #: The game's split cameras (:meth:`use_split_depth`)
     depth: SplitDepthCameras | None = None
-    half_res: HalfResClouds | None = None
 
     def __init__(
         self,
@@ -702,8 +698,6 @@ class World:
             sky_strength=cl.sky_strength,
             sky_occlusion=cl.sky_occlusion,
             exposure=cl.exposure,
-            near_fade_radii=cl.near_fade_radii,
-            channel=f"clouds:{look.name}",
             genera=cl.genera,
         )
         clouds.set_sun(self._sun)
@@ -1012,7 +1006,6 @@ class World:
                 body.cloud_light.per_frame = settings.shadows.cloud_light_slices
         if self.casters is not None:
             self.casters.set_size(settings.shadows.caster_size)
-        self._sync_half_res()
 
     def _model_lightings(self) -> list[ModelLighting]:
         """The model shader's inputs: every body's, and open space's."""
@@ -1039,37 +1032,12 @@ class World:
 
     def use_split_depth(self, depth: SplitDepthCameras) -> None:
         """The split cameras the game built after the world: the clouds'
-        half-resolution layers (``CloudSettings.half_resolution``) and their
-        raymarch (``CloudSettings.renderer``) draw with them, so the world
-        needs them for those settings. Call ``depth.update`` before
+        raymarch draws its passes with them. Call ``depth.update`` before
         :meth:`update` every frame, as always."""
         self.depth = depth
         for body in self.bodies:
             if body.clouds is not None:
                 body.clouds.use_split_depth(self.app, depth)
-        self._sync_half_res()
-
-    def _sync_half_res(self) -> None:
-        """Build or remove the clouds' half-resolution layers as the
-        settings ask (they need the split cameras)."""
-        clouds = [body.clouds for body in self.bodies if body.clouds is not None]
-        wanted = (
-            self.settings.clouds.half_resolution
-            and self.settings.clouds.renderer == "billboards"
-            and self.depth is not None
-            and bool(clouds)
-        )
-        if wanted and self.half_res is None:
-            self.half_res = HalfResClouds(self.app, self.depth)
-            if self.sky is not None:
-                self.half_res.exclude(self.sky.node)
-            for cloud in clouds:
-                cloud.use_half_res(self.half_res)
-        elif not wanted and self.half_res is not None:
-            for cloud in clouds:
-                cloud.use_half_res(None)
-            self.half_res.destroy()
-            self.half_res = None
 
     def enable_collision(
         self, into_mask: Any, bodies: Iterable[str] | None = None, **kwargs: Any
@@ -1123,16 +1091,12 @@ class World:
                 far = self.depth_ranges(origin_world)[1]
             self.sky.update(tuple(camera_render), far)
         pixel_angle = self._pixel_angle()
-        scale = 1.0
-        if self.half_res is not None:
-            self.half_res.update()
-            scale = self.half_res.pixel_scale
         for body in self.bodies:
             if pixel_angle is not None and body.terrain.trees is not None:
                 body.terrain.trees.set_pixel_angle(pixel_angle)
             if body.clouds is not None:
                 if pixel_angle is not None:
-                    body.clouds.set_pixel_angle(pixel_angle, volume_scale=scale)
+                    body.clouds.set_pixel_angle(pixel_angle)
                 body.clouds.update(camera, camera_render)
                 if body.cloud_maps is not None:
                     steps = self.shadows.settings.cloud_shadow_steps
@@ -1263,9 +1227,6 @@ class World:
 
     def destroy(self) -> None:
         """Remove every part and the lights, and stop the workers."""
-        if self.half_res is not None:
-            self.half_res.destroy()
-            self.half_res = None
         self.tracked.clear()
         self.space_models.destroy()
         if self.casters is not None:

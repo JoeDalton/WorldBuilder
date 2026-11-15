@@ -7,13 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The billboard cloud renderer: `clouds.sphere` (`CloudVolume`, its tiles,
+  shells and sprite atlas), `clouds.half_res` (`HalfResClouds`), the
+  native `billboards.c`, and the `CloudSettings` knobs `renderer`,
+  `count_scale`, `overlap_near`, `overlap_far`, `interior_growth`,
+  `half_resolution`, `uploads_per_frame`, `resorts_per_frame` and
+  `tile_cache` (a saved config holding them loads with them skipped), and
+  `CloudSpec`'s `radius`, `aspect` and `deep_radius`. The low clouds are
+  always raymarched (`clouds.march.CloudMarch`). The demos lose
+  `--cloud-renderer` and `--half-res-clouds`, `cloud_bench.py` its
+  `--renderer`, `--half-res` and `--interior-growth`.
+
 ### Added
+
+- `docs/source/cloud_genera_research.md`: the ten cloud genera and the
+  density functions the literature draws them with.
 
 - `AsteroidField.reach(camera_world)`: how far a field's rocks can still be
   drawn (its largest rock at the settings' `min_pixels`, at most the field's
   far side).
 
 ### Changed
+
+- `CloudSettings.shells` is `octave_bands` (a saved `shells` loads as it);
+  `clouds.sphere`'s helpers the march uses moved to `clouds.field_setup`,
+  `clouds.deck` and `clouds.passes`.
+- Cumulus congestus grow into connected towers that reach their top
+  (`DensityField.deep_exponent`, `deep_erosion`, `cell_power`), and the
+  cumulonimbus's anvil and shelf are smooth (`noise.anvil_weight`,
+  `ANVIL_SCALE`).
 
 - The far plane reaches the asteroid fields' rocks (#39):
   `World.depth_ranges` returns the larger of the bodies' far distance (or

@@ -74,7 +74,8 @@ from world_builder.clouds.noise import (
     CLOUD_SHADOW_STEP_SCALE,
     _slab_density,
     cell_shift,
-    fbm,
+    march_pairs,
+    mix_pairs,
     shadow_calibration,
 )
 from world_builder.terrain.chart import TangentFrame, latlon
@@ -194,7 +195,7 @@ def light_depth_on_sphere(
     )
     h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
     coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    pair = fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
+    pairs = march_pairs(volume, coords, spec)
     flat = positions.reshape(-1, 3)
 
     def at(sample):
@@ -205,11 +206,12 @@ def light_depth_on_sphere(
     convective = at(depth_at)
     cell = cell_shift(volume, spec, coords, convective, octave_mean)
     gain, bias = shadow_calibration(spec, octave_mean)
+    pair, low = mix_pairs(spec, h, convective, pairs)
     raw = pair * gain + at(shift_at) + cell + bias
     shelf = None
     if spec.anvil and spread_at is not None:
         w = spec.octave_weights
-        value = pair + octave_mean * (w[2] + w[3]) + cell + spec.shelf_shift
+        value = low + octave_mean * (w[2] + w[3]) + cell + spec.shelf_shift
         shelf = (at(spread_at), value)
     density = _slab_density(spec, h, raw, convective, shelf)
     density = np.where(k < steps[..., None], density, 0.0).sum(axis=-1)
@@ -454,7 +456,7 @@ class CloudLightVolumes:
         :param output: the window (its GSG bakes the volumes)
         :param clouds: the planet's clouds (a
             :class:`~world_builder.clouds.planet.PlanetClouds`: a volume a
-            family, or a :class:`~world_builder.clouds.sphere.CloudVolume`)
+            family, or a :class:`~world_builder.clouds.march.CloudMarch`)
         :param tile: a slice's texels per side (0: none)
         :param per_frame: slices baked a frame
         :param steps: the most steps of a voxel's march

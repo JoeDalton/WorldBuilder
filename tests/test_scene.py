@@ -11,12 +11,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from panda3d.core import LVecBase3f, NodePath, Texture
+from panda3d.core import NodePath, Texture
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
-from world_builder.clouds import sphere
 from world_builder.clouds.cloud import CloudSettings
-from world_builder.clouds.sphere import CloudVolume
+from world_builder.clouds.march import CloudMarch
 from world_builder.depth import (
     FAR_CAMERA_MASK,
     NEAR_CAMERA_MASK,
@@ -76,70 +75,6 @@ def test_split_cameras_draw_into_the_window(window):
     finally:
         cameras.destroy()
     assert cameras.far_region not in list(window.win.get_display_regions())
-
-
-def _card(parent, name, distance, frame, color):
-    """A flat, unlit card *distance* ahead of the camera, its frame in
-    fractions of the view's half-width (x0, x1, z0, z1)."""
-    from panda3d.core import CardMaker
-
-    lens_half = math.tan(math.radians(0.5 * 60.0)) * distance
-    maker = CardMaker(name)
-    x0, x1, z0, z1 = frame
-    maker.set_frame(x0 * lens_half, x1 * lens_half, z0 * lens_half, z1 * lens_half)
-    card = parent.attach_new_node(maker.generate())
-    card.set_y(distance)
-    card.set_color(*color)
-    card.set_light_off(1)
-    card.set_shader_off(1)
-    card.set_texture_off(1)
-    card.set_two_sided(True)
-    return card
-
-
-def test_half_resolution_clouds_are_hidden_by_what_is_in_front(window):
-    """Each depth range's clouds go into their own half-size layer: near
-    ground hides far clouds (one buffer for both ranges showed them through
-    it), and near clouds cover near ground."""
-    from world_builder.clouds.half_res import HalfResClouds
-
-    fov, transform = window.camLens.get_fov(), window.camera.get_transform()
-    window.camLens.set_fov(60.0, 60.0)
-    window.camera.set_pos_hpr(0, 0, 0, 0, 0, 0)
-    cameras = SplitDepthCameras(window, near=1.0)
-    clouds = window.render.attach_new_node("test_clouds")
-    occluder = _card(
-        window.render, "occluder", 50.0, (-0.4, 0.4, -0.4, 0.4), (0, 1, 0, 1)
-    )
-    _card(clouds, "far_cloud", 2000.0, (-2, 2, -2, 2), (1, 0, 0, 1))
-    _card(clouds, "near_cloud", 20.0, (-2, -0.5, -2, 2), (0, 0, 1, 1))
-    half = HalfResClouds(window, cameras)
-    half.add(clouds)
-    try:
-        cameras.update(500.0, 5000.0)
-        half.update()
-        for _ in range(3):
-            window.graphicsEngine.render_frame()
-        shot = window.win.get_screenshot()
-        size = shot.get_x_size()
-        ram = np.frombuffer(shot.get_ram_image_as("RGB").get_data(), np.uint8)
-        rgb = ram.reshape(shot.get_y_size(), size, 3)
-
-        def at(x, y):  # fractions of the view, from the bottom left
-            return tuple(int(c) for c in rgb[int(y * size), int(x * size)])
-
-        assert at(0.55, 0.5) == (0, 255, 0)  # the occluder hides the far cloud
-        assert at(0.9, 0.9) == (255, 0, 0)  # the far cloud elsewhere
-        assert at(0.1, 0.5) == (0, 0, 255)  # the near cloud, in front
-        assert half.pixel_scale == 2.0
-    finally:
-        half.destroy()
-        cameras.destroy()
-        clouds.remove_node()
-        occluder.remove_node()
-        window.camLens.set_fov(fov)
-        window.camera.set_transform(transform)
-    assert clouds.is_empty()
 
 
 def test_split_cameras_keep_the_split_off_translucent_volumes(window):
@@ -637,12 +572,12 @@ def test_terrain_frames(terrain):
 @pytest.fixture
 def clouds(showbase):
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    made = CloudVolume(
+    made = CloudMarch(
         showbase.render,
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2),
+        settings=CloudSettings(octave_bands=2),
         planet=PRESETS["forest"],
     )
     yield made, executor
@@ -662,37 +597,8 @@ def test_cloud_settings(clouds):
     assert _input(made.root, "uCloudDebug")[0] == 5
 
 
-def test_clouds_forget_tiles_far_out_of_use(clouds):
-    """Flying away, the cache keeps at most ``tile_cache`` tiles nobody
-    wants; tiles for an older spec version are dropped on arrival."""
-    from dataclasses import replace
-
-    made, _ = clouds
-    kept = made.settings
-    made.set_settings(replace(kept, tile_cache=0))  # live: no rebuild
-    assert made.settings.tile_cache == 0
-    first = TangentFrame.at(20.0, 40.0).up * (R + 1000.0)
-    for _ in range(10):
-        made.update(first)
-    before = set(made._tiles)
-    assert before
-    elsewhere = TangentFrame.at(-30.0, -100.0).up * (R + 1000.0)
-    for _ in range(60):  # until the new area's tiles are all in
-        made.update(elsewhere)
-    assert not (before & set(made._tiles))  # the first area's tiles are gone
-    # A tile generated for an older version is not uploaded.
-    key = next(iter(made._wanted))
-    stale = sphere.generate_cloud_tile(made.spec, key, version=made._version - 1)
-    made._tiles.pop(key).node.remove_node()
-    made._ready[key] = stale
-    made._upload()
-    assert key not in made._tiles
-    made.set_settings(kept)
-
-
-def test_clouds_settings_live_and_rebuilt(clouds):
-    """The sun march changes live (same tiles, same worker spec); the
-    billboard count re-plans the shells and regenerates every tile."""
+def test_clouds_settings_live(clouds):
+    """The sun march and the reflection change live."""
     from dataclasses import replace
 
     from world_builder.depth import REFLECTION_CAMERA_MASK
@@ -703,46 +609,12 @@ def test_clouds_settings_live_and_rebuilt(clouds):
     try:
         for _ in range(10):
             made.update(camera)
-        tiles, version, spec = set(made._tiles), made._version, made.spec
-        assert tiles
         made.set_settings(replace(kept, march_scale=0.5, reflected=False))
-        assert made._version == version and made.spec == spec
-        assert set(made._tiles) == tiles
+        assert made.settings.march_scale == 0.5
         assert made.root.is_hidden(REFLECTION_CAMERA_MASK)
-        made.set_settings(replace(made.settings, count_scale=0.5))
-        assert made._version == version + 1 and not made._tiles
-        # Fewer billboards, larger: as count^(-1/3).
-        assert made.spec.shells[0].radius[0] > spec.shells[0].radius[0]
-        made.set_settings(made.settings)  # nothing changes: no rebuild
-        assert made._version == version + 1
     finally:
         made.set_settings(kept)
     assert not made.root.is_hidden(REFLECTION_CAMERA_MASK)
-
-
-def test_clouds_rebase_with_altitude(clouds):
-    """The rebasing grid coarsens with altitude, so float32 only sees small
-    numbers near the camera."""
-    made, _ = clouds
-    camera = TangentFrame.at(20.0, 40.0).up * (R + 300e3)
-    made.update(camera, camera_render=(0.0, 0.0, 0.0))
-    origin = made._origin
-    assert np.all(np.abs(camera - origin) <= 0.5 * 4096.0 * 2**8)
-    np.testing.assert_allclose(
-        tuple(made.tiles_root.get_pos()), -(camera - origin), atol=1.0
-    )
-
-
-def test_cloud_tile_node_bounds_hold_the_billboards(clouds):
-    made, _ = clouds
-    camera = TangentFrame.at(20.0, 40.0).up * (R + 1000.0)
-    for _ in range(8):
-        made.update(camera)
-    tile = next(t for t in made._tiles.values() if t.tris is not None)
-    bounds = tile.node.node().get_internal_bounds()
-    p = tile.data.particles
-    assert bounds.contains(LVecBase3f(*p[0, 0:3]))
-    assert tile.reach >= float(np.linalg.norm(p[:, 0:3], axis=1).max())
 
 
 def test_terrain_settings_apply_live(terrain):

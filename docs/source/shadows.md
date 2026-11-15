@@ -80,10 +80,10 @@ annular eclipse).
 - **Terrain** (`terrain_frag.glsl`): land and far water, per pixel, at
   `vRelPos`. An airless moon inside the planet's shadow goes dark: a lunar
   eclipse.
-- **Cloud billboards** (`cloud_sphere.vert`): per vertex, at the
-  billboard's centre, into `vSunTint` and `vTwilight`.
+- **Clouds** (`cloud_march.frag`): per sample. (The billboards, removed on
+  2026-11-15, took it per vertex in `cloud_sphere.vert`.)
 - **Cloud deck** (`cloud.frag`): per fragment.
-- **Cirrus** (`cirrus.vert`): per vertex, as the billboards, from the main
+- **Cirrus** (`cirrus.vert`): per vertex, from the main
   camera (`camPos`; the sea's mirror draws it from its own).
 - **The air** (`atmoSegment`): each sample's direct sunlight, at the
   sample. The sky darkens, and so does the aerial perspective over the
@@ -110,10 +110,10 @@ only, so it lines up with the clouds drawn, and it moves with the sun.
   marches the chord between them in steps of about the layer's
   `sunStepLength`, at most `maxSteps` (a long, low chord takes longer steps
   rather than more of them). The shadow is `exp2(-depth)`.
-- **The field.** The deck layer's (`CloudVolume._deck_layer`, the full
+- **The field.** The deck layer's (the march's deck layer, the full
   field with per-metre extinction, and the cumulus's `shadow_strength`), so
   the shadow matches the clouds as drawn.
-- **Inputs.** `CloudVolume.bind_shadow_inputs(node)` gives a node (the
+- **Inputs.** `CloudMarch.bind_shadow_inputs(node)` gives a node (the
   planet's terrain root) the field's inputs and `uCloudShadowLayer`, its
   layer: -1 until the weather is made, or after `remove`.
   `clouds.shadow_defaults.cloud_shadow_defaults` (the terrain binds it) is
@@ -136,7 +136,8 @@ only, so it lines up with the clouds drawn, and it moves with the sun.
   the CPU's light on the sea leaves the clouds out. The sky light is not
   dimmed: under a cloud the air all round is still lit.
 - **CPU twin.** `noise.cloud_shadow_on_sphere`, and
-  `CloudVolume.sun_visibility(points, sun, steps)` (`PlanetClouds`'), which
+  `field_setup.sun_visibility(points, sun, steps)` (each family's caster's,
+  through `PlanetClouds.sun_visibility`), which
   `World.sun_visibility` and `lights_at` multiply in: Panda3D's lights and
   the tracked models darken under a cloud.
 - **Knob.** `ShadowSettings.cloud_shadow_steps` (the `shadows` section of
@@ -328,7 +329,7 @@ texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
   of an azimuthal equidistant chart on the base's sphere around the camera,
   and `cloud_shadow_map.frag` runs `cloudShadowDepth` from there. A pixel
   of ground below the slab finds its ray's entry point (analytic,
-  `cloudShadowChord`) and fetches it (`cloudMapsDepth`).
+  `cloudShadowChord`) and fetches it (`cloudMapsDepthIn`).
 - **The levels.** A texel holds the total (r) and the depth a quarter, a half
   and three quarters of the way along the chord (g, b, a:
   `cloudShadowLevelsIn`); the ground reads r. They are what lets the
@@ -469,8 +470,10 @@ A cloud's fragment marches toward the sun for its own few hundred metres
 tower), enough for its own form. With a low sun the clouds kilometres
 upwind shade it too, and that march misses them.
 
-- **The far segment.** `cloud_field.glsl`'s `cloudFarDepth`, per vertex
-  in `cloud_sphere.vert`, from the billboard's centre: from where the
+- **The far segment.** `cloud_field.glsl`'s `cloudFarDepth` (per vertex
+  in the billboards' `cloud_sphere.vert`, from the billboard's centre,
+  until their removal on 2026-11-15; the march's samples take it from the
+  light volume and the shadow maps): from where the
   fragment's march stops along the sun's ray to the slab's top (or the
   reach), in steps of 600 m (`CLOUD_FAR_STEP`, at most 12), through
   `slabOpticalDepth`. It multiplies `vSunTint`. The fragment's march does

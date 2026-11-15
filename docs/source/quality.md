@@ -31,7 +31,7 @@ change takes effect:
 | Mode | What happens |
 |---|---|
 | `live` | At once: a shader input, a budget or a cache size. Lower caches evict on the next update, never a chunk or tile the drawn view needs. |
-| `rebuild` | The object rebuilds a part of itself. The clouds re-plan their shells and regenerate their tiles (a few seconds of refill). The sea makes its reflection buffer again. The sky makes a new Milky Way texture. |
+| `rebuild` | The object rebuilds a part of itself. The clouds re-pack their octave bands (and remake the deck's light table when the farthest band's octaves change, ~0.4 s). The sea makes its reflection buffer again. The sky makes a new Milky Way texture. |
 | `restart` | Only a newly built object takes it: the terrain's texture size and worker count. `set_settings` logs that it will apply at the next start. |
 
 ## A game's settings menu, without naming a knob
@@ -112,7 +112,7 @@ terrain's GPU chunk cap is never above its RAM one.
   without one reads as version 1.
 - **Objects find their own section** (`SETTINGS_TYPE` on each class:
   `Terrain`, `Atmospheres`, `Sky`, `PlanetClouds` (and its layers,
-  `CloudVolume` and `CloudSheet`), `Sea`), so `apply()` and
+  `CloudMarch` and `CloudSheet`), `Sea`), so `apply()` and
   `settings_for()` work for any mix of them.
 
 What the schema does not say:
@@ -164,28 +164,28 @@ labels and ranges below are what the schema gives.
 
 ### `clouds`: Clouds (`CloudSettings`)
 
-The low clouds are raymarched at every preset (`renderer`, a rebuild knob that
-a preset does not change; "Billboards" selects the billboard renderer). The
-march's own knobs are `march_steps` (24, 40, 64, 96) and `march_block`
-(one pixel in 16 traced a frame, 4 × 4, at LOW and MID; one in 8, 4 × 2, at
-HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
-(`count_scale`, overlaps, `shell_octaves`, `shells`, `interior_growth`,
-`half_resolution`) apply to the billboards only.
+The low clouds are raymarched at every preset: `march_steps` is its most
+steps a ray, `march_block` the share of the view's pixels it traces a frame
+(one in 16, 4 × 4, at LOW and MID; one in 8, 4 × 2, at HIGH; one in 4, 2 × 2,
+at ULTRA), `shell_octaves` the noise octaves per distance band of the march
+and `octave_bands` how many bands before the deck's far field takes over.
+
+The billboard renderer was removed on 2026-11-15, and its knobs with it
+(`renderer`, `count_scale`, `overlap_near`, `overlap_far`,
+`interior_growth`, `half_resolution`, `uploads_per_frame`,
+`resorts_per_frame`, `tile_cache`): a saved config holding them loads with
+them skipped (with a warning). `octave_bands` was `shells`; `RENAMED` maps
+the old key, so an old save keeps its value.
 
 | Id | Label | Applies | Range or choices | LOW | MID | HIGH | ULTRA |
 |---|---|---|---|---|---|---|---|
-| `count_scale` | Billboards | rebuild | 0.1 to 4 x | 0.25 | 0.5 | 1 | 2 |
+| `march_steps` | Raymarch steps | live | 8 to 256 steps | 24 | 40 | 64 | 96 |
+| `march_block` | Raymarch resolution | live | Quarter, Ninth (3 x 3), Eighth (4 x 2), Half, Full | Quarter | Quarter | Eighth (4 x 2) | Half |
+| `march_refresh_moving` (advanced) | Raymarch: faster refresh in motion | live | on / off | off | off | off | off |
 | `march_scale` | Lighting | live | 0.25 to 2 x | 0.44 | 0.67 | 1 | 1.5 |
-| `overlap_near` (advanced) | Overlap, near | rebuild | 0.5 to 4 | 1.5 | 2 | 2.5 | 2.5 |
-| `overlap_far` (advanced) | Overlap, far | rebuild | 0.5 to 4 | 1 | 1.5 | 2.5 | 2.5 |
 | `shell_octaves` | Detail | rebuild | 4-3-3-2, 4-4-3-3, 4-4-4-3, 4 | 4-3-3-2 | 4-4-3-3 | 4-4-4-3 | 4 |
-| `shells` (advanced) | Billboard distance | rebuild | 1 to 6 shells | 4 | 4 | 4 | 4 |
+| `octave_bands` (advanced) | Detail distance | rebuild | 1 to 6 bands | 4 | 4 | 4 | 4 |
 | `reflected` | In reflections | live | on / off | off | on | on | on |
-| `interior_growth` (advanced) | Larger billboards inside | rebuild | on / off | on | on | off | off |
-| `half_resolution` | Half-resolution clouds | live | on / off | on | on | off | off |
-| `uploads_per_frame` (advanced) | Tile uploads per frame | live | 1 to 32 | 3 | 3 | 3 | 3 |
-| `resorts_per_frame` (advanced) | Tile re-sorts per frame | live | 1 to 32 | 4 | 4 | 4 | 4 |
-| `tile_cache` (advanced) | Tiles kept | live | 0 to 2000 tiles | 160 | 160 | 160 | 160 |
 
 ### `ocean`: Sea (`OceanSettings`)
 
@@ -279,7 +279,8 @@ HIGH; one in 4, 2 × 2, at ULTRA); the billboard knobs below
 | LOW | 93.2 | 10.4 ms | 15.6 ms |
 
 LOW's visible trades: the sea reflects only the sky (no terrain and no
-clouds in it), there are fewer and larger cloud billboards, the textures
+clouds in it), there were fewer and larger cloud billboards (the renderer
+of the time, removed 2026-11-15), the textures
 stop at 1.5 km, and the ground is three levels coarser.
 
 ## The demo

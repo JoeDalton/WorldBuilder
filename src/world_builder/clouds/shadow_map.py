@@ -179,7 +179,7 @@ class CloudShadowMaps:
         :param clouds: the planet's clouds
             (:class:`~world_builder.clouds.planet.PlanetClouds`: a pair of
             maps per family that casts a shadow, or a
-            :class:`~world_builder.clouds.sphere.CloudVolume`: one)
+            :class:`~world_builder.clouds.march.CloudMarch` without genera: one)
         :param size: ``ShadowSettings.cloud_map_size`` (0: none)
         :param to_ram: copy each map to RAM when drawn (tests)
         """

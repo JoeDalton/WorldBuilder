@@ -527,7 +527,7 @@ def load_cirrus_atlas(game: Any = None) -> Texture:
     mostly seen far and grazing), clamped at its edges.
 
     Through ``game.app.asset_manager`` when the game has one, as
-    :func:`cloud.load_cloud_atlas`; straight from disk otherwise.
+    the clouds' own loader did; straight from disk otherwise.
     """
     asset_manager = getattr(getattr(game, "app", None), "asset_manager", None)
     if asset_manager is not None:

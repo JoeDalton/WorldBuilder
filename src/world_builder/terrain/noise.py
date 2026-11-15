@@ -381,12 +381,7 @@ class _NativeNoise:
             ptr,
             ptr,
         ]
-        # The planet clouds' back-to-front order (billboards.c).
-        lib.wb_billboard_order.argtypes = [ptr, i64, i64, ptr, ptr, ptr]
-        lib.wb_billboard_vertices.argtypes = [ptr, i64, ptr, ptr, ptr]
         for function in (
-            lib.wb_billboard_order,
-            lib.wb_billboard_vertices,
             lib.wb_face_grid,
             lib.wb_chunk_surface,
             lib.wb_chunk_pack,
@@ -486,57 +481,6 @@ class _NativeNoise:
             out.ctypes.data,
         )
         return out.reshape(shape)
-
-    def billboard_order(
-        self,
-        particles: np.ndarray,
-        offset: np.ndarray,
-        order: np.ndarray,
-        index: np.ndarray,
-    ) -> None:
-        """A cloud tile's billboards farthest first (``wb_billboard_order``).
-
-        :param particles: (n, k) float32 rows, xyz relative to the tile's
-            centre first
-        :param offset: (3,) the tile's centre minus the camera
-        :param order: (n,) uint32 the previous order, updated in place
-            (stable: equal distances keep it)
-        :param index: (6 n,) uint32, filled with the triangle indices
-        """
-        assert particles.dtype == np.float32 and particles.flags.c_contiguous
-        assert order.dtype == np.uint32 and index.dtype == np.uint32
-        offset = np.ascontiguousarray(offset, dtype=np.float64)
-        self._lib.wb_billboard_order(
-            particles.ctypes.data,
-            particles.shape[1],
-            len(particles),
-            offset.ctypes.data,
-            order.ctypes.data,
-            index.ctypes.data,
-        )
-
-    def billboard_vertices(
-        self, particles: np.ndarray, out: np.ndarray
-    ) -> tuple[np.ndarray, float]:
-        """A cloud tile's vertices (``wb_billboard_vertices``).
-
-        :param particles: (n, 9) float32, ``CloudTile.particles``
-        :param out: (4 n * 11,) float32, filled (four corners a billboard)
-        :returns: the tile's box (min xyz, max xyz; float32) and its reach
-        """
-        particles = np.ascontiguousarray(particles, dtype=np.float32)
-        assert particles.shape[1] == 9 and out.dtype == np.float32
-        assert out.size == 4 * 11 * len(particles)
-        box = np.empty(6, dtype=np.float32)
-        reach = ctypes.c_double()
-        self._lib.wb_billboard_vertices(
-            particles.ctypes.data,
-            len(particles),
-            out.ctypes.data,
-            box.ctypes.data,
-            ctypes.byref(reach),
-        )
-        return box, reach.value
 
     def face_grid(self, face: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
         """``cubesphere.face_dirs(face, *np.meshgrid(a, b))``: (len(b) *

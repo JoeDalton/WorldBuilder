@@ -21,8 +21,8 @@ The sky's light dims with the sunlight that makes it, down to
 
 The second term is the planet's clouds' shadow on what is under them,
 marched through their density field (cloud_field.glsl's
-``cloudShadowDepth``; :meth:`CloudVolume.bind_shadow_inputs
-<world_builder.clouds.sphere.CloudVolume.bind_shadow_inputs>` gives a
+``cloudShadowDepth``; :meth:`CloudMarch.bind_shadow_inputs
+<world_builder.clouds.march.CloudMarch.bind_shadow_inputs>` gives a
 node's shaders the field). :class:`ShadowSettings` sets what it costs.
 
 Most of the time no body's shadow is near another: :meth:`Shadows.set_sun`

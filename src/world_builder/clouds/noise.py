@@ -132,6 +132,15 @@ class DensityField:
                     of the first: towers kilometres wide
     shelf_shift     the shelf's fbm shift, DERIVED like the threshold
                     (:func:`with_shelf`)
+    deep_exponent   the threshold's rise's exponent at depth 1 (linear in
+                    depth from ``top_exponent``); None = ``top_exponent``.
+                    Higher: the threshold stays low up the column and rises
+                    late, so the clouds reach their local top (towers)
+    deep_erosion    the threshold's rise at depth 1 (linear from
+                    ``top_erosion``); None = ``top_erosion``
+    cell_power      the cell octave's weight grows as depth ** this (1:
+                    linear); below 1, a congestus is gathered into towers
+                    nearly as a cumulonimbus is
     """
 
     slab: tuple = (1000.0, 600.0)
@@ -150,6 +159,9 @@ class DensityField:
     anvil: float = 0.0
     cell_weight: float = 0.0
     shelf_shift: float = 0.0
+    deep_exponent: float | None = None
+    deep_erosion: float | None = None
+    cell_power: float = 1.0
 
     @property
     def feature_size(self) -> tuple:
@@ -456,7 +468,8 @@ def fbm(
     octaves: int = 4,
     octave_mean: float | None = None,
 ) -> np.ndarray:
-    """The four-octave fbm of the shader's ``cloudFbm``.
+    """The four-octave fbm of the shader (cloud_field.glsl's two coarse
+    octaves and ``highOctaves``).
 
     :param volume: the noise octave, indexed [z, y, x]
     :param coords: (..., 3) noise coords (world * noise_scale + offset)
@@ -529,6 +542,38 @@ def _smoothstep(lo: float, hi: float, x: ArrayLike) -> np.ndarray:
 #: cloud_field.glsl's thresholdLift.
 ANVIL_DEPTH = (0.6, 1.0)
 ANVIL_BAND = (0.7, 0.95)
+#: How much wider the threshold's window is deep in the anvil
+#: (:func:`anvil_weight` 1), in windows: its edges soft. MUST match
+#: cloud_field.glsl.
+ANVIL_SOFTEN = 1.0
+#: The band under the local top the anvil smooths over (:func:`anvil_weight`),
+#: a share of it: ahead of :data:`ANVIL_BAND`, so the cloud is already smooth
+#: where it starts to spread (over the same band, the spread's underside kept
+#: the tower's lumps). MUST match cloud_field.glsl's anvilWeight.
+ANVIL_SMOOTH_BAND = (0.5, 0.75)
+#: The anvil's (and its shelf's) two coarse octaves are read at this share of
+#: the field's frequency, from an offset decorrelating them from the cell
+#: octave's (which reads the same volume at :data:`CELL_SCALE`): features
+#: four times wider, ~8 km for the convective field. Smooth anvils are
+#: smooth over kilometres; at the tower's own scale both stayed lumpy.
+#: MUST match cloud_field.glsl.
+ANVIL_SCALE = 0.25
+ANVIL_OFFSET = (0.71, 0.29, 0.53)
+
+
+def deep_profile(spec: DensityField, depth: ArrayLike = 0.0) -> tuple:
+    """The threshold's rise's (exponent, erosion) at convective *depth*:
+    ``top_exponent`` and ``top_erosion`` at depth 0, linear to
+    :attr:`DensityField.deep_exponent` and ``deep_erosion`` at 1 (each the
+    depth-0 value when None). MUST match cloud_field.glsl's thresholdLift."""
+    d = np.clip(depth, 0.0, 1.0)
+    exponent = spec.top_exponent
+    if spec.deep_exponent is not None:
+        exponent = exponent + (spec.deep_exponent - exponent) * d
+    erosion = spec.top_erosion
+    if spec.deep_erosion is not None:
+        erosion = erosion + (spec.deep_erosion - erosion) * d
+    return exponent, erosion
 
 
 def threshold_lift(
@@ -546,7 +591,8 @@ def threshold_lift(
     deep cloud's threshold falls again just under its top: the anvil.
     """
     local = np.asarray(h) / top_fraction(spec, depth)
-    lift = spec.top_erosion * np.clip(local, 0.0, 1.0) ** spec.top_exponent
+    exponent, erosion = deep_profile(spec, depth)
+    lift = erosion * np.clip(local, 0.0, 1.0) ** exponent
     if spec.anvil:
         lift = lift - spec.anvil * _smoothstep(*ANVIL_DEPTH, depth) * _smoothstep(
             *ANVIL_BAND, local
@@ -554,6 +600,71 @@ def threshold_lift(
     if spec.min_top < 1.0:
         lift = np.where(local < 1.0, lift, np.inf)
     return lift
+
+
+def anvil_weight(
+    spec: DensityField, h: ArrayLike, depth: ArrayLike = 0.0
+) -> np.ndarray:
+    """How far into its anvil a point is, 0 to 1: the share of the anvil's
+    threshold fall (:data:`ANVIL_DEPTH`, :data:`ANVIL_BAND`) at slab height
+    *h* and convective *depth*; 0 everywhere for a field without an anvil.
+    The fine octaves (and the raymarch's billows) fade to their means by it,
+    so the anvil is smooth, not the tower's cauliflower spread sideways.
+    MUST match cloud_field.glsl's anvilWeight."""
+    h = np.asarray(h, dtype=np.float64)
+    if not spec.anvil:
+        return np.zeros(np.broadcast(h, np.asarray(depth)).shape)
+    local = h / top_fraction(spec, depth)
+    return _smoothstep(*ANVIL_DEPTH, depth) * _smoothstep(*ANVIL_SMOOTH_BAND, local)
+
+
+def anvil_fbm(
+    volume: np.ndarray,
+    coords: np.ndarray,
+    spec: DensityField,
+    octaves: int,
+    weight: ArrayLike,
+) -> np.ndarray:
+    """:func:`fbm` with its fine octaves faded to their means by *weight*
+    (:func:`anvil_weight`): the two coarse octaves, plus (1 - weight) of
+    what the fine ones add about their mean."""
+    weight = np.asarray(weight)
+    if not np.any(weight > 0.0):
+        return fbm(volume, coords, spec, octaves)
+    mean = float(volume.mean())
+    full = fbm(volume, coords, spec, octaves, mean)
+    return full + weight * (anvil_coarse(volume, coords, spec, mean) - full)
+
+
+def anvil_coarse(
+    volume: np.ndarray, coords: np.ndarray, spec: DensityField, octave_mean: float
+) -> np.ndarray:
+    """The anvil's fbm: its two coarse octaves at :data:`ANVIL_SCALE` of the
+    field's frequency, the fine ones their mean (*octave_mean*; 0 for a
+    march's bare two-octave sum)."""
+    low = np.asarray(coords) * ANVIL_SCALE + np.asarray(ANVIL_OFFSET)
+    return fbm(volume, low, spec, 2, octave_mean)
+
+
+def march_pairs(volume: np.ndarray, coords: np.ndarray, spec: DensityField) -> tuple:
+    """A march's two-octave sums (the fine octaves 0): the field's, and the
+    anvil's (:func:`anvil_coarse`; the field's again without an anvil).
+    :func:`mix_pairs` blends them by the anvil's weight."""
+    pair = fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
+    if not spec.anvil:
+        return pair, pair
+    return pair, anvil_coarse(volume, coords, spec, 0.0)
+
+
+def mix_pairs(
+    spec: DensityField, h: np.ndarray, depth: ArrayLike, pairs: tuple
+) -> tuple:
+    """(the column's two-octave sum, the shelf's) from :func:`march_pairs`:
+    the column's faded into the anvil's by :func:`anvil_weight`, the shelf's
+    the anvil's."""
+    pair, low = pairs
+    weight = anvil_weight(spec, np.clip(h, 0.0, 1.0), depth)
+    return pair + weight * (low - pair), low
 
 
 #: The anvil's shelf (:attr:`DensityField.anvil`), a smooth lens under the
@@ -599,7 +710,7 @@ def shelf_fbm(
 ) -> np.ndarray:
     """The shelf's fbm: the two coarse octaves, the others their mean
     (smooth, not cauliflower), its shift added."""
-    return fbm(volume, coords, spec, 2, octave_mean) + spec.shelf_shift
+    return anvil_coarse(volume, coords, spec, octave_mean) + spec.shelf_shift
 
 
 def _shelf_density(spec: DensityField, h: ArrayLike, value: np.ndarray) -> np.ndarray:
@@ -607,7 +718,8 @@ def _shelf_density(spec: DensityField, h: ArrayLike, value: np.ndarray) -> np.nd
     shelf's fbm less its lift, through the field's window, its density
     fading out over the top of :data:`SHELF_BAND`."""
     lo, hi = spec.threshold
-    t = np.clip((value - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
+    # The anvil's soft edge (ANVIL_SOFTEN): its window that much wider.
+    t = np.clip((value - lo) / max((hi - lo) * (1.0 + ANVIL_SOFTEN), 1e-9), 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t) * (1.0 - _smoothstep(*SHELF_BAND[2:], h))
 
 
@@ -623,7 +735,7 @@ def with_shelf(spec: DensityField, volume: np.ndarray, radius: float) -> Density
     dirs = _fibonacci_dirs(COVERAGE_GRID * COVERAGE_GRID)
     points = dirs * (radius + spec.slab[0] + middle * spec.slab[1])
     coords = points * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    values = fbm(volume, coords, spec, 2, float(volume.mean())) - shelf_lift(
+    values = anvil_coarse(volume, coords, spec, float(volume.mean())) - shelf_lift(
         spec, middle
     )
     shift = spec.threshold[0] - np.quantile(values, 1.0 - SHELF_COVERAGE)
@@ -650,7 +762,8 @@ def cell_shift(
     cell = sample_volume(
         volume, np.asarray(coords) * CELL_SCALE + np.asarray(CELL_OFFSET)
     )
-    return spec.cell_weight * np.clip(depth, 0.0, 1.0) * (cell - octave_mean)
+    growth = np.clip(depth, 0.0, 1.0) ** spec.cell_power
+    return spec.cell_weight * growth * (cell - octave_mean)
 
 
 def fbm_sigma(volume: np.ndarray, spec: DensityField) -> float:
@@ -699,7 +812,10 @@ def sphere_column_peaks(
     lift = threshold_lift(spec, h, depth)
     points = dirs[:, None, :] * (radius + base + h * thickness)[None, :, None]
     coords = points * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    raw = fbm(volume, coords, spec, octaves) + cell_shift(volume, spec, coords, depth)
+    weight = anvil_weight(spec, h, depth)[None, :]
+    raw = anvil_fbm(volume, coords, spec, octaves, weight) + cell_shift(
+        volume, spec, coords, depth
+    )
     peaks = (raw - lift[None, :]).max(axis=1)
     peaks.sort()
     return peaks
@@ -779,24 +895,21 @@ def pack_layer_params(
     extinction: float,
     octave_mean: float = 0.5,
     optics: CloudOptics = CloudOptics(),
-    aspect: float = 1.0,
     fade_in: tuple | None = None,
     fade_out: tuple | None = None,
     octaves: int = 4,
 ) -> np.ndarray:
     """Flatten one type into its LAYER_VEC4S rows of the layerParams array.
 
-    The row layout IS the contract with cloud_field.glsl's getField (and the rows
-    cloud_sphere.vert reads directly: 10, 11); change them together.
+    The row layout IS the contract with cloud_field.glsl's getField; change
+    them together. Row 10's first component is free (the billboards' aspect).
 
     :param spec: a resolved field
-    :param extinction: per-BILLBOARD extinction (density / (overlap x the
-        sprites' mean alpha), so a ray through overlapping billboards takes the
-        field's own optical depth), or per metre of path for a planet's deck
+    :param extinction: optical depth per metre of path at density 1 (the
+        march's and the deck's)
     :param octave_mean: noise volume mean, for :func:`shadow_calibration` and the
         octaves not evaluated
     :param optics: the type's optics (phase weights are solved here)
-    :param aspect: billboard long:short ratio (area-preserving, so no recalibration)
     :param fade_in: (lo, hi) camera distances the layer fades in over, None = none
     :param fade_out: (lo, hi) it fades out over, None = never (the deck; the
         air hazes it)
@@ -826,9 +939,9 @@ def pack_layer_params(
             (o.sun_steps, o.sun_step_length, o.shadow_strength, o.multiple_scattering),
             (o.powder_strength, o.powder_length, forward, backward),
             (isotropic, clamped_anisotropy(o), octaves, octave_mean),
-            (aspect, spec.shelf_shift, 0.0, 0.0),
+            (0.0, spec.shelf_shift, *deep_profile(spec, 1.0)),
             (*fade_in, *fade_out),
-            (spec.min_top, spec.anvil, spec.cell_weight, 0.0),
+            (spec.min_top, spec.anvil, spec.cell_weight, spec.cell_power),
         ],
         dtype=np.float32,
     )
@@ -856,7 +969,7 @@ def density_on_sphere(
         (:func:`weather.weather_cube`), (6, n, n, 3) with the convective
         depth too, (6, n, n, 4) with the anvil shelf's spread too
         (:mod:`genera`), or its (6, n, n) shift plane alone (depth 0)
-    :param spec: a resolved field (a shell's: :meth:`sphere.ShellSpec.field_of`)
+    :param spec: a resolved field (a shell's: :meth:`sphere.OctaveBand.field_of`)
     :param points: (..., 3) planet-frame positions, metres
     :param radius: sea-level radius, metres
     :param octaves: octaves evaluated (the shell's; see :func:`fbm`)
@@ -884,7 +997,8 @@ def density_on_sphere(
         spread = sample_cube(weather[..., 3], points)
         shelf = (spread, shelf_fbm(volume, spec, coords, float(volume.mean())) + cell)
     shift = shift + cell
-    raw = fbm(volume, coords, spec, octaves) + shift
+    weight = anvil_weight(spec, np.clip(h, 0.0, 1.0), depth)
+    raw = anvil_fbm(volume, coords, spec, octaves, weight) + shift
     if early_out:
         # cloud_field.glsl's cloudDensity: what is still to come at most.
         mean = float(volume.mean())
@@ -897,18 +1011,13 @@ def density_on_sphere(
             )
             * w[1]
         )
-        if shelf is None:
-            lo = spec.threshold[0] + threshold_lift(spec, h, depth)
-            first = first + shift
-            alive = (first + w[1] + rest > lo) & (first + second + rest > lo)
-            raw = np.where(alive, raw, -np.inf)
-        else:
-            column = shift - cell - threshold_lift(spec, h, depth) + rest
-            sheet = spec.shelf_shift - shelf_lift(spec, h, shelf[0])
-            reach = np.maximum(column, sheet + mean * (w[2] + w[3])) + cell
-            lo = spec.threshold[0]
-            alive = (first + w[1] + reach > lo) & (first + second + reach > lo)
-            return np.where(alive, _slab_density(spec, h, raw, depth, shelf), 0.0)
+        # The column's only: in its anvil (low-frequency octaves the first
+        # two do not bound) it goes on; the shelf (its own octaves) is
+        # always evaluated whole.
+        lo = spec.threshold[0] + threshold_lift(spec, h, depth)
+        first = first + shift
+        alive = (first + w[1] + rest > lo) & (first + second + rest > lo)
+        raw = np.where(alive | (weight > 0.0), raw, -np.inf)
     return _slab_density(spec, h, raw, depth, shelf)
 
 
@@ -934,6 +1043,11 @@ def _slab_density(
     above = np.isinf(lift)  # over the local top: no cloud
     lift = np.where(above, 0.0, lift)
     lo, hi = spec.threshold[0] + lift, spec.threshold[1] + lift
+    # In the anvil the window widens (ANVIL_SOFTEN): a soft edge, not the
+    # tower's crisp one; its low end, hence the coverage, stays.
+    hi = hi + ANVIL_SOFTEN * anvil_weight(spec, np.clip(h, 0.0, 1.0), depth) * (
+        spec.threshold[1] - spec.threshold[0]
+    )
     t = np.clip((raw - lo) / np.maximum(hi - lo, 1e-9), 0.0, 1.0)
     t = np.where(above, 0.0, t)
     coverage = t * t * (3.0 - 2.0 * t)
@@ -959,7 +1073,7 @@ def _sun_march_samples(
     radius: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """The sun march's steps before the weather and the calibration: their
-    slab heights and two-octave sums, (..., sun_steps) each."""
+    slab heights, (..., sun_steps), and their :func:`march_pairs`."""
     steps = np.arange(optics.sun_steps) + 0.5
     positions = points[..., None, :] + sun_dirs[..., None, :] * (
         steps[:, None] * optics.sun_step_length
@@ -967,7 +1081,7 @@ def _sun_march_samples(
     base, thickness = spec.slab
     h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
     coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    return h, fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
+    return h, march_pairs(volume, coords, spec)
 
 
 def _march_density(
@@ -980,18 +1094,19 @@ def _march_density(
     shelf: tuple | None = None,
 ) -> np.ndarray:
     """The density at a march's samples (..., steps), from their slab
-    heights and two-octave sums: the column's calibrated onto the full
+    heights and :func:`march_pairs`: the column's calibrated onto the full
     field, the shelf's its own (cloud_field.glsl's
     ``slabOpticalDepthCell``). *shift*, *depth* and *shelf* are the
     march's, one per march (...)."""
     gain, bias = shadow_calibration(spec, octave_mean)
     shift = np.asarray(shift, dtype=np.float64)[..., None]
     depth = np.asarray(depth, dtype=np.float64)[..., None]
+    pair, low = mix_pairs(spec, h, depth, pair)
     if shelf is not None:
         # The shelf's two octaves are its own, the rest their mean.
         spread, cell = (np.asarray(v, dtype=np.float64)[..., None] for v in shelf)
         w = spec.octave_weights
-        value = pair + octave_mean * (w[2] + w[3]) + cell + spec.shelf_shift
+        value = low + octave_mean * (w[2] + w[3]) + cell + spec.shelf_shift
         shelf = (spread, value)
     raw = pair * gain + shift + bias
     return _slab_density(spec, h, raw, depth, shelf)
@@ -1029,7 +1144,7 @@ def sun_optical_depth_on_sphere(
     depth: ArrayLike = 0.0,
     shelf: tuple | None = None,
 ) -> np.ndarray:
-    """The shader's ``sunOpticalDepth`` in planet mode: *sun_steps* steps of
+    """The shader's ``sunOpticalDepthAt`` in planet mode: *sun_steps* steps of
     *sun_step_length* toward the sun, from half a step out, through the two
     lowest octaves calibrated onto the full field (:func:`shadow_calibration`).
     Its early-out is exact, so it is left out.
@@ -1227,7 +1342,7 @@ def _cloud_shadow_samples(
     )
     h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
     coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    pair = fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
+    pair = march_pairs(volume, coords, spec)
     counted = k < steps[..., None]
     return h, pair, counted, step_length, alive, start
 
@@ -1428,7 +1543,7 @@ def far_cloud_depth(
     )
     h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
     coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    pair = fbm(volume, coords, spec, octaves=2, octave_mean=0.0)
+    pair = march_pairs(volume, coords, spec)
 
     def at(sample):
         if sample is None:
@@ -1544,7 +1659,7 @@ def deck_light_table(
     its own close-up lighting, by the sun's elevation and the weather's
     coverage.
 
-    Close up, a deck pixel is lit by ``vis = exp2(-sunOpticalDepth)`` at
+    Close up, a deck pixel is lit by ``vis = exp2(-sunOpticalDepthAt)`` at
     mid-slab, its sun term scaled by the powder term as well. Averaged over
     columns, weighted by their alpha seen from overhead, those make the far
     deck the blur of the near one: a low sun marches along the slab through
@@ -1553,7 +1668,7 @@ def deck_light_table(
 
     :param volume: the noise octave (quantised, to match the GPU)
     :param spec: the deck's resolved field (its shell's
-        :meth:`sphere.ShellSpec.field_of`)
+        :meth:`sphere.OctaveBand.field_of`)
     :param optics: the deck's optics (its ``max_optical_depth`` caps the alpha)
     :param radius: sea-level radius, metres
     :param shift_table: coverage to fbm shift (:func:`weather.shift_table`)

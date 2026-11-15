@@ -19,6 +19,7 @@ import pytest
 from panda3d.core import SamplerState, Texture
 
 from world_builder.clouds.cloud import PRESETS
+from world_builder.clouds.deck import _SHADERS
 from world_builder.clouds.noise import (
     BACKWARD_ANISOTROPY,
     COVERAGE_GRID,
@@ -51,7 +52,6 @@ from world_builder.clouds.noise import (
     value_noise_volume,
     with_threshold,
 )
-from world_builder.clouds.sphere import _SHADERS
 
 #: The planet the field is measured over, metres.
 R = 600e3
@@ -807,7 +807,7 @@ def test_both_shaders_size_layerparams_for_every_layer():
       * different between the two stages, and the shared uniform fails to LINK
         ("has different type across different shaders") and nothing draws at all.
 
-    Both stages (cloud.frag and cloud_sphere.vert) declare it through their
+    Every stage (cloud.frag, cloud_deck.vert, ...) declares it through their
     shared include, cloud_field.glsl, which must hold exactly
     MAX_LAYERS * LAYER_VEC4S.
     """

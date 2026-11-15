@@ -114,8 +114,8 @@ class Feature:
 DEFAULT_FEATURES = (
     Feature(0.0, 40e3, 6e3, "cumulonimbus", 1.0),
     Feature(45e3, 55e3, 5e3, "cumulonimbus", 1.0),
-    Feature(-30e3, 20e3, 12e3, "congestus", 0.45),
-    Feature(-30e3, 40e3, 10e3, "congestus", 0.45),
+    Feature(-30e3, 20e3, 12e3, "congestus", 0.65),
+    Feature(-30e3, 40e3, 10e3, "congestus", 0.65),
     Feature(0.0, -30e3, 25e3, "stratus", 0.9),
 )
 

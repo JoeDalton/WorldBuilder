@@ -162,14 +162,6 @@ vec3 cloudRadianceOther(Field f, Field above, vec3 p, float density, vec3 V,
 }
 #endif
 
-// With only the weather's shift (no convective depth, no shelf).
-vec3 cloudRadianceShifted(Field f, vec3 p, float density, vec3 V, float shading,
-                          float farCoverage, vec3 sunlight, vec3 skylight,
-                          vec3 twilight, float shift) {
-    return cloudRadianceAt(f, p, density, V, shading, farCoverage, sunlight,
-                           skylight, twilight, vec3(shift, 0.0, -NO_CLOUD_LIFT));
-}
-
 vec3 cloudRadiance(Field f, vec3 p, float density, vec3 V, float shading,
                    float farCoverage, vec3 sunlight, vec3 skylight, vec3 twilight) {
     return cloudRadianceAt(f, p, density, V, shading, farCoverage, sunlight,

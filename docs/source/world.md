@@ -152,9 +152,8 @@ In order, it updates:
 Build the world before `SplitDepthCameras`. The sea's reflection camera
 copies the app's lens once when it is built, and the split cameras then
 shorten that lens to the near range every frame. Then hand the split
-cameras to the world, `world.use_split_depth(depth)`: half-resolution
-clouds (`CloudSettings.half_resolution`) mirror them, and stay at full
-resolution without them.
+cameras to the world, `world.use_split_depth(depth)`: the clouds' raymarch
+draws its passes with them.
 
 Load `transform-cache false` in the game's PRC (before ShowBase opens its
 window). The world moves around the camera, so every drawn node's net

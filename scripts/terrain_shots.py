@@ -56,7 +56,7 @@ each waiting for the GPU to finish (a one-pixel read back): CPU and GPU time
 in series, so a difference between two runs is the difference in work.
 Without the wait, an offscreen frame is not held back by the GPU at all. Each
 pose prints whether it settled, the body's chunk count and finest level, the
-cloud billboards, the LOD pass and the median frame time.
+LOD pass and the median frame time.
 
 Poses: ground (the level's start), ground_up (the same, 11 degrees up),
 coast (2 km up over the reference point), high (20 km up),
@@ -71,7 +71,12 @@ radii up, looking down), moon_ground (2 km over the moon's sand), cirrus_up
 cirrus_between (5 km up, between the cumulus and the cirrus, looking at the
 horizon), cirrus_above (15 km up, above both, looking down at the horizon: the
 cirrus in front of the cumulus), cirrus_dusk (the cirrus still lit after the
-cumulus has gone grey: the sun 2 degrees down), night_orbit (1.5 radii up,
+cumulus has gone grey: the sun 2 degrees down), genera_cb (from the start,
+looking north 8 degrees up at the cumulonimbus 40 km away: its tower and
+anvil), genera_congestus (the same, north-west 6 degrees up: the congestus
+line), cirrus_overhead and cirrus_grazing (the same, south-south-west, 75
+and 4 degrees up: the cirrus above and toward the horizon); the genera are
+laid out around the start, so pass the demo's --start, night_orbit (1.5 radii up,
 looking down at the terminator: the sun 60 degrees below the nadir's horizon),
 night_sea (3 m over the sea, the sun 8 degrees down: the sky's reflection must
 be as dark as the sky), beach (40 m up, 300 m off the coast nearest the
@@ -285,6 +290,16 @@ def _poses(demo: TerrainDemo) -> dict:
     poses["cirrus_between"] = (ref_lat, ref_lon, 5000.0, 0.0, 3.0, 0, 0)
     poses["cirrus_above"] = (ref_lat, ref_lon, 15000.0, 0.0, -8.0, 0, 0)
     poses["cirrus_dusk"] = (ref_lat, ref_lon, 600.0, 90.0, 15.0, 0, 0)
+    # The genera (clouds.genera's DEFAULT_FEATURES, laid out around the
+    # start: pass --start to match the demo's): the cumulonimbus 40 km north,
+    # its tower and anvil; the congestus line to the north-west (heading 45:
+    # headings turn west); the cirrus overhead and at a grazing angle, to the
+    # south-south-west (heading 150).
+    ground_alt = start.get("alt", 800.0)
+    poses["genera_cb"] = (lat0, lon0, ground_alt, 0.0, 8.0, 0, 0)
+    poses["genera_congestus"] = (lat0, lon0, ground_alt, 45.0, 6.0, 0, 0)
+    poses["cirrus_overhead"] = (lat0, lon0, ground_alt, 150.0, 75.0, 0, 0)
+    poses["cirrus_grazing"] = (lat0, lon0, ground_alt, 150.0, 4.0, 0, 0)
     if demo.ring is not None:
         poses["ring_ground"] = (ref_lat, ref_lon, 1500.0, 180.0, 12.0, 0, 0)
         poses["ring_orbit"] = (35.0, lon0, 6.0 * radius, 0.0, -89.9, 0, 0)
@@ -773,12 +788,10 @@ def main() -> None:
         path = args.out / f"{name}.png"
         demo.win.save_screenshot(Filename.from_os_specific(str(path)))
         s = demo.bodies[body].terrain.stats
-        clouds = demo.clouds.stats if demo.clouds is not None else None
-        billboards = f"{clouds['billboards'] / 1e3:.0f}k bb, " if clouds else ""
         bake = demo.bodies[body].shadow_map.bake_seconds
         print(
             f"{name:<13} {'settled' if settled else 'TIMEOUT'}  {s['shown']} chunks, "
-            f"finest {s['finest']}, {billboards}LOD {s['select_ms']:.1f} ms, "
+            f"finest {s['finest']}, LOD {s['select_ms']:.1f} ms, "
             f"shadow map {bake:.1f} s, "
             f"{median:.2f} ms ({1e3 / median:.0f} fps) -> {path}"
         )

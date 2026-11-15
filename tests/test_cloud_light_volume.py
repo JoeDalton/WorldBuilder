@@ -12,6 +12,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from world_builder.clouds.field_setup import _noise
 from world_builder.clouds.light_volume import (
     COLUMNS,
     REACH_MAX,
@@ -26,7 +27,6 @@ from world_builder.clouds.light_volume import (
     smooth_volume,
     voxel_positions,
 )
-from world_builder.clouds.sphere import _noise
 from world_builder.clouds.weather import sample_cube
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PRESETS as PLANETS
@@ -93,28 +93,29 @@ def test_the_bake_is_the_cpus_march_from_each_voxel(window):
     nothing baked again with all still, again on a turned sun or a camera
     moved past the recentring share."""
     from world_builder.clouds.cloud import CloudSettings
-    from world_builder.clouds.sphere import CloudVolume
+    from world_builder.clouds.march import CloudMarch
     from world_builder.terrain.workers import ChunkExecutor
 
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    clouds = CloudVolume(
+    clouds = CloudMarch(
         window.render,
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2),
+        settings=CloudSettings(octave_bands=2),
         planet=PLANETS["forest"],
     )
     tile, steps = 64, 16
     volumes = CloudLightVolumes(
         window.win, clouds, tile=tile, per_frame=8, steps=steps, to_ram=True
     )
+    caster = clouds.shadow_caster(0)
     try:
         clouds.update(TangentFrame.at(20.0, 40.0).up * (R + 1000.0))
-        assert clouds.weather is not None
+        assert caster.weather is not None
         places = [(lat, lon) for lat in range(-60, 61, 20) for lon in range(0, 360, 30)]
         cover = [
-            sample_cube(clouds.weather[..., 0], TangentFrame.at(*place).up[None])[0]
+            sample_cube(caster.weather[..., 0], TangentFrame.at(*place).up[None])[0]
             for place in places
         ]
         frame = TangentFrame.at(*places[int(np.argmax(cover))])
@@ -140,7 +141,7 @@ def test_the_bake_is_the_cpus_march_from_each_voxel(window):
 
         chart = [tuple(volume.front.chart[k]) for k in range(4)]
         points = voxel_positions(chart, tile).reshape(-1, 3)
-        field, optics = clouds._deck_field, clouds._deck_optics
+        field, optics = caster._deck_field, caster._deck_optics
         optics = replace(optics, sun_step_length=optics.sun_step_length * STEP_SCALE)
 
         def march(dirs):
@@ -152,7 +153,7 @@ def test_the_bake_is_the_cpus_march_from_each_voxel(window):
                 dirs,
                 R,
                 steps,
-                shift_at=lambda p: sample_cube(clouds.weather[..., 1], p),
+                shift_at=lambda p: sample_cube(caster.weather[..., 1], p),
             ).reshape(SLICES, tile, tile)
 
         direct = march(sun)
@@ -212,7 +213,7 @@ def test_the_genera_bake_is_the_cpus_march_for_each_family(window, family):
         window.render,
         R,
         executor,
-        settings=CloudSettings(shells=2, renderer="march"),
+        settings=CloudSettings(octave_bands=2),
         genera=genera,
     )
     tile, steps = 64, 24

@@ -6,7 +6,7 @@ Three systems make a planet look like one from the ground to orbit:
 |---|---|---|
 | Atmospheres | `world_builder.atmosphere` | Single scattering of sunlight by air and haze: sky colour, sunsets, aerial perspective, the limb from space, reddened sunlight. Applied by every shader along its view ray. |
 | Sky | `world_builder.sky` | A star field (procedural or painted) and the sun's disc, seen through the atmospheres. |
-| Planet clouds | `world_builder.clouds.sphere` | One cloud density field over the whole planet: volumetric billboards near the camera, a deck surface far away, the same pattern at every distance. |
+| Planet clouds | `world_builder.clouds` | One cloud density field over the whole planet, raymarched from the ground to orbit, with the weather's expected coverage where a pixel spans more than its features: the same pattern at every distance. |
 
 `scripts/demo_terrain.py` wires all three; `scripts/terrain_shots.py` renders
 them from fixed poses (`sunset`, `night_orbit`, `in_clouds`, `moonrise`...).
@@ -23,7 +23,7 @@ Earth's air (Bruneton 2017's constants) over a 60 km shell; every value is in
 
 For a view ray, `atmosphere.glsl` marches `uAtmoSteps` samples (8 at HIGH:
 `AtmosphereSettings.steps`, live through `Atmospheres.set_settings`; the
-stars and the cloud billboards march `vertex_steps`, 4, per vertex) through
+stars march `vertex_steps`, 4, per vertex) through
 each atmosphere the ray crosses (a ray that meets the ground stops there).
 With the camera in the air most pixels read the sky-view table and the
 aerial-perspective cells ([the tables](#the-tables)), baked at 16 samples
@@ -91,11 +91,10 @@ when a ray crosses two atmospheres.
   planet's air: dimmed and tinted by day, untouched from space.
 - **The sea:** drawn by the terrain, so seen through the air like the
   ground, in both its looks.
-- **Planet clouds:** per vertex for billboards (the air barely changes across
-  one, and per pixel it would be paid for every layer of overdraw), per pixel
-  for the deck. They then share the sky's tonemap (`display.glsl`), so a
-  cloud deep in haze ends up the colour of the sky behind it
-  ([clouds at the horizon](#clouds-at-the-horizon)).
+- **Planet clouds:** no air is drawn in front of them (it showed them
+  yellow, [clouds at the horizon](#clouds-at-the-horizon)); the air reddens
+  their sunlight, per sample in the raymarch, per pixel on the deck. They
+  share the sky's tonemap (`display.glsl`).
 
 `Atmospheres` holds every atmosphere's uniforms in arrays shared by all bound
 nodes and rewrites them in place once a frame, in float64 where it matters
@@ -323,23 +322,24 @@ Its shader shows:
 A planet's clouds are one part, `clouds.planet.PlanetClouds` (`CloudLook` in
 a `World`), with two layers:
 
-- the **volume** (`clouds.sphere.CloudVolume`): the low clouds, cumulus by
-  default (any cloud type), as billboard shells near the camera and a deck
-  beyond. Everything below up to "Clouds at the horizon" is about it. The
-  same field can be raymarched instead (`CloudSettings.renderer`,
-  `clouds.march.CloudMarch`, [the raymarch](clouds.md#the-raymarch)): no
-  shells nor deck, but the same weather, lighting, far field and terminator;
+- the **volume** (`clouds.march.CloudMarch`): the low clouds, cumulus by
+  default (any cloud type, or the [genera](clouds.md#genera)), raymarched
+  from the ground to orbit ([the raymarch](clouds.md#the-raymarch)), with a
+  deck sphere (`clouds.deck`) for the sea's reflection. Everything below up
+  to "Clouds at the horizon" is about it. (Until 2026-11-15 it could also
+  be drawn as billboard shells near the camera and the deck beyond; they
+  were removed.);
 - the **sheet** (`clouds.cirrus.CloudSheet`), optional: high cirrus above
   them ([Cirrus](#cirrus)).
 
-The part drives both as one (sun, sky light, settings, pixel angle, half
-resolution, update, removal) and holds the rule that only the pair can
+The part drives both as one (sun, sky light, settings, pixel angle, the
+split cameras, update, removal) and holds the rule that only the pair can
 check: the sheet's base must clear the volume's slab (its draw order depends
 on it) and its top stay inside the air (`planet.check_layers`).
 
 ### One density field
 
-The billboard field's density (`clouds.noise`) is moved onto the planet:
+The clouds' density field (`clouds.noise`) is moved onto the planet:
 
 - the slab is a **height above the sea-level sphere** (`altitude` sets its
   base);
@@ -349,9 +349,10 @@ The billboard field's density (`clouds.noise`) is moved onto the planet:
   the coverage it asks for there.
 
 `noise.density_on_sphere` is the CPU copy, exact to the shader's texture
-filtering, which places the billboards where the shader draws cloud. The
-field's code is one include, `clouds/shaders/cloud_field.glsl`, shared by the
-fragment stage and the billboards' vertex stage.
+filtering, which the coverage calibration and the tests measure the drawn
+field with. The field's code is one include,
+`clouds/shaders/cloud_field.glsl`, shared by the march, the deck and the
+shadow maps.
 
 ### The weather
 
@@ -371,8 +372,7 @@ tunables):
 
 Lengths follow the planet's feature scale, like the terrain's. The climate is
 sampled on a coarse 6 × 64² grid and upsampled; the whole map takes ~3 s,
-once per process (the main thread for the textures, each worker for
-placement, cached by spec).
+once per process (cached by spec).
 
 **Coverage to the field, exactly.** The clouds never use coverage directly.
 The sorted column peaks of the field (`noise.sphere_column_peaks`, the coverage
@@ -380,97 +380,43 @@ calibration) are the inverse of the coverage function: a column is cloud when
 its peak plus the shift clears the threshold, so
 `shift(c) = threshold_lo − quantile(peaks, 1 − c)`. `weather.shift_table`
 tabulates it at 256 coverages; the texture holds both the coverage (r) and
-its shift (g, through the table), so the shader pays one fetch. The far deck
-reads the coverage, the near field the shift, and the two agree by
+its shift (g, through the table), so the shader pays one fetch. The far
+field reads the coverage, the near field the shift, and the two agree by
 construction (a test checks the round trip within 3 % at 0.1–0.9).
 
 `python -m world_builder.terrain.preview --weather` draws each preset's globe
 under its weather, and the coverage alone, for tuning.
 
-### Near: billboard shells
+### Near: the raymarch
 
-Billboards are generated per **cube-sphere tile** in the shared worker pool
-(`generate_cloud_tile`), by rejection sampling of the density
-([clouds](clouds.md#the-types-and-their-cost)). Shell *k* uses tiles of level
-`base + k` (8 km at the first) and billboards twice the size of shell
-*k − 1*; adjacent shells crossfade by distance on optical depth, over a
-shared band so their weights sum to 1. Each shell costs about half the
-previous.
+Near the camera the march samples the field itself, along each pixel's ray
+([the raymarch](clouds.md#the-raymarch)), with fewer octaves the farther it
+reaches (`CloudSettings.shell_octaves` over `octave_bands` distance bands,
+each twice as far as the last: `field_setup.octave_bands`). HIGH evaluates
+all 4 octaves up to the second band and drops the finest from the third on;
+MID and LOW drop more, sooner; ULTRA keeps all four everywhere. The finest
+cumulus octave (~125 m features) is still ~6 px wide at 27 km at 1600×900,
+so dropping it nearer shows as smoother, blander clouds. A dropped octave
+counts as its mean, and the band's threshold is moved to make up for the
+lost spread (`field_setup.octave_offset`), so the coverage holds within 2 %
+(tested). Every density evaluation also stops after one or two octaves
+where the rest cannot reach the threshold (they add at most their weights):
+exact, the same densities, fewer fetches in clear air.
 
-Per pixel, the cost depends on the settings (`CloudSettings`, its presets
-by `QualityLevel`: LOW, MID, HIGH, ULTRA; the demo's F4 cycles them; ULTRA, above HIGH, keeps all four octaves on every shell;
-`CloudVolume.set_settings` re-plans the shells and regenerates the
-tiles on the same worker channel), which sets the billboard sizes, the sun
-march's steps, and:
-
-- **Octaves per shell** (`CloudSettings.shell_octaves`): HIGH evaluates all 4 up to
-  shell 2 and drops the finest from shell 3 on; MID and LOW drop more,
-  sooner. The finest cumulus octave (~125 m features) is still ~6 px wide at
-  27 km at 1600×900, so dropping it nearer shows as smoother, blander
-  clouds. A dropped octave counts as its mean, and the shell's threshold is
-  moved to make up for the lost spread (`octave_offset`), so the coverage
-  holds within 2 % (tested) and the crossfades still agree; the placement
-  evaluates the same octaves and threshold.
-- **Overlap** (`CloudSettings.overlap_near`, `overlap_far`): billboard volume per unit of
-  cloud volume, 2.5 at HIGH, less at MID and LOW. The
-  extinction is divided by it, so the mean opacity holds, but fewer, more
-  opaque billboards look lumpier and hit the per-billboard optical-depth cap
-  sooner (thinner dense cores).
-
-At every quality:
-
-- **Early-out:** every density evaluation stops after one or two octaves
-  where the rest cannot reach the threshold (they add at most their
-  weights). It is exact: the same densities, fewer fetches in clear air, which
-  is most of a billboard quad.
-- **Off-screen costs nothing.** Every pass (near, far, the ocean's mirror)
-  runs the vertex stage for every billboard of every shown tile. One whose
-  four corners all lie beyond one clip plane is dropped before its air and
-  sunlight are worked out (exact: it could not cover a pixel); ~1.5 ms at a
-  dusk view from inside the deck.
-- **Zero weight costs nothing.** A billboard wholly outside its shell's
-  distance band, or faded out near the camera, is dropped in the vertex
-  stage; a fragment's shell weight is known before its density. A coarse
-  shell's tile around the camera holds many such billboards, large on screen
-  (inside the deck, looking at a nearby cloud: 12.7 → 9.6 ms of clouds).
-- **The sun march** reads the weather once per pixel, not at every step.
-- **The atmosphere** in front of a billboard takes 4 samples per vertex
-  (`atmosphereAlong(..., steps, ...)`), against 8 per pixel elsewhere.
-
-Tiles hang under a root moved by `origin − camera` (the terrain's rebasing).
-
-**Draw order.** Premultiplied "over" needs back to front. The deck draws
-first, then each shell in its own back-to-front bin, the coarsest first.
-One bin for all tiles was wrong: a coarse tile holding the camera has its
-centre near it, so it drew late, and its billboards, all farther than the
-finer shells' (its near ones are faded out), covered nearer clouds. Within
-a tile the particles are re-sorted, a few tiles per frame, the stalest first:
-new tiles, then those the camera has moved past most relative to their
-distance. A stale order composites a cloud's far side over its near side,
-which reads as shadows sliding over it.
-
-**At half resolution** (`CloudSettings.half_resolution`, on at LOW and MID;
-`clouds.half_res.HalfResClouds`). The clouds draw into two offscreen layers
-half the view's size, one per split-depth range, each by a camera sharing
-that range's lens. Everything else draws into them as depth only (the
-terrain through a depth-only fragment stage; the sky is left out), so the
-ground and a game's models still hide the clouds. Each layer is laid over
-its own range's pass by a fullscreen card, premultiplied "over": the far
-layer in the far pass, so near ground covers it as it covers anything far.
-It saves 1-1.7 ms of GPU time low over the planet and costs ~1.2 ms of
-main-thread cull and draw (see [performance](performance.md) §19): a trade
-for GPU-limited setups. `World.use_split_depth(depth)` gives the world the
-split cameras it needs for it; cloud edges against the ground's silhouettes
-are resolved at half resolution.
+(Until 2026-11-15 the near clouds could also be **billboards**: quads placed
+per cube-sphere tile by rejection sampling of the density, in LOD shells
+crossfaded on optical depth, sorted back to front within a tile, optionally
+drawn at half resolution. Their cost grew with the cloud's volume on screen,
+and they were removed; [performance](performance.md) §13-22 measure them.)
 
 ### Far: the deck
 
-Billboards cannot reach orbit: at constant volume fraction their covered area
-falls as 1/size. Beyond the last shell, the **deck** takes over: a sphere at
-mid-slab height whose fragments evaluate the same density through the
-slab's depth (thickness / |cos|). Where a pixel spans more than the clouds'
-features (from orbit, a pixel is a kilometre or two), the deck fades from the
-sampled field to its **expected coverage**, the share of the pixel's columns
+Sampling the field stops working where a pixel spans more than the clouds'
+features (from orbit, a pixel is a kilometre or two): it speckles. There the
+march, and the **deck** (a sphere at mid-slab height whose fragments evaluate
+the same density through the slab's depth, thickness / |cos|; the sea's
+reflection draws it, `clouds.deck`), fade from the sampled field to its
+**expected coverage**, the share of the pixel's columns
 that hold cloud: the weather map's coverage, which the near field reproduces
 by construction. Self-shadowing goes first (it is smaller than the
 cloud). So the pattern from orbit is the one you fly into, without the
@@ -499,7 +445,7 @@ A cloud stays sunlit after sunset below it: at 2.7 km over a 600 km planet,
 until the sun is 5.4° below its horizon. The air alone dimmed its light only
 to about 15 % of red by then, and the planet's shadow then cut it to black,
 which drew a hard line across the clouds, close up and from orbit. Two terms
-in `cloud_field.glsl` (billboards per vertex, the deck per pixel) spread it:
+in `cloud_field.glsl` (per sample in the march, per pixel on the deck) spread it:
 
 - **The grazing edge** (`grazingLight`): sunlight whose path dips below the
   cloud's own altitude crosses the haze, the terrain and the cloud deck
@@ -555,7 +501,7 @@ clouds kept their contrast. Ruled out on the way: the sunlight's own tint
 in front turned off the clouds came out white; and too
 few samples of that air per vertex (as orange with 8 as with 4).
 
-None of the clouds (the raymarch, the billboards and the deck, the cirrus)
+None of the clouds (the raymarch, the deck, the cirrus)
 draws any air in front of them, since that haze still showed them yellow:
 seen at a grazing angle (from orbit, anywhere on the lit side, or at the
 horizon and in the sea's reflection) they turned yellow even at noon, and
@@ -692,7 +638,7 @@ near-identical colours, so their order within a draw does not show.
 
 | Node | Crossings | Bin |
 |---|---|---|
-| `behind` | where sight lines leave the sphere (all of them from below) | the sky's (21, fixed), draw order 2: after the dome and the stars, before the deck (22) and every shell |
+| `behind` | where sight lines leave the sphere (all of them from below) | the sky's (21, fixed), draw order 2: after the dome and the stars, before the clouds' bins (22: the deck in the reflection, the march's far composite) |
 | `front` | where they enter it (only from above) | Panda's "transparent" (30, back to front by each group's centre): after every cloud bin, before a game's translucent effects nearer than the stamps |
 
 Neither needs a bin of its own. The `front` stamps belong among a game's
@@ -700,9 +646,10 @@ translucent things: Panda's transparent bin sorts them all back to front.
 
 - **The depth split** needs nothing: the far range draws before the near
   one, and everything near is in front of everything far.
-- **Half-resolution clouds** leave the cirrus at full resolution (its fibres
-  are its look, and it costs one atlas fetch a stamp). It is kept out of the
-  half-resolution pass, and the composite (22) lands between its two nodes.
+- **The raymarch** leaves the cirrus at full resolution (its fibres are its
+  look, and it costs one atlas fetch a stamp). It is kept out of the march's
+  depth passes (`HIDE_FROM_CLOUD_PASS`), and the march's far composite (22)
+  lands between its two nodes.
 - **The far plane** (`World.depth_ranges`) reaches the cirrus's far limb
   where it is higher than any ground.
 

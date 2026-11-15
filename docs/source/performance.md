@@ -15,6 +15,16 @@ CPU timings on this machine are noisy (frequency scaling): treat them as
 ±30 %. Since the move to the cube-sphere (600 km planet by default), the
 figures in §3–5 and §10 are re-measured; §1, §2 and §6–9 still hold as written.
 
+**The billboard cloud renderer was removed on 2026-11-15**: the low clouds
+are always raymarched now ([clouds](clouds.md#the-raymarch)). The sections
+that measure the billboards are kept as history and no longer describe the
+code: §13's cloud rows, "Cheaper clouds, and the weather", §15's cloud tiles,
+§19's "The clouds' re-sort in C", "The clouds' tiles built in C" and
+"Half-resolution clouds", and §21-22 (the genera by billboards); §20 and
+§23 compare the raymarch against them. Knobs they name (`count_scale`,
+overlaps, `shells`, `interior_growth`, `half_resolution`, tile uploads,
+re-sorts and cache) no longer exist (`shells` is now `octave_bands`).
+
 ## Summary
 
 | # | Concern | Where | Impact today | Status |
@@ -2106,6 +2116,41 @@ forest_low instead of about 200 000. That layer is part V3's to replace.
 The ray-marched canopy trial was then removed (it was off by default: no change to these numbers). With the
 instanced trees, the vegetation on against off (default `--ab`): forest_edge +4.23, forest_low +2.50,
 mixed_mid +0.79, high +0.01, desert +0.53, forest_dusk +2.38 ms.
+
+## 37. Cloud genera baseline (2026-11-15)
+
+Before the genera work (docs/superpowers/plans/2026-11-15-cloud-genera.md),
+from the user's start (`terrain_shots.py --start 29.7159 29.8232`), HIGH,
+2560 x 1440, RTX 3070, the raymarch, the mean of 60 frames once settled
+(terrain_shots prints no percentile):
+
+| Pose | Frame | FPS |
+|---|---|---|
+| `genera_cb` (the cumulonimbus 40 km north) | 12.57 ms | 80 |
+| `genera_congestus` (north-west) | 12.74 ms | 78 |
+| `cirrus_overhead` (75 degrees up) | 8.21 ms | 122 |
+| `cirrus_grazing` (4 degrees up) | 12.50 ms | 80 |
+
+At these poses the frame is already about twice the 160 FPS target (6.25 ms)
+before any genus is added: the later phases are measured against these rows
+(no regression) as well as against the target.
+
+After the congestus and anvil changes and the billboards' removal (phases 1
+and 2), the same poses:
+
+| Pose | Frame | Against the baseline |
+|---|---|---|
+| `genera_cb` | 13.77 ms | +1.20 ms |
+| `genera_congestus` | 14.01 ms | +1.27 ms |
+| `cirrus_overhead` | 8.07 ms | -0.14 ms |
+| `cirrus_grazing` | 13.51 ms | +1.01 ms |
+
+The removal costs nothing (the march was already the renderer). The extra
+millisecond where the low clouds are in view is more cloud to march (the
+congestus features at coverage 0.65, not 0.45, and a cell octave twice as
+strong gather larger masses) and the anvil's and its shelf's low-frequency
+octaves, two more noise fetches where the anvil weight or the shelf is
+non-zero, with no early-out there (clouds.md, "The anvil is smooth").
 
 ## Not covered
 

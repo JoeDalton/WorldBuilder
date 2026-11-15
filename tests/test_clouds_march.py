@@ -2,7 +2,7 @@
 Unit tests for the raymarched clouds (world_builder.clouds.march): the
 NumPy mirror of the shader's geometry (the slab's segments, the steps and
 their compositing), the constants the shader shares with Python, and the
-renderer choice in PlanetClouds. The shader itself needs a window (see
+march as PlanetClouds' volume. The shader itself needs a window (see
 scripts/cloud_bench.py).
 """
 
@@ -10,12 +10,12 @@ import math
 import re
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
+from world_builder.clouds.field_setup import _noise
 from world_builder.clouds.march import (
     BLOCKS,
     MIN_STEP_FEATURE,
@@ -46,7 +46,6 @@ from world_builder.clouds.noise import (
     with_threshold,
 )
 from world_builder.clouds.planet import PlanetClouds
-from world_builder.clouds.sphere import CloudVolume, _noise
 from world_builder.clouds.weather import coverage_to_shift, shift_table
 from world_builder.quality import QualityLevel
 from world_builder.terrain.planet import PRESETS as PLANETS
@@ -285,7 +284,6 @@ def test_the_steps_do_not_lengthen_as_the_light_is_spent():
     [
         "cloud_march.frag",
         "cloud.frag",
-        "cloud_sphere.vert",
         "cloud_deck.vert",
         "cirrus.vert",
         "cirrus.frag",
@@ -386,17 +384,13 @@ def test_the_shader_shares_the_layer_count_and_the_feature_size():
     assert fewest == SEGMENT_SAMPLES
 
 
-# ── Settings and the renderer choice ─────────────────────────────────────────
+# ── Settings and the volume ──────────────────────────────────────────────────
 
 
 def test_the_presets_trade_steps_and_resolution():
     levels = [CloudSettings.preset(level) for level in QualityLevel]
     steps = [s.march_steps for s in levels]
     assert steps == sorted(steps)
-    assert all(s.renderer == "march" for s in levels)
-    assert CloudSettings().renderer == "march"
-    with pytest.raises(ValueError):
-        CloudSettings(renderer="splats")
 
 
 @pytest.fixture
@@ -406,19 +400,19 @@ def executor():
     made.shutdown()
 
 
-def _clouds(showbase, executor, renderer):
+def _clouds(showbase, executor):
     return PlanetClouds(
         showbase.render,
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2, renderer=renderer),
+        settings=CloudSettings(octave_bands=2),
         planet=PLANETS["forest"],
     )
 
 
-def test_the_settings_pick_the_renderer(showbase, executor):
-    clouds = _clouds(showbase, executor, "march")
+def test_the_volume_is_a_march(showbase, executor):
+    clouds = _clouds(showbase, executor)
     try:
         assert isinstance(clouds.volume, CloudMarch)
         assert clouds.volume.root.get_parent() == clouds.root
@@ -426,27 +420,21 @@ def test_the_settings_pick_the_renderer(showbase, executor):
         clouds.remove()
 
 
-def test_a_change_of_renderer_rebuilds_the_volume_with_its_state(showbase, executor):
-    clouds = _clouds(showbase, executor, "billboards")
+def test_the_clouds_state_reaches_the_march(showbase, executor):
+    clouds = _clouds(showbase, executor)
     try:
         clouds.set_sun((0.0, 2.0, 0.0))
         clouds.set_sky_light(0.2)
         clouds.set_debug(1)
-        old = clouds.volume
-        clouds.set_settings(replace(clouds.settings, renderer="march"))
-        assert isinstance(clouds.volume, CloudMarch)
-        assert old.root.is_empty()  # removed
         assert tuple(clouds.volume._sun[0]) == pytest.approx((0.0, 1.0, 0.0))
         assert clouds.volume._inputs["skyStrength"] == 0.2
         assert clouds.volume._inputs["uCloudDebug"] == 1
-        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
-        assert isinstance(clouds.volume, CloudVolume)
     finally:
         clouds.remove()
 
 
 def test_the_march_packs_a_layer_per_shell_and_the_far_one(showbase, executor):
-    clouds = _clouds(showbase, executor, "march")
+    clouds = _clouds(showbase, executor)
     try:
         march = clouds.volume
         assert march._layers_used == 3
@@ -464,11 +452,11 @@ def test_the_march_packs_a_layer_per_shell_and_the_far_one(showbase, executor):
 def test_the_march_casts_a_shadow_and_reads_the_maps_for_its_own_light(
     showbase, executor
 ):
-    """A raymarched volume is a shadow caster as the billboards' is (its far
-    layer's field, the layer bound once the set-up is done) and takes the
-    shadow maps' inputs on its passes' nodes, kept across a change of
-    renderer; the shader's maps path is compiled in for the march alone."""
-    clouds = _clouds(showbase, executor, "march")
+    """A raymarched volume is a shadow caster (its far layer's field, the
+    layer bound once the set-up is done) and takes the shadow maps' inputs
+    on its passes' nodes; the shader's maps path is compiled in for the
+    march alone."""
+    clouds = _clouds(showbase, executor)
     try:
         march = clouds.volume
         assert clouds.shadow_caster(0) is march.shadow_caster(0)
@@ -486,9 +474,6 @@ def test_the_march_casts_a_shadow_and_reads_the_maps_for_its_own_light(
         bound = []
         clouds.bind_maps(lambda n: bound.append(n))
         assert bound == march._nodes
-        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
-        assert clouds.shadow_caster(0) is clouds.volume
-        assert not isinstance(clouds.volume, CloudMarch)
     finally:
         clouds.remove()
     shaders = Path(__file__).parents[1] / "src/world_builder/clouds/shaders"
@@ -719,7 +704,7 @@ def test_one_march_covers_both_depth_ranges(window, executor):
         SplitDepthCameras,
     )
 
-    clouds = _clouds(window, executor, "march")
+    clouds = _clouds(window, executor)
     depth = SplitDepthCameras(window, near=1.0)
     try:
         clouds.use_split_depth(window, depth)
@@ -791,7 +776,7 @@ def test_the_march_traces_more_pixels_while_moving_when_asked(window, executor):
     from world_builder.clouds.march import MOVING_BLOCKS, MOVING_HOLD
     from world_builder.depth import SplitDepthCameras
 
-    clouds = _clouds(window, executor, "march")
+    clouds = _clouds(window, executor)
     depth = SplitDepthCameras(window, near=1.0)
     try:
         clouds.use_split_depth(window, depth)
@@ -831,7 +816,7 @@ def test_the_march_ends_at_either_range_and_the_cards_split_the_pixels():
 
 
 def test_the_view_ray_takes_its_own_extinction(showbase, executor):
-    clouds = _clouds(showbase, executor, "march")
+    clouds = _clouds(showbase, executor)
     try:
         march = clouds.volume
         # layerParams row 5: (view extinction, the field's own, ...)
@@ -841,32 +826,17 @@ def test_the_view_ray_takes_its_own_extinction(showbase, executor):
         clouds.remove()
 
 
-def test_a_forgotten_half_res_pass_is_not_given_the_next_volume(showbase, executor):
-    clouds = _clouds(showbase, executor, "billboards")
-    try:
-        half_res = MagicMock()
-        clouds.use_half_res(half_res)
-        half_res.add.assert_called_once_with(clouds.volume.root)
-        clouds.use_half_res(None)
-        half_res.remove.assert_called_once()
-        clouds.set_settings(replace(clouds.settings, renderer="march"))
-        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
-        assert half_res.add.call_count == 1
-    finally:
-        clouds.remove()
-
-
 def test_the_ground_reads_the_clouds_shadow_from_a_pass(window, executor):
     """The clouds' shadow on the view's ground from the march's pass at the
     depth passes' resolution (performance.md §33): its readers bind one
     texture, on while the passes draw; its card takes the clouds' inputs and
-    the binders given, again on a rebuild; per pixel again with billboards."""
+    the binders given, again on a rebuild."""
     from panda3d.core import NodePath
 
     from world_builder.clouds.march import depth_size
     from world_builder.depth import SplitDepthCameras
 
-    clouds = _clouds(window, executor, "march")
+    clouds = _clouds(window, executor)
     depth = SplitDepthCameras(window, near=1.0)
     ground = NodePath("ground")
     bound = []
@@ -900,9 +870,6 @@ def test_the_ground_reads_the_clouds_shadow_from_a_pass(window, executor):
         clouds.set_settings(replace(clouds.settings, march_block=(2, 2)))
         (layer,) = march._layers
         assert layer.ground.texture == texture and bound[-1] == layer.ground.card
-        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
-        # The defaults' (off): not the march's texture any more
-        assert ground.get_shader_input("uGroundShadow").get_texture() != texture
     finally:
         clouds.remove()
         depth.destroy()

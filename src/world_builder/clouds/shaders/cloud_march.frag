@@ -129,6 +129,9 @@ float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
     float billows = resolved(unit / (f.octaveScales.x * uDetailScale), footprint);
     float window = (uCloudDebug & 32) != 0 ? 0.0  // no billows (profiling)
                  : (f.threshHi - f.threshLo) * uDetailErosion * billows;
+    // None in a cumulonimbus's anvil (cloud_field.glsl's anvilWeight): it
+    // is smooth, not the tower's lumps.
+    window *= 1.0 - anvilWeight(f, slabHeight(f, heightOf(p)), weather.y);
     // The field once, at the billows' highest threshold shift: the billows only
     // lower the column's value afterwards, so their pass costs no more noise.
     float raw, fill, shelf;
