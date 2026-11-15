@@ -132,8 +132,12 @@ void main() {
         vec2 s0, s1;
         int n = hazeIntervals(uCamField, d, s0, s1);
         float tau = 0.0;
-        if (n > 0) tau += hazeDepth(uCamField, d, s0.x, min(s0.y, dist), VEIL_SAMPLES);
-        if (n > 1) tau += hazeDepth(uCamField, d, s1.x, min(s1.y, dist), VEIL_SAMPLES);
+        // Past the split, the near camera's haze covers what lies before it
+        float tFrom = hazeVeilStart(dirRender, dist);
+        if (n > 0)
+            tau += hazeDepth(uCamField, d, max(s0.x, tFrom), min(s0.y, dist), VEIL_SAMPLES);
+        if (n > 1)
+            tau += hazeDepth(uCamField, d, max(s1.x, tFrom), min(s1.y, dist), VEIL_SAMPLES);
         rgb = mix(hazeColour(dirRender), rgb, exp(-tau));
     }
     fragColor = vec4(rgb, 1.0);

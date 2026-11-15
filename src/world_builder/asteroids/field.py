@@ -51,6 +51,7 @@ from panda3d.core import (
     SamplerState,
     Shader,
     Texture,
+    Vec3,
 )
 
 from world_builder.asteroids.haze import FieldHaze, mean_projected_cover
@@ -63,7 +64,7 @@ from world_builder.asteroids.rock import ROCK_UV_PERIOD
 from world_builder.asteroids.scatter import Scatter
 from world_builder.asteroids.settings import AsteroidSettings
 from world_builder.asteroids.spec import FieldSpec, KeepOut
-from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.depth import NEAR_CAMERA_MASK, REFLECTION_CAMERA_MASK
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.materials import (
     MaterialSet,
@@ -277,6 +278,36 @@ class AsteroidField:
         """(3, 3) world from field"""
         return self._rotation_matrix
 
+    def _pixels_per_radian(self, cameras) -> float:
+        """:returns: the first view's pixels per radian (vertically)"""
+        if cameras and self.app.win is not None:
+            vfov = cameras[0].node().get_lens().get_vfov()
+            return self.app.win.get_y_size() / math.radians(vfov)
+        # headless: rocks held and solid as on a 900-pixel 40-degree view
+        return HEADLESS_PIXELS_PER_RADIAN
+
+    def reach(self, camera_world: ArrayLike) -> float:
+        """How far from the camera this field's rocks can still be drawn:
+        its largest rock's distance at the smallest size drawn (the
+        settings', so the budget raising it does not pull the far plane in
+        and out), at most the field's far side. What the camera's far plane
+        must reach (``World.depth_ranges``): nearer, it cut the biggest
+        rocks while they were several pixels wide, a line against the haze.
+
+        :param camera_world: the camera, world frame
+        :returns: metres
+        """
+        app_cam = getattr(self.app, "cam", None)
+        pixels_per_radian = self._pixels_per_radian([app_cam] if app_cam else [])
+        largest = float(self.spec.sizes.hi)
+        drawn = 2.0 * largest * pixels_per_radian / self._settings.min_pixels
+        camera = self.to_field(camera_world)
+        lo, hi = self.spec.shape.bounds()
+        far_side = float(
+            np.linalg.norm(np.maximum(np.abs(camera - lo), np.abs(camera - hi)))
+        )
+        return min(drawn, far_side + largest)
+
     def to_field(self, point_world: ArrayLike) -> np.ndarray:
         """:returns: a world point in the field frame"""
         r = self.rotation
@@ -345,11 +376,7 @@ class AsteroidField:
             cameras = [getattr(self.app, "cam", None)]
         cameras = [view for view in cameras if view is not None]
         camera = self.to_field(camera_world)
-        if cameras and self.app.win is not None:
-            vfov = cameras[0].node().get_lens().get_vfov()
-            pixels_per_radian = self.app.win.get_y_size() / math.radians(vfov)
-        else:  # headless: rocks held and solid as on a 900-pixel 40-degree view
-            pixels_per_radian = HEADLESS_PIXELS_PER_RADIAN
+        pixels_per_radian = self._pixels_per_radian(cameras)
         # Rocks in and out of range.
         kept = max(self._min_pixels, self._held_pixels)
         ranges = self.population.ranges(pixels_per_radian, kept, self.far)
@@ -382,6 +409,13 @@ class AsteroidField:
             cell = np.floor(camera / c.cell)
             frame["uCamCell"][k] = LVecBase3f(*cell)
             frame["uCamLocal"][k] = LVecBase3f(*(camera - cell * c.cell))
+        split = None
+        if cameras and cameras[0].node().get_camera_mask() == NEAR_CAMERA_MASK:
+            # The near camera of a split view: its far plane is the split
+            view = cameras[0]
+            forward = self.app.render.get_relative_vector(view, Vec3(0.0, 1.0, 0.0))
+            split = (tuple(forward), view.node().get_lens().get_far())
+        self.haze.set_split(split)
         self.haze.update(
             camera,
             self.population.limits(self.far),

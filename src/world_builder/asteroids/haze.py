@@ -7,8 +7,7 @@ of light from afar and fills the distance between drawn rocks up close.
   r_cut(t) = t * min_pixels * :data:`FADE_MIDDLE` / (2 pixels_per_radian)
   are not (they fade out between 1 and 1.25 times ``min_pixels``: the cut
   is that fade's middle), nor, past the field's ``far``, any rock: they fade
-  out over its last :data:`~world_builder.asteroids.population.FAR_FADE`
-  (half), and the haze takes them in over the same band. The haze is
+  out over its last fifth, and the haze takes them in over the same band. The haze is
   their cross-section: per metre of a ray, the density there (the shape's
   profile times the peak density times the clumping's coverage: the clumps
   averaged out) times the mean cross-section of the rocks under r_cut
@@ -77,7 +76,7 @@ from panda3d.core import (
 )
 
 from world_builder.asteroids.distributions import interpolate
-from world_builder.asteroids.population import FAR_FADE, far_fade
+from world_builder.asteroids.population import FAR_FADE
 from world_builder.asteroids.spec import Annulus, Box, FieldShape, FieldSpec, Sphere
 from world_builder.depth import HIDE_FROM_FAR, HIDE_FROM_NEAR
 from world_builder.sky.sky import SKY_BIN, ensure_sky_bin
@@ -239,7 +238,10 @@ class HazeModel:
             base = self.cumulative(lo)
             under = self.cumulative(np.clip(cut, lo, hi)) - base
             whole = self.cumulative(hi) - base
-            drawn = far_fade(t, limit)
+            if math.isinf(limit):
+                drawn = np.ones_like(t)
+            else:
+                drawn = np.clip((limit - t) / max(FAR_FADE * limit, 1e-6), 0.0, 1.0)
             rocks = rocks + under * drawn + whole * (1.0 - drawn)
         return self.density * self.cover * rocks + self.dust
 
@@ -543,7 +545,8 @@ class FieldHaze:
             far.hide(HIDE_FROM_NEAR)
         self._split = False
         self._split_plane = PTA_LVecBase4f.empty_array(1)
-        node.set_shader_input("uHazeSplit", self._split_plane)
+        # On the field's root: the rocks' veil starts at the split too
+        field.root.set_shader_input("uHazeSplit", self._split_plane)
         self._clouds_top = PTA_float.empty_array(1)
         node.set_shader_input("uCloudTop", self._clouds_top)
         node.set_shader(

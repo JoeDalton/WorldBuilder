@@ -25,12 +25,10 @@ uniform int uTonemap;
 // radius from the field's origin, 0: no clouds (all in pass 1).
 uniform int uHazePass;
 uniform float uCloudTop;
-// A split view (FieldHaze.set_split): 1 the near camera's pass, which
-// draws up to the split, 0 the far camera's, from the split on; the split
-// as a plane (xyz the cameras' forward axis, render frame; w its distance
-// along it; 0 unsplit).
+// A split view (FieldHaze.set_split, haze.glsl's uHazeSplit): 1 the near
+// camera's pass, which draws up to the split, 0 the far camera's, from the
+// split on.
 uniform int uHazeToFar;
-uniform vec4 uHazeSplit;
 
 #pragma include "haze.glsl"
 
@@ -114,8 +112,7 @@ void main() {
     float e = span.y;
     if (uHazeSplit.w > 0.0) {
         // Both passes cut at the same plane, not at their lenses': they meet
-        float along = dot(dirRender, uHazeSplit.xyz);
-        float tSplit = along > 0.0 ? uHazeSplit.w / along : 1e30;
+        float tSplit = hazeSplitAlong(dirRender);
         if (uHazeToFar == 1) {
             e = min(e, tSplit);
         } else {

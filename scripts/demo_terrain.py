@@ -842,6 +842,9 @@ class TerrainDemo(ShowBase):
                 )
             )
         split, far = SplitDepthCameras.system_ranges(ranges)
+        if self.ring is not None:
+            # As far as the ring's rocks are drawn (World.depth_ranges)
+            far = max(far, self.ring.reach(self.cam_world))
         self.depth.update(split, far)
         if self.half_res is not None:
             self.half_res.update()
