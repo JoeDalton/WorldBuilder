@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `AsteroidField.reach(camera_world)`: how far a field's rocks can still be
+  drawn (its largest rock at the settings' `min_pixels`, at most the field's
+  far side).
+
+### Changed
+
+- The far plane reaches the asteroid fields' rocks (#39):
+  `World.depth_ranges` returns the larger of the bodies' far distance (or
+  `SPACE_FAR_M` in open space) and every field's `reach`. In open space the
+  far plane was a fixed 1,000 km, so the biggest rocks were cut while
+  still a few pixels wide: a line where the drawn rocks met the haze (the
+  `ring` preset seen from 80 km over its plane: now 3,440 km, the line
+  gone, no cost seen). With bodies the far plane still follows their
+  horizon; it only grows. `demo_terrain.py --ring` does the same.
+
+### Fixed
+
+- A field's haze ended abruptly at the depth split (#39): only the far
+  camera drew it, from the split on, on the assumption that every rock
+  nearer is drawn. A ring's dust never is, and from orbit the split sits
+  hundreds of kilometres out (halfway down to the ground: 248 km at 500 km
+  up). The near camera now draws the haze up to the split
+  (`FieldHaze.set_split`, which the field calls when the app's camera is a
+  split's near one); both passes cut the rays at the same plane, given from
+  Python (read from the near lens's projection in floats it was off by
+  kilometres: a seam).
+- Rocks beyond the split were veiled twice over the stretch before it (by
+  their own veil, then by the near camera's haze pass): their veil now
+  starts at the split (`haze.glsl`'s `hazeVeilStart`).
+
 ## [0.4.1] 2026-11-14
 
 ### Added

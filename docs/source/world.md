@@ -48,8 +48,9 @@ world.destroy()
 space_ambient=...)` is the sky, the sun and the Panda3D lights alone, for a
 space level. Its light everywhere is the bare sun and `space_ambient` (the
 sky light away from any body), `loading` is always False, and `depth_ranges`
-gives a fixed split (`SPACE_SPLIT_M`, 2 km) and far plane (`SPACE_FAR_M`,
-1,000 km). An asteroid field (`world_builder.asteroids`) can share its worker
+gives a fixed split (`SPACE_SPLIT_M`, 2 km) and a far plane of at least
+`SPACE_FAR_M` (1,000 km), farther where a field's rocks are drawn farther
+(see below). An asteroid field (`world_builder.asteroids`) can share its worker
 pool (`executor=world.executor`).
 
 ## Looks
@@ -170,7 +171,9 @@ band (see `world_builder.depth`).
 ## Other members
 
 - **`depth_ranges(origin_world)`**: split and far distances over every body
-  (`SplitDepthCameras.system_ranges`).
+  (`SplitDepthCameras.system_ranges`), the far reaching every asteroid
+  field's rocks too (`AsteroidField.reach`: a shorter far plane cut the
+  biggest while they were still a few pixels wide).
 - **`gravity_field(g_constant=1.0)`**: the bodies' gravity as point masses
   (`BodyLook.mass`, keyword only); `acceleration(points)` is the raw vector
   for N points at once (numpy, or native: 4-9x faster), `-g` is "up". The
