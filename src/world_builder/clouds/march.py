@@ -1639,6 +1639,9 @@ class CloudMarch:
         self._steps = PTA_int.empty_array(1)
         self._split = PTA_float.empty_array(1)  # the near range's end (uSplit)
         self._frame = PTA_int.empty_array(1)
+        #: The genera drawn, a bit each (set_genus_visible)
+        self._genus_mask = PTA_int.empty_array(1)
+        self._genus_mask[0] = (1 << MAX_GENERA) - 1
         self._layer_count = PTA_int.empty_array(1)
         self._layer_count[0] = self._layers_used
         self._inputs: dict[str, Any] = {
@@ -1670,6 +1673,7 @@ class CloudMarch:
             "uStepGrowth": STEP_GROWTH,
             "uLayerFar": self._layer_far,
             "uLayerCount": self._layer_count,
+            "uGenusMask": self._genus_mask,
             "uWeatherStretch": WEATHER_STRETCH_GENERA
             if genera is not None
             else WEATHER_STRETCH,
@@ -2073,6 +2077,29 @@ class CloudMarch:
         )
         if value != self._inputs["uPixelAngle"]:
             self._set_inputs(uPixelAngle=value)
+
+    @property
+    def genus_names(self) -> list[str]:
+        """The genera's names, by index (the convective clouds, or the one
+        type, first)."""
+        return [genus.name or "clouds" for genus in self._genera]
+
+    def set_genus_visible(self, genus: int | str, visible: bool) -> None:
+        """Draw a genus or not, live (a look-development toggle: the
+        showcase's keys). Only the view hides it: it still shades the
+        others, and the ground.
+
+        :param genus: its index or its name (:attr:`genus_names`)
+        """
+        index = self.genus_names.index(genus) if isinstance(genus, str) else genus
+        bit = 1 << int(index)
+        mask = self._genus_mask[0]
+        self._genus_mask[0] = (mask | bit) if visible else (mask & ~bit)
+
+    def genus_visible(self, genus: int | str) -> bool:
+        """:returns: whether a genus is drawn (:meth:`set_genus_visible`)"""
+        index = self.genus_names.index(genus) if isinstance(genus, str) else genus
+        return bool(self._genus_mask[0] >> int(index) & 1)
 
     def set_debug(self, flags: int) -> None:
         """Profiling switches (cloud_field.glsl's ``uCloudDebug`` bits)."""

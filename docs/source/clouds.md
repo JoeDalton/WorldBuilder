@@ -424,6 +424,24 @@ towers it was 2-2.4 times cheaper than the billboards' overdraw (7.6-8.8 ms
 at HIGH on an RTX 3070 at 2560 × 1440; performance §23, "The raymarch with
 genera"); §37 is the genera's baseline from the user's start.
 
+**The showcase.** [`scripts/demo_genera.py`](../../scripts/demo_genera.py)
+(the terrain demo with `--showcase`) shows every genus alone, for look
+development: `genera.showcase_features` lays out one feature per genus and
+cumulus species (`SHOWCASE_ROW`: stratus, humilis, mediocris, congestus,
+cumulonimbus, west to east) in a row along the northern horizon, 35-45 km
+from the start, apart (a test checks no feature's cloud reaches another's,
+the cumulonimbus's anvil counted at 4 radii), and
+`GeneraSpec(background=False)` removes the fair-weather cumulus between
+them. The cumulus species are convective depths (`GENUS_DEPTHS`: humilis 0,
+mediocris 0.2, congestus 0.5). Keys 1-9 hide or show each genus of the march
+(`CloudMarch.set_genus_visible`, a bit of `uGenusMask` the view's samples
+test before any noise); a hidden genus still shades the others and the
+ground, and the cumulus species, one genus, go together.
+`terrain_shots.py --showcase` has a `genus_<name>` pose per feature (1 km up,
+the stratus's from the ground). At 50-60 km the features were specks in the
+haze; at 30 km the cumulus species gave a cloud or two each, hence wider,
+sparser discs a little farther. At 2560 x 1440 HIGH: 9.4-12.4 ms.
+
 **Not yet.** The anvil does not lean downwind with height (a shear; it is
 the genus framework's, docs/superpowers/plans/2026-11-15-cloud-genera.md).
 The plume is straight: the wind is read at the tower, not

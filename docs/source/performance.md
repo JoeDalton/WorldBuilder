@@ -2168,6 +2168,11 @@ the 0.58-0.84 ms the tree before measured. Every genus keeping all its
 the band of one genus's own sample loop (no genus loop) and the skipped
 genera at zero coverage take back.
 
+The showcase (`demo_genera.py`, phase 4), the same settings, from 1 km over
+the start: `genus_congestus` 9.39 ms, `genus_cumulonimbus` 9.72 ms,
+`genus_stratus` (from the ground, the terrain in view) 12.42 ms: above the
+showcase's 60 FPS.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

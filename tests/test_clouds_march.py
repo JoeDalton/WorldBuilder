@@ -912,3 +912,22 @@ def test_the_ground_takes_the_pass_where_its_distance_agrees():
     # The same shadow as the ground's per pixel, at the scene the march stops at
     assert "planetCloudShadow(planet, normalize(sunDir), uCloudShadowSteps," in shadow
     assert "fragColor = vec4(1.0, -1.0, 0.0, 1.0);  // the sky" in shadow
+
+
+def test_a_genus_can_be_hidden_live(showbase, executor):
+    """set_genus_visible flips the genus's bit of uGenusMask (the showcase's
+    toggles), by index or name, and nothing else."""
+    clouds = _clouds(showbase, executor)
+    try:
+        march = clouds.volume
+        assert clouds.genus_names == ["clouds"]
+        everything = march._genus_mask[0]
+        assert clouds.genus_visible(0)
+        clouds.set_genus_visible("clouds", False)
+        assert not clouds.genus_visible(0)
+        assert march._genus_mask[0] == everything & ~1
+        assert march._inputs["uGenusMask"] is march._genus_mask
+        clouds.set_genus_visible(0, True)
+        assert march._genus_mask[0] == everything
+    finally:
+        clouds.remove()

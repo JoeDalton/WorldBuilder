@@ -87,6 +87,7 @@ Controls (AZERTY):
                     settings; a cloud or ocean change may refill a moment)
     F6              cycle every part's preset at once
     C               show / hide the high cirrus
+    1-9             show / hide each genus of the low clouds (--showcase)
     F7              cycle the shadows' preset (the clouds' shadow on the
                     ground: off at low, more samples above)
     F8              cycle the models' preset (the test balls' and ship's
@@ -159,7 +160,7 @@ from world_builder.asteroids.spec import PRESETS as FIELD_PRESETS
 from world_builder.asteroids.spec import Annulus, Clumping, Density, FieldSpec
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cirrus import CirrusSpec
-from world_builder.clouds.genera import GeneraSpec
+from world_builder.clouds.genera import GeneraSpec, showcase_features
 from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.clouds.shadow_map import CloudShadowMaps
@@ -439,6 +440,7 @@ class TerrainDemo(ShowBase):
         clouds: bool = True,
         cloud_debug: int = 0,
         genera: bool = False,
+        showcase: bool = False,
         ocean_debug: int = 0,
         preset: str | None = None,
         seed: int | None = None,
@@ -494,7 +496,9 @@ class TerrainDemo(ShowBase):
         self.frame_cap = FrameCap(world.display)
         # A planet drawn without clouds (the tiny test planet) has none.
         self._clouds_on = clouds and spec.has_clouds
-        self._genera = genera
+        # The showcase is the genera, each alone (--showcase)
+        self._showcase = showcase
+        self._genera = genera or showcase
         print("starting terrain workers ...")
         self.executor = ChunkExecutor(
             backend=backend, workers=world.terrain.workers or None
@@ -653,6 +657,7 @@ class TerrainDemo(ShowBase):
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
             ("c", self._toggle_cirrus, []),
+            *((str(k + 1), self._toggle_genus, [k]) for k in range(9)),
             ("m", self._toggle_model_shader, []),
             ("escape", self._quit, []),
             (QUALITY_ALL_KEY, self._cycle_all_quality, []),
@@ -1069,6 +1074,11 @@ class TerrainDemo(ShowBase):
         if self.clouds is not None and self.clouds.sheet is not None:
             shown = not self.clouds.sheet.root.is_hidden()
             clouds += f"   cirrus {'on' if shown else 'off'} (C)"
+        if self.clouds is not None and len(self.clouds.genus_names) > 1:
+            clouds += "   genera: " + "  ".join(
+                f"{k + 1} {name}{'' if self.clouds.genus_visible(k) else ' (off)'}"
+                for k, name in enumerate(self.clouds.genus_names)
+            )
         quality = "   ".join(
             f"{SECTIONS[name].LABEL.lower()} {_level_name(self.world, name)}"
             for _, name in QUALITY_KEYS
@@ -1190,13 +1200,27 @@ class TerrainDemo(ShowBase):
             return None
         spec = self.terrain.spec
         pose = self.start_pose or {}
-        return GeneraSpec(
-            WeatherSpec(spec),
-            focus=(
-                pose.get("lat", spec.reference_lat),
-                pose.get("lon", spec.reference_lon),
-            ),
+        focus = (
+            pose.get("lat", spec.reference_lat),
+            pose.get("lon", spec.reference_lon),
         )
+        if self._showcase:
+            # Every genus alone, in a row along the northern horizon
+            return GeneraSpec(
+                WeatherSpec(spec),
+                focus=focus,
+                features=showcase_features(),
+                background=False,
+            )
+        return GeneraSpec(WeatherSpec(spec), focus=focus)
+
+    def _toggle_genus(self, index: int) -> None:
+        """Show or hide a genus of the low clouds (keys 1-9; a look toggle:
+        the hidden genus still shades the others and the ground)."""
+        if self.clouds is None or index >= len(self.clouds.genus_names):
+            return
+        visible = self.clouds.genus_visible(index)
+        self.clouds.set_genus_visible(index, not visible)
 
     def _toggle_cirrus(self) -> None:
         """Show or hide the high cirrus (a look toggle)."""
@@ -1418,6 +1442,7 @@ def main() -> None:
         settings=settings_from_args(args),
         clouds=not args.no_clouds,
         genera=args.genera,
+        showcase=args.showcase,
         preset=args.planet,
         seed=args.seed,
         start=args.start,
@@ -1522,6 +1547,13 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         help="the low clouds by genus: cumulonimbus, congestus and stratus "
         "around the start (clouds.genera's placeholder maps); on by default, "
         "--no-genera for the plain field",
+    )
+    parser.add_argument(
+        "--showcase",
+        action="store_true",
+        help="every genus alone, in a row along the northern horizon from "
+        "the start (clouds.genera.showcase_features, no other cloud); keys "
+        "1-9 show or hide each genus",
     )
 
 

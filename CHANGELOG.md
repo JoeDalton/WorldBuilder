@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The cloud genera showcase: `scripts/demo_genera.py` (the terrain demo's
+  `--showcase`), every genus alone in a row along the horizon
+  (`genera.showcase_features`, `GeneraSpec.background`), keys 1-9 to show or
+  hide each (`PlanetClouds.set_genus_visible`), and `terrain_shots.py`'s
+  `genus_<name>` poses; cumulus humilis and mediocris features
+  (`genera.GENUS_DEPTHS`).
 - `docs/source/cloud_genera_research.md`: the ten cloud genera and the
   density functions the literature draws them with.
 

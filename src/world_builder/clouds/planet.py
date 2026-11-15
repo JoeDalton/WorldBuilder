@@ -471,6 +471,20 @@ class PlanetClouds:
         for layer in self._layers():
             layer.set_debug(flags)
 
+    @property
+    def genus_names(self) -> list[str]:
+        """The low clouds' genera, by index (:attr:`march.CloudMarch.genus_names`)."""
+        return self.volume.genus_names
+
+    def set_genus_visible(self, genus: int | str, visible: bool) -> None:
+        """Draw a genus of the low clouds or not, live
+        (:meth:`march.CloudMarch.set_genus_visible`)."""
+        self.volume.set_genus_visible(genus, visible)
+
+    def genus_visible(self, genus: int | str) -> bool:
+        """:returns: whether a genus is drawn"""
+        return self.volume.genus_visible(genus)
+
     def set_visible(self, visible: bool) -> None:
         """Show or hide both layers (a march's passes included)."""
         if visible:

@@ -76,7 +76,9 @@ looking north 8 degrees up at the cumulonimbus 40 km away: its tower and
 anvil), genera_congestus (the same, north-west 6 degrees up: the congestus
 line), cirrus_overhead and cirrus_grazing (the same, south-south-west, 75
 and 4 degrees up: the cirrus above and toward the horizon); the genera are
-laid out around the start, so pass the demo's --start, night_orbit (1.5 radii up,
+laid out around the start, so pass the demo's --start; with --showcase,
+genus_<name> (each genus of the showcase row from the start, along its
+bearing), night_orbit (1.5 radii up,
 looking down at the terminator: the sun 60 degrees below the nadir's horizon),
 night_sea (3 m over the sea, the sun 8 degrees down: the sky's reflection must
 be as dark as the sky), beach (40 m up, 300 m off the coast nearest the
@@ -156,6 +158,7 @@ from demo_terrain import (  # noqa: E402
     settings_from_args,
     window_config,
 )
+from world_builder.clouds.genera import SHOWCASE_ROW  # noqa: E402
 from world_builder.terrain.chart import (  # noqa: E402
     AzimuthalEquidistantChart,
     TangentFrame,
@@ -164,6 +167,15 @@ from world_builder.terrain.chart import (  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 
 CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
+#: The middle height of each showcase genus's cloud, metres above sea level
+#: (its pose aims at it).
+SHOWCASE_MIDDLES = {
+    "stratus": 1150.0,
+    "humilis": 2700.0,
+    "mediocris": 3000.0,
+    "congestus": 4500.0,
+    "cumulonimbus": 6000.0,
+}
 
 
 @dataclass(frozen=True)
@@ -300,6 +312,17 @@ def _poses(demo: TerrainDemo) -> dict:
     poses["genera_congestus"] = (lat0, lon0, ground_alt, 45.0, 6.0, 0, 0)
     poses["cirrus_overhead"] = (lat0, lon0, ground_alt, 150.0, 75.0, 0, 0)
     poses["cirrus_grazing"] = (lat0, lon0, ground_alt, 150.0, 4.0, 0, 0)
+    # The showcase (--showcase): each genus from 1 km over the start (the
+    # test balls, at the start's height, below the view), along its bearing
+    # (headings turn west), the view's centre a little above its cloud's
+    # middle.
+    for genus, bearing, distance, _, _ in SHOWCASE_ROW:
+        # The stratus from the ground, under it (from 1 km up, level with
+        # its top, it was a line)
+        eye = ground_alt + (0.0 if genus == "stratus" else 1000.0)
+        middle = SHOWCASE_MIDDLES[genus]
+        pitch = math.degrees(math.atan2(middle - eye, distance)) + 2.0
+        poses[f"genus_{genus}"] = (lat0, lon0, eye, -bearing, pitch, 0, 0)
     if demo.ring is not None:
         poses["ring_ground"] = (ref_lat, ref_lon, 1500.0, 180.0, 12.0, 0, 0)
         poses["ring_orbit"] = (35.0, lon0, 6.0 * radius, 0.0, -89.9, 0, 0)
@@ -721,6 +744,7 @@ def main() -> None:
         settings=settings,
         clouds=not args.no_clouds,
         genera=args.genera,
+        showcase=args.showcase,
         ring=args.ring,
         cloud_debug=args.cloud_debug,
         ocean_debug=args.ocean_debug,

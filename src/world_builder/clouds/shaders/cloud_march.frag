@@ -45,6 +45,7 @@ uniform float uStepGrowth;       // a step's length per metre of distance, farth
 // Layer i (its octaves) is sampled up to uLayerFar[i] metres from the camera;
 // the last one beyond.
 uniform float uLayerFar[MAX_MARCH_LAYERS];
+uniform int   uGenusMask;        // the genera drawn, a bit each (set_genus_visible)
 uniform int   uLayerCount;       // a genus's detail levels (its bands, then its far one)
 uniform sampler2D uBlueNoise;    // march.blue_noise, 64 x 64, the steps' jitter
 uniform int   uFrame;            // this pixel's visits: moves its steps' jitter (march.visit_of)
@@ -246,6 +247,12 @@ float interleavedGradient(vec2 pixel) {
 // (shading: 0 its averages, cloudRadiance) and its far coverage.
 float genusDensity(int g, Field lf, vec3 p, vec4 weather, float t, float stepLength,
                    out float shading, out float farCoverage) {
+    if (((uGenusMask >> g) & 1) == 0) {
+        // Hidden (CloudMarch.set_genus_visible: the showcase's toggles)
+        shading = 1.0;
+        farCoverage = 0.0;
+        return 0.0;
+    }
     float feature = NOISE_FEATURE_UNITS / (lf.noiseScale.x * lf.octaveScales.x);
     float footprint = t * uPixelAngle / feature;
     float detail = 1.0 - smoothstep(0.15, 0.6, footprint);

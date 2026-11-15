@@ -132,6 +132,41 @@ GENUS_PRESETS = {
 }
 
 
+#: The convective depth of each cumulus species a feature can be (a
+#: cumulonimbus is depth 1 and its anvil, :func:`genus_planes`): its clouds'
+#: top rises with it (``DensityField.min_top``), a congestus's to 6.85 km.
+GENUS_DEPTHS = {"humilis": 0.0, "mediocris": 0.2, "congestus": 0.5}
+
+#: The showcase's row (:func:`showcase_features`): (genus, bearing east of
+#: north in degrees, distance in metres, radius in metres, coverage), west
+#: to east. A cumulonimbus last, east of the rest: its anvil streams to 3
+#: radii and farther downwind.
+SHOWCASE_ROW = (
+    ("stratus", -72.0, 35e3, 8e3, 0.9),
+    ("humilis", -42.0, 35e3, 8e3, 0.35),
+    ("mediocris", -12.0, 35e3, 8e3, 0.45),
+    ("congestus", 16.0, 35e3, 7e3, 0.65),
+    ("cumulonimbus", 60.0, 45e3, 5e3, 1.0),
+)
+
+
+def showcase_features() -> tuple[Feature, ...]:
+    """The separated-genera showcase: one feature per genus of the march (and
+    per cumulus species), in a row along the northern horizon from the focus,
+    apart (:data:`SHOWCASE_ROW`). With ``GeneraSpec(background=False)``
+    there is no other cloud: each genus is seen alone."""
+    return tuple(
+        Feature(
+            distance * math.sin(math.radians(bearing)),
+            distance * math.cos(math.radians(bearing)),
+            radius,
+            genus,
+            coverage,
+        )
+        for genus, bearing, distance, radius, coverage in SHOWCASE_ROW
+    )
+
+
 #: The demo's: within view of the demo's start, a cumulonimbus 40 km north
 #: ringed by congestus, another 70 km north-east, a line of congestus to the
 #: west, and a stratus deck to the south.
@@ -153,6 +188,8 @@ class GeneraSpec:
     :ivar features: the features
     :ivar stratus_altitude: the stratiform slab's base, metres (it may
         overlap the convective clouds' slab: the march takes them as one)
+    :ivar background: the weather's fair-weather cumulus between the
+        features; False = none (the showcase: each genus alone)
     :ivar wind: the upper wind blowing the anvils, (east, north), the jets'
         fastest 1, the same for all; None = the weather's at each
         cumulonimbus (:func:`upper_wind_at`)
@@ -164,6 +201,7 @@ class GeneraSpec:
     stratus_altitude: float = 900.0
     wind: tuple[float, float] | None = None
     genera: tuple[str, ...] = ("convective", "stratus")
+    background: bool = True
 
 
 def genus_specs(spec: GeneraSpec, altitude: float | None = None) -> list[tuple]:
@@ -282,6 +320,8 @@ def genus_planes(spec: GeneraSpec, size: int = GENUS_SIZE) -> np.ndarray:
     """
     dirs = cube_directions(size).reshape(-1, 3)
     convective = sample_cube(coverage_map(spec.weather), dirs).astype(np.float64)
+    if not spec.background:
+        convective = np.zeros(len(dirs))
     depth = np.zeros(len(dirs))
     stratiform = np.zeros(len(dirs))
     shelf = np.zeros(len(dirs))
@@ -306,7 +346,7 @@ def genus_planes(spec: GeneraSpec, size: int = GENUS_SIZE) -> np.ndarray:
             )
             shelf = np.maximum(shelf, anvil_spread(dirs, centre, angle, wind))
         else:
-            depth = np.maximum(depth, 0.5 * core)
+            depth = np.maximum(depth, GENUS_DEPTHS.get(f.genus, 0.5) * core)
             cover = f.coverage * core
         convective = np.maximum(convective, cover)
     planes = np.stack([convective, depth, stratiform, shelf], axis=-1)

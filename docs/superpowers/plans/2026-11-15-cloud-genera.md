@@ -420,7 +420,7 @@ Design (Plan-agent review of the code, accepted):
 
 ## Phase 4: Showcase demo
 
-### Task 11: `showcase_features()` and `scripts/demo_genera.py`
+### Task 14: `showcase_features()` and `scripts/demo_genera.py` (done)
 In `genera.py`, `showcase_features(focus) -> tuple[Feature, ...]`: an arc 40–70 km from the
 start, one strip per genus, 15–25 km wide, each at its real altitude. `Feature.genus` accepts
 every genus name.
