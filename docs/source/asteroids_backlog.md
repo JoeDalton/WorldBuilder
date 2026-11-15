@@ -12,15 +12,6 @@ The design is in [Asteroid fields](asteroids.md).
   camera moves, read by the haze's samples. Its pockets would match the
   rocks' exactly; a GLSL noise could not (the CPU's 64-bit hash). Waiting
   for a go.
-- **The far plane in open space.** `World`'s far plane there is 1,000 km
-  (`SPACE_FAR_M`), but at 2 pixels the biggest rocks are drawn out to about
-  2,600 km (1600×900): past the far plane they are cut hard. Either
-  `World.depth_ranges` reaches the fields' reach (2 × largest radius ×
-  pixels per radian / `min_pixels`; with the 2 km split, depth steps at
-  2,600 km are about 200 m: plenty for 2-pixel rocks; with planets, a far
-  plane farther coarsens their far range a little), or the fields' `far` is
-  capped at the camera's far plane, so those rocks fade into the haze (the
-  farthest are lost). Recommended: reach. First suspect for the front below.
 
 ## Rock shapes
 
@@ -112,6 +103,12 @@ Ways to make them better:
   To find it: shots of the same view with the far plane pushed out, with
   the held budget off, and with uniform density (no clumps).
 
+  Measured 2026-11-15: the far plane (1,000 km) is the line, the class
+  limits a fainter one; the mean brightness matches across both, the grain
+  does not. The far plane now reaches the fields' rocks
+  (`AsteroidField.reach`, `World.depth_ranges`); the options left are in
+  `ASTEROID_EDGE_PLAN.md`.
+
 - **Shadows.** The haze and the rocks take no shadows: a planet's shadow
   across its ring, the ring's on the planet, the rocks' on each other are
   for the shadows issue.
@@ -129,9 +126,6 @@ Ways to make them better:
   place of the coverage, would put the pockets in the haze exactly where
   the rocks are. A GLSL copy of the noise would not match the CPU's bits
   (its 64-bit hash), so the pockets would sit beside the rocks'.
-- **Dust near the camera.** The far camera of a split draws the haze from
-  the split on: the dust nearer is lost (0.06 of optical depth for the
-  `ring` preset's 2 km split). The near camera could draw the dust alone.
 - **Forward scattering.** Rocks are Lambert spheres, dark against the sun;
   fine dust scatters forward and glows there (Saturn's rings seen against
   the sun). A phase term for the dust would add it.

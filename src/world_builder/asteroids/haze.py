@@ -38,12 +38,15 @@ of light from afar and fills the distance between drawn rocks up close.
   ground covered them. Along a ray a ring (well outside the planet) and
   the clouds never overlap. Depth-tested, not written: a planet in
   front hides it. Hull points beyond the far plane are pulled onto it (as the
-  sky's), so a ring across the sky is drawn whole. Only the far camera of
-  a split draws it (``HIDE_FROM_NEAR``), from its near plane on (read from
-  its projection): nearer than the split, every rock is drawn (the haze
-  starts where the smallest rock is under ``min_pixels``, about 57 km for
-  50 m rocks at 2 pixels), so nothing is missed and nothing counted twice.
-  A single camera draws it from its near plane.
+  sky's), so a ring across the sky is drawn whole. A single camera draws it
+  from its near plane on (read from its projection). A split view
+  (``depth.SplitDepthCameras``) draws it with both cameras: the far one
+  from its near plane (the split) on, the near one from its near plane to
+  its far plane (the split again, give or take the sliver both draw). A
+  ring with dust, or with rocks too small to be drawn at the split, is
+  missing nearer than it: drawn by the far camera alone, the haze ended
+  abruptly at the split (:meth:`FieldHaze.set_split`, which the field
+  calls).
 """
 
 from __future__ import annotations
@@ -64,16 +67,18 @@ from panda3d.core import (
     GeomVertexFormat,
     GeomVertexWriter,
     LVecBase3f,
+    LVecBase4f,
     OmniBoundingVolume,
     PTA_float,
     PTA_LVecBase3f,
+    PTA_LVecBase4f,
     Shader,
 )
 
 from world_builder.asteroids.distributions import interpolate
 from world_builder.asteroids.population import FAR_FADE
 from world_builder.asteroids.spec import Annulus, Box, FieldShape, FieldSpec, Sphere
-from world_builder.depth import HIDE_FROM_NEAR
+from world_builder.depth import HIDE_FROM_FAR, HIDE_FROM_NEAR
 from world_builder.sky.sky import SKY_BIN, ensure_sky_bin
 
 if TYPE_CHECKING:
@@ -520,6 +525,28 @@ class FieldHaze:
         behind.set_shader_input("uHazePass", 2)
         hull = front.attach_new_node(_hull_node(tris, normals))
         hull.instance_to(behind)
+        node.set_shader_input("uHazeToFar", 0)
+        # The far camera's passes; the near camera's (to its far plane: the
+        # split), shown only while the app's camera is a split's near one.
+        self._near_passes = []
+        for part, (bin_name, order, haze_pass) in (
+            ("front", (HAZE_BIN, HAZE_BIN_SORT, 1)),
+            ("behind", (SKY_BIN, HAZE_BEHIND_ORDER, 2)),
+        ):
+            near = node.attach_new_node(f"haze_near_{part}")
+            near.set_bin(bin_name, order)
+            near.set_shader_input("uHazePass", haze_pass)
+            near.set_shader_input("uHazeToFar", 1)
+            near.hide(HIDE_FROM_FAR)
+            hull.instance_to(near)
+            near.stash()
+            self._near_passes.append(near)
+        for far in (front, behind):
+            far.hide(HIDE_FROM_NEAR)
+        self._split = False
+        self._split_plane = PTA_LVecBase4f.empty_array(1)
+        # On the field's root: the rocks' veil starts at the split too
+        field.root.set_shader_input("uHazeSplit", self._split_plane)
         self._clouds_top = PTA_float.empty_array(1)
         node.set_shader_input("uCloudTop", self._clouds_top)
         node.set_shader(
@@ -529,7 +556,6 @@ class FieldHaze:
                 fragment=shader_path / "haze.frag",
             )
         )
-        node.hide(HIDE_FROM_NEAR)
         node.set_depth_write(False)
         node.set_attrib(DepthTestAttrib.make(DepthTestAttrib.M_less_equal))
         node.set_attrib(CullFaceAttrib.make(CullFaceAttrib.M_cull_none))
@@ -592,6 +618,32 @@ class FieldHaze:
         centre: a ring's planet's), metres; 0: none (one pass, after the
         clouds)."""
         self._clouds_top[0] = float(radius)
+
+    def set_split(self, plane=None) -> None:
+        """The split of a split view (``depth.SplitDepthCameras``): the near
+        camera draws the haze up to it, the far camera beyond. Both passes
+        cut the rays at this plane, not at their lenses' (the near lens's far
+        plane, read from its projection in floats, was off by kilometres:
+        a seam), so they meet whatever the lenses hold this frame.
+
+        :param plane: (the cameras' forward axis, render frame; the split's
+            distance along it, metres), or None: unsplit, the one camera
+            draws all of it
+        """
+        if plane is None:
+            self._split_plane[0] = LVecBase4f(0.0, 0.0, 0.0, 0.0)
+        else:
+            forward, distance = plane
+            self._split_plane[0] = LVecBase4f(*forward, float(distance))
+        split = plane is not None
+        if split == self._split:
+            return
+        self._split = split
+        for near in self._near_passes:
+            if split:
+                near.unstash()
+            else:
+                near.stash()
 
     def set_cover(self, cover: float) -> None:
         """The rocks' mean projected area over their bounding disc's."""

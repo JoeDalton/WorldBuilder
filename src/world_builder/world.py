@@ -770,16 +770,20 @@ class World:
     def depth_ranges(self, origin_world: ArrayLike) -> tuple[float, float]:
         """Split and far distances for :class:`SplitDepthCameras` this
         frame: the split follows the nearest ground, the far plane reaches
-        the farthest visible part of any body.
+        the farthest visible part of any body, and as far as any field's
+        rocks are drawn (:meth:`AsteroidField.reach`: a far plane short of
+        it cut the biggest rocks while they were still a few pixels wide,
+        a line where they met the haze).
 
         :param origin_world: render's origin in the world frame (float64)
         :returns: (split, far), metres; in open space (no body) a fixed
-            split and :data:`SPACE_FAR_M`
+            split and at least :data:`SPACE_FAR_M`
         """
-        if not self.bodies:
-            return SPACE_SPLIT_M, SPACE_FAR_M
         camera = np.asarray(origin_world, dtype=np.float64) + self.camera_render()
-        return SplitDepthCameras.system_ranges(
+        reach = max((f.reach(camera) for f in self.fields), default=0.0)
+        if not self.bodies:
+            return SPACE_SPLIT_M, max(SPACE_FAR_M, reach)
+        split, far = SplitDepthCameras.system_ranges(
             (
                 body.radius,
                 float(np.linalg.norm(camera - body.position)),
@@ -796,6 +800,7 @@ class World:
             )
             for body in self.bodies
         )
+        return split, max(far, reach)
 
     def gravity_field(self, g_constant: float = 1.0) -> Gravity:
         """The bodies' gravity as point masses (see :mod:`world_builder.gravity`).

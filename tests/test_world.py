@@ -217,12 +217,37 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
 def _field(world, name="ring", ambient=None, loading=False):
     """A stand-in field added to a stand-in world."""
     field = MagicMock(loading=loading)
+    field.reach.return_value = 0.0
     world.fields.append(field)
     world._field_looks.append(FieldLook(name, RING, ambient=ambient))
     return field
 
 
 # ── frames, ranges, light ──────────────────────────────────────────────────────
+
+
+def test_the_far_plane_reaches_the_fields_rocks():
+    """The far plane reaches as far as a field's rocks are drawn, past the
+    bodies' and open space's: short of it, the biggest rocks were cut while
+    a few pixels wide. Nearer fields leave it as it was."""
+    from world_builder.world import SPACE_FAR_M
+
+    space = _world()
+    ring = _field(space)
+    assert space.depth_ranges(np.zeros(3))[1] == SPACE_FAR_M
+    ring.reach.return_value = 2.6e6
+    assert space.depth_ranges(np.zeros(3))[1] == 2.6e6
+    body = _body()
+    world = _world(body)
+    origin = np.array([0.0, 0.0, R + 1000.0])
+    _, planet_far = world.depth_ranges(origin)
+    near = _field(world)
+    near.reach.return_value = 0.5 * planet_far
+    assert world.depth_ranges(origin)[1] == planet_far
+    near.reach.return_value = 2.0 * planet_far
+    split, far = world.depth_ranges(origin)
+    assert far == 2.0 * planet_far
+    np.testing.assert_allclose(split, _world(body).depth_ranges(origin)[0])
 
 
 def test_update_works_around_the_camera():

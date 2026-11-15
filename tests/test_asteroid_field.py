@@ -550,3 +550,37 @@ def test_pbr_rocks_are_as_bright_as_the_gloss_lit_ones(window, built_field):
     a, b = pbr[rock].mean(axis=0), gloss[rock].mean(axis=0)
     np.testing.assert_allclose(a, b, rtol=0.1)
     assert not np.array_equal(pbr, gloss)  # the specular differs
+
+
+def test_the_reach_is_the_largest_rock_at_the_smallest_size(showbase):
+    """How far a field's rocks are drawn (the far plane reaches it): its
+    largest rock at the settings' smallest size, but no farther than the
+    field's far side (headless: 900 pixels over 40 degrees)."""
+    from world_builder.asteroids.field import HEADLESS_PIXELS_PER_RADIAN, AsteroidField
+    from world_builder.asteroids.settings import AsteroidSettings
+    from world_builder.terrain.workers import ChunkExecutor
+
+    executor = ChunkExecutor(backend="inline", inline_budget=8)
+    settings = AsteroidSettings(min_pixels=2.0)
+    field = AsteroidField(
+        showbase,
+        _small_field(),
+        clock=lambda: 0.0,
+        settings=settings,
+        executor=executor,
+    )
+    try:
+        cam = showbase.cam
+        showbase.cam = None  # headless: the default scale
+        try:
+            drawn = 2.0 * 400.0 * HEADLESS_PIXELS_PER_RADIAN / 2.0
+            far_away = np.array([1.0e9, 0.0, 0.0])
+            assert field.reach(far_away) == pytest.approx(drawn)
+            # Inside the 3 km box: its farthest corner, and the rock's size
+            corner = np.linalg.norm([3000.0, 3000.0, 3000.0])
+            assert field.reach(np.zeros(3)) == pytest.approx(corner + 400.0)
+        finally:
+            showbase.cam = cam
+    finally:
+        field.destroy()
+        executor.shutdown()
