@@ -21,7 +21,13 @@ from world_builder.clouds.cloud import (
     CloudSpec,
     CloudType,
 )
-from world_builder.clouds.genera import GeneraSpec, depth_shift_tables, genus_cube
+from world_builder.clouds.genera import (
+    GeneraSpec,
+    coverage_cube,
+    depth_shift_tables,
+    genus_cube,
+    genus_weather_at,
+)
 from world_builder.clouds.noise import (
     CloudOptics,
     DensityField,
@@ -92,8 +98,13 @@ def _weather(weather: WeatherSpec, table: tuple) -> np.ndarray:
 
 
 @functools.cache
-def _genus_weather(genera: GeneraSpec, family: str, tables: tuple) -> np.ndarray:
-    return genus_cube(genera, family, tables)
+def _genus_weather(genera: GeneraSpec, kind: str, tables: tuple) -> np.ndarray:
+    return genus_cube(genera, kind, tables)
+
+
+@functools.cache
+def _coverage_cube(genera: GeneraSpec, cube: str) -> np.ndarray:
+    return coverage_cube(genera, cube)
 
 
 def _peaks(seed: int, field: DensityField, radius: float, octaves: int) -> np.ndarray:
@@ -156,7 +167,11 @@ def octave_offset(full: np.ndarray, fewer: np.ndarray) -> float:
 
 
 def planet_field(
-    cloud_type: CloudType, altitude: float | None, seed: int, radius: float
+    cloud_type: CloudType,
+    altitude: float | None,
+    seed: int,
+    radius: float,
+    thickness: float | None = None,
 ) -> tuple[CloudSpec, DensityField, np.ndarray]:
     """A cloud type's field on a planet, the threshold resolved from its
     coverage: what every renderer of a planet's low clouds starts from.
@@ -166,14 +181,17 @@ def planet_field(
         the type's
     :param seed: the noise seed
     :param radius: the planet's sea-level radius, metres
+    :param thickness: the slab's thickness, metres; None keeps the type's
     :returns: the preset, the resolved field (its anvil's shelf too:
         :func:`noise.with_shelf`) and the planet's sorted column peaks
         (:func:`noise.sphere_column_peaks`, all four octaves)
     """
     preset = PRESETS[cloud_type]
     field = preset.field
-    if altitude is not None:
-        field = replace(field, slab=(float(altitude), field.slab[1]))
+    if altitude is not None or thickness is not None:
+        base = field.slab[0] if altitude is None else float(altitude)
+        depth = field.slab[1] if thickness is None else float(thickness)
+        field = replace(field, slab=(base, depth))
     sigma = fbm_sigma(_noise(seed), field)
     peaks = _peaks(seed, field, radius, 4)
     resolved = with_shelf(with_threshold(field, peaks, sigma), _noise(seed), radius)
@@ -220,15 +238,59 @@ SHADE_CELL = 25.0
 SHADE_CACHE_SIZE = 4096
 
 
+def genus_sun_depth(
+    genus: Any, points: np.ndarray, sun: np.ndarray, max_steps: int
+) -> np.ndarray:
+    """A genus's optical depth toward the sun from planet-frame points
+    (:func:`noise.cloud_shadow_on_sphere` through its deck field and weather):
+    its caster's (:class:`march._GenusCaster`: its ``weather``, ``radius``,
+    ``_seed``, ``_deck_field``, ``_deck_optics`` and ``_octave_mean``). A
+    genus whose coverage is a coverage cube's channel (its
+    ``coverage_source``: the cube, the channel, its shift table) takes its
+    shift as the shader's ``genusWeatherAt`` does: the coverage filtered,
+    then turned into a shift (:func:`genera.genus_weather_at`).
+
+    :param points: (m, 3) planet frame, metres
+    :param sun: toward the sun (unit)
+    :returns: (m,)
+    """
+    weather = genus.weather
+    source = getattr(genus, "coverage_source", None)
+
+    def channel(k):
+        if source is not None:
+            if k != 1:
+                return None  # no depth, no spread
+            cube, index, table = source
+            return lambda p: genus_weather_at(cube, index, table, p)[1]
+        if weather.shape[-1] <= k:
+            return None
+        return lambda p: sample_cube(weather[..., k], p)
+
+    return cloud_shadow_on_sphere(
+        _noise(genus._seed),
+        genus._deck_field,
+        genus._deck_optics,
+        points,
+        sun,
+        genus.radius,
+        max_steps,
+        shift_at=channel(1),
+        octave_mean=genus._octave_mean,
+        depth_at=channel(2),
+        spread_at=channel(3),
+    )
+
+
 def sun_visibility(
     self: Any, points_world: ArrayLike, sun_direction: ArrayLike, max_steps: int
 ) -> np.ndarray:
-    """The share of the sun a family's clouds leave points under them (or in
-    them), as a method of its caster (:class:`march._FamilyCaster`: its
-    ``weather``, ``position``, ``radius``, ``_seed``, ``_deck_field``,
-    ``_deck_optics``, ``_octave_mean``, ``_shade_key`` and ``_shades``): the
-    shader's cloud shadow on the CPU (:func:`noise.cloud_shadow_on_sphere`),
-    for what the CPU lights.
+    """The share of the sun the clouds leave points under them (or in them),
+    as a method of a caster (its ``position``, ``_shade_key`` and
+    ``_shades``, and its genera: ``shadow_genera``, or itself as one): the
+    shader's cloud shadow on the CPU, ``exp2(-sum of the genera's depths)``
+    (:func:`genus_sun_depth`; the product of their shades), for what the CPU
+    lights.
 
     :param points_world: (..., 3) world frame, metres
     :param sun_direction: toward the sun, world frame (any length)
@@ -237,7 +299,8 @@ def sun_visibility(
     :returns: (...) in [0, 1]; 1 everywhere until the set-up is done
     """
     points = np.asarray(points_world, dtype=np.float64)
-    if self.weather is None or max_steps <= 0:
+    genera = getattr(self, "shadow_genera", None) or [self]
+    if any(genus.weather is None for genus in genera) or max_steps <= 0:
         return np.ones(points.shape[:-1])
     sun = np.asarray(sun_direction, dtype=np.float64)
     sun = sun / np.linalg.norm(sun)
@@ -253,25 +316,8 @@ def sun_visibility(
     cells = [tuple(c) for c in np.round(flat / SHADE_CELL).astype(np.int64)]
     missing = [i for i, cell in enumerate(cells) if cell not in self._shades]
     if missing:
-        weather = self.weather
-
-        def channel(k):
-            if weather.shape[-1] <= k:
-                return None
-            return lambda p: sample_cube(weather[..., k], p)
-
-        depth = cloud_shadow_on_sphere(
-            _noise(self._seed),
-            self._deck_field,
-            self._deck_optics,
-            flat[missing],
-            sun,
-            self.radius,
-            max_steps,
-            shift_at=channel(1),
-            octave_mean=self._octave_mean,
-            depth_at=channel(2),
-            spread_at=channel(3),
+        depth = sum(
+            genus_sun_depth(genus, flat[missing], sun, max_steps) for genus in genera
         )
         for i, value in zip(missing, np.exp2(-depth)):
             self._shades[cells[i]] = float(value)

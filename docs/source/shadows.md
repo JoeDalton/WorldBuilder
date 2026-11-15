@@ -127,8 +127,17 @@ only, so it lines up with the clouds drawn, and it moves with the sun.
   with genera ([Clouds](clouds.md#genera)) the convective depth, the cell
   octave and the anvil's shelf. The march's early-out (exact: the two
   octaves at their most under the threshold at its lowest) allows for
-  the anvil's fall and the shelf. With genera, the convective volume casts
-  the shadow.
+  the anvil's fall and the shelf.
+- **Genera** ([Clouds](clouds.md#genera)). Every genus casts, and the
+  shadow is their summed depth: `planetCloudShadow` marches the sky bands
+  (`skyShadowDepth`: the genera's slabs merged, `march.sky_bands`; each band's
+  chord cut at its clouds' own top, every genus in it by its own field and
+  weather) or reads the one map pair that holds the sum (below). A depth is
+  linear, so `exp2(-sum)` is the product of the genera's shades.
+  `uCloudShadowLayer` is genus 0's far level (-1: none), genus *g*'s is *g* ×
+  `DETAIL_LEVELS` past it; `uCloudGenera`, `uSkyBands` and `uSkyBandCount`
+  come with it. Far away it fades to the product of the genera's means, by the
+  genus whose cell fades first.
 - **Receivers.** The terrain's sunlight (`terrain_frag.glsl`, at the planet
   frame position `uAtmoCam[own] + vRelPos`: clouds come with air), so land
   and far water. The near sea takes a per-pixel `sunShade` in `seaShade`,
@@ -136,8 +145,10 @@ only, so it lines up with the clouds drawn, and it moves with the sun.
   the CPU's light on the sea leaves the clouds out. The sky light is not
   dimmed: under a cloud the air all round is still lit.
 - **CPU twin.** `noise.cloud_shadow_on_sphere`, and
-  `field_setup.sun_visibility(points, sun, steps)` (each family's caster's,
-  through `PlanetClouds.sun_visibility`), which
+  `field_setup.sun_visibility(points, sun, steps)` (the one caster's,
+  `CloudMarch.shadow_caster()`: `exp2` of minus the genera's summed depths,
+  `field_setup.genus_sun_depth` each; through `PlanetClouds.sun_visibility`),
+  which
   `World.sun_visibility` and `lights_at` multiply in: Panda3D's lights and
   the tracked models darken under a cloud.
 - **Knob.** `ShadowSettings.cloud_shadow_steps` (the `shadows` section of
@@ -146,7 +157,7 @@ only, so it lines up with the clouds drawn, and it moves with the sun.
   sparkle; **under a grazing sun**, the chord is kilometres long and its
   steps longer than the clouds, so the march would band (each height of
   ground on a slope stepping onto other clouds: stripes along the
-  contours). In both cases `cloudShadow` fades it, over the second octave's
+  contours). In both cases `planetCloudShadow` fades it, over the second octave's
   cell, to the shadow's mean for the weather's coverage and the sun's
   elevation (`noise.ground_shadow_table`, made with the deck's lighting, in
   its texture's third channel), which costs one fetch. A long, low sun's
@@ -325,24 +336,33 @@ mostly the sky's, and a level surface takes little direct sunlight then
 texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
 
 - **What a texel holds.** The march depends on the sun's ray alone, so it
-  is stored by where the ray enters the slab's base: each texel is a node
-  of an azimuthal equidistant chart on the base's sphere around the camera,
-  and `cloud_shadow_map.frag` runs `cloudShadowDepth` from there. A pixel
-  of ground below the slab finds its ray's entry point (analytic,
-  `cloudShadowChord`) and fetches it (`cloudMapsDepthIn`).
+  is stored by where the ray enters the sky bands' base (the lowest genus's):
+  each texel is a node of an azimuthal equidistant chart on the base's sphere
+  around the camera, and `cloud_shadow_map.frag` runs `skyShadowLevels` from
+  there: all the genera's depth, summed (each band ahead in its own steps,
+  every genus in it at the same samples by its own field and weather). A
+  pixel of ground below the bands finds its ray's entry point (analytic,
+  `shellChord`) and fetches it (`planetCloudShadow`).
+- **One pair for every genus.** With genera the stratus's depth and the
+  towers' are in the same texel, so the ground, the sea, the models and the
+  god rays take one fetch and no product. (A pair per family, before, made
+  every receiver carry a second set of inputs, `uCloudShadowOther` and the
+  `other*` maps, and multiply the two shadows itself.)
 - **The levels.** A texel holds the total (r) and the depth a quarter, a half
-  and three quarters of the way along the chord (g, b, a:
-  `cloudShadowLevelsIn`); the ground reads r. They are what lets the
-  raymarched clouds take their own light from the map (below).
+  and three quarters of the way along the bands' summed chord (g, b, a; the
+  gap between two bands counts no length); the ground reads r. They are what
+  lets the raymarched clouds take their own light from the map (below).
 - **Lighting the raymarch.** The raymarch's pass nodes are bound to the
   maps (`PlanetClouds.bind_maps`, `World` does it), and a sample's sun march
   (`cloudSunDepth`, `CLOUD_MAP_LIGHTING` in `cloud_march.frag` only) is
   its first two steps through the field itself plus, from the map at the
   point where the sun's line left the base, the chord's total less the depth
   up to where those two steps ended (`cloudMapSunDepth`, linearly between the
-  levels; `noise.sun_depth_from_map` on the CPU), out to where the sun march
-  would have stopped (its steps): counting a tower's whole 10 km chord left
-  every tower black. It blends into the sun march over the far map's last
+  levels by the summed chord, `skyChordAt`; `noise.sun_depth_from_map` on the
+  CPU), out to where the sun march would have stopped (its steps): counting a
+  tower's whole 10 km chord left every tower black. A genus's `far_shadow` of
+  the rest is added (`cloudMapLevelsAt`: the stratus takes the towers' whole
+  chord above it). It blends into the sun march over the far map's last
   eighth, and is the sun march for a sun too low for the line to have left the
   base (`--cloud-debug 64` takes the lighting from the sun march alone). It costs what the sun march did (a cumulus's has three steps) and
   changes the image by under half a level (8-bit) on average; it pays for
@@ -352,7 +372,7 @@ texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
   anvil's shelf spreads): the maps' and the ground's steps are spread over a
   fair-weather cumulus, not over the 10 km slab it fills a tenth of. Before,
   with genera the chord was so long that its steps were longer than the clouds
-  and the ground took the shadow's mean (`cloudShadowIn`'s far rule): no cloud
+  and the ground took the shadow's mean (the far rule): no cloud
   shadows at all, for either renderer.
 - **Two maps**: near, 60 m texels (1024: 61 km wide), and far, 500 m
   (512: 256 km), each faded into the next over the last eighth of its
@@ -380,8 +400,9 @@ depth passes' resolution (half the view's), not per pixel of the terrain and
 the sea.
 
 - **Why.** Far off, the ground's triangles are a pixel or two; the GPU shades
-  2 x 2 quads, so every pixel's work ran for up to four, and the lookup (both
-  families: the chord, the weather, two maps each) cost 0.8-0.9 ms a frame at
+  2 x 2 quads, so every pixel's work ran for up to four, and the lookup (then
+  both families: the chord, the weather, two maps each; now each genus's
+  chord for the far fade and one map pair) cost 0.8-0.9 ms a frame at
   2560 x 1440 (performance.md §32).
 - **The pass** (`ground_shadow.frag`): from the march's own depth passes (the
   near range's where it drew, the far range's elsewhere), each texel's scene
@@ -407,24 +428,33 @@ the sea.
 `LightVolume`): the light the raymarched clouds are lit by, in place of the
 shadow maps' four levels, whose bands showed in towers.
 
-- **What it holds.** For every voxel of a family's slab around the camera,
-  the clouds' optical depth toward the sun (r) and straight up (g), RG16F.
+- **What it holds.** For every voxel of the clouds' sky bands around the
+  camera, all the genera's optical depth together toward the sun (r) and
+  straight up (g), RG16F: one volume however many genera.
   Depths, not transmittances: along one ray a depth is linear, so the depth
   between two points of a sun ray is the difference of theirs.
-- **Chart.** The cloud shadow maps' azimuthal equidistant chart on the slab
+- **Chart.** The cloud shadow maps' azimuthal equidistant chart on the bands'
   base's sphere, warped radially (a texel at `t` in [-1, 1]² of its tile lies
   `|t|² × reach` from the centre: fine near the camera, about 800 m wide at
-  25 km with 256² tiles), and 32 shells through the slab (330 m in a tower's
-  10.5 km). The reach is the longest sight line inside the slab (40-200 km).
-  An atlas of 8 × 4 tiles (`cloud_field.glsl`'s `lightVoxelAt`,
-  `lightChartCoords`).
-- **Bake** (`cloud_light_bake.frag`). Each voxel marched to the slab's top,
-  toward the sun and up, in steps of half a sun step, the weather and the cell
-  octave read at **every step** (`light_volume.light_depth_on_sphere` on the
-  CPU). With the weather of the chord's start, as the ground's shadow march
+  25 km with 256² tiles), and 32 shells through **each sky band** (330 m in a
+  tower's 10.5 km; 16 m in a 500 m stratus deck), none through the gap between
+  two (`lightSliceHeight`, `lightSliceAt`; `light_volume.slice_heights`). A
+  read and its jitter stay inside the point's band (a point in a gap takes the
+  nearer band's edge slice), and so does the smoothing's tent: mixed across the gap, a tower's
+  base took in the slice under it, whose sun ray crosses the tower a kilometre
+  aside, and streaked. Uniform shells through the union, 64 of them, would
+  have given the stratus three. The reach is the
+  longest sight line inside the bands (40-200 km). An atlas of 8 × 4 tiles a
+  band (`cloud_field.glsl`'s `lightVoxelAt`, `lightChartCoords`).
+- **Bake** (`cloud_light_bake.frag`, `skyShadowLevels`). Each voxel marched
+  to the highest band's top, toward the sun and up, each band ahead in steps
+  of half a sun step of its genera's shortest, every genus in it at those
+  samples, the depths summed, the weather and the cell octave read at **every
+  step** (`light_volume.light_depth_union` on the CPU). With the weather of the chord's start, as the ground's shadow march
   takes it, two voxels on one sun ray disagreed about the tower between them
-  and its face streaked. A few slices a frame
-  (`ShadowSettings.cloud_light_slices`) into a raw atlas; once whole, smoothed
+  and its face streaked. A few slices of each sky band a frame
+  (`ShadowSettings.cloud_light_slices`, per band: a bake takes as many
+  frames whatever the bands) into a raw atlas; once whole, smoothed
   in one frame into a third (`cloud_light_smooth.frag`: each voxel the
   [1, 2, 1] tent of its neighbours along the three axes,
   `light_volume.smooth_volume` on the CPU), swapped to the front: the readers
@@ -433,13 +463,18 @@ shadow maps' four levels, whose bands showed in towers.
   reads across it showed as dark specks in motion (performance.md §28).
   Baked again when the sun turns past `utils.SUN_TOLERANCE`, the camera moves
   3 % of the reach, the reach changes by as much, or the clouds' layer
-  changes; one bake at a time. With all still, nothing a frame. Each family
-  has its own (genera).
+  changes; one bake at a time. With all still, nothing a frame. One volume
+  for every genus: a volume per family, before, baked the same voxels' worth
+  but made every reader carry a second atlas and chart (`otherLight`) and the
+  stratus read the towers' shadow from their maps instead.
 - **Readers** (`cloudLightSunDepth`, `cloudLightAt`). A march sample takes the
   sun march's two local steps (the nearby clouds' shape), then the difference
   of the volume's depths where they ended and where the sun march would have
   (its window: the whole chord, `--cloud-debug 1024`, still blackens towers,
-  as the maps' did). Past a view footprint of `march.LIGHT_LOCAL_FOOTPRINT`
+  as the maps' did), plus its genus's `far_shadow` (`noise.GenusField`, row
+  13's w) of the depth beyond the window: 0 for the convective clouds, 1 for
+  the stratus, which takes the whole chord of the towers above it (what its
+  read of their maps gave before). Past a view footprint of `march.LIGHT_LOCAL_FOOTPRINT`
   the volume alone. Each read is jittered by up to a texel and a slice either
   way (`LIGHT_JITTER`; per pixel and visit, the march's blue noise): read at
   the nodes, the linear interpolation between texels hundreds of metres wide
@@ -449,7 +484,8 @@ shadow maps' four levels, whose bands showed in towers.
   comes from the up depth, `mix(skyOcclusion, 1, exp2(-depth))`, in place of
   the height ramp. Beyond the volume (its last eighth fades), the maps and the
   ramp as before; `--cloud-debug 512` takes them everywhere (the old look).
-  The ground, the sea and the models keep the shadow maps.
+  The ground, the sea and the models keep the shadow maps; the god rays take
+  the volume where it holds the point, the maps beyond.
 - **Cost** (RTX 3070, 2560 × 1440, genera; performance.md §26). Re-baking: 0.3-0.4 ms a
   frame at 256² and a slice a frame (32 frames a bake, a quarter of a second);
   0.9-1.5 ms at four slices; 1.1-1.2 ms at 512² even at one. Still: 0.
@@ -459,9 +495,10 @@ shadow maps' four levels, whose bands showed in towers.
   and ULTRA) and `cloud_light_slices` (2 MID, 1 HIGH, 2 ULTRA). Off, the
   raymarch lights by the shadow maps as before. `World` and the demo make one
   for a body with clouds and bind it to the march (`bind_maps`).
-- **Tests** (`tests/test_cloud_light_volume.py`): the chart and its reach;
-  every voxel read back against the CPU twin, toward the sun and up, plain and
-  for each genera family; the change-driven rules.
+- **Tests** (`tests/test_cloud_light_volume.py`): the chart, its bands' slices
+  and its reach; every voxel read back against the CPU twin, toward the sun and
+  up, plain and with genera (one volume over both feature sites); the
+  change-driven rules.
 
 ## Long cloud shadows across the deck
 

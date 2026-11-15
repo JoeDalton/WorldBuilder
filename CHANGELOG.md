@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`DensityField.deep_exponent`, `deep_erosion`, `cell_power`), and the
   cumulonimbus's anvil and shelf are smooth (`noise.anvil_weight`,
   `ANVIL_SCALE`).
+- The genera are one union march (`CloudMarch(genera=...)`): every genus is
+  marched in one pass over the sky bands (`march.sky_bands`, the genera's
+  slabs merged; at most `noise.MAX_GENERA` genera and `MAX_SKY_BANDS` bands),
+  so genera may overlap: `planet.check_layers` no longer keeps the stratus
+  under the convective clouds; it checks the genera's and bands' counts and
+  the cirrus against the union's top (`PlanetClouds.top_radius` too). Every
+  genus keeps all its `octave_bands` (no more halving).
+- One light volume and one shadow map pair hold all the genera's summed
+  depth: `PlanetClouds.shadow_families` is removed; `shadow_caster()` and
+  `bind_shadow_inputs(node)` take no family; `CloudMarch.genus_caster(g)` is
+  one genus's part on the CPU, `CloudMarch.genera_count` how many (was
+  `families`). `CloudLightVolumes.volume` and `CloudShadowMaps.pair` are
+  single (were the lists `volumes` and `pairs`).
+- `ShadowSettings.cloud_light_slices` counts slices of each sky band a frame.
 
 - The far plane reaches the asteroid fields' rocks (#39):
   `World.depth_ranges` returns the larger of the bodies' far distance (or

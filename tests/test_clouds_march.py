@@ -38,7 +38,7 @@ from world_builder.clouds.march import (
     visit_of,
 )
 from world_builder.clouds.noise import (
-    MAX_LAYERS,
+    DETAIL_LEVELS,
     NOISE_FEATURE,
     density_on_sphere,
     fbm_sigma,
@@ -377,7 +377,10 @@ def test_the_march_converges_on_the_fine_integral(field):
 
 def test_the_shader_shares_the_layer_count_and_the_feature_size():
     text = SHADER.read_text()
-    assert int(re.search(r"MAX_MARCH_LAYERS = (\d+);", text).group(1)) == MAX_LAYERS
+    assert "const int MAX_MARCH_LAYERS = DETAIL_LEVELS;" in text
+    field = (SHADER.parent / "cloud_field.glsl").read_text()
+    levels = int(re.search(r"DETAIL_LEVELS = (\d+);", field).group(1))
+    assert levels == DETAIL_LEVELS
     units = float(re.search(r"NOISE_FEATURE_UNITS = ([\d.]+);", text).group(1))
     assert units == NOISE_FEATURE
     fewest = float(re.search(r"SEGMENT_SAMPLES = ([\d.]+);", text).group(1))
@@ -471,8 +474,9 @@ def test_the_march_casts_a_shadow_and_reads_the_maps_for_its_own_light(
     clouds = _clouds(showbase, executor)
     try:
         march = clouds.volume
-        assert clouds.shadow_caster(0) is march.shadow_caster(0)
-        assert clouds.shadow_families == march.families == 1
+        assert clouds.shadow_caster() is march.shadow_caster()
+        assert march.genera_count == 1
+        assert march.shadow_caster().sky_bands == [march.field.slab]
         assert march.shadow_field.slab == march.field.slab
         node = showbase.render.attach_new_node("receiver")
         clouds.bind_shadow_inputs(node)
@@ -496,36 +500,37 @@ def test_the_march_casts_a_shadow_and_reads_the_maps_for_its_own_light(
             assert "CLOUD_MAP_LIGHTING" not in path.read_text()
 
 
-def test_two_families_slabs_make_up_to_four_sorted_stretches():
-    """The genera's stratus under the convective clouds: a ray from the ground
-    crosses the stratus then the convective slab; from above, the convective
-    one then the stratus, then (the planet not in the way) nothing; a ray
-    skimming under both leaves and re-enters each."""
-    from world_builder.clouds.march import family_segments
+def test_two_sky_bands_make_up_to_four_sorted_stretches():
+    """The genera's stratus under the convective clouds, two bands of sky: a
+    ray from the ground crosses the stratus's band then the convective one;
+    from above, the convective one then the stratus's, then (the planet not
+    in the way) nothing; a ray skimming under both leaves and re-enters
+    each."""
+    from world_builder.clouds.march import band_segments
 
     radius = 600e3
     slabs = [(2200.0, 10500.0), (900.0, 1000.0)]  # convective, stratus
     up = np.array([0.0, 0.0, 1.0])
-    below = family_segments(up * (radius + 100.0), up, radius, slabs)
-    assert [f for _, _, f in below] == [1, 0]
+    below = band_segments(up * (radius + 100.0), up, radius, slabs)
+    assert [b for _, _, b in below] == [0, 1]  # the bands lowest first
     assert below[0][0] == pytest.approx(800.0) and below[0][1] == pytest.approx(1800.0)
     assert below[1][0] == pytest.approx(2100.0)
     assert below[1][1] == pytest.approx(12600.0)
-    above = family_segments(up * (radius + 20e3), -up, radius, slabs)
-    assert [f for _, _, f in above] == [0, 1]
+    above = band_segments(up * (radius + 20e3), -up, radius, slabs)
+    assert [b for _, _, b in above] == [1, 0]
     assert above[0][1] <= above[1][0]
     # A ray passing under the base of both (its closest approach 500 m up):
-    # each slab twice, four stretches in order along it, the stratus's
+    # each band twice, four stretches in order along it, the stratus's
     # outside the convective ones' (it is lower)
     side = np.array([1.0, 0.0, 0.0])
-    skimming = family_segments(
+    skimming = band_segments(
         np.array([-200e3, 0.0, radius + 500.0]), side, radius, slabs
     )
-    assert [f for _, _, f in skimming] == [0, 1, 1, 0]
+    assert [b for _, _, b in skimming] == [1, 0, 0, 1]
     starts = [t0 for t0, _, _ in skimming]
     assert starts == sorted(starts)
     # The planet cuts the far side, and the view's range the near
-    clipped = family_segments(
+    clipped = band_segments(
         up * (radius + 20e3), -up, radius, slabs, t_start=9e3, t_end=15e3
     )
     assert all(9e3 <= t0 < t1 <= 15e3 for t0, t1, _ in clipped)

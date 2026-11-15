@@ -14,9 +14,10 @@ builds for a planet. It owns two layers, one per technique:
 They share the planet's weather (the same cyclones carry the cumulus and bend
 the cirrus), the sun, the settings and the camera, so a game updates, lights
 and removes them as one. The pair also has a rule of its own
-(:func:`check_layers`): the sheet must lie above the volume's slab, which is
-what makes its draw order hold without sorting (see :mod:`cirrus`), and
-inside the air.
+(:func:`check_layers`): the sheet must lie above the volume's slabs (all
+the genera's), which is what makes its draw order hold without sorting (see
+:mod:`cirrus`), and inside the air; the genera must fit the march (how many,
+and their bands of sky).
 
 Design notes: docs/source/atmosphere.md, "Planet clouds" and "Cirrus".
 """
@@ -33,9 +34,9 @@ from panda3d.core import NodePath
 from world_builder.atmosphere import Atmospheres
 from world_builder.clouds.cirrus import CirrusSpec, CloudSheet
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
-from world_builder.clouds.genera import GeneraSpec
-from world_builder.clouds.march import CloudMarch
-from world_builder.clouds.noise import DensityField
+from world_builder.clouds.genera import GeneraSpec, genus_specs
+from world_builder.clouds.march import MAX_SKY_BANDS, CloudMarch, sky_bands
+from world_builder.clouds.noise import MAX_GENERA, DensityField
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.depth import HIDE_FROM_CLOUD_PASS
 from world_builder.terrain.planet import PlanetSpec
@@ -45,6 +46,35 @@ if TYPE_CHECKING:
     from world_builder.terrain.workers import ChunkExecutor
 
 
+def layer_slabs(
+    cloud_type: CloudType, altitude: float | None, genera: GeneraSpec | None = None
+) -> list[tuple[float, float]]:
+    """The volume's slabs, as the march builds them: one per genus
+    (:func:`genera.genus_specs`), or the one type's.
+
+    :param cloud_type: the volume's type (ignored with genera)
+    :param altitude: the volume's (the convective genus's) base, metres;
+        None = the type's
+    :param genera: the genera (:mod:`genera`); None = one type
+    :returns: each slab's (base, thickness) above sea level, metres
+    """
+    specs = (
+        genus_specs(genera, altitude)
+        if genera is not None
+        else [(None, cloud_type, altitude, None, None)]
+    )
+    slabs = []
+    for _, kind, base, thickness, _ in specs:
+        preset = PRESETS[kind].field.slab
+        slabs.append(
+            (
+                float(preset[0] if base is None else base),
+                float(preset[1] if thickness is None else thickness),
+            )
+        )
+    return slabs
+
+
 def check_layers(
     cloud_type: CloudType,
     altitude: float | None,
@@ -52,11 +82,12 @@ def check_layers(
     air_top: float | None = None,
     genera: GeneraSpec | None = None,
 ) -> None:
-    """Refuse layers the draw order or the air cannot hold: the sheet's base
-    must clear the volume's slab, its top stay under the air's; with genera,
-    the stratus's top must stay under the convective clouds' base (the march
-    takes each family's slab as up to two stretches of a ray, sorted along
-    it, which needs them apart).
+    """Refuse layers the march, the draw order or the air cannot hold: with
+    genera, no more than :data:`noise.MAX_GENERA` of them, their slabs in no
+    more than :data:`march.MAX_SKY_BANDS` bands of sky
+    (:func:`march.sky_bands`; the genera's slabs may overlap: the march takes
+    them as one); the sheet's base must clear the union of the slabs, its top
+    stay under the air's.
 
     :param cloud_type: the volume's type (the convective one with genera)
     :param altitude: the volume's base, metres; None = the type's
@@ -65,20 +96,21 @@ def check_layers(
     :param genera: the genera (:mod:`genera`); None = one type
     :raises ValueError: for layers that do not fit
     """
-    if genera is not None:
-        cloud_type = CloudType.CONVECTIVE
-        stratus = PRESETS[CloudType.STRATUS].field.slab
-        stratus_top = genera.stratus_altitude + stratus[1]
-        base = PRESETS[cloud_type].field.slab[0] if altitude is None else altitude
-        if stratus_top >= base:
-            raise ValueError(
-                f"the stratus's top ({stratus_top:g} m) must be under the "
-                f"convective clouds' base ({base:g} m)"
-            )
+    if genera is not None and len(genera.genera) > MAX_GENERA:
+        raise ValueError(
+            f"{len(genera.genera)} genera: the march takes at most {MAX_GENERA}"
+        )
+    slabs = layer_slabs(cloud_type, altitude, genera)
+    try:
+        bands = sky_bands(slabs)
+    except ValueError:
+        raise ValueError(
+            f"the genera's slabs make more than {MAX_SKY_BANDS} bands of sky "
+            f"(slabs {slabs}): merge or overlap some"
+        ) from None
     if cirrus is None:
         return
-    slab = PRESETS[cloud_type].field.slab
-    top = (slab[0] if altitude is None else altitude) + slab[1]
+    top = bands[-1][0] + bands[-1][1]
     if cirrus.base <= top:
         raise ValueError(
             f"the cirrus's base ({cirrus.base:g} m) must be above the "
@@ -171,12 +203,11 @@ class PlanetClouds:
         :param game: the game object, for its asset manager (the cirrus's
             atlas; None: from disk)
         :param genera: the low clouds by genus (:mod:`genera`): the march
-            marches the convective family (*cloud_type* is
-            :attr:`cloud.CloudType.CONVECTIVE`, *weather* the genera's) and
-            the stratus under it; None = one type
+            marches every genus as one (*cloud_type* is
+            :attr:`cloud.CloudType.CONVECTIVE` for the primary genus,
+            *weather* the genera's); None = one type
         :raises ValueError: a sheet not above the volume or not inside the
-            air, a stratus not under the convective clouds
-            (:func:`check_layers`)
+            air, too many genera or bands of sky (:func:`check_layers`)
         """
         air_top = None
         if atmospheres is not None and atmosphere is not None:
@@ -325,31 +356,19 @@ class PlanetClouds:
         for bind in self._binders if binders is None else binders:
             bind(layer.root)
 
-    @property
-    def shadow_families(self) -> int:
-        """How many families cast a shadow: two with genera (the convective
-        one, then the stratus), else one."""
-        return self.volume.families
+    def shadow_caster(self) -> Any:
+        """The caster of the clouds' shadow, all their genera's together
+        (:meth:`march.CloudMarch.shadow_caster`)."""
+        return self.volume.shadow_caster()
 
-    def shadow_caster(self, family: int = 0) -> Any:
-        """The caster of *family*'s shadow (0: the convective clouds, or the
-        one type; 1: the stratus): :meth:`march.CloudMarch.shadow_caster`."""
-        return self.volume.shadow_caster(family)
-
-    def bind_shadow_inputs(self, node: NodePath, family: int = 0) -> None:
-        """Let the shaders on a node (the planet's terrain) darken the sun
-        under the clouds: the volume's shadow, and with genera the stratus's
-        too (:meth:`march.CloudMarch.bind_shadow_inputs`,
-        ``uCloudShadowOther``).
+    def bind_shadow_inputs(self, node: NodePath) -> None:
+        """Let the shaders on a node (the planet's terrain, the light
+        resources' bakes) darken the sun under the clouds: all their genera's
+        shadow (:meth:`march.CloudMarch.bind_shadow_inputs`).
 
         :param node: the node whose shaders include cloud_field.glsl's
             ``planetCloudShadow``
-        :param family: 1 binds the stratus's alone, as the first (its shadow
-            maps' bake: :class:`shadow_map.CloudShadowMaps`)
         """
-        if family == 1:
-            self.shadow_caster(1).bind_shadow_inputs(node)
-            return
         self._shadow_nodes.append(node)
         self._shade([node])
 
@@ -363,7 +382,8 @@ class PlanetClouds:
         highest layer's top (the cirrus's, when there is one). What a ray
         meets past where it enters this sphere is behind them (a ring's
         haze, :meth:`asteroids.haze.FieldHaze.set_clouds_top`)."""
-        tops = [self.radius + sum(self.volume.field.slab)]
+        band = self.volume.sky_bands[-1]  # the genera's union's top
+        tops = [self.radius + band[0] + band[1]]
         if self.sheet is not None:
             tops.append(self.radius + self.sheet.spec.top)
         return max(tops)
@@ -383,8 +403,8 @@ class PlanetClouds:
         self, points_world: ArrayLike, sun_direction: ArrayLike, max_steps: int
     ) -> np.ndarray:
         """The share of the sun the clouds leave points under them (or in
-        them), as their shaders draw it on the ground: both families' with
-        genera (:func:`field_setup.sun_visibility`).
+        them), as their shaders draw it on the ground: all the genera's
+        (:func:`field_setup.sun_visibility`).
 
         :param points_world: (..., 3) world frame, metres
         :param sun_direction: toward the sun, world frame (any length)
@@ -392,14 +412,7 @@ class PlanetClouds:
             (``ShadowSettings.cloud_shadow_steps``; 0 = none)
         :returns: (...) in [0, 1]
         """
-        shade = np.ones(np.shape(points_world)[:-1])
-        for family in range(self.shadow_families):
-            caster = self.shadow_caster(family)
-            if caster is not None:
-                shade = shade * caster.sun_visibility(
-                    points_world, sun_direction, max_steps
-                )
-        return shade
+        return self.volume.sun_visibility(points_world, sun_direction, max_steps)
 
     # ── live ──────────────────────────────────────────────────────────────────
 

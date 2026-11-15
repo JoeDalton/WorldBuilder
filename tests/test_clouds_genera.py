@@ -19,9 +19,9 @@ from world_builder.clouds.field_setup import _noise
 from world_builder.clouds.genera import (
     CONVECTIVE,
     DEPTHS,
-    STRATIFORM,
     Feature,
     GeneraSpec,
+    coverage_cube,
     depth_shift,
     depth_shift_tables,
     genus_cube,
@@ -33,7 +33,8 @@ from world_builder.clouds.noise import (
     ANVIL_SMOOTH_BAND,
     CELL_OFFSET,
     CELL_SCALE,
-    DETAIL_LEVELS,
+    GENUS_VEC4S,
+    LAYER_VEC4S,
     SHELF_BAND,
     SHELF_CLEAR,
     SHELF_COVERAGE,
@@ -49,7 +50,7 @@ from world_builder.clouds.noise import (
     with_shelf,
     with_threshold,
 )
-from world_builder.clouds.weather import WeatherSpec, shift_table
+from world_builder.clouds.weather import WeatherSpec
 from world_builder.sky.starfield import cube_directions
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PRESETS as PLANETS
@@ -420,7 +421,10 @@ def test_away_from_the_features_it_is_the_weather(genera):
     assert np.allclose(planes[..., 0][far], weather, atol=1e-6)
 
 
-def test_the_families_cubes(genera, convective):
+def test_the_weather_cube_and_coverage_cube_a(genera, convective):
+    """The primary genus's weather cube (coverage, shift, depth, spread),
+    and cube A with the stratus's coverage in its channel 0 (its shift its
+    own table's: genusShift)."""
     field, tables = convective
     cube = genus_cube(genera, CONVECTIVE, tuple(map(tuple, tables)), 64)
     planes = genus_planes(genera, 64)
@@ -428,17 +432,13 @@ def test_the_families_cubes(genera, convective):
     assert np.array_equal(cube[..., 0], planes[..., 0])
     assert np.array_equal(cube[..., 2], planes[..., 1])
     assert np.array_equal(cube[..., 3], planes[..., 3])
-    stratus = PRESETS[CloudType.STRATUS].field
-    volume = _noise(7)
-    peaks = sphere_column_peaks(volume, stratus, R)
-    resolved = with_threshold(stratus, peaks, fbm_sigma(volume, stratus))
-    table = shift_table(peaks, resolved.threshold[0])
-    flat = genus_cube(genera, STRATIFORM, tuple(table), 64)
-    assert flat.shape == (6, 64, 64, 3)
-    assert np.array_equal(flat[..., 0], planes[..., 2])
-    assert np.all(flat[..., 2] == 0.0)
+    covers = coverage_cube(genera, "A", 64)
+    assert covers.shape == (6, 64, 64, 4)
+    assert np.array_equal(covers[..., 0], planes[..., 2])
+    assert not covers[..., 1:].any()
+    assert not coverage_cube(genera, "B", 64).any()
     with pytest.raises(ValueError):
-        genus_cube(genera, "nimbus", tuple(table), 64)
+        genus_cube(genera, "stratus", tuple(map(tuple, tables)), 64)
 
 
 # ── The shader and Python agree ──────────────────────────────────────────────
@@ -477,15 +477,16 @@ def executor():
     made.shutdown()
 
 
-def test_the_raymarch_marches_both_families_and_casts_both_shadows(
+def test_the_raymarch_marches_both_genera_and_casts_one_summed_shadow(
     showbase, executor, genera
 ):
-    """With genera a raymarch is one volume of two families (no stratus
-    volume): each family its own field, weather and shadow; the layers of
-    the two fit the uniform array."""
+    """With genera a raymarch is one volume of two genera (no stratus
+    volume): each genus its own field and weather (the stratus's from cube
+    A and its shift table), one shadow of both (one caster, its layer genus
+    0's far level, the sky bands, the union's shade the product of the
+    genera's); every genus has all the detail levels asked for."""
     from world_builder.clouds.cloud import CloudSettings
     from world_builder.clouds.march import CloudMarch
-    from world_builder.clouds.noise import MAX_LAYERS
     from world_builder.clouds.planet import PlanetClouds
 
     clouds = PlanetClouds(
@@ -499,53 +500,115 @@ def test_the_raymarch_marches_both_families_and_casts_both_shadows(
     try:
         march = clouds.volume
         assert isinstance(march, CloudMarch)
-        assert march.families == clouds.shadow_families == 2
-        convective, stratiform = (f.field for f in march._families)
+        assert march.genera_count == 2
+        assert clouds.shadow_caster() is march.shadow_caster()
+        convective, stratiform = (f.field for f in march._genera)
         assert convective.min_top < 1.0
         assert stratiform.slab[0] == genera.stratus_altitude
-        # Both families' layers fit: fewer bands each than the 6 asked for
-        assert march._layers_used * 2 <= MAX_LAYERS
+        # Each genus its 6 bands and its far level (DETAIL_LEVELS slots each)
+        assert march._layers_used == 7
         assert march._layer_count[0] == march._layers_used
-        assert march._inputs["uFamilies"] == 2
+        assert "uFamilies" not in march._inputs
         for _ in range(400):  # the set-up, in the pool
             clouds.update((0.0, 0.0, R + 1000.0))
             if march.weather is not None:
                 break
         stride = march._layers_used
-        assert [march.shadow_caster(i).shadow_layer for i in (0, 1)] == [
-            stride - 1,
-            DETAIL_LEVELS + stride - 1,  # genus * DETAIL_LEVELS + its far level
-        ]
-        # Both families shade a point under them, and bind as their own maps'
-        # bake does (the stratus's alone as the first)
+        caster = clouds.shadow_caster()
+        # Genus 0's far level (genus g's is g * DETAIL_LEVELS past it)
+        assert caster.shadow_layer == stride - 1
+        stratus, convective = (f.field.slab for f in reversed(march._genera))
+        assert caster.sky_bands == [stratus, convective]  # disjoint: two bands
+        assert clouds.top_radius == R + sum(convective)  # the union's top
+        # far_shadow in row 13's w: the stratus under the towers takes their
+        # depth beyond its window, the convective clouds none
+        rows = np.array([tuple(march._layer_params[i]) for i in range(32)])
+        assert rows[LAYER_VEC4S, 3] == 0.0
+        assert rows[GENUS_VEC4S + LAYER_VEC4S, 3] == 1.0
+        # The union's shade is the product of the genera's (the sum of
+        # their depths), under the towers and under the stratus
         points = np.array([[0.0, 0.0, R + 10.0], [0.0, 40e3, R + 10.0]])
+        points = np.vstack([points, TangentFrame.at(-2.86, 0.0).up * (R + 10.0)])
         sun = np.array([0.0, 0.3, 1.0])
         shade = clouds.sun_visibility(points, sun, 8)
-        both = np.ones(2)
-        for family in (0, 1):
-            both *= clouds.shadow_caster(family).sun_visibility(points, sun, 8)
+        both = np.ones(len(points))
+        for genus in (0, 1):
+            both *= march.genus_caster(genus).sun_visibility(points, sun, 8)
         np.testing.assert_allclose(shade, both)
+        np.testing.assert_allclose(caster.sun_visibility(points, sun, 8), both)
         assert np.all((shade >= 0.0) & (shade <= 1.0))
         node = showbase.render.attach_new_node("bake")
-        clouds.bind_shadow_inputs(node, family=1)
-        assert node.get_attrib(ShaderAttrib).has_shader_input("uCloudShadowLayer")
+        clouds.bind_shadow_inputs(node)
+        attrib = node.get_attrib(ShaderAttrib)
+        for name in ("uCloudShadowLayer", "uCloudGenera", "uSkyBands", "genusCoverA"):
+            assert attrib.has_shader_input(name)
+        assert march._shadow_inputs()["uCloudGenera"] == 2
         # The stratus's weather has no depth channel; the convective one has
-        assert march._families[0].weather.shape[-1] == 4
-        assert march._families[1].weather.shape[-1] == 3
+        assert march._genera[0].weather.shape[-1] == 4
+        assert march._genera[1].weather.shape[-1] == 3
+        # The stratus's coverage from cube A's channel 0, its shift from it
+        stratus = march.genus_caster(1)
+        cover, channel, table = stratus.coverage_source
+        assert channel == 0 and march.genus_caster(0).coverage_source is None
+        np.testing.assert_array_equal(march._genera[1].weather[..., 0], cover[..., 0])
+        for name in ("genusCoverA", "genusShift", "genusDeckLight"):
+            assert attrib.get_shader_input(name).get_texture() == march._textures[name]
     finally:
         clouds.remove()
 
 
-def test_the_stratus_must_stay_under_the_convective_clouds(genera):
+def test_the_genera_may_overlap(genera):
     from world_builder.clouds.planet import check_layers
 
     check_layers(CloudType.CUMULUS, 2200.0, None, None, genera)
-    high = replace(genera, stratus_altitude=2000.0)
-    with pytest.raises(ValueError, match="under the convective"):
-        check_layers(CloudType.CUMULUS, 2200.0, None, None, high)
-    # And the cirrus over the cumulonimbus's cap
+    # The stratus inside the convective clouds' slab: one band of sky
+    check_layers(
+        CloudType.CUMULUS, 2200.0, None, None, replace(genera, stratus_altitude=2000.0)
+    )
+
+
+def test_the_genera_must_fit_the_march(genera, monkeypatch):
+    from world_builder.clouds.genera import GENUS_PRESETS, GenusPreset
+    from world_builder.clouds.march import MAX_SKY_BANDS
+    from world_builder.clouds.noise import MAX_GENERA
+    from world_builder.clouds.planet import check_layers
+
+    many = replace(genera, genera=("convective",) + ("stratus",) * MAX_GENERA)
+    with pytest.raises(ValueError, match="genera: the march takes"):
+        check_layers(CloudType.CUMULUS, 2200.0, None, None, many)
+    # Disjoint thin slabs under the convective clouds, a band of sky each
+    names = []
+    for k in range(MAX_SKY_BANDS):
+        name = f"thin{k}"
+        slab = (100.0 + 400.0 * k, 100.0)
+        monkeypatch.setitem(
+            GENUS_PRESETS, name, GenusPreset(CloudType.STRATUS, ("A", 0), slab=slab)
+        )
+        names.append(name)
+    fits = replace(genera, genera=("convective", *names[:-1]))
+    check_layers(CloudType.CUMULUS, 2200.0, None, None, fits)  # 4 bands
+    over = replace(genera, genera=("convective", *names))
+    with pytest.raises(ValueError, match="bands of sky"):
+        check_layers(CloudType.CUMULUS, 2200.0, None, None, over)
+
+
+def test_the_cirrus_must_clear_the_union_of_the_genera(genera, monkeypatch):
     from world_builder.clouds.cirrus import CirrusSpec
+    from world_builder.clouds.genera import GENUS_PRESETS, GenusPreset
+    from world_builder.clouds.planet import check_layers
 
     check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(), None, genera)
     with pytest.raises(ValueError, match="above the clouds"):
         check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(base=9000.0), None, genera)
+    # A genus topping the convective clouds (10.5 km) sets the union's top
+    monkeypatch.setitem(
+        GENUS_PRESETS,
+        "tall",
+        GenusPreset(CloudType.STRATUS, ("A", 0), slab=(500.0, 10800.0)),
+    )
+    tall = replace(genera, genera=("convective", "tall"))
+    with pytest.raises(ValueError, match=r"clouds' top \(11300 m\)"):
+        check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(), None, tall)
+    # The air's top still bounds the cirrus
+    with pytest.raises(ValueError, match="inside the air"):
+        check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(), 11500.0, genera)

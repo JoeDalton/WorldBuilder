@@ -3,11 +3,11 @@ A planet's low clouds by genus: stratus, and the convective continuum from
 fair-weather cumulus through congestus to cumulonimbus. A PLACEHOLDER for the
 weather (issue #8): its maps are features laid out around one point.
 
-Two families, each one :class:`sphere.CloudVolume` (one density field), in
-bands of sky that do not overlap, so their billboards sort together in the
-shells' bins as one cloud would:
+The genera (:data:`GENUS_PRESETS`, :attr:`GeneraSpec.genera`), each one
+density field over its own slab, which the raymarch marches as one union
+(:class:`march.CloudMarch`; slabs may overlap):
 
-* **stratiform** (:attr:`cloud.CloudType.STRATUS`): a flat sheet low down,
+* **stratus** (:attr:`cloud.CloudType.STRATUS`): a flat sheet low down,
   its coverage a map of its own;
 * **convective** (:attr:`cloud.CloudType.CONVECTIVE`): the cumulus field,
   whose clouds grow with the convective **depth** (0 to 1, a third map):
@@ -80,9 +80,8 @@ _ANVIL_REACH = (1.0, 3.0)
 ANVIL_DOWNWIND = 2.5
 ANVIL_UPWIND = 0.5
 ANVIL_ACROSS = 0.25
-#: The families.
+#: The primary genus's weather (:func:`genus_cube`).
 CONVECTIVE = "convective"
-STRATIFORM = "stratiform"
 
 
 @dataclass(frozen=True)
@@ -95,8 +94,8 @@ class Feature:
     :ivar genus: ``"cumulonimbus"`` (depth 1 to 1.4 radii: its core, then
         its anvil's overhang; a ring of congestus to 2.2 radii; its anvil's
         shelf to 3 radii),
-        ``"congestus"`` (depth ~0.5) or ``"stratus"`` (the stratiform
-        family)
+        ``"congestus"`` (depth ~0.5) or ``"stratus"`` (a stratiform
+        genus)
     :ivar coverage: the share of its columns holding cloud at its core (a
         cumulonimbus's near 1: a solid tower, the noise carving its edges;
         less, and a deep column holds scattered blobs at every height)
@@ -152,8 +151,8 @@ class GeneraSpec:
     :ivar weather: the weather whose coverage the fair-weather cumulus keep
     :ivar focus: (lat, lon) degrees the features are placed around
     :ivar features: the features
-    :ivar stratus_altitude: the stratiform slab's base, metres (its top must
-        stay under the convective clouds' base)
+    :ivar stratus_altitude: the stratiform slab's base, metres (it may
+        overlap the convective clouds' slab: the march takes them as one)
     :ivar wind: the upper wind blowing the anvils, (east, north), the jets'
         fastest 1, the same for all; None = the weather's at each
         cumulonimbus (:func:`upper_wind_at`)
@@ -165,6 +164,26 @@ class GeneraSpec:
     stratus_altitude: float = 900.0
     wind: tuple[float, float] | None = None
     genera: tuple[str, ...] = ("convective", "stratus")
+
+
+def genus_specs(spec: GeneraSpec, altitude: float | None = None) -> list[tuple]:
+    """Each genus of *spec* as the march builds it (:data:`GENUS_PRESETS`):
+    its name, cloud type, slab and coverage source.
+
+    :param altitude: the convective clouds' base, metres; None = the type's
+    :returns: (name, cloud type, base or None, thickness or None, coverage)
+        per genus, in :attr:`GeneraSpec.genera`'s order (None: the type's)
+    """
+    out = []
+    for name in spec.genera:
+        preset = GENUS_PRESETS[name]
+        base, thickness = preset.slab if preset.slab is not None else (None, None)
+        if preset.slab is None and preset.cloud_type is CloudType.CONVECTIVE:
+            base = altitude
+        elif preset.slab is None and preset.cloud_type is CloudType.STRATUS:
+            base = spec.stratus_altitude
+        out.append((name, preset.cloud_type, base, thickness, preset.coverage))
+    return out
 
 
 def _feature_dirs(spec: GeneraSpec) -> list[tuple[Feature, np.ndarray, float]]:
@@ -336,32 +355,24 @@ def depth_shift(
 
 
 def genus_cube(
-    spec: GeneraSpec, family: str, tables: tuple, size: int = GENUS_SIZE
+    spec: GeneraSpec, kind: str, tables: tuple, size: int = GENUS_SIZE
 ) -> np.ndarray:
-    """A family's weather map (:func:`weather.build_weather_texture`
-    uploads it), as :func:`weather.weather_cube` is the single field's.
+    """The primary genus's weather map (:func:`weather.build_weather_texture`
+    uploads it), as :func:`weather.weather_cube` is the single field's. The
+    other genera read a coverage cube (:func:`coverage_cube`).
 
-    :param family: :data:`CONVECTIVE` or :data:`STRATIFORM`
-    :param tables: the family's shift tables: one per depth of
-        :data:`DEPTHS` (:func:`depth_shift_tables`) for the convective one,
-        one (:func:`weather.shift_table`) for the stratiform one
-    :returns: (6, size, size, 4) float32 for the convective family:
-        coverage, the fbm shift giving it, the convective depth, the anvil
-        shelf's spread; (6, size, size, 3) for the stratiform one, its
-        depth 0
+    :param kind: :data:`CONVECTIVE` (the primary genus's kind)
+    :param tables: its shift tables, one per depth of :data:`DEPTHS`
+        (:func:`depth_shift_tables`)
+    :returns: (6, size, size, 4) float32: coverage, the fbm shift giving it,
+        the convective depth, the anvil shelf's spread
     """
+    if kind != CONVECTIVE:
+        raise ValueError(f"unknown primary genus kind {kind!r}")
     planes = genus_planes(spec, size)
-    tables = np.asarray(tables)
-    if family == CONVECTIVE:
-        cover, depth = planes[..., 0], planes[..., 1]
-        shift = depth_shift(cover, depth, tables)
-        channels = [cover, shift, depth, planes[..., 3]]
-    elif family == STRATIFORM:
-        cover, depth = planes[..., 2], np.zeros(planes.shape[:-1], np.float32)
-        shift = coverage_to_shift(cover, tables.reshape(-1))
-        channels = [cover, shift, depth]
-    else:
-        raise ValueError(f"unknown family {family!r}")
+    cover, depth = planes[..., 0], planes[..., 1]
+    shift = depth_shift(cover, depth, np.asarray(tables))
+    channels = [cover, shift, depth, planes[..., 3]]
     return np.stack([c.astype(np.float32) for c in channels], axis=-1)
 
 
@@ -378,11 +389,14 @@ def coverage_cube(
     """
     planes = genus_planes(spec, size)
     out = np.zeros(planes.shape[:-1] + (4,), dtype=np.float32)
-    maps = {"stratus": planes[..., 2]}
+    # The placeholder's maps by cloud type: every stratiform genus the
+    # stratus features' (genus_planes' third plane).
+    maps = {CloudType.STRATUS: planes[..., 2]}
     for name in spec.genera:
-        source, channel = GENUS_PRESETS[name].coverage
-        if source == cube and name in maps:
-            out[..., channel] = maps[name]
+        preset = GENUS_PRESETS[name]
+        source, channel = preset.coverage
+        if source == cube and preset.cloud_type in maps:
+            out[..., channel] = maps[preset.cloud_type]
     return out
 
 

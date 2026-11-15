@@ -56,27 +56,36 @@ uniform sampler2D cloudShadowFar;
 uniform vec4  cloudNearChart[4];
 uniform vec4  cloudFarChart[4];
 uniform int   cloudShadowMapOn;
-// The clouds' shadow's layer in layerParams (-1: none), for its receivers
-// (the terrain, the models: planetCloudShadow) and the maps' bake.
+// The clouds' shadow's level: genus 0's layer in layerParams (-1: none), for
+// its receivers (the terrain, the models: planetCloudShadow) and the light
+// resources' bakes. Genus g's shadow is marched in getField(g *
+// DETAIL_LEVELS + uCloudShadowLayer) (genusShadowLayer).
 uniform int   uCloudShadowLayer;
-// The other family's (clouds.genera: the stratus's for the convective
-// clouds and their receivers, theirs for the stratus): its deck's layer in
-// layerParams (sphere.OTHER_LAYER; -1: none), its weather, its far table
-// and its shadow maps.
-uniform int   uCloudShadowOther;
-uniform samplerCube otherWeather;
-uniform sampler2D otherDeckLight;
-uniform sampler2D otherShadowNear;
-uniform sampler2D otherShadowFar;
-uniform vec4  otherNearChart[4];
-uniform vec4  otherFarChart[4];
-uniform int   otherShadowMapOn;
+// How many genera cast it (genera 0 to uCloudGenera - 1 of layerParams).
+uniform int   uCloudGenera;
+// The sky bands (march.sky_bands: the genera's slabs merged), lowest first:
+// (base, top) above sea level, metres, then the genera in the band as a bit
+// mask (bit g: genus g), 0. The light resources are baked through them, a
+// gap between two crossed in no steps.
+uniform vec4  uSkyBands[4];
+uniform int   uSkyBandCount;
+// The other genera's weather (genusWeatherAt): coverage cube A
+// (weather.build_coverage_texture: a genus's coverage in one channel, row
+// 13's y), turned into its fbm shift by its row of genusShift (row 13's z;
+// x the coverage, weather.build_shift_texture). Their far tables
+// (genusFarTable): a page each of genusDeckLight, page = genus
+// (noise.build_deck_light_array). Genus 0 reads weatherMap and deckLight.
+uniform samplerCube genusCoverA;
+uniform sampler2D genusShift;
+uniform sampler2DArray genusDeckLight;
 
 const int LAYER_VEC4S = 13;
 const int GENUS_VEC4S = 16;           // noise.GENUS_VEC4S
 const int MAX_GENERA = 10;            // noise.MAX_GENERA
 const int DETAIL_LEVELS = 8;          // noise.DETAIL_LEVELS
 const int DECK_LAYER = MAX_GENERA * DETAIL_LEVELS;
+const int MAX_SKY_BANDS = 4;          // march.MAX_SKY_BANDS
+const int SHIFT_TABLE_SIZE = 256;     // weather.SHIFT_TABLE_SIZE: genusShift's width
 // A noise lattice cell, in noise coordinates (noise.NOISE_FEATURE).
 const float NOISE_FEATURE = 4.0;
 // The ground shadow's march steps, in the layer's sunStepLength
@@ -133,6 +142,10 @@ struct Field {
     float deepExponent;
     float deepErosion;
     float cellPower;
+    // The share of the clouds' depth beyond its sun window that shades it
+    // (noise.GenusField.far_shadow; row 13's w): 1 for the stratus under a
+    // cumulonimbus, 0 for the convective clouds.
+    float farShadow;
 };
 
 Field getField(int layer) {
@@ -202,6 +215,7 @@ Field getField(int layer) {
     f.deepExponent = v10.z;
     f.deepErosion = v10.w;
     f.cellPower = v12.w;
+    f.farShadow = layerParams[b + LAYER_VEC4S].w;
     return f;
 }
 
@@ -538,33 +552,6 @@ float slabOpticalDepthCell(Field f, vec3 start, vec3 dir, float stepLength,
     return density * stepLength * f.fieldExtinction * f.shadowStrength;
 }
 
-// slabOpticalDepthCell, and the depth accumulated a quarter, a half and
-// three quarters of the way along the chord (the steps' densities spread
-// evenly over their lengths, so a boundary inside a step takes its share):
-// what the cloud shadow map stores per texel (CLOUD_MAP_LEVELS).
-float slabOpticalDepthLevels(Field f, vec3 start, vec3 dir, float stepLength,
-                             int steps, vec3 weather, float cell, out vec3 levels) {
-    vec3 increment = dir * stepLength;
-    vec3 position = start + increment * 0.5;
-    float shift = f.shadowBias + cell;
-    float mean = f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w) + cell;
-    float scale = stepLength * f.fieldExtinction * f.shadowStrength;
-    float total = 0.0;
-    levels = vec3(0.0);
-    for (int i = 0; i < steps; i++, position += increment) {
-        float density = slabSampleDensity(f, position, weather, shift, mean) * scale;
-        for (int k = 0; k < 3; k++) {
-            // The boundary k + 1 quarters along, in steps.
-            float boundary = 0.25 * float(k + 1) * float(steps);
-            if (float(i) < boundary && boundary <= float(i + 1)) {
-                levels[k] = total + density * (boundary - float(i));
-            }
-        }
-        total += density;
-    }
-    return total;
-}
-
 float slabOpticalDepthAt(Field f, vec3 start, vec3 dir, float stepLength, int steps,
                          vec3 weather) {
     float cell = cellShift(f, start * f.noiseScale + f.noiseOrigin, weather.y);
@@ -583,13 +570,13 @@ float sunOpticalDepthAt(Field f, vec3 p, vec3 weather) {
 }
 
 // The chord a ray from p (planet frame) toward dir (unit) cuts through the
-// slab's shell: where it enters it (or p, inside it) and its length to where
-// it leaves the top; false above the slab (nothing to cross).
-bool cloudShadowChord(Field f, vec3 p, vec3 dir, out vec3 start, out float chord) {
-    float inner = planetRadius + f.slabBase;
-    float outer = inner + f.slabThickness;
+// shell between the spheres of radii inner and outer: how far along the ray
+// it enters it (0: p inside it) and its length to where it leaves the outer
+// sphere; false above the shell (nothing to cross).
+bool shellChord(float inner, float outer, vec3 p, vec3 dir, out float enter,
+                out float chord) {
     float r = length(p);
-    start = p;
+    enter = 0.0;
     chord = 0.0;
     if (r >= outer) {
         return false;
@@ -598,11 +585,19 @@ bool cloudShadowChord(Field f, vec3 p, vec3 dir, out vec3 start, out float chord
     // difference of squares factored (centimetres in float32 at 600 km).
     float b = dot(p, dir);
     float leave = -b + sqrt(max((outer - r) * (outer + r) + b * b, 0.0));
-    float enter = r < inner ? -b + sqrt(max((inner - r) * (inner + r) + b * b, 0.0))
-                            : 0.0;
+    enter = r < inner ? -b + sqrt(max((inner - r) * (inner + r) + b * b, 0.0)) : 0.0;
     chord = leave - enter;
-    start = p + dir * enter;
     return chord > 0.0;
+}
+
+// The chord through the field's slab: where the ray enters it (or p, inside
+// it) and its length to where it leaves the top; false above the slab.
+bool cloudShadowChord(Field f, vec3 p, vec3 dir, out vec3 start, out float chord) {
+    float inner = planetRadius + f.slabBase;
+    float enter;
+    bool crosses = shellChord(inner, inner + f.slabThickness, p, dir, enter, chord);
+    start = p + dir * enter;
+    return crosses;
 }
 
 // A chord that starts at *start* (on the slab's base, or inside it), cut at the
@@ -676,26 +671,227 @@ float cloudShadowDepthIn(Field f, samplerCube weatherCube, vec3 p, vec3 dir,
                                 cell);
 }
 
-// cloudShadowDepthIn with the depth a quarter, a half and three quarters of the
-// way along the chord too: (total, quarter, half, three quarters), what a
-// cloud shadow map's texel holds (cloud_shadow_map.frag). p on the slab's
-// base reads the chord of a ray entering there.
-vec4 cloudShadowLevelsIn(Field f, samplerCube weatherCube, vec3 p, vec3 dir,
-                         int maxSteps) {
-    vec3 start, weather;
-    float chord, cell;
-    if (!cloudShadowMarch(f, weatherCube, p, dir, maxSteps, start, chord, weather, cell)) {
-        return vec4(0.0);
-    }
-    int steps = cloudShadowSteps(f, chord, maxSteps);
-    vec3 levels;
-    float total = slabOpticalDepthLevels(f, start, dir, chord / float(steps), steps,
-                                         weather, cell, levels);
-    return vec4(total, levels);
-}
-
 float cloudShadowDepth(Field f, vec3 p, vec3 dir, int maxSteps) {
     return cloudShadowDepthIn(f, weatherMap, p, dir, maxSteps);
+}
+
+// ── The genera's summed shadow (the light volume's and the maps' bakes) ──────
+// One light volume and one pair of shadow maps hold the optical depth of all
+// the genera together (clouds.light_volume, clouds.shadow_map): a depth is a
+// sum, so the sum of the genera's is the depth of their summed density.
+
+// Genus g's layer for the shadows (its far level).
+int genusShadowLayer(int genus) {
+    return genus * DETAIL_LEVELS + uCloudShadowLayer;
+}
+
+// A genus's coverage at p (unit or not): genus 0's the weather's, the
+// others' their channel of coverage cube A.
+float genusCoverageAt(int genus, vec3 p) {
+    if (genus == 0) {
+        return texture(weatherMap, p).r;
+    }
+    int channel = int(layerParams[genus * GENUS_VEC4S + LAYER_VEC4S].y + 0.5);
+    return texture(genusCoverA, p)[channel];
+}
+
+// A genus's weather at p (unit or not): r its coverage, then its fbm shift,
+// its convective depth, its anvil's spread (weatherMap's channels). Genus 0
+// reads the weather cube; the others their coverage (genusCoverageAt), the
+// shift their table gives it (the coverage filtered, then turned into a
+// shift: genera.genus_weather_at), no depth, no spread.
+vec4 genusWeatherAt(int genus, vec3 p) {
+    if (genus == 0) {
+        return texture(weatherMap, p);
+    }
+    vec4 row = layerParams[genus * GENUS_VEC4S + LAYER_VEC4S];
+    float coverage = texture(genusCoverA, p)[int(row.y + 0.5)];
+    vec2 at = vec2((coverage * float(SHIFT_TABLE_SIZE - 1) + 0.5) / float(SHIFT_TABLE_SIZE),
+                   (row.z + 0.5) / float(MAX_GENERA));
+    return vec4(coverage, texture(genusShift, at).r, 0.0, 0.0);
+}
+
+// A genus's far table's texel at (u, v) in [0, 1]^2 (deckLight's layout).
+vec4 genusFarTable(int genus, vec2 at) {
+    if (genus == 0) {
+        vec2 size = vec2(textureSize(deckLight, 0));
+        return texture(deckLight, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size);
+    }
+    vec2 size = vec2(textureSize(genusDeckLight, 0).xy);
+    return texture(genusDeckLight,
+                   vec3((clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size, float(genus)));
+}
+
+bool genusInBand(int genus, int band) {
+    return ((int(uSkyBands[band].z + 0.5) >> genus) & 1) != 0;
+}
+
+// The sky bands' shell: the lowest base's radius and the highest top's.
+float skyBaseRadius() {
+    return planetRadius + uSkyBands[0].x;
+}
+
+float skyTopRadius() {
+    return planetRadius + uSkyBands[max(uSkyBandCount - 1, 0)].y;
+}
+
+// A band's chord ahead of p toward dir (shellChord), cut, where the ray
+// enters the band, at its genera's highest own top there (cloudChordToTop:
+// a band of one genus is cut as its own slab's chord). 0 for none.
+float skyBandChord(int band, vec3 p, vec3 dir, bool cut, out float enter) {
+    float chord;
+    if (!shellChord(planetRadius + uSkyBands[band].x, planetRadius + uSkyBands[band].y,
+                    p, dir, enter, chord)) {
+        return 0.0;
+    }
+    if (!cut) {
+        return chord;
+    }
+    vec3 start = p + dir * enter;
+    float top = 0.0;
+    for (int g = 0; g < MAX_GENERA; ++g) {
+        if (g >= uCloudGenera) {
+            break;
+        }
+        if (genusInBand(g, band)) {
+            top = max(top, cloudChordToTop(getField(genusShadowLayer(g)), start, dir,
+                                           genusWeatherAt(g, start).gba, chord));
+        }
+    }
+    return top;
+}
+
+// The genera's summed optical depth from p toward the sun (unit dir), through
+// the sky bands ahead of it (skyBandChord, cut at the clouds' own tops when
+// cut), each band in its own steps (cloudShadowSteps of its genera's shortest
+// sun step, times stepScale; at most maxSteps), every genus of the band
+// marched at the same samples by its own field and weather: the weather and
+// the cell octave taken where the band's chord starts (atStart: the ground's
+// march and the maps', cloudShadowMarch's early-out with them) or at every
+// step (the light volume's). levels: the depth a quarter, a half and three
+// quarters of the way along the bands' summed chord (cloudLevelDepth: what a
+// map's texel holds; for one genus noise.cloud_shadow_on_sphere's levels).
+// 0 without genera or clouds.
+float skyShadowLevels(vec3 p, vec3 dir, int maxSteps, float stepScale, bool cut,
+                      bool atStart, out vec3 levels) {
+    levels = vec3(0.0);
+    if (uCloudShadowLayer < 0 || maxSteps <= 0) {
+        return 0.0;
+    }
+    float enters[MAX_SKY_BANDS];
+    float chords[MAX_SKY_BANDS];
+    float summed = 0.0;
+    for (int band = 0; band < MAX_SKY_BANDS; ++band) {
+        chords[band] = 0.0;
+        enters[band] = 0.0;
+        if (band < uSkyBandCount) {
+            chords[band] = max(skyBandChord(band, p, dir, cut, enters[band]), 0.0);
+            summed += chords[band];
+        }
+    }
+    if (summed <= 0.0) {
+        return 0.0;
+    }
+    float total = 0.0;
+    float offset = 0.0;  // the summed chord before this band
+    for (int band = 0; band < MAX_SKY_BANDS; ++band) {
+        float chord = chords[band];
+        if (chord <= 0.0) {
+            continue;
+        }
+        vec3 start = p + dir * enters[band];
+        float shortest = 1e30;
+        for (int g = 0; g < MAX_GENERA; ++g) {
+            if (g >= uCloudGenera) {
+                break;
+            }
+            if (genusInBand(g, band)) {
+                shortest = min(shortest, getField(genusShadowLayer(g)).sunStepLength);
+            }
+        }
+        float target = max(shortest * stepScale * CLOUD_SHADOW_STEP_SCALE, 1.0);
+        int steps = clamp(int(ceil(chord / target)), 1, maxSteps);
+        float stepLength = chord / float(steps);
+        vec3 increment = dir * stepLength;
+        // Each level's boundary, in this band's steps from its start.
+        vec3 boundary = (vec3(0.25, 0.5, 0.75) * summed - offset) / stepLength;
+        for (int g = 0; g < MAX_GENERA; ++g) {
+            if (g >= uCloudGenera) {
+                break;
+            }
+            if (!genusInBand(g, band)) {
+                continue;
+            }
+            Field f = getField(genusShadowLayer(g));
+            vec3 weather = genusWeatherAt(g, start).gba;
+            float cell = cellShift(f, start * f.noiseScale + f.noiseOrigin, weather.y);
+            if (atStart) {
+                // cloudShadowMarch's exact early-out: the weather leaves no cloud.
+                float most = f.octaveWeights.x + f.octaveWeights.y;
+                float column = most * f.shadowGain + f.shadowBias + cell + weather.x
+                             + f.anvil * smoothstep(0.6, 1.0, weather.y);
+                float shelf = f.anvil > 0.0
+                    ? most + f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w) + cell
+                          + f.shelfShift + f.anvil
+                    : -NO_CLOUD_LIFT;
+                if (max(column, shelf) <= f.threshLo) {
+                    continue;
+                }
+            }
+            float rest = f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w);
+            float scale = stepLength * f.fieldExtinction * f.shadowStrength;
+            vec3 position = start + increment * 0.5;
+            float own = 0.0;
+            for (int i = 0; i < steps; i++, position += increment) {
+                if (!atStart) {
+                    weather = genusWeatherAt(g, position).gba;
+                    cell = cellShift(f, position * f.noiseScale + f.noiseOrigin, weather.y);
+                }
+                float density = slabSampleDensity(f, position, weather, f.shadowBias + cell,
+                                                  rest + cell) * scale;
+                for (int k = 0; k < 3; k++) {
+                    if (float(i) < boundary[k] && boundary[k] <= float(i + 1)) {
+                        levels[k] += own + density * (boundary[k] - float(i));
+                    }
+                }
+                own += density;
+            }
+            for (int k = 0; k < 3; k++) {
+                if (boundary[k] > float(steps)) {
+                    levels[k] += own;  // the whole band before the boundary
+                }
+            }
+            total += own;
+        }
+        offset += chord;
+    }
+    return total;
+}
+
+// The genera's summed shadow depth from p toward dir: the ground's march
+// (each band cut at the clouds' own top, the weather where it starts),
+// cloudShadowDepthIn summed over the genera.
+float skyShadowDepth(vec3 p, vec3 dir, int maxSteps) {
+    vec3 levels;
+    return skyShadowLevels(p, dir, maxSteps, 1.0, true, true, levels);
+}
+
+// Where along the bands' summed chord from start (on the bands' base) two
+// distances along the ray lie (each the chord's length before it), and the
+// summed chord: the map's levels' measure (skyShadowLevels).
+vec2 skyChordAt(vec3 start, vec3 dir, vec2 distance, out float summed) {
+    vec2 before = vec2(0.0);
+    summed = 0.0;
+    for (int band = 0; band < MAX_SKY_BANDS; ++band) {
+        if (band >= uSkyBandCount) {
+            break;
+        }
+        float enter;
+        float chord = max(skyBandChord(band, start, dir, true, enter), 0.0);
+        before += clamp(distance - enter, 0.0, chord);
+        summed += chord;
+    }
+    return before;
 }
 
 // The clouds far along the sun's ray from a cloud at p (planet frame): the
@@ -729,7 +925,7 @@ float cloudFarDepth(Field f, vec3 p, vec3 dir, float reach) {
 }
 
 // One cloud shadow map at a point of the base's sphere (unit dir): its
-// texel (the depth toward the sun, then its levels: cloudShadowLevelsIn), and how much of it to keep (1 inside, 0 outside, faded over the
+// texel (the depth toward the sun, then its levels: skyShadowLevels), and how much of it to keep (1 inside, 0 outside, faded over the
 // last eighth of its half-width).
 vec4 cloudMapTexel(sampler2D map, vec4 chart[4], vec3 dir, out float keep) {
     vec2 across = vec2(dot(dir, chart[1].xyz), dot(dir, chart[2].xyz));
@@ -771,21 +967,6 @@ bool cloudMapsTexelIn(int on, sampler2D nearMap, vec4 nearChart[4], sampler2D fa
     return on != 0 && (keepNear > 0.0 || weight >= 1.0);
 }
 
-// cloudShadowDepth from a field's maps where they hold it (the ray enters
-// the base: ground under the slab), the near one first; false elsewhere.
-bool cloudMapsDepthIn(Field f, int on, sampler2D nearMap, vec4 nearChart[4],
-                      sampler2D farMap, vec4 farChart[4], vec3 p, vec3 start,
-                      out float depth) {
-    if (on == 0 || length(p) >= planetRadius + f.slabBase) {
-        return false;
-    }
-    vec4 texel;
-    bool held = cloudMapsTexelIn(on, nearMap, nearChart, farMap, farChart,
-                                 normalize(start), texel);
-    depth = texel.r;
-    return held;
-}
-
 // How many steps of the sun march a cloud keeps when it takes the clouds
 // beyond them from the shadow map (cloudMapSunDepth).
 const int MAP_LOCAL_STEPS = 2;
@@ -802,26 +983,28 @@ float cloudLevelDepth(vec4 levels, float u) {
     return mix(lower, upper, t);
 }
 
-// The optical depth toward the sun (unit dir) from a point p in the slab,
-// from the field's shadow maps: the sun march's first localSteps steps through
-// the field itself (the nearby clouds' shape), then the rest of the chord from
-// the map's levels at the point where the sun's line left the slab's base: its
-// total less the depth up to where the local march ended, linearly between
-// the levels (cloudShadowLevelsIn). Returns how much the maps hold the line
+// The genera's summed depth toward the sun (unit dir) from the shadow maps
+// along the line through a point p of the sky bands' shell: where the line
+// left the bands' base (back along it), the map's texel there (its total and
+// levels: skyShadowLevels), and the depth it accumulates out to two distances
+// from p (reach, and reach + window), linearly between the levels by the
+// bands' summed chord (skyChordAt). Returns how much the maps hold the line
 // (1: wholly, fading to 0 at the far map's edge; 0 beyond it, or for a sun too
-// low for the line to have left the base): the sun march fills in the rest. noise.sun_depth_from_map on the CPU.
-float cloudMapSunDepth(Field f, samplerCube weatherCube, int on, sampler2D nearMap,
-                       vec4 nearChart[4], sampler2D farMap, vec4 farChart[4], vec3 p,
-                       vec3 dir, vec3 weather, int localSteps, out float depth) {
-    float inner = planetRadius + f.slabBase;
-    float outer = inner + f.slabThickness;
+// low for the line to have left the base).
+float cloudMapLevelsAt(vec3 p, vec3 dir, float reach, float window, out float near,
+                       out float far, out float total) {
+    float inner = skyBaseRadius();
+    float outer = skyTopRadius();
     float r = length(p);
     float b = dot(p, dir);
     // Back along the line to where it left the base's sphere: a negative
-    // distance for a point in the slab under a sun above the horizon.
+    // distance for a point in the bands under a sun above the horizon.
     float root = (inner - r) * (inner + r) + b * b;
-    depth = 0.0;
-    if (on == 0 || root <= 0.0 || r <= inner || r >= outer) {
+    near = 0.0;
+    far = 0.0;
+    total = 0.0;
+    if (cloudShadowMapOn == 0 || uSkyBandCount <= 0 || root <= 0.0 || r <= inner
+            || r >= outer) {
         return 0.0;
     }
     float back = -b + sqrt(root);
@@ -831,31 +1014,47 @@ float cloudMapSunDepth(Field f, samplerCube weatherCube, int on, sampler2D nearM
     vec3 entry = p + dir * back;
     vec4 levels;
     float keepNear;
-    float held = cloudMapsTexelWeightIn(on, nearMap, nearChart, farMap, farChart,
-                                        normalize(entry), levels, keepNear);
+    float held = cloudMapsTexelWeightIn(cloudShadowMapOn, cloudShadowNear, cloudNearChart,
+                                        cloudShadowFar, cloudFarChart, normalize(entry),
+                                        levels, keepNear);
     if (held <= 0.0) {
         return 0.0;
     }
-    float rEntry = length(entry);
-    float bEntry = dot(entry, dir);
-    float chord = -bEntry + sqrt(max((outer - rEntry) * (outer + rEntry) + bEntry * bEntry,
-                                     0.0));
-    // The chord the bake marched: to the clouds' own top where the ray enters.
-    chord = cloudChordToTop(f, entry, dir, texture(weatherCube, entry).gba, chord);
+    // The chord the bake marched: the bands' from the entry, each cut at the
+    // clouds' own top where the ray enters it.
+    float summed;
+    vec2 along = skyChordAt(entry, dir, vec2(reach - back, reach - back + window), summed);
+    // The depth the chord accumulates out to each point, linearly between the
+    // levels. (A line in transmittance blows up near a level that holds almost
+    // all the depth.)
+    near = cloudLevelDepth(levels, along.x / max(summed, 1.0));
+    far = cloudLevelDepth(levels, along.y / max(summed, 1.0));
+    total = levels.r;
+    return held;
+}
+
+// The optical depth toward the sun (unit dir) from a cloud at p of genus
+// field f, from the shadow maps: the sun march's first localSteps steps
+// through the field itself (the nearby clouds' shape), then what the maps'
+// chord accumulates between where they ended and where the sun march would
+// have (its steps: the clouds count out to there, no farther: a tower's
+// interior is dark but its sunlit face is lit, the light that reaches a
+// sample coming from the clouds near it; counting the whole 10 km chord left
+// every tower black), and farShadow of what lies beyond (cloudMapLevelsAt).
+// Returns how much the maps hold the line: the sun march fills in the rest.
+// noise.sun_depth_from_map on the CPU (one genus).
+float cloudMapSunDepth(Field f, vec3 p, vec3 dir, vec3 weather, int localSteps,
+                       out float depth) {
     float reach = float(localSteps) * f.sunStepLength;
-    // The clouds count out to where the sun march reached (its steps), no
-    // farther: a tower's interior is dark but its sunlit face is lit, the light
-    // that reaches a sample coming from the clouds near it; counting the whole
-    // 10 km chord left every tower black. The map gives the march's far steps in
-    // a fetch, and the shape of its field there (a thicker slab: more levels).
     float window = float(max(f.sunSteps - localSteps, 0)) * f.sunStepLength;
-    // What lies beyond the local march, out to the window: the depth the chord
-    // accumulates between the two points, linearly between the levels. (A line
-    // in transmittance blows up near a level that holds almost all the depth.)
-    float near = cloudLevelDepth(levels, (reach - back) / max(chord, 1.0));
-    float far = cloudLevelDepth(levels, (reach - back + window) / max(chord, 1.0));
+    float near, far, total;
+    float held = cloudMapLevelsAt(p, dir, reach, window, near, far, total);
+    depth = 0.0;
+    if (held <= 0.0) {
+        return 0.0;
+    }
     depth = slabOpticalDepthAt(f, p, dir, f.sunStepLength, localSteps, weather)
-          + far - near;
+          + far - near + f.farShadow * max(total - far, 0.0);
     return held;
 }
 
@@ -867,12 +1066,59 @@ float cloudMapSunDepth(Field f, samplerCube weatherCube, int on, sampler2D nearM
 // texel's node at t in [-1, 1]^2 (from its tile's centre) lies |t|^2 * reach
 // metres from the centre along t, finer near the camera (EVE-Redux's light
 // volume is a paraboloid). Vertically `slices` shells through the slab, the
-// voxels at their middles. Tile k (a slice, 0 the lowest) sits at column
-// k % columns, row k / columns of the atlas.
+// voxels at their middles; with several sky bands (uSkyBands) each band has
+// its share of the slices (light_volume.SLICES each, through its own
+// thickness) and a gap between two none: a 500 m stratus deck keeps the
+// slices a thin slab of its own had. Tile k (a slice, 0 the lowest) sits at
+// column k % columns, row k / columns of the atlas.
 //
 // uLightChart-style arrays: [0] the centre's up, the base's radius; [1] east,
 // the reach; [2] north, the tile's texels; [3] the slab's thickness, the
-// slices, the atlas's columns, 0.
+// slices, the atlas's columns, the bands (0 or 1: one, the slab's).
+
+// The height above the chart's base of a slice's middle (a fraction of the
+// slices: its index plus 0.5), its band's share of the slices through it.
+float lightSliceHeight(vec4 chart[4], float slice) {
+    int bands = int(chart[3].w + 0.5);
+    if (bands <= 1) {
+        return slice / chart[3].y * chart[3].x;
+    }
+    float per = chart[3].y / float(bands);
+    int band = clamp(int(floor(slice / per)), 0, bands - 1);
+    float base = uSkyBands[band].x - uSkyBands[0].x;
+    float top = uSkyBands[band].y - uSkyBands[0].x;
+    return base + (slice - float(band) * per) / per * (top - base);
+}
+
+// A point's slice coordinate at height h above the chart's base (0 at the
+// lowest slice's middle, slices - 1 at the highest's), within its band's
+// slices: a point under a band's lowest middle or over its highest takes
+// that slice (as under a lone slab's lowest), one in a gap the nearer band's.
+// Read across a gap, a tower's base mixed in the slice under it, whose sun
+// ray crosses the tower a kilometre aside: streaks along the bases.
+float lightSliceAt(vec4 chart[4], float h) {
+    int bands = int(chart[3].w + 0.5);
+    if (bands <= 1) {
+        return h / chart[3].x * chart[3].y - 0.5;
+    }
+    float per = chart[3].y / float(bands);
+    float lowest = uSkyBands[0].x;
+    for (int band = 0; band < MAX_SKY_BANDS; ++band) {
+        float base = uSkyBands[band].x - lowest;
+        float top = uSkyBands[band].y - lowest;
+        float dz = (top - base) / per;
+        float first = float(band) * per;
+        float s = first + (h - base) / dz - 0.5;
+        if (band >= bands - 1) {
+            return band > 0 ? max(s, first) : s;  // over the top: the fade
+        }
+        // Up to the middle of the gap over it.
+        if (h < 0.5 * (top + uSkyBands[band + 1].x - lowest)) {
+            return clamp(s, band > 0 ? first : s, first + per - 1.0);
+        }
+    }
+    return chart[3].y - 1.0;
+}
 
 // The planet-frame position of the voxel at a pixel of the atlas.
 vec3 lightVoxelAt(vec4 chart[4], vec2 pixel, out int slice) {
@@ -887,13 +1133,11 @@ vec3 lightVoxelAt(vec4 chart[4], vec2 pixel, out int slice) {
     vec2 toward = rho > 0.0 ? t / rho : vec2(0.0);
     vec3 dir = cos(angle) * chart[0].xyz
              + sin(angle) * (toward.x * chart[1].xyz + toward.y * chart[2].xyz);
-    float height = (float(slice) + 0.5) / chart[3].y * chart[3].x;
-    return dir * (chart[0].w + height);
+    return dir * (chart[0].w + lightSliceHeight(chart, float(slice) + 0.5));
 }
 
 // A point's place in the chart: its tile coordinates t ([-1, 1]^2 inside
-// the volume) and its slice coordinate s (0 at the lowest shell's middle,
-// slices - 1 at the highest's).
+// the volume) and its slice coordinate s (lightSliceAt).
 void lightChartCoords(vec4 chart[4], vec3 p, out vec2 t, out float s) {
     float r = length(p);
     vec3 dir = p / r;
@@ -903,21 +1147,18 @@ void lightChartCoords(vec4 chart[4], vec3 p, out vec2 t, out float s) {
     float distance = angle * chart[0].w;
     float rho = sqrt(distance / chart[1].w);
     t = sine > 1e-9 ? across / sine * rho : vec2(0.0);
-    s = (r - chart[0].w) / chart[3].x * chart[3].y - 0.5;
+    s = lightSliceAt(chart, r - chart[0].w);
 }
 
 #ifdef CLOUD_MAP_LIGHTING
-// The raymarch's light volumes (clouds.light_volume), a family's each: the
-// atlas, its chart, on once whole.
+// The raymarch's light volume (clouds.light_volume: the genera's summed
+// depths): the atlas, its chart, on once whole.
 uniform sampler2D cloudLight;
 uniform vec4  cloudLightChart[4];
 uniform int   cloudLightOn;
-uniform sampler2D otherLight;
-uniform vec4  otherLightChart[4];
-uniform int   otherLightOn;
 // Where in its texel and slice a sample reads the volumes, in [-0.5, 0.5]
 // of each, per pixel and visit (the raymarch sets it from its blue noise),
-// moved on at each sample along the ray (cloudSunDepthIn):
+// moved on at each sample along the ray (cloudSunDepth):
 // read at their nodes, the depths' linear interpolation between texels
 // hundreds of metres wide drew their grid on a tower's face, a few tens of
 // pixels whatever the distance; jittered, it is noise the resolve averages.
@@ -945,10 +1186,18 @@ vec2 cloudLightAt(sampler2D atlas, vec4 chart[4], vec3 p, out float keep) {
     float s;
     lightChartCoords(chart, p, t, s);
     float tile = chart[2].w;
-    t += cloudLightJitter.xy * (LIGHT_JITTER * 2.0 / tile);
-    s += cloudLightJitter.z * LIGHT_JITTER;
-    keep = 1.0 - smoothstep(0.875, 1.0 - 1.0 / tile, max(abs(t.x), abs(t.y)));
     float slices = chart[3].y;
+    // The jitter keeps to the point's sky band (lightSliceAt): jittered into
+    // the band under it, a tower's base read the slice whose sun ray crosses
+    // the tower a kilometre aside, and streaked.
+    float bands = max(floor(chart[3].w + 0.5), 1.0);
+    float per = slices / bands;
+    float first = clamp(floor((s + 0.5) / per), 0.0, bands - 1.0) * per;
+    float lowest = first > 0.0 ? first : -1e30;
+    float highest = first + per < slices ? first + per - 1.0 : 1e30;
+    t += cloudLightJitter.xy * (LIGHT_JITTER * 2.0 / tile);
+    s = clamp(s + cloudLightJitter.z * LIGHT_JITTER, lowest, highest);
+    keep = 1.0 - smoothstep(0.875, 1.0 - 1.0 / tile, max(abs(t.x), abs(t.y)));
     if (keep <= 0.0 || s >= slices - 0.5) {
         return vec2(0.0);
     }
@@ -967,13 +1216,15 @@ vec2 cloudLightAt(sampler2D atlas, vec4 chart[4], vec3 p, out float keep) {
 }
 
 // The optical depth toward the sun (unit dir) from a point p of the slab, by
-// a light volume: the sun march's first localSteps steps through the field
+// the light volume: the sun march's first localSteps steps through the field
 // itself (the nearby clouds' shape), then the volume's depth between where
 // they ended and where the sun march would have (its steps: the window
 // cloudMapSunDepth keeps, a tower's lit face lit), the difference of the two
-// points' depths to the top (along one ray: linear). Debug bit 1024: to the
-// top, the whole chord. Returns how much the volume holds both points (the
-// sun march fills in the rest).
+// points' depths to the top (along one ray: linear), and the genus's
+// farShadow of the depth beyond the window (the volume's at its end: all the
+// genera's above, the stratus under a cumulonimbus in its shadow). Debug bit
+// 1024: to the top, the whole chord. Returns how much the volume holds both
+// points (the sun march fills in the rest).
 float cloudLightSunDepth(Field f, sampler2D atlas, vec4 chart[4], vec3 p, vec3 dir,
                          vec3 weather, int localSteps, out float depth) {
     depth = 0.0;
@@ -993,7 +1244,7 @@ float cloudLightSunDepth(Field f, sampler2D atlas, vec4 chart[4], vec3 p, vec3 d
     if (held <= 0.0) {
         return 0.0;
     }
-    depth = max(near - far, 0.0);
+    depth = max(near - far, 0.0) + f.farShadow * far;
     if (localSteps > 0) {
         depth += slabOpticalDepthAt(f, p, dir, f.sunStepLength, localSteps, weather);
     }
@@ -1004,28 +1255,27 @@ float cloudLightSunDepth(Field f, sampler2D atlas, vec4 chart[4], vec3 p, vec3 d
 // The clouds' optical depth straight up from the sample being lit, from a
 // light volume (its g), and how much the volume holds the sample (0: none,
 // the sky's light by the height ramp, cloud_shading.glsl's skyReach): set by
-// cloudSunDepthIn with the sun's depth, read and cleared by cloudRadianceFrom.
+// cloudSunDepth with the sun's depth, read and cleared by cloudRadianceFrom.
 float cloudSkyDepth = 0.0;
 float cloudSkyHeld = 0.0;
 
-// The optical depth toward the sun from a cloud at p: from the shadow maps
-// where the shader takes its light from them (CLOUD_MAP_LIGHTING: the
-// raymarch's, whose nodes the maps are bound to) and they hold it, else the
-// sun march's own.
+// The optical depth toward the sun from a cloud at p of genus field f (its
+// weather there given): from the light volume where the shader takes its
+// light from it (CLOUD_MAP_LIGHTING: the raymarch's, whose nodes it is bound
+// to) and it holds p, else from the shadow maps where they hold it, else the
+// sun march's own (and, for a genus that takes it, farShadow of the maps'
+// depth beyond the march).
 #ifdef CLOUD_MAP_LIGHTING
-float cloudSunDepthIn(Field f, samplerCube weatherCube, int on, sampler2D nearMap,
-                      vec4 nearChart[4], sampler2D farMap, vec4 farChart[4],
-                      int lightOn, sampler2D light, vec4 lightChart[4], vec3 p,
-                      vec3 weather) {
+float cloudSunDepth(Field f, vec3 p, vec3 weather) {
     float depth = 0.0;
     float held = 0.0;
     if (f.sunSteps > 0 && (uCloudDebug & 64) == 0) {
         int localSteps = min(f.sunSteps, MAP_LOCAL_STEPS);
         // The light volume where it is whole (debug bit 512: the maps').
-        if (lightOn != 0 && (uCloudDebug & 512) == 0) {
-            held = cloudLightSunDepth(f, light, lightChart, p, sunDir, weather,
+        if (cloudLightOn != 0 && (uCloudDebug & 512) == 0) {
+            held = cloudLightSunDepth(f, cloudLight, cloudLightChart, p, sunDir, weather,
                                       localSteps, depth);
-            cloudSkyDepth = cloudLightAt(light, lightChart, p, cloudSkyHeld).g;
+            cloudSkyDepth = cloudLightAt(cloudLight, cloudLightChart, p, cloudSkyHeld).g;
             // Moved on for the ray's next sample (R3, low discrepancy): one
             // draw for the whole ray put all its reads off the same way, and
             // the pixel's light with them; moved on, they average along it
@@ -1038,42 +1288,20 @@ float cloudSunDepthIn(Field f, samplerCube weatherCube, int on, sampler2D nearMa
             cloudLightJitter = fract(cloudLightJitter + 0.5
                                      + vec3(0.8191725, 0.6710436, 0.5497005)) - 0.5;
         } else {
-            held = cloudMapSunDepth(f, weatherCube, on, nearMap, nearChart, farMap,
-                                    farChart, p, sunDir, weather, localSteps, depth);
+            held = cloudMapSunDepth(f, p, sunDir, weather, localSteps, depth);
         }
     }
     if (held >= 1.0) {
         return depth;
     }
     float march = sunOpticalDepthAt(f, p, weather);
-    return held > 0.0 ? mix(march, depth, held) : march;
-}
-
-float cloudSunDepth(Field f, vec3 p, vec3 weather) {
-    return cloudSunDepthIn(f, weatherMap, cloudShadowMapOn, cloudShadowNear,
-                           cloudNearChart, cloudShadowFar, cloudFarChart, cloudLightOn,
-                           cloudLight, cloudLightChart, p, weather);
-}
-
-// The same for a cloud of the second family (the stratus, under the first's
-// convective clouds: *above* is their field): its own maps' (otherShadowNear...),
-// and the convective clouds' optical depth along the sun's ray from p, from
-// theirs where the ray enters their base, which shades it.
-float cloudSunDepthOther(Field f, Field above, vec3 p, vec3 weather) {
-    float depth = cloudSunDepthIn(f, otherWeather, otherShadowMapOn, otherShadowNear,
-                                  otherNearChart, otherShadowFar, otherFarChart,
-                                  otherLightOn, otherLight, otherLightChart, p, weather);
-    vec3 start;
-    float chord;
-    if (cloudShadowChord(above, p, sunDir, start, chord)) {
-        vec4 texel;
-        float keepNear;
-        float held = cloudMapsTexelWeightIn(cloudShadowMapOn, cloudShadowNear,
-                                            cloudNearChart, cloudShadowFar, cloudFarChart,
-                                            normalize(start), texel, keepNear);
-        depth += held * texel.r;
+    if (f.farShadow > 0.0 && f.sunSteps > 0) {
+        float near, far, total;
+        float window = float(f.sunSteps) * f.sunStepLength;
+        float mapHeld = cloudMapLevelsAt(p, sunDir, 0.0, window, near, far, total);
+        march += f.farShadow * mapHeld * max(total - far, 0.0);
     }
-    return depth;
+    return held > 0.0 ? mix(march, depth, held) : march;
 }
 #else
 float cloudSunDepth(Field f, vec3 p, vec3 weather) {
@@ -1081,80 +1309,87 @@ float cloudSunDepth(Field f, vec3 p, vec3 weather) {
 }
 #endif
 
-// The clouds' shadow on what is under them (planet frame p), as a share of
-// the sun toward dir: the march (cloudShadowDepth: the field's maps where
-// they hold it) where it can follow the clouds' shapes, their mean for the
-// weather there (the far table's b) where it cannot, which costs nothing:
+// The planet's clouds' shadow on what is under them (planet frame p), as a
+// share of the sun toward dir: the genera's summed depth (one map pair holds
+// it; the product of their shades), marched (skyShadowDepth) where no map
+// holds it, where it can follow the clouds' shapes; the product of their
+// means for the weather there (each genus's far table's b) where it cannot,
+// which costs nothing:
 // * where a pixel's footprint (metres) spans several clouds (the march
 //   would sparkle);
 // * where the steps are longer than the clouds (a grazing sun's long chord:
 //   the march would band, each height of ground stepping onto other
 //   clouds).
-// Faded over the second octave's cell. The field's weather, far table and
-// maps given.
-float cloudShadowIn(Field f, samplerCube weatherCube, sampler2D farTable, int mapsOn,
-                    sampler2D nearMap, vec4 nearChart[4], sampler2D farMap,
-                    vec4 farChart[4], vec3 p, vec3 dir, int maxSteps,
-                    float footprint) {
-    vec3 start;
-    float chord;
-    if (maxSteps <= 0 || !cloudShadowChord(f, p, dir, start, chord)) {
+// Faded over the second octave's cell, by the genus that fades first. 1
+// where no clouds are bound (uCloudShadowLayer -1).
+float planetCloudShadow(vec3 p, vec3 dir, int maxSteps, float footprint) {
+    if (uCloudShadowLayer < 0 || maxSteps <= 0) {
         return 1.0;
     }
-    if (f.minTop < 1.0) {
-        // A convective field's chord ends at its clouds' own top there, as the
-        // march's (cloudShadowMarch) and the maps' do: its steps are then
-        // short enough to follow a cumulus, not a 10 km slab's.
-        chord = cloudChordToTop(f, start, dir, texture(weatherCube, start).gba, chord);
-        if (chord <= 0.0) {
-            return 1.0;
+    float far = 0.0;
+    bool any = false;
+    for (int g = 0; g < MAX_GENERA; ++g) {
+        if (g >= uCloudGenera) {
+            break;
         }
+        Field f = getField(genusShadowLayer(g));
+        vec3 start;
+        float chord;
+        if (!cloudShadowChord(f, p, dir, start, chord)) {
+            continue;
+        }
+        if (f.minTop < 1.0) {
+            // A convective field's chord ends at its clouds' own top there, as
+            // the march's (cloudShadowMarch) and the maps' do: its steps are then
+            // short enough to follow a cumulus, not a 10 km slab's.
+            chord = cloudChordToTop(f, start, dir, genusWeatherAt(g, start).gba, chord);
+            if (chord <= 0.0) {
+                continue;
+            }
+        }
+        any = true;
+        float cell = NOISE_FEATURE / (f.noiseScale.x * f.octaveScales.y);
+        float step = chord / float(cloudShadowSteps(f, chord, maxSteps));
+        far = max(far, max(smoothstep(0.25 * cell, cell, footprint),
+                           smoothstep(0.5 * cell, cell, step)));
     }
-    float cell = NOISE_FEATURE / (f.noiseScale.x * f.octaveScales.y);
-    float step = chord / float(cloudShadowSteps(f, chord, maxSteps));
-    float far = max(smoothstep(0.25 * cell, cell, footprint),
-                    smoothstep(0.5 * cell, cell, step));
+    if (!any) {
+        return 1.0;
+    }
     float mean = 1.0;
     if (far > 0.0) {
-        vec2 size = vec2(textureSize(farTable, 0));
         float cosSun = dot(normalize(p), dir);
-        vec2 at = vec2((cosSun - deckLightCosMin) / (1.0 - deckLightCosMin),
-                       texture(weatherCube, p).r);
-        mean = texture(farTable, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size).b;
+        for (int g = 0; g < MAX_GENERA; ++g) {
+            if (g >= uCloudGenera) {
+                break;
+            }
+            vec3 start;
+            float chord;
+            if (cloudShadowChord(getField(genusShadowLayer(g)), p, dir, start, chord)) {
+                vec2 at = vec2((cosSun - deckLightCosMin) / (1.0 - deckLightCosMin),
+                               genusCoverageAt(g, p));
+                mean *= genusFarTable(g, at).b;
+            }
+        }
     }
     if (far >= 1.0) {
         return mean;
     }
+    // The maps where they hold the ray (it enters the bands' base: ground
+    // under them), the near one first; the march elsewhere.
+    float enter, chord;
+    vec4 texel;
     float depth;
-    if (!cloudMapsDepthIn(f, mapsOn, nearMap, nearChart, farMap, farChart, p, start,
-                          depth)) {
-        depth = cloudShadowDepthIn(f, weatherCube, p, dir, maxSteps);
+    if (length(p) < skyBaseRadius()
+            && shellChord(skyBaseRadius(), skyTopRadius(), p, dir, enter, chord)
+            && cloudMapsTexelIn(cloudShadowMapOn, cloudShadowNear, cloudNearChart,
+                                cloudShadowFar, cloudFarChart, normalize(p + dir * enter),
+                                texel)) {
+        depth = texel.r;
+    } else {
+        depth = skyShadowDepth(p, dir, maxSteps);
     }
     return mix(exp2(-depth), mean, far);
-}
-
-float cloudShadow(Field f, vec3 p, vec3 dir, int maxSteps, float footprint) {
-    return cloudShadowIn(f, weatherMap, deckLight, cloudShadowMapOn, cloudShadowNear,
-                         cloudNearChart, cloudShadowFar, cloudFarChart, p, dir,
-                         maxSteps, footprint);
-}
-
-// The planet's clouds' shadow on what is under them: the field bound's
-// (uCloudShadowLayer) and, with genera (clouds.genera), the other family's
-// (uCloudShadowOther: the stratus under the convective clouds), the product
-// of the two. 1 where neither is bound.
-float planetCloudShadow(vec3 p, vec3 dir, int maxSteps, float footprint) {
-    float shade = 1.0;
-    if (uCloudShadowLayer >= 0) {
-        shade = cloudShadow(getField(uCloudShadowLayer), p, dir, maxSteps, footprint);
-    }
-    if (uCloudShadowOther >= 0) {
-        shade *= cloudShadowIn(getField(uCloudShadowOther), otherWeather,
-                               otherDeckLight, otherShadowMapOn, otherShadowNear,
-                               otherNearChart, otherShadowFar, otherFarChart, p, dir,
-                               maxSteps, footprint);
-    }
-    return shade;
 }
 
 // ── Sunlight on a planet's clouds (through its own air) ───────────────────────

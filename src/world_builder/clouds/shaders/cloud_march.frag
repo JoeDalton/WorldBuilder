@@ -21,7 +21,7 @@
 #pragma include "cloud_field.glsl"
 #pragma include "cloud_shading.glsl"
 
-const int MAX_MARCH_LAYERS = 8;        // noise.MAX_LAYERS
+const int MAX_MARCH_LAYERS = DETAIL_LEVELS;  // noise.DETAIL_LEVELS
 const float NOISE_FEATURE_UNITS = 4.0;  // noise.NOISE_FEATURE
 const float KM = 1000.0;                // the distance's unit out
 
@@ -45,8 +45,7 @@ uniform float uStepGrowth;       // a step's length per metre of distance, farth
 // Layer i (its octaves) is sampled up to uLayerFar[i] metres from the camera;
 // the last one beyond.
 uniform float uLayerFar[MAX_MARCH_LAYERS];
-uniform int   uLayerCount;       // the layers of one family (its bands, then its far one)
-uniform int   uFamilies;         // 1, or 2 with genera: the convective clouds, the stratus under them
+uniform int   uLayerCount;       // a genus's detail levels (its bands, then its far one)
 uniform sampler2D uBlueNoise;    // march.blue_noise, 64 x 64, the steps' jitter
 uniform int   uFrame;            // this pixel's visits: moves its steps' jitter (march.visit_of)
 // The edges' billows (what the billboards' sprites carry): a fine billowy
@@ -238,6 +237,36 @@ float interleavedGradient(vec2 pixel) {
     return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
 }
 
+// Genus g's density at a sample t metres along the ray at p (lf its field
+// at the sample's level, weather its genusWeatherAt there), stepLength the
+// step's length by its distance: none where its coverage is 0; far away,
+// where a pixel spans more than the clouds' features, their expected
+// coverage (the deck's) as a homogeneous slab whose vertical crossing takes
+// the deck's alpha. Out: how much of its own self-shadowing the sample keeps
+// (shading: 0 its averages, cloudRadiance) and its far coverage.
+float genusDensity(int g, Field lf, vec3 p, vec4 weather, float t, float stepLength,
+                   out float shading, out float farCoverage) {
+    float feature = NOISE_FEATURE_UNITS / (lf.noiseScale.x * lf.octaveScales.x);
+    float footprint = t * uPixelAngle / feature;
+    float detail = 1.0 - smoothstep(0.15, 0.6, footprint);
+    shading = 1.0 - smoothstep(0.04, 0.2, footprint);
+    // The light volume alone (no local sun steps) where a pixel spans this
+    // much of the clouds' feature (cloud_field.glsl).
+    cloudLightLocal = footprint < uLightLocalFootprint;
+    float density = detail > 0.0 && weather.r > 0.0
+                  ? marchDensity(lf, p, weather.gba,
+                                 max(t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y)),
+                                     uStepFade * stepLength))
+                  : 0.0;
+    farCoverage = 0.0;
+    if (shading < 1.0) {
+        farCoverage = genusCoverageAt(g, p);
+        float mean = -log2(1.0 - FAR_ALPHA * farCoverage) / (lf.extinction * lf.slabThickness);
+        density = mix(mean, density, detail);
+    }
+    return density;
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy) * uBlock + uOffset;
     if (any(greaterThanEqual(vec2(pixel), uViewSize))) {
@@ -264,25 +293,24 @@ void main() {
     // against each pixel's own (its sceneDistance, the same measure).
     float sceneKm = nearDepth < 1.0 || farDepth < 1.0 ? length(end - nearPoint) / KM : 0.0;
 
-    // Each family's slab between two spheres, less the planet: up to two
-    // segments (a ray from above, or skimming the slab's underside, leaves and
-    // re-enters), the families' together sorted along the ray (the slabs do not
-    // overlap).
-    Field f = getField(0);  // the first family's: every layer of it shares the slab
+    // Each sky band (cloud_field.glsl's uSkyBands: the genera's slabs merged)
+    // between two spheres, less the planet: up to two segments each (a ray
+    // from above, or skimming the band's underside, leaves and re-enters),
+    // the bands' together sorted along the ray (they do not overlap). Gaps
+    // between bands take no steps.
     vec2 ground = sphereInterval(camPos, dir, planetRadius);
     if (ground.x < ground.y && ground.y > 0.0) {
         tEnd = min(tEnd, max(ground.x, 0.0));
     }
-    vec2 segments[4];
-    int family[4];
+    vec2 segments[2 * MAX_SKY_BANDS];
+    int bandOf[2 * MAX_SKY_BANDS];
     int count = 0;
-    for (int i = 0; i < 2; ++i) {
-        if (i >= uFamilies) {
+    for (int i = 0; i < MAX_SKY_BANDS; ++i) {
+        if (i >= uSkyBandCount) {
             break;
         }
-        Field slabField = getField(i * DETAIL_LEVELS);
-        float rBase = planetRadius + slabField.slabBase;
-        vec2 top = sphereInterval(camPos, dir, rBase + slabField.slabThickness);
+        float rBase = planetRadius + uSkyBands[i].x;
+        vec2 top = sphereInterval(camPos, dir, planetRadius + uSkyBands[i].y);
         vec2 base = sphereInterval(camPos, dir, rBase);
         vec2 first = top;
         vec2 second = vec2(1.0, -1.0);
@@ -294,12 +322,12 @@ void main() {
         second = vec2(max(second.x, tStart), min(second.y, tEnd));
         if (first.y > first.x) {
             segments[count] = first;
-            family[count] = i;
+            bandOf[count] = i;
             ++count;
         }
         if (second.y > second.x) {
             segments[count] = second;
-            family[count] = i;
+            bandOf[count] = i;
             ++count;
         }
     }
@@ -309,16 +337,16 @@ void main() {
         fragDistance = vec4(0.0, sceneKm, 0.0, 1.0);
         return;
     }
-    // Sorted by where they start (at most four).
-    for (int i = 1; i < 4; ++i) {
+    // Sorted by where they start (at most eight).
+    for (int i = 1; i < 2 * MAX_SKY_BANDS; ++i) {
         for (int k = i; k > 0 && k < count; --k) {
             if (segments[k].x < segments[k - 1].x) {
                 vec2 swapSegment = segments[k];
                 segments[k] = segments[k - 1];
                 segments[k - 1] = swapSegment;
-                int swapFamily = family[k];
-                family[k] = family[k - 1];
-                family[k - 1] = swapFamily;
+                int swapBand = bandOf[k];
+                bandOf[k] = bandOf[k - 1];
+                bandOf[k - 1] = swapBand;
             }
         }
     }
@@ -332,7 +360,7 @@ void main() {
     float dtMin = uMinStep;
     float growth = uStepGrowth;
     vec2 needed = vec2(0.0);  // near, far
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 2 * MAX_SKY_BANDS; ++i) {
         if (i < count) {
             vec2 seg = segments[i];
             needed.x += stepsOver(vec2(seg.x, min(seg.y, uSplit)), dtMin, growth);
@@ -382,24 +410,36 @@ void main() {
     vec3 twilight = vec3(0.0);
     bool lit = false;
     int current = -1;
-    Field lf = f;
+    Field lf = getField(0);  // replaced at the first sample (current -1)
     int steps = 0;
     int emptySteps = 0;  // steps whose density was 0 (uCloudDebug 128)
-    // The weather (the shift, the convective depth, the anvil's spread), read
-    // once a WEATHER_STRETCH of ray: it varies over kilometres.
-    vec3 weather = vec3(0.0);
-    float weatherUntil = -1.0;
-    for (int s = 0; s < 4; ++s) {
+    // A genus's weather (its coverage, its shift, the convective depth, the
+    // anvil's spread: genusWeatherAt), read once a uWeatherStretch of ray: it
+    // varies over kilometres. Kept for the last genus read: with genera the
+    // stretch is shorter than a step (WEATHER_STRETCH_GENERA), so a sample
+    // reads each of its genera's anyway.
+    vec4 weather = vec4(0.0);
+    for (int s = 0; s < 2 * MAX_SKY_BANDS; ++s) {
         if (s >= count) {
             break;
         }
         vec2 seg = segments[s];
-        int fam = family[s];
-        weatherUntil = -1.0;
+        int genera = int(uSkyBands[bandOf[s]].z + 0.5);  // the band's, a bit each
+        int weatherGenus = -1;
+        float weatherUntil = -1.0;
         float a = seg.x;
         float least = (seg.y - seg.x) / SEGMENT_SAMPLES;  // the fewest a segment takes
         bool first = true;  // its first step: shortened by boundary
-        while (a < seg.y && steps < 2 * uMarchSteps + 8 && transmittance > OPAQUE) {
+        // A band of one genus (every band today) takes its samples alone, in
+        // a loop of its own: the same light through the genus loop below, or
+        // a test of the band per sample, cost 0.1-0.6 ms more between the
+        // towers (cloud_bench --genera, 2560 x 1440).
+        bool alone = (genera & (genera - 1)) == 0;
+        int only = 0;  // its genus
+        while (only < MAX_GENERA - 1 && ((genera >> only) & 1) == 0) {
+            ++only;
+        }
+        while (alone && a < seg.y && steps < 2 * uMarchSteps + 8 && transmittance > OPAQUE) {
             float k = a < uSplit ? stretch.x : stretch.y;
             float dt = min(min(k * max(dtMin, a * growth), least), seg.y - a);
             if (first) {
@@ -408,41 +448,22 @@ void main() {
             }
             float t = a + dt * jitter;
             steps++;
-            int layer = fam * DETAIL_LEVELS + layerAt(t);
+            int level = layerAt(t);
+            vec3 p = camPos + dir * t;
+            // The step's length by its distance alone (uStepFade, above).
+            float stepLength = k * max(dtMin, t * growth);
+            float shading, farCoverage;
+            int layer = only * DETAIL_LEVELS + level;
             if (layer != current) {
                 lf = getField(layer);
                 current = layer;
             }
-            vec3 p = camPos + dir * t;
             if (t > weatherUntil) {
-                weather = fam == 0 ? texture(weatherMap, p).gba
-                                   : texture(otherWeather, p).gba;
+                weather = genusWeatherAt(only, p);
                 weatherUntil = t + uWeatherStretch;
             }
-            // Far away a pixel spans more than the clouds' features: their
-            // expected coverage (the deck's), as a homogeneous slab whose
-            // vertical crossing takes the deck's alpha; the self-shadowing
-            // goes to its averages first (cloudRadiance).
-            float feature = NOISE_FEATURE_UNITS / (lf.noiseScale.x * lf.octaveScales.x);
-            float footprint = t * uPixelAngle / feature;
-            float detail = 1.0 - smoothstep(0.15, 0.6, footprint);
-            float shading = 1.0 - smoothstep(0.04, 0.2, footprint);
-            // The light volume alone (no local sun steps) where a pixel spans
-            // this much of the clouds' feature (cloud_field.glsl).
-            cloudLightLocal = footprint < uLightLocalFootprint;
-            float density = detail > 0.0
-                          ? marchDensity(lf, p, weather,
-                                         max(t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y)),
-                                             uStepFade * k * max(dtMin, t * growth)))
-                          : 0.0;
-            float farCoverage = 0.0;
-            if (shading < 1.0) {
-                farCoverage = fam == 0 ? texture(weatherMap, p).r
-                                       : texture(otherWeather, p).r;
-                float mean = -log2(1.0 - FAR_ALPHA * farCoverage)
-                           / (lf.extinction * lf.slabThickness);
-                density = mix(mean, density, detail);
-            }
+            float density = genusDensity(only, lf, p, weather, t, stepLength, shading,
+                                         farCoverage);
             a += dt;
             if (density <= 0.0) {
                 ++emptySteps;
@@ -455,14 +476,74 @@ void main() {
                 lit = true;
             }
             vec3 radiance = (uCloudDebug & 256) != 0 ? vec3(0.8)  // no lighting (profiling)
-                          : fam == 0
-                ? cloudRadianceAt(lf, p, density, -dir, shading, farCoverage, sunlight,
-                                  skylight, twilight, weather)
-                : cloudRadianceOther(lf, getField(uLayerCount - 1), p, density, -dir,
-                                     shading, farCoverage, sunlight, skylight,
-                                     twilight, weather);
+                : cloudRadianceAt(only, lf, p, density, -dir, shading, farCoverage, sunlight,
+                                  skylight, twilight, weather.gba);
             float weight = transmittance * alpha;
             light += weight * radiance;
+            weightedDistance += weight * t;
+            transmittance *= 1.0 - alpha;
+        }
+        // Genera sharing a band: every genus whose slab holds the sample adds
+        // its extinction (sigma), its light weighted by it.
+        while (!alone && a < seg.y && steps < 2 * uMarchSteps + 8 && transmittance > OPAQUE) {
+            float k = a < uSplit ? stretch.x : stretch.y;
+            float dt = min(min(k * max(dtMin, a * growth), least), seg.y - a);
+            if (first) {
+                dt *= boundary;
+                first = false;
+            }
+            float t = a + dt * jitter;
+            steps++;
+            int level = layerAt(t);
+            vec3 p = camPos + dir * t;
+            // The step's length by its distance alone (uStepFade, above).
+            float stepLength = k * max(dtMin, t * growth);
+            float shading, farCoverage;
+            float height = heightOf(p);
+            float sigma = 0.0;
+            vec3 radiance = vec3(0.0);
+            for (int g = 0; g < MAX_GENERA; ++g) {
+                if (g >= uCloudGenera) {
+                    break;
+                }
+                vec2 slab = layerParams[g * GENUS_VEC4S + 4].xy;  // its slab (getField's)
+                if (((genera >> g) & 1) == 0 || height <= slab.x || height >= slab.x + slab.y) {
+                    continue;
+                }
+                if (g != weatherGenus || t > weatherUntil) {
+                    weather = genusWeatherAt(g, p);
+                    weatherGenus = g;
+                    weatherUntil = t + uWeatherStretch;
+                }
+                int layer = g * DETAIL_LEVELS + level;
+                if (layer != current) {
+                    lf = getField(layer);
+                    current = layer;
+                }
+                float density = genusDensity(g, lf, p, weather, t, stepLength, shading,
+                                             farCoverage);
+                if (density <= 0.0) {
+                    continue;
+                }
+                if (!lit) {
+                    planetCloudLight(uOwnAtmosphere, p, sunlight, skylight, twilight);
+                    lit = true;
+                }
+                float own = lf.extinction * density;
+                sigma += own;
+                radiance += own * ((uCloudDebug & 256) != 0
+                    ? vec3(0.8)
+                    : cloudRadianceAt(g, lf, p, density, -dir, shading, farCoverage,
+                                      sunlight, skylight, twilight, weather.gba));
+            }
+            a += dt;
+            if (sigma <= 0.0) {
+                ++emptySteps;
+                continue;
+            }
+            float alpha = 1.0 - exp2(-sigma * dt);
+            float weight = transmittance * alpha;
+            light += weight * (radiance / sigma);
             weightedDistance += weight * t;
             transmittance *= 1.0 - alpha;
         }

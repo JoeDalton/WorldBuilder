@@ -17,7 +17,7 @@ from enum import Enum
 from typing import ClassVar
 
 from world_builder.clouds.noise import (
-    MAX_LAYERS,
+    DETAIL_LEVELS,
     MIE_ASYMMETRY_ICE,
     MIE_ASYMMETRY_WATER,
     CloudOptics,
@@ -27,10 +27,10 @@ from world_builder.clouds.noise import (
 )
 from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 
-#: Most distance bands of the march's detail (each a layer of the field's
-#: parameters, plus the deck's far field): they fit ``MAX_LAYERS``.
+#: Most distance bands of the march's detail (each a detail level of a
+#: genus, plus its far level): they fit ``DETAIL_LEVELS``.
 MAX_OCTAVE_BANDS = 6
-assert MAX_OCTAVE_BANDS < MAX_LAYERS
+assert MAX_OCTAVE_BANDS < DETAIL_LEVELS
 
 
 class CloudType(Enum):

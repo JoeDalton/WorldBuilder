@@ -2152,6 +2152,22 @@ strong gather larger masses) and the anvil's and its shelf's low-frequency
 octaves, two more noise fetches where the anvil weight or the shelf is
 non-zero, with no early-out there (clouds.md, "The anvil is smooth").
 
+**Phase 3 (union march).** One march of all the genera over the sky bands,
+one light volume and one map pair (clouds.md, "Genera"). 2560 x 1440, HIGH,
+the medians of interleaved runs of the tree before and after (run to run
+±0.8 ms):
+
+| Pose | Before | Union march |
+|---|---|---|
+| `genera_cb` | 13.10 ms | 12.84 ms |
+| `genera_congestus` | 13.03 ms | 12.24 ms |
+
+`cloud_bench.py --genera` between the towers: the clouds cost 0.71 ms, within
+the 0.58-0.84 ms the tree before measured. Every genus keeping all its
+`octave_bands` (the two marches had halved them) costs about +0.35 ms, which
+the band of one genus's own sample loop (no genus loop) and the skipped
+genera at zero coverage take back.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

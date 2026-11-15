@@ -29,7 +29,7 @@ A planet's clouds are one part,
 by two techniques:
 
 - a **volume**: the low clouds, cumulus by default (any `CloudType`), or the
-  [genera](#genera)' two families, raymarched
+  [genera](#genera), raymarched as one union
   ([`march.py`](../../src/world_builder/clouds/march.py), `CloudMarch`) from
   the ground to orbit. It needs the split cameras
   (`PlanetClouds.use_split_depth`, which a `World` calls). Around it:
@@ -119,11 +119,14 @@ like:
 - Types share one volume, decorrelated by a constant noise-space offset
   (`field_offset`): an independent field with identical statistics, for the
   cost of an add.
-- **Per-type fields on the GPU** ride in a `layerParams` uniform array indexed
-  by a flat layer id (`LAYER_VEC4S`, thirteen `vec4`s each, for up to
-  `MAX_LAYERS`, eight, layers: each family's octave bands and its far layer,
-  which the reflection's deck shares). They are packed by
-  `noise.pack_layer_params` and read by `getField` in `cloud_field.glsl`. A
+- **Per-genus fields on the GPU** ride in a `layerParams` uniform array, an
+  entry per genus (`GENUS_VEC4S`, sixteen `vec4`s: the field's
+  `LAYER_VEC4S` thirteen, then its coverage row) for up to `MAX_GENERA`
+  (ten), then the reflection's deck's. Each genus has `DETAIL_LEVELS` (eight)
+  detail levels, its octave bands by distance and its far level, which differ
+  only in their octaves and threshold offset (`detailOctaves`,
+  `genusLevelOffset`). They are packed by `noise.pack_genus_params` and read
+  by `getField(genus * DETAIL_LEVELS + level)` in `cloud_field.glsl`. A
   uniform array rather than a texture: a sample needs about two dozen of
   its type's parameters, which as `texelFetch`es would be two dozen texture
   reads per sample.
@@ -230,35 +233,86 @@ cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
 `--genera` in the demo and the scripts sharing its options, on by default
 there, `--no-genera` for the plain field; opt-in in `cloud_bench.py`). Its maps are
 a **placeholder** for the weather (issue #8): features laid out around one
-point. One `CloudMarch` of two families draws them.
+point. One `CloudMarch` draws them all, as one union of genera.
 
-**Two families.** A family is one field (one cloud type) with its own
-weather, light table and shadow maps, in a band of sky the other's does not
-overlap:
+**The genera and their sky bands.** A genus is one field (one cloud type)
+over its own slab, with its own coverage, shift table and far table
+(`GeneraSpec.genera`, each a `genera.GENUS_PRESETS` entry: its cloud type,
+coverage source, `far_shadow` and slab). Today there are two:
 
-- **stratiform** (`CloudType.STRATUS`): a sheet 500 m thick, its base at
-  `GeneraSpec.stratus_altitude`;
-- **convective** (`CloudType.CONVECTIVE`): the cumulus field, its clouds
-  growing with the convective **depth** (0 to 1, a map of its own).
+- **convective** (`CloudType.CONVECTIVE`), the primary genus (genus 0): the
+  cumulus field, its clouds growing with the convective **depth** (0 to 1, a
+  map of its own);
+- **stratus** (`CloudType.STRATUS`): a sheet 500 m thick, its base at
+  `GeneraSpec.stratus_altitude`.
 
-`check_layers` refuses a stratus reaching the convective base. The split
-comes from the billboards (removed 2026-11-15), which mixed types by
-superposition, each quad sampling its own type's field. The march keeps it:
-each family keeps its own field, coverage calibration, light table and
-shadow maps, and the march sorts their stretches along the ray (below).
+Slabs may overlap: `march.sky_bands` merges them into at most four
+(`MAX_SKY_BANDS`) disjoint bands of sky, each with a bit mask of the genera
+in it (`uSkyBands`' z); a test marches a third, stratus-like genus at 3-4 km
+inside the convective slab. `planet.check_layers` refuses only what the march
+cannot hold: more than `noise.MAX_GENERA` (10) genera, or slabs making more
+than four bands, and a cirrus whose base is not above the **union's** top
+(the highest band's; `PlanetClouds.top_radius` takes the same) or whose top
+is not inside the air.
 
-**The raymarch with genera.** `CloudMarch(genera=...)` marches both families
-in one pass, so a stratus cloud in front of a tower and one behind it composite
-correctly: each family's slab gives up to two stretches of a ray
-(`march.family_segments`), the four sorted along it, and every sample takes the
-field, the weather (the shift, the convective depth, the anvil's spread:
-`texture(weatherMap | otherWeather, p).gba`), the light table and the shadow
-maps of the stretch's family. The families' layers share `layerParams` (at
-most `MAX_LAYERS` between them, so with two the octave bands are at most 3
-each: `march._configure`); a stratus cloud takes the convective clouds' shadow
-from their maps (`cloudSunDepthOther`). Both families cast their shadows on the
-ground, sea and models (`PlanetClouds.shadow_caster(family)`). The
-reflection's deck is the convective family's alone.
+**The raymarch with genera.** `CloudMarch(genera=...)` marches every genus in
+one pass, so a stratus cloud in front of a tower and one behind it composite
+correctly. Each sky band gives up to two stretches of a ray
+(`march.band_segments`, the CPU mirror), at most eight, sorted along it; the
+steps are laid as for one slab, and a gap between bands costs no steps. At
+each sample the march loops over the band's genera whose slab holds it and
+whose coverage there is above 0: each takes its own detail level of its own
+entry, its own weather (once per `uWeatherStretch` of ray, per genus), its
+own footprint fades, billows and far mean, and adds its extinction
+`σ_g`; the sample's alpha is that of `Σσ_g`, its light `Σ (σ_g / σ)` of
+each genus's `cloudRadianceAt(genus, ...)` (one lighting path, its far table
+the genus's). A band of one genus (every band today) takes its samples in a
+loop of its own, without the genus loop: through it the same light cost
+0.4-0.6 ms more between the towers (`cloud_bench.py --genera`, 2560 × 1440),
+its lighting inside a second loop; a single (sample, genus) loop, and slots
+of weather per genus, cost 0.2-0.4 ms more too. Every genus has all the
+`octave_bands` asked for (with two marches, the convective clouds' and the
+stratus's, each had used to halve them to fit eight layers). The reflection's deck is genus 0's
+alone.
+
+**The weather of the other genera.** Genus 0 reads the weather cube
+(coverage, shift, depth, spread), so a planet without genera is one genus
+and unchanged. The others read their coverage from a channel of **coverage
+cube A** (`genusCoverA`, RGBA16F, `genera.coverage_cube`: the stratus in
+channel 0), and turn it into their fbm shift through their row of the
+**shift table** (`genusShift`, `SHIFT_TABLE_SIZE` × `MAX_GENERA`, R32F;
+`weather.build_shift_texture`), their channel and row in row 13 of their
+entry (`genusWeatherAt`); no depth, no spread. Their far tables are pages of
+`genusDeckLight` (a 2D array, page = genus; `genusFarTable`). The shift is
+taken of the filtered coverage, not filtered from a cube of shifts: at a
+stratus's edge it differs slightly from the stratus's old cube of its own, and
+`genera.genus_weather_at` is its CPU twin (the ground's shade,
+`field_setup.genus_sun_depth`). A full weather cube per genus was rejected:
+four channels of 6 × 512² per genus, where one channel carries all a stratus
+needs.
+
+**One light volume and one map pair for all the genera.** The light volume
+and the cloud shadow maps ([Shadows](shadows.md#the-cloud-light-volume)) hold
+the genera's **summed** depth: their bakes march the sky bands
+(`march.sky_bands`: the genera's slabs merged, a gap between two crossed in no
+steps; `cloud_field.glsl`'s `skyShadowLevels`), every genus in a band at the
+same samples by its own field and weather, and a depth is a sum. The light
+volume keeps 32 slices a band, so the 500 m stratus deck keeps the 16 m
+slices it had alone. Each genus takes its own sun window from the volume and
+its **`far_shadow`** (`noise.GenusField`, `genera.GENUS_PRESETS`; row 13's w
+of its entry) of the depth beyond it: 0 for the convective clouds (their
+window carries their form; the whole chord blackens a tower), 1 for the
+stratus, which so takes the whole chord of the towers above it. Under the
+towers its sky light dims too (the volume's up depth holds them). The ground,
+sea and models take one shadow, `exp2(-sum)`, the product of the genera's
+shades (`PlanetClouds.shadow_caster()`, `planetCloudShadow`;
+`CloudMarch.genus_caster(g)` is one genus's part, on the CPU). A volume and a
+map pair for the convective clouds and another for the stratus, before, read
+the towers' shadow on the stratus from the convective clouds' maps and made every reader carry a second set of inputs
+(`uCloudShadowOther`, `otherLight`, `otherShadowNear`...). The CPU's shade
+sums each genus's depth through its own slab
+(`field_setup.sun_visibility`); the GPU marches a band's genera at the band's
+shared steps, which differs only by the steps where genera overlap.
 The convective weather is read at every sample (`WEATHER_STRETCH_GENERA`): a
 tower's depth, which sets its top, changes over tens of metres, and read once
 a kilometre it showed as horizontal bands across every tower. The fair-weather
@@ -402,7 +456,15 @@ cloud). Here each pixel steps along its own ray:
 - **Through the slab**, between the spheres at its base and top, less the
   planet: up to two segments (a ray skimming under the slab leaves it and
   comes back), from the near plane to the **scene's depth** (the near
-  range's surface where it has one, else the far range's).
+  range's surface where it has one, else the far range's). With genera, the
+  slab is each **sky band** (`uSkyBands`, the genera's slabs merged): up to
+  two segments a band, eight in all, sorted along the ray (insertion sort),
+  and inside a segment a **genus loop** per sample over the band's genera
+  (bit mask), each adding its own density and light ([Genera](#genera)).
+  Rejected: segments per genus (overlapping slabs would cross the same
+  stretch twice, and the steps of two segments could not be one comb), and
+  a march pass per genus (they would composite in the wrong order where a
+  stratus lies in front of a tower and behind another).
   A game's model inside a cloud is hidden by just the cloud in front of it,
   and the camera inside a cloud sees it all around (the billboards faded out
   near the camera, which left a clear bubble).
@@ -459,7 +521,8 @@ cloud). Here each pixel steps along its own ray:
   taken, which is cut at a stretch's end: the octaves a sample kept then
   depended on where its ray
   entered the cloud, contours up a tower's face. The weather is read
-  once per kilometre of ray (`uWeatherStretch`), not at every sample.
+  once per `uWeatherStretch` of ray (a kilometre without genera), each
+  genus's its own, not at every sample.
   Two departures from the plain field keep the crisp look the billboards
   had (removed 2026-11-15; the march was tuned against them):
   - the view ray takes **twice the field's extinction**
@@ -597,8 +660,8 @@ that switch.
 
 **Their shadow on the ground** comes from one more pass of the march's
 (`_GroundShadow`, `ground_shadow.frag`): from the same two depth passes, at
-their resolution, the clouds' shadow at each texel's scene point
-(`planetCloudShadow`, as the terrain's per pixel), and the distance there.
+their resolution, the clouds' shadow at each texel's scene point (all the
+genera's: `planetCloudShadow`, as the terrain's per pixel), and the distance there.
 The terrain and the sea read it back by their distance (`groundShadowAt`) and
 shade it per pixel only where no texel agrees, and in the sea's reflection
 (shadows.md, "The clouds' shadow on the view's ground"; performance.md §33).

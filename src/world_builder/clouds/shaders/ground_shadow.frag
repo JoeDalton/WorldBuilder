@@ -51,7 +51,7 @@ void main() {
     }
     float dist = length(rel);
     float shade = 1.0;
-    if ((uCloudShadowLayer >= 0 || uCloudShadowOther >= 0) && uCloudShadowSteps > 0
+    if (uCloudShadowLayer >= 0 && uCloudShadowSteps > 0
             && uOwnAtmosphere >= 0) {
         // The ground a VIEW pixel spans (the terrain's footprint, from its
         // position's derivatives): across the ray, its length over how

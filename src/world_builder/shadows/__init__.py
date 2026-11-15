@@ -101,7 +101,8 @@ class ShadowSettings(QualitySettings):
     :ivar cloud_light_size: the clouds' light volume, a slice's texels per
         side (:class:`~world_builder.clouds.light_volume.CloudLightVolumes`);
         0 = none (the raymarch lights its clouds by the shadow maps)
-    :ivar cloud_light_slices: its slices baked a frame while it is redrawn
+    :ivar cloud_light_slices: its slices of each sky band baked a frame
+        while it is redrawn
     :ivar cloud_far_reach: how far along the sun's ray each cloud billboard
         looks for the clouds that shade it, past its own march, metres
         (cloud_field.glsl's ``cloudFarDepth``); 0 = no farther
@@ -183,9 +184,10 @@ class ShadowSettings(QualitySettings):
         unit="slices",
         range=(1, 8),
         advanced=True,
-        help="Slices of the cloud light volume baked a frame while it is "
-        "redrawn (the sun turning, the camera far moved): more is a quicker "
-        "redraw (32 slices) at more cost a frame meanwhile.",
+        help="Slices of each sky band of the cloud light volume baked a "
+        "frame while it is redrawn (the sun turning, the camera far moved): "
+        "more is a quicker redraw (32 slices a band) at more cost a frame "
+        "meanwhile.",
     )
 
     cloud_far_reach: float = knob(

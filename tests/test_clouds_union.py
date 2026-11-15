@@ -4,12 +4,15 @@ band_segments; noise.GenusField, pack_genus_params; genera.GENUS_PRESETS):
 genera whose slabs may overlap, marched as one.
 """
 
+import re
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from world_builder.clouds.cloud import PRESETS, CloudType
 from world_builder.clouds.genera import GENUS_PRESETS
-from world_builder.clouds.march import band_segments, family_segments, sky_bands
+from world_builder.clouds.march import band_segments, sky_bands, slab_segments
 from world_builder.clouds.noise import (
     COVERAGE_SOURCES,
     DETAIL_LEVELS,
@@ -51,16 +54,31 @@ def test_more_than_four_bands_is_refused():
 
 
 @pytest.mark.parametrize("height, sign", [(100.0, 1.0), (20e3, -1.0), (1500.0, 1.0)])
-def test_band_segments_are_the_families_on_disjoint_slabs(height, sign):
+def test_band_segments_are_the_slabs_own_on_disjoint_slabs(height, sign):
     slabs = [(2200.0, 8300.0), (900.0, 500.0)]
     up = np.array([0.0, 0.6, 0.8])
     tilt = np.array([0.8, 0.0, -0.6])
     for direction in (sign * up, sign * up * 0.2 + tilt):
         direction = direction / np.linalg.norm(direction)
         origin = up * (R + height)
-        old = [(t0, t1) for t0, t1, _ in family_segments(origin, direction, R, slabs)]
+        old = sorted(
+            (float(t0), float(t1))
+            for slab in slabs
+            for t0, t1 in slab_segments(origin, direction, R, slab)
+            if t1 > t0
+        )
         new = [(t0, t1) for t0, t1, _ in band_segments(origin, direction, R, slabs)]
         np.testing.assert_allclose(new, old)
+
+
+def test_a_nested_slab_shares_its_bands_segments():
+    """A genus inside another's slab adds no stretch: the ray crosses the
+    outer slab's band once (the genus loop finds both in it)."""
+    up = np.array([0.0, 0.0, 1.0])
+    slabs = [(2200.0, 8300.0), (900.0, 500.0), (3000.0, 1000.0)]
+    segments = band_segments(up * (R + 100.0), up, R, slabs)
+    assert [band for *_, band in segments] == [0, 1]
+    assert segments[1][:2] == pytest.approx((2100.0, 10400.0))
 
 
 def test_band_segments_name_their_band():
@@ -212,3 +230,164 @@ def test_the_deck_light_array_holds_one_genus_a_page():
     ram = np.frombuffer(tex.get_ram_image(), np.float32).reshape(2, 8, 16, 4)
     np.testing.assert_allclose(ram[0], 0.25)
     np.testing.assert_allclose(ram[1], 0.75)
+
+
+# ── The shaders and Python agree ─────────────────────────────────────────────
+
+SHADERS = Path(__file__).parents[1] / "src/world_builder/clouds/shaders"
+
+
+def test_the_shaders_share_the_genus_and_band_sizes():
+    from world_builder.clouds.march import MAX_SKY_BANDS
+    from world_builder.clouds.noise import LAYER_VEC4S
+    from world_builder.clouds.weather import SHIFT_TABLE_SIZE
+
+    field = (SHADERS / "cloud_field.glsl").read_text()
+    for name, value in (
+        ("MAX_SKY_BANDS", MAX_SKY_BANDS),
+        ("MAX_GENERA", MAX_GENERA),
+        ("GENUS_VEC4S", GENUS_VEC4S),
+        ("LAYER_VEC4S", LAYER_VEC4S),
+        ("DETAIL_LEVELS", DETAIL_LEVELS),
+        ("SHIFT_TABLE_SIZE", SHIFT_TABLE_SIZE),
+    ):
+        assert int(re.search(rf"const int {name} = (\d+);", field).group(1)) == value
+    assert f"uniform vec4  uSkyBands[{MAX_SKY_BANDS}];" in field
+    march = (SHADERS / "cloud_march.frag").read_text()
+    # Two segments a band, sorted; a genus loop per sample, one lighting path
+    assert "vec2 segments[2 * MAX_SKY_BANDS];" in march
+    assert "weather = genusWeatherAt(g, p);" in march  # the genus loop
+    assert "bool alone = (genera & (genera - 1)) == 0;" in march  # its fast path
+    for gone in ("uFamilies", "otherWeather", "otherDeckLight", "cloudRadianceOther"):
+        for name in ("cloud_march.frag", "cloud_field.glsl", "cloud_shading.glsl"):
+            assert gone not in (SHADERS / name).read_text(), (gone, name)
+
+
+# ── A third genus, inside the convective slab (test-only) ───────────────────
+
+#: A stratus-like genus 3-4 km up, inside the convective clouds' slab, its
+#: coverage cube A's second channel (the stratus features' map).
+MID = "stratus_mid"
+
+
+@pytest.fixture
+def mid_genus(monkeypatch):
+    from world_builder.clouds.genera import GenusPreset
+
+    monkeypatch.setitem(
+        GENUS_PRESETS,
+        MID,
+        GenusPreset(CloudType.STRATUS, ("A", 1), far_shadow=1.0, slab=(3000.0, 1000.0)),
+    )
+    from world_builder.clouds.genera import GeneraSpec
+    from world_builder.clouds.weather import WeatherSpec
+    from world_builder.terrain.planet import PlanetSpec
+
+    spec = PlanetSpec(name="clouds", radius=R)
+    return GeneraSpec(WeatherSpec(spec, seed=11), genera=("convective", "stratus", MID))
+
+
+def test_a_third_genus_takes_its_slab_and_its_channel(mid_genus):
+    from world_builder.clouds.genera import coverage_cube, genus_planes, genus_specs
+
+    specs = genus_specs(mid_genus, 2200.0)
+    assert [s[0] for s in specs] == ["convective", "stratus", MID]
+    assert specs[0][2] == 2200.0 and specs[1][2] == mid_genus.stratus_altitude
+    assert specs[2][2:] == (3000.0, 1000.0, ("A", 1))
+    cube = coverage_cube(mid_genus, "A", 32)
+    planes = genus_planes(mid_genus, 32)
+    np.testing.assert_array_equal(cube[..., 0], planes[..., 2])
+    np.testing.assert_array_equal(cube[..., 1], planes[..., 2])
+    assert not cube[..., 2:].any()
+
+
+@pytest.fixture
+def window(showbase):
+    """The session's ShowBase with an offscreen window; skipped where none
+    can be opened."""
+    if showbase.win is None:
+        try:
+            showbase.openMainWindow(type="offscreen", size=(64, 64))
+        except Exception as error:  # no GL context here
+            pytest.skip(f"no offscreen window: {error}")
+    if showbase.win is None:
+        pytest.skip("no offscreen window")
+    return showbase
+
+
+def _pixels(texture):
+    """A float texture's RAM image as (n, components) float32."""
+    from panda3d.core import Texture
+
+    dtype = {Texture.T_float: np.float32, Texture.T_half_float: np.float16}[
+        texture.get_component_type()
+    ]
+    image = np.frombuffer(texture.get_ram_image(), dtype).astype(np.float32)
+    return image.reshape(-1, texture.get_num_components())
+
+
+def test_a_genus_inside_another_s_slab_renders(window, mid_genus):
+    """The union march with overlapping genera: three genera in two sky
+    bands (the stratus's; the convective one holding the third genus too),
+    each genus its own parameters, coverage and far table; looking up from
+    under the stratus deck the march draws cloud, and nothing that is not
+    finite."""
+    from panda3d.core import Point3
+
+    from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.planet import PlanetClouds
+    from world_builder.depth import SplitDepthCameras
+    from world_builder.terrain.chart import TangentFrame
+    from world_builder.terrain.workers import ChunkExecutor
+
+    executor = ChunkExecutor(backend="inline", inline_budget=64)
+    clouds = PlanetClouds(
+        window.render,
+        R,
+        executor,
+        altitude=2200.0,
+        settings=CloudSettings(octave_bands=2),
+        genera=mid_genus,
+    )
+    depth = SplitDepthCameras(window, near=1.0)
+    camera = window.camera
+    pos, hpr = camera.get_pos(), camera.get_hpr()
+    try:
+        march = clouds.volume
+        assert march.genera_count == 3
+        assert march.sky_bands == [(900.0, 500.0), (2200.0, 8300.0)]  # 2.2-10.5 km
+        assert [march._sky_bands[k][2] for k in range(2)] == [0b010, 0b101]
+        rows = np.array([tuple(march._layer_params[i]) for i in range(3 * GENUS_VEC4S)])
+        assert tuple(rows[2 * GENUS_VEC4S + 13]) == (COVERAGE_SOURCES["A"], 1, 2, 1)
+        assert tuple(rows[2 * GENUS_VEC4S + 4][:2]) == (3000.0, 1000.0)
+        clouds.use_split_depth(window, depth)
+        march._finish()
+        assert march._genera[2].weather.shape[-1] == 3
+        for name in ("genusCoverA", "genusShift", "genusDeckLight"):
+            assert name in march._textures
+        assert march._textures["genusDeckLight"].get_z_size() == 3
+        # Under the stratus deck (genera.DEFAULT_FEATURES: 30 km south),
+        # looking up through every band
+        frame = TangentFrame.at(-2.86, 0.0)
+        here = frame.up * (R + 600.0)
+        camera.set_pos(0.0, 0.0, 0.0)
+        camera.look_at(Point3(*frame.up))
+        clouds.set_sun(frame.up + 0.5 * frame.east)
+        (layer,) = march._layers
+        gsg = window.win.get_gsg()
+        alphas = []
+        for _ in range(6):
+            depth.update(*SplitDepthCameras.planet_ranges(R, R + 600.0))
+            clouds.update(here)
+            window.graphicsEngine.render_frame()
+            window.graphicsEngine.extract_texture_data(layer.colour, gsg)
+            image = _pixels(layer.colour)
+            assert np.all(np.isfinite(image))
+            alphas.append(image[:, 3].max())
+        assert max(alphas) > 0.05
+    finally:
+        camera.set_pos(pos)
+        camera.set_hpr(hpr)
+        clouds.remove()
+        depth.destroy()
+        executor.shutdown()

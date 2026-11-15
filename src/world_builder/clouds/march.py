@@ -109,6 +109,7 @@ from world_builder.clouds.deck import (
 from world_builder.clouds.field_setup import (
     DECK_MAX_OPTICAL_DEPTH,
     OctaveBand,
+    _coverage_cube,
     _deck_light,
     _depth_tables,
     _genus_weather,
@@ -121,7 +122,12 @@ from world_builder.clouds.field_setup import (
     planet_weather,
     sun_visibility,
 )
-from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
+from world_builder.clouds.genera import (
+    CONVECTIVE,
+    GENUS_PRESETS,
+    GeneraSpec,
+    genus_specs,
+)
 from world_builder.clouds.noise import (
     DECK_LAYER,
     DECK_LIGHT_COS_MIN,
@@ -129,23 +135,33 @@ from world_builder.clouds.noise import (
     GENUS_VEC4S,
     LAYER_VEC4S,
     MAX_GENERA,
-    MAX_LAYERS,
     NOISE_FEATURE,
     NOISE_SIZE,
     DensityField,
+    GenusField,
     build_curl_texture,
+    build_deck_light_array,
     build_deck_light_texture,
     build_noise_texture,
     curl_noise_volume,
+    pack_genus_params,
     pack_layer_params,
 )
 from world_builder.clouds.passes import composite_card, pass_camera, pass_states
 from world_builder.clouds.shadow_defaults import (
-    _no_deck_light,
-    _no_weather,
+    _no_coverage,
+    _no_deck_light_array,
+    _no_shift,
     cloud_shadow_defaults,
 )
-from world_builder.clouds.weather import WeatherSpec, build_weather_texture, shift_table
+from world_builder.clouds.weather import (
+    WeatherSpec,
+    build_coverage_texture,
+    build_shift_texture,
+    build_weather_texture,
+    coverage_to_shift,
+    shift_table,
+)
 from world_builder.depth import (
     CLOUD_FAR_BIT,
     CLOUD_NEAR_BIT,
@@ -273,29 +289,6 @@ def slab_segments(
     return segments
 
 
-def family_segments(
-    origin: ArrayLike,
-    direction: ArrayLike,
-    radius: float,
-    slabs: list[tuple[float, float]],
-    t_start: float = 0.0,
-    t_end: float = math.inf,
-) -> list[tuple[float, float, int]]:
-    """The stretches of a ray in several families' slabs (the genera's
-    convective clouds, then the stratus under them), sorted along the ray (the
-    shader's four segments): the slabs do not overlap.
-
-    :param slabs: each family's (base, thickness) above sea level, metres
-    :returns: (t0, t1, family) of each non-empty stretch
-    """
-    out = []
-    for family, slab in enumerate(slabs):
-        for t0, t1 in slab_segments(origin, direction, radius, slab, t_start, t_end):
-            if t1 > t0:
-                out.append((float(t0), float(t1), family))
-    return sorted(out)
-
-
 #: The most sky bands the march takes a ray through (each up to two
 #: stretches: cloud_march.frag's eight segments). MUST match the shader.
 MAX_SKY_BANDS = 4
@@ -320,6 +313,28 @@ def sky_bands(slabs: list[tuple[float, float]]) -> list[tuple[float, float]]:
     if len(bands) > MAX_SKY_BANDS:
         raise ValueError(f"{len(bands)} bands of sky; the march takes {MAX_SKY_BANDS}")
     return [(float(b), float(t - b)) for b, t in bands]
+
+
+def band_masks(
+    slabs: list[tuple[float, float]], bands: list[tuple[float, float]]
+) -> list[int]:
+    """Which genera each sky band holds, as bit masks (bit *g*: genus *g*;
+    cloud_field.glsl's ``uSkyBands`` z).
+
+    :param slabs: each genus's (base, thickness) above sea level, metres
+    :param bands: :func:`sky_bands` of *slabs*
+    """
+    masks = []
+    for base, thickness in bands:
+        top = base + thickness
+        masks.append(
+            sum(
+                1 << g
+                for g, (b, t) in enumerate(slabs)
+                if b >= base - 1e-6 and b + t <= top + 1e-6
+            )
+        )
+    return masks
 
 
 def band_segments(
@@ -1348,10 +1363,12 @@ class _MarchLayer:
 
 
 @dataclass
-class _Family:
-    """One family of the march's clouds: a density field and its weather. A
-    planet has one; with genera, two (the convective clouds, then the stratus
-    under them), whose slabs do not overlap."""
+class _Genus:
+    """One genus of the march's clouds: a density field over its own slab
+    (which may overlap another genus's) and its weather. A planet has one;
+    with genera, one per name of :attr:`genera.GeneraSpec.genera`, the first
+    (the primary genus) reading the weather cube, the others a channel of
+    coverage cube A (``coverage``: the channel; ``weather_job`` the cube's)."""
 
     name: str | None
     preset: Any
@@ -1363,12 +1380,14 @@ class _Family:
     deck_job: Any = None
     deck_field: DensityField | None = None
     deck_optics: Any = None
+    coverage: tuple = ("weather", 0)
+    cover: np.ndarray | None = None
 
 
-class _FamilyCaster:
-    """A family's shadow, as :class:`sphere.CloudVolume`'s (what
-    :class:`shadow_map.CloudShadowMaps` and :class:`planet.PlanetClouds` ask
-    of a caster)."""
+class _GenusCaster:
+    """A genus's part of the clouds' shadow (one genus of the march: its
+    weather, its deck field and optics), as the CPU marches it
+    (:func:`field_setup.genus_sun_depth`; :class:`_UnionCaster` sums them)."""
 
     def __init__(self, march: CloudMarch, index: int) -> None:
         self._march, self._index = march, index
@@ -1376,12 +1395,12 @@ class _FamilyCaster:
         self._shades: dict[tuple, float] = {}
 
     @property
-    def _family(self) -> _Family:
-        return self._march._families[self._index]
+    def _genus(self) -> _Genus:
+        return self._march._genera[self._index]
 
     @property
     def weather(self):
-        return self._family.weather
+        return self._genus.weather
 
     @property
     def position(self):
@@ -1400,24 +1419,59 @@ class _FamilyCaster:
         return self._march._octave_mean
 
     @property
+    def coverage_source(self) -> tuple | None:
+        """(coverage cube, channel, shift table) of a genus that reads one
+        (:func:`field_setup.genus_sun_depth`); None for the primary genus."""
+        genus = self._genus
+        if genus.cover is None:
+            return None
+        return genus.cover, genus.coverage[1], np.asarray(genus.table)
+
+    @property
     def _deck_field(self):
-        return self._family.deck_field
+        return self._genus.deck_field
 
     @property
     def _deck_optics(self):
-        return self._family.deck_optics
-
-    @property
-    def shadow_layer(self) -> int:
-        return int(self._march._shadow_layers[self._index][0])
+        return self._genus.deck_optics
 
     @property
     def shadow_field(self) -> DensityField:
-        return self._family.deck_field
+        return self._genus.deck_field
+
+    #: Its shade alone (the union's is the product of the genera's).
+    sun_visibility = sun_visibility
+
+
+class _UnionCaster(_GenusCaster):
+    """The clouds' shadow, all their genera's together (what
+    :class:`shadow_map.CloudShadowMaps`, :class:`light_volume.CloudLightVolumes`
+    and :class:`planet.PlanetClouds` ask of a caster): one shadow layer, the
+    sky bands its resources span, and ``exp2(-sum of the genera's depths)``
+    on the CPU. Its weather, field and optics are the first genus's."""
+
+    def __init__(self, march: CloudMarch) -> None:
+        super().__init__(march, 0)
+
+    @property
+    def shadow_genera(self) -> list[_GenusCaster]:
+        """The genera it sums (:func:`field_setup.sun_visibility`)."""
+        return self._march._genus_casters
+
+    @property
+    def shadow_layer(self) -> int:
+        return int(self._march._shadow_layer[0])
+
+    @property
+    def sky_bands(self) -> list[tuple[float, float]]:
+        """The sky bands (:func:`sky_bands`) the light volume and the maps
+        span: their (base, thickness) above sea level, lowest first."""
+        return self._march.sky_bands
 
     def bind_shadow_inputs(self, node: NodePath) -> None:
-        self._march.bind_shadow_inputs(node, family=self._index)
+        self._march.bind_shadow_inputs(node)
 
+    #: The genera's together.
     sun_visibility = sun_visibility
 
 
@@ -1464,8 +1518,10 @@ class CloudMarch:
         genera: GeneraSpec | None = None,
     ):
         """As :class:`planet.PlanetClouds`' arguments of the same names
-        (without the cirrus). With *genera* it marches both families, the
-        convective clouds and the stratus under them."""
+        (without the cirrus). With *genera* it marches every genus of
+        :attr:`genera.GeneraSpec.genera` (:data:`genera.GENUS_PRESETS`) as
+        one: the first, the primary genus (the convective clouds), on the
+        weather cube, the others on coverage cube A."""
         settings = settings or CloudSettings()
         _ensure_bin()
         self.radius = float(radius)
@@ -1478,32 +1534,48 @@ class CloudMarch:
         volume = _noise(seed)
         self._seed = seed
         self._octave_mean = float(volume.mean())
-        self._genera = genera
-        if genera is not None:
-            specs = [
-                (CONVECTIVE, CloudType.CONVECTIVE, altitude),
-                (STRATIFORM, CloudType.STRATUS, genera.stratus_altitude),
-            ]
-        else:
-            specs = [(None, cloud_type, altitude)]
+        self._genera_spec = genera
+        specs = (
+            genus_specs(genera, altitude)
+            if genera is not None
+            else [(None, cloud_type, altitude, None, ("weather", 0))]
+        )
+        if genera is None:
             weather = planet_weather(weather, planet, self.radius, weather_seed)
-        self._families: list[_Family] = []
-        for name, kind, base in specs:
-            preset, field, peaks = planet_field(kind, base, seed, self.radius)
+        if len(specs) > MAX_GENERA:
+            raise ValueError(f"{len(specs)} genera; the march takes {MAX_GENERA}")
+        self._genera: list[_Genus] = []
+        cover_job = None
+        for index, (name, kind, base, thickness, coverage) in enumerate(specs):
+            if (coverage[0] == "weather") != (index == 0):
+                raise ValueError(
+                    f"genus {name!r}: the first genus, and it alone, reads the weather"
+                )
+            preset, field, peaks = planet_field(
+                kind, base, seed, self.radius, thickness
+            )
             table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
-            if genera is not None:
-                # The family's maps; a convective field's shift by depth too.
+            if genera is None:
+                job = executor.submit_once(_weather, weather, table)
+            elif index == 0:
+                # The primary genus's weather cube: its shift by depth too.
                 tables = table
                 if field.min_top < 1.0:
                     tables = tuple(
                         tuple(float(v) for v in row)
                         for row in _depth_tables(seed, field, self.radius)
                     )
-                job = executor.submit_once(_genus_weather, genera, name, tables)
+                job = executor.submit_once(_genus_weather, genera, CONVECTIVE, tables)
             else:
-                job = executor.submit_once(_weather, weather, table)
-            self._families.append(_Family(name, preset, field, peaks, table, job))
-        first = self._families[0]
+                if coverage[0] != "A":
+                    raise ValueError(f"genus {name!r}: only coverage cube A exists")
+                if cover_job is None:
+                    cover_job = executor.submit_once(_coverage_cube, genera, "A")
+                job = cover_job
+            self._genera.append(
+                _Genus(name, preset, field, peaks, table, job, coverage=coverage)
+            )
+        first = self._genera[0]
         self.field = first.field
         self._preset = first.preset
         self._peaks = first.peaks
@@ -1511,15 +1583,24 @@ class CloudMarch:
         self._weather_job = first.weather_job
         self.weather: np.ndarray | None = None
         self._settings = settings
-        #: Each family's shadow's layer (uCloudShadowLayer), -1 until ready
-        self._shadow_layers = [PTA_int.empty_array(1) for _ in self._families]
-        for layer in self._shadow_layers:
-            layer[0] = -1
-        #: (node, its first family, its second or None) the shadow is bound to
-        self._shadow_nodes: list[tuple[NodePath, int, int | None]] = []
+        #: The shadow's layer (uCloudShadowLayer: genus 0's far level; genus
+        #: g's is g * DETAIL_LEVELS past it), -1 until ready
+        self._shadow_layer = PTA_int.empty_array(1)
+        self._shadow_layer[0] = -1
+        #: The sky bands (uSkyBands): (base, top, genus mask, 0)
+        slabs = [tuple(f.field.slab) for f in self._genera]
+        self.sky_bands = sky_bands(slabs)
+        self._sky_bands = PTA_LVecBase4f.empty_array(MAX_SKY_BANDS)
+        for k, ((base, thickness), mask) in enumerate(
+            zip(self.sky_bands, band_masks(slabs, self.sky_bands))
+        ):
+            self._sky_bands[k] = LVecBase4f(base, base + thickness, mask, 0.0)
+        #: The nodes the shadow is bound to
+        self._shadow_nodes: list[NodePath] = []
         self._map_binders: list[Any] = []
-        self._casters = [_FamilyCaster(self, i) for i in range(len(self._families))]
-        self._family_textures: list[tuple[Any, Any]] = []
+        self._genus_casters = [_GenusCaster(self, i) for i in range(len(self._genera))]
+        self._union = _UnionCaster(self)
+        self._textures: dict[str, Any] = {}
         self._layer_far = PTA_float.empty_array(DETAIL_LEVELS)
         self._layer_params = PTA_LVecBase4f.empty_array((MAX_GENERA + 1) * GENUS_VEC4S)
         self._level_offsets = PTA_LVecBase4f.empty_array(
@@ -1585,11 +1666,10 @@ class CloudMarch:
             "uCloudDebug": 0,
             "uMarchSteps": self._steps,
             "uSplit": self._split,
-            "uMinStep": min(min_step(f.field) for f in self._families),
+            "uMinStep": min(min_step(f.field) for f in self._genera),
             "uStepGrowth": STEP_GROWTH,
             "uLayerFar": self._layer_far,
             "uLayerCount": self._layer_count,
-            "uFamilies": len(self._families),
             "uWeatherStretch": WEATHER_STRETCH_GENERA
             if genera is not None
             else WEATHER_STRETCH,
@@ -1603,6 +1683,9 @@ class CloudMarch:
             "uCurlFrequency": CURL_FREQUENCY,
             # The deck's (cloud_deck.vert, cloud.frag): its own entry
             "uDeckLayer": DECK_LAYER,
+            # The shadow's genera and sky bands: the light volume's chart and
+            # the maps' chord (cloud_field.glsl)
+            **self._shadow_inputs(),
         }
         self._nodes: list[NodePath] = []
         self._bind(self.root)
@@ -1755,14 +1838,10 @@ class CloudMarch:
         self._write_params(params)
         self._set_inputs(uDeckLayer=DECK_LAYER)
         if old.shell_octaves[-1:] != settings.shell_octaves[-1:]:
-            names = ("deckLight", "otherDeckLight")
-            for index, job in enumerate(deck_jobs):
-                light = build_deck_light_texture(job.result())
-                self._set_inputs(**{names[index]: light})
-                if self.weather is not None:
-                    self._textures[names[index]] = light
-                    weather = self._family_textures[index][0]
-                    self._family_textures[index] = (weather, light)
+            lights = self._deck_textures([job.result() for job in deck_jobs])
+            self._set_inputs(**lights)
+            if self.weather is not None:
+                self._textures.update(lights)
         self._update_shadow_nodes()
         if (
             old.march_block != settings.march_block
@@ -1781,21 +1860,19 @@ class CloudMarch:
             self.root.hide(REFLECTION_CAMERA_MASK)
 
     def _configure(self, settings: CloudSettings) -> tuple[np.ndarray, list[Any]]:
-        """Pack the march's parameters: an entry per family (its field at
-        its full octaves), each detail level's octaves and, per family, the
+        """Pack the march's parameters: an entry per genus (its field at
+        its full octaves), each detail level's octaves and, per genus, the
         threshold offset that keeps its coverage with them (the octave bands
         by distance, then the far level, which the shadows are marched in),
-        and the deck's own entry (the first family's far level, its optical
-        depth capped). The families share the levels' distances; with two,
-        they take fewer bands each (as when every level was an entry of its
-        own: the same look).
+        and the deck's own entry (the first genus's far level, its optical
+        depth capped). The genera share the levels' distances, each its
+        own ``DETAIL_LEVELS`` slots.
 
-        :returns: the packed parameters, and each family's far level's light
+        :returns: the packed parameters, and each genus's far level's light
             table being made in the pool (futures)
         """
         seed = self._seed
-        families = len(self._families)
-        shells = max(min(settings.octave_bands, MAX_LAYERS // families - 1), 1)
+        shells = max(min(settings.octave_bands, DETAIL_LEVELS - 1), 1)
         schedule = settings.shell_octaves
         _, bands = octave_bands(self.grid, shells)
         params = np.zeros((MAX_GENERA + 1, GENUS_VEC4S, 4), dtype=np.float32)
@@ -1808,14 +1885,14 @@ class CloudMarch:
             octave_counts[k] = schedule[min(k, len(schedule) - 1)]
             if k < shells:
                 far[k] = 0.5 * sum(bands[k])  # mid-band: where the levels cross
-        for index, family in enumerate(self._families):
-            field, peaks = family.field, family.peaks
-            optics = scale_march(family.preset, settings.march_scale).optics
+        for index, genus in enumerate(self._genera):
+            field, peaks = genus.field, genus.peaks
+            optics = scale_march(genus.preset, settings.march_scale).optics
             # Per metre of the view's path
             extinction = field.density * VIEW_EXTINCTION_SCALE
-            params[index, :LAYER_VEC4S] = pack_layer_params(
-                field, extinction=extinction, octave_mean=self._octave_mean,
-                optics=optics, octaves=4,
+            params[index] = pack_genus_params(
+                self._genus_field(index, optics), extinction=extinction,
+                octave_mean=self._octave_mean, octaves=4, shift_row=index,
             )  # fmt: skip
             for k in range(stride):
                 octaves = int(octave_counts[k])
@@ -1836,8 +1913,8 @@ class CloudMarch:
                     optics=layer_optics, octaves=octaves,
                 )  # fmt: skip
             # The deck's field and optics: the one its shadow is marched in.
-            family.deck_field = deck
-            family.deck_optics = layer_optics
+            genus.deck_field = deck
+            genus.deck_optics = layer_optics
             jobs.append(
                 self.executor.submit_once(
                     _deck_light,
@@ -1845,7 +1922,7 @@ class CloudMarch:
                     deck,
                     layer_optics,
                     self.radius,
-                    family.table,
+                    genus.table,
                     schedule[-1],
                 )
             )
@@ -1854,6 +1931,17 @@ class CloudMarch:
         self._offset_values = offsets
         self._octave_values = octave_counts
         return params, jobs
+
+    def _genus_field(self, index: int, optics: Any) -> GenusField:
+        """Genus *index* as a :class:`noise.GenusField`: its field, optics,
+        coverage source and far shadow (:data:`genera.GENUS_PRESETS`; a
+        planet without genera is one primary genus)."""
+        genus = self._genera[index]
+        if self._genera_spec is None:
+            return GenusField("primary", genus.field, optics)
+        name = self._genera_spec.genera[index]
+        preset = GENUS_PRESETS[name]
+        return GenusField(name, genus.field, optics, preset.coverage, preset.far_shadow)
 
     def _write_params(self, params: np.ndarray) -> None:
         for i, row in enumerate(params.reshape(-1, 4)):
@@ -1867,41 +1955,57 @@ class CloudMarch:
         if hasattr(self, "_layer_count"):
             self._layer_count[0] = self._layers_used
 
-    # ── the clouds' shadow (as sphere.CloudVolume's) ──────────────────────
+    # ── the clouds' shadow ────────────────────────────────────────────────
 
     @property
-    def families(self) -> int:
-        """How many families of clouds it marches: 2 with genera."""
-        return len(self._families)
+    def genera_count(self) -> int:
+        """How many genera of clouds it marches (1 without genera)."""
+        return len(self._genera)
 
-    def shadow_caster(self, family: int = 0) -> _FamilyCaster:
-        """The shadow of a family of the clouds (0: the convective clouds, or
-        the only ones; 1: the stratus), as a volume's."""
-        return self._casters[family]
+    def shadow_caster(self) -> _UnionCaster:
+        """The clouds' shadow, all their genera's together (one light volume,
+        one pair of shadow maps)."""
+        return self._union
+
+    def genus_caster(self, genus: int) -> _GenusCaster:
+        """One genus's part of the shadow, as the CPU marches it (0: the
+        convective clouds, or the only ones; 1: the stratus)."""
+        return self._genus_casters[genus]
 
     @property
     def shadow_layer(self) -> int:
-        """The layer of ``layerParams`` the (first) family's shadow is marched
-        in (its far one, the deck's), -1 until the set-up is done or after
-        :meth:`remove`."""
-        return self._casters[0].shadow_layer
+        """The layer of ``layerParams`` the first genus's shadow is marched in
+        (its far one; genus g's is g * ``DETAIL_LEVELS`` past it), -1 until
+        the set-up is done or after :meth:`remove`."""
+        return self._union.shadow_layer
 
     @property
     def shadow_field(self) -> DensityField:
-        """The field the (first) family's shadow is marched in (the deck's)."""
-        return self._families[0].deck_field
+        """The field the first genus's shadow is marched in (the deck's)."""
+        return self._genera[0].deck_field
 
-    def bind_shadow_inputs(self, node: NodePath, family: int | None = None) -> None:
-        """As :meth:`sphere.CloudVolume.bind_shadow_inputs`: let the shaders
-        on a node (the planet's terrain, the maps' bake) darken the sun under
-        these clouds, through the deck's layers.
+    def _deck_textures(self, tables: list[np.ndarray]) -> dict[str, Any]:
+        """The genera's far tables: genus 0's as ``deckLight`` (the deck's
+        and genus 0's), every genus's a page of ``genusDeckLight``."""
+        out = {"deckLight": build_deck_light_texture(tables[0])}
+        if len(tables) > 1:
+            out["genusDeckLight"] = build_deck_light_array(tables)
+        return out
 
-        :param family: bind this family's alone, as the first (the maps'
-            bake); None = the first's, and the second's too as the other
-            (``uCloudShadowOther``)
+    def _shadow_inputs(self) -> dict[str, Any]:
+        """The shadow's layer, genera and sky bands (cloud_field.glsl)."""
+        return {
+            "uCloudShadowLayer": self._shadow_layer,
+            "uCloudGenera": len(self._genera),
+            "uSkyBands": self._sky_bands,
+            "uSkyBandCount": len(self.sky_bands),
+        }
+
+    def bind_shadow_inputs(self, node: NodePath) -> None:
+        """Let the shaders on a node (the planet's terrain, the light
+        resources' bakes) darken the sun under these clouds: all the genera's
+        shadow (``planetCloudShadow``), through their deck layers.
         """
-        first = 0 if family is None else family
-        other = 1 if family is None and len(self._families) > 1 else None
         node.set_shader_inputs(
             cloudNoise=self._inputs["cloudNoise"],
             layerParams=self._layer_params,
@@ -1913,42 +2017,27 @@ class CloudMarch:
             noiseOffset=Vec3(0, 0, 0),
             deckLightCosMin=DECK_LIGHT_COS_MIN,
             uCloudDebug=0,
-            uCloudShadowLayer=self._shadow_layers[first],
-            uCloudShadowOther=-1 if other is None else self._shadow_layers[other],
-            otherWeather=_no_weather(),
-            otherDeckLight=_no_deck_light(),
+            genusCoverA=_no_coverage(),
+            genusShift=_no_shift(),
+            genusDeckLight=_no_deck_light_array(),
+            **self._shadow_inputs(),
         )
-        self._shadow_nodes.append((node, first, other))
+        self._shadow_nodes.append(node)
         self._update_shadow_nodes()
 
-    def _textures_of(self, index: int) -> dict[str, Any]:
-        """A family's weather and light table, as the names the first
-        family's shaders read them by."""
-        return {
-            "weatherMap": self._family_textures[index][0],
-            "deckLight": self._family_textures[index][1],
-        }
-
     def _update_shadow_nodes(self) -> None:
-        """The shaded nodes' weather and layers: none until the set-up."""
+        """The shaded nodes' weather and layer: none until the set-up."""
         ready = self.weather is not None
-        stride = self._layers_used
-        for index, layer in enumerate(self._shadow_layers):
-            layer[0] = index * DETAIL_LEVELS + stride - 1 if ready else -1
-        self._shadow_nodes = [n for n in self._shadow_nodes if not n[0].is_empty()]
+        self._shadow_layer[0] = self._layers_used - 1 if ready else -1
+        self._shadow_nodes = [n for n in self._shadow_nodes if not n.is_empty()]
         if ready:
-            for node, first, other in self._shadow_nodes:
-                node.set_shader_inputs(**self._textures_of(first))
-                if other is not None:
-                    node.set_shader_inputs(
-                        otherWeather=self._family_textures[other][0],
-                        otherDeckLight=self._family_textures[other][1],
-                    )
+            for node in self._shadow_nodes:
+                node.set_shader_inputs(**self._textures)
 
     def sun_visibility(self, *args: Any, **kwargs: Any) -> np.ndarray:
-        """The share of the sun the first family's clouds leave points
-        (:meth:`sphere.CloudVolume.sun_visibility`)."""
-        return self._casters[0].sun_visibility(*args, **kwargs)
+        """The share of the sun the clouds leave points (all the genera's:
+        :func:`field_setup.sun_visibility`)."""
+        return self._union.sun_visibility(*args, **kwargs)
 
     # ── public ────────────────────────────────────────────────────────────
 
@@ -2014,7 +2103,7 @@ class CloudMarch:
         if self._weather_job is not None:
             if not all(
                 job.done()
-                for job in [f.weather_job for f in self._families] + self._deck_jobs
+                for job in [f.weather_job for f in self._genera] + self._deck_jobs
             ):
                 self.stats["pending"] = 1
                 return
@@ -2052,8 +2141,8 @@ class CloudMarch:
         (planet frame), metres"""
         altitude = float(np.linalg.norm(camera)) - self.radius
         nearest = math.inf
-        for family in self._families:
-            base, thickness = family.field.slab
+        for genus in self._genera:
+            base, thickness = genus.field.slab
             nearest = min(
                 nearest, max(base - altitude, altitude - base - thickness, 0.0)
             )
@@ -2062,8 +2151,7 @@ class CloudMarch:
     def remove(self) -> None:
         """Take the clouds off the scene (and their shadow off the nodes it
         shaded)."""
-        for layer in self._shadow_layers:
-            layer[0] = -1
+        self._shadow_layer[0] = -1
         self._shadow_nodes = []
         self.detach()
         self.root.remove_node()
@@ -2072,18 +2160,32 @@ class CloudMarch:
         """Finish the set-up begun in the pool (waiting for it if need be)."""
         if self._weather_job is None:
             return
-        self._family_textures = []
-        self._textures = {}
-        names = (("weatherMap", "deckLight"), ("otherWeather", "otherDeckLight"))
-        for index, family in enumerate(self._families):
-            family.weather = family.weather_job.result()
-            weather = build_weather_texture(family.weather)
-            light = build_deck_light_texture(self._deck_jobs[index].result())
-            self._family_textures.append((weather, light))
-            self._textures[names[index][0]] = weather
-            self._textures[names[index][1]] = light
-            family.weather_job = None
-        self.weather = self._families[0].weather
+        first = self._genera[0]
+        first.weather = first.weather_job.result()
+        self._textures = {"weatherMap": build_weather_texture(first.weather)}
+        tables = [()] * len(self._genera)  # genusShift: genus 0's row unused
+        for index, genus in enumerate(self._genera[1:], start=1):
+            # A genus on coverage cube A: its coverage and the shift its
+            # table gives it (genera.genus_weather_at, the shader's
+            # genusWeatherAt) as the CPU's weather.
+            genus.cover = genus.weather_job.result()
+            coverage = genus.cover[..., genus.coverage[1]]
+            shift = coverage_to_shift(coverage, np.asarray(genus.table))
+            depth = np.zeros_like(coverage)
+            genus.weather = np.stack([coverage, shift, depth], -1).astype(np.float32)
+            tables[index] = genus.table
+            if "genusCoverA" not in self._textures:
+                self._textures["genusCoverA"] = build_coverage_texture(genus.cover)
+        for genus in self._genera:
+            genus.weather_job = None
+        if len(self._genera) > 1:
+            self._textures["genusShift"] = build_shift_texture(
+                [t if t else np.zeros(len(self._genera[1].table)) for t in tables]
+            )
+        self._textures.update(
+            self._deck_textures([job.result() for job in self._deck_jobs])
+        )
+        self.weather = first.weather
         self._weather_job = self._deck_jobs = None
         for node in self._nodes:
             node.set_shader_inputs(**self._textures)

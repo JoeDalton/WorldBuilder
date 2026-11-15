@@ -1,8 +1,8 @@
 """
 "No clouds overhead": the inputs a shader that receives the clouds' shadow
-(cloud_field.glsl's ``cloudShadow``: the terrain's) needs before any clouds
-are bound to it, or without any. :meth:`sphere.CloudVolume.bind_shadow_inputs`
-overrides them.
+(cloud_field.glsl's ``planetCloudShadow``: the terrain's) needs before any
+clouds are bound to it, or without any.
+:meth:`march.CloudMarch.bind_shadow_inputs` overrides them.
 """
 
 from __future__ import annotations
@@ -16,8 +16,10 @@ from world_builder.clouds.noise import (
     DETAIL_LEVELS,
     GENUS_VEC4S,
     MAX_GENERA,
+    build_deck_light_array,
     build_deck_light_texture,
 )
+from world_builder.clouds.weather import build_coverage_texture, build_shift_texture
 
 
 @functools.cache
@@ -36,6 +38,24 @@ def _no_deck_light() -> Texture:
 
 
 @functools.cache
+def _no_coverage() -> Texture:
+    """A 1-texel coverage cube (``genusCoverA``), no cloud."""
+    return build_coverage_texture(np.zeros((6, 1, 1, 4), dtype=np.float32))
+
+
+@functools.cache
+def _no_shift() -> Texture:
+    """The genera's shift tables (``genusShift``), all 0."""
+    return build_shift_texture([])
+
+
+@functools.cache
+def _no_deck_light_array() -> Texture:
+    """A 1-texel far table per genus (``genusDeckLight``)."""
+    return build_deck_light_array([np.ones((1, 1, 4), dtype=np.float32)] * MAX_GENERA)
+
+
+@functools.cache
 def _no_noise() -> Texture:
     """A 1-texel noise volume, for shaders that never read it."""
     tex = Texture("no_cloud_noise")
@@ -46,7 +66,7 @@ def _no_noise() -> Texture:
 
 def cloud_shadow_defaults(node: NodePath) -> None:
     """Give a node "no clouds overhead" inputs for cloud_field.glsl's
-    ``cloudShadowDepth`` (``uCloudShadowLayer`` -1), so a shader that
+    ``planetCloudShadow`` (``uCloudShadowLayer`` -1), so a shader that
     includes it (the terrain's) runs without clouds, until
     :meth:`march.CloudMarch.bind_shadow_inputs` overrides them.
     """
@@ -70,20 +90,15 @@ def cloud_shadow_defaults(node: NodePath) -> None:
         cloudNearChart=PTA_LVecBase4f.empty_array(4),
         cloudFarChart=PTA_LVecBase4f.empty_array(4),
         cloudShadowMapOn=0,
-        uCloudShadowOther=-1,
-        otherWeather=_no_weather(),
-        otherDeckLight=_no_deck_light(),
-        otherShadowNear=_no_cloud_map(),
-        otherShadowFar=_no_cloud_map(),
-        otherNearChart=PTA_LVecBase4f.empty_array(4),
-        otherFarChart=PTA_LVecBase4f.empty_array(4),
-        otherShadowMapOn=0,
+        uCloudGenera=0,
+        uSkyBands=PTA_LVecBase4f.empty_array(4),
+        uSkyBandCount=0,
+        genusCoverA=_no_coverage(),
+        genusShift=_no_shift(),
+        genusDeckLight=_no_deck_light_array(),
         cloudLight=_no_cloud_map(),
         cloudLightChart=PTA_LVecBase4f.empty_array(4),
         cloudLightOn=0,
-        otherLight=_no_cloud_map(),
-        otherLightChart=PTA_LVecBase4f.empty_array(4),
-        otherLightOn=0,
     )
 
 

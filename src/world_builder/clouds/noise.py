@@ -80,11 +80,9 @@ _ZERO = ((0.0, 0.0, 0.0),)
 COVERAGE_GRID = 96
 COVERAGE_LEVELS = 32
 
-#: vec4s per cloud type in the layerParams uniform array, and the most layers one
-#: field may mix (LOD shells, and a planet's deck, count as layers). Must match
-#: cloud_field.glsl / cloud_sphere.vert.
+#: vec4s of a field's parameters in the layerParams uniform array (a genus's
+#: first rows: GENUS_VEC4S). Must match cloud_field.glsl.
 LAYER_VEC4S = 13
-MAX_LAYERS = 8
 
 #: A convective field's cell octave (:attr:`DensityField.cell_weight`): its
 #: scale over the first octave's (four times its features: 8 km for cumulus),
@@ -1287,8 +1285,8 @@ def cloud_shadow_on_sphere(
     :param spread_at: the anvil shelf's spread there, the same way; None =
         no shelf
     :param levels: also the depth a quarter, a half and three quarters of
-        the way along each chord (``cloudShadowLevelsIn``: what a cloud shadow
-        map's texel holds)
+        the way along each chord (``skyShadowLevels`` of one genus: what a
+        cloud shadow map's texel holds)
     :returns: (...) optical depth, 0 above the slab; with *levels*, (..., 4):
         that, then the three levels
     """
@@ -1446,7 +1444,7 @@ def _cloud_shadow_levels(
     shelf: tuple | None = None,
 ) -> np.ndarray:
     """:func:`_cloud_shadow_depth`, and the depth a quarter, a half and three
-    quarters of the way along each chord (``slabOpticalDepthLevels``: the
+    quarters of the way along each chord (``skyShadowLevels``: the
     steps' densities spread evenly over their lengths): (..., 4)."""
     h, pair, counted, step_length, alive, _ = march
     density = _march_density(spec, h, pair, shift, octave_mean, depth, shelf)
