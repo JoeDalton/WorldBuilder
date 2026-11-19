@@ -1205,7 +1205,7 @@ class TerrainDemo(ShowBase):
             pose.get("lon", spec.reference_lon),
         )
         if self._showcase:
-            # Every genus alone, in a row along the northern horizon
+            # Every genus alone: the cumulus north, the stratiform south
             return GeneraSpec(
                 WeatherSpec(spec),
                 focus=focus,
@@ -1551,9 +1551,10 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--showcase",
         action="store_true",
-        help="every genus alone, in a row along the northern horizon from "
-        "the start (clouds.genera.showcase_features, no other cloud); keys "
-        "1-9 show or hide each genus",
+        help="every genus alone, the cumulus in a row along the northern "
+        "horizon from the start, the stratiform genera along the southern "
+        "(clouds.genera.showcase_features, no other cloud); keys 1-9 show or "
+        "hide each genus",
     )
 
 

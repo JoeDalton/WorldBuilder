@@ -31,15 +31,21 @@ from world_builder.clouds.genera import (
 from world_builder.clouds.noise import (
     CloudOptics,
     DensityField,
+    GenusField,
     cloud_shadow_on_sphere,
     deck_light_table,
     fbm_sigma,
     ground_shadow_table,
     quantise,
+    recipe_column_peaks,
+    recipe_deck_light_table,
+    recipe_shadow_on_sphere,
+    recipe_sigma,
     sphere_column_peaks,
     value_noise_volume,
     with_shelf,
     with_threshold,
+    worley_volume,
 )
 from world_builder.clouds.weather import (
     WeatherSpec,
@@ -147,6 +153,104 @@ def _deck_light(
     return np.dstack([deck[..., :2], ground, deck[..., 2:]])
 
 
+@functools.cache
+def _recipe_deck_light(
+    seed: int, genus: GenusField, radius: float, table: tuple, octaves: int
+) -> np.ndarray:
+    """A recipe genus's far averages (:func:`noise.recipe_deck_light_table`:
+    from its recipe's own density), RGBA as :func:`_deck_light`'s.
+
+    :param genus: its far level's field (resolved) and the deck's optics
+    """
+    return recipe_deck_light_table(
+        _noise(seed), _cells(), genus, radius, np.asarray(table), octaves
+    )
+
+
+@functools.cache
+def _cells() -> np.ndarray:
+    """The recipe genera's Worley volume (:func:`noise.worley_volume`)."""
+    return worley_volume()
+
+
+def recipe_peaks(
+    seed: int, genus: GenusField, radius: float, octaves: int = 4
+) -> np.ndarray:
+    """A recipe genus's sorted column peaks (:func:`noise.recipe_column_peaks`),
+    cached: its threshold and optics do not change them."""
+    key = replace(
+        genus, field=replace(genus.field, threshold=None), optics=CloudOptics()
+    )
+    return _cached_recipe_peaks(seed, key, radius, octaves)
+
+
+@functools.cache
+def _cached_recipe_peaks(seed, genus, radius, octaves) -> np.ndarray:
+    return recipe_column_peaks(_noise(seed), _cells(), genus, radius, octaves)
+
+
+def recipe_field(
+    genus: GenusField, seed: int, radius: float
+) -> tuple[GenusField, np.ndarray]:
+    """A recipe genus with its field's threshold resolved from its coverage
+    by the recipe's own column peaks and spread (:func:`noise.recipe_sigma`),
+    as :func:`planet_field` resolves a field's from its fbm's.
+
+    :returns: the genus, resolved, and its sorted column peaks (all four
+        octaves): its shift table's (:func:`weather.shift_table`)
+    """
+    peaks = recipe_peaks(seed, genus, radius, 4)
+    sigma = recipe_sigma(_noise(seed), _cells(), genus)
+    return replace(genus, field=with_threshold(genus.field, peaks, sigma)), peaks
+
+
+def genus_field(
+    name: str,
+    base: float | None,
+    thickness: float | None,
+    seed: int,
+    radius: float,
+    east: tuple = (0.0, 1.0, 0.0),
+) -> tuple[CloudSpec, DensityField, np.ndarray, GenusField | None]:
+    """A genus of :data:`genera.GENUS_PRESETS` on a planet, as the union
+    march builds it: its type's field (:func:`planet_field`) with the
+    preset's overrides (:attr:`genera.GenusPreset.field`), its threshold
+    resolved anew; a recipe genus's from its recipe's own column peaks
+    (:func:`recipe_field`); its type's optics with the preset's overrides
+    (:attr:`genera.GenusPreset.optics`).
+
+    :param base: its slab's base, metres (None: the type's;
+        :func:`genera.genus_specs` gives it)
+    :param thickness: its slab's thickness (None: the type's)
+    :param east: the recipe genera's stretch axis (the genera's focus's
+        east, planet frame)
+    :returns: its type's preset, its resolved field, its sorted column peaks
+        (its shift table's) and, for a recipe genus, its resolved
+        :class:`noise.GenusField` (its optics the type's, with the preset's
+        :attr:`genera.GenusPreset.optics`), else None
+    """
+    from world_builder.clouds.genera import GENUS_PRESETS
+
+    own = GENUS_PRESETS[name]
+    preset, field, peaks = planet_field(own.cloud_type, base, seed, radius, thickness)
+    if own.optics:
+        preset = replace(preset, optics=replace(preset.optics, **own.optics))
+    if own.recipe is not None:
+        # Its threshold from the recipe's peaks alone (the fbm's not needed)
+        field = replace(field, threshold=None, **(own.field or {}))
+        recipe, peaks = recipe_field(
+            GenusField(name, field, preset.optics, own.coverage, own.far_shadow,
+                       recipe=True, east=tuple(east), **own.recipe),
+            seed, radius,
+        )  # fmt: skip
+        return preset, recipe.field, peaks, recipe
+    if own.field:
+        field = replace(field, threshold=None, **own.field)
+        peaks = _peaks(seed, field, radius, 4)
+        field = with_threshold(field, peaks, fbm_sigma(_noise(seed), field))
+    return preset, field, peaks, None
+
+
 def octave_offset(full: np.ndarray, fewer: np.ndarray) -> float:
     """How far to move the threshold of a field evaluated with fewer octaves
     so its coverage matches the full field's.
@@ -248,7 +352,13 @@ def genus_sun_depth(
     genus whose coverage is a coverage cube's channel (its
     ``coverage_source``: the cube, the channel, its shift table) takes its
     shift as the shader's ``genusWeatherAt`` does: the coverage filtered,
-    then turned into a shift (:func:`genera.genus_weather_at`).
+    then turned into a shift (:func:`genera.genus_weather_at`). A recipe
+    genus (its ``recipe`` not None) marches its recipe's own density as the
+    bakes do (:func:`noise.recipe_shadow_on_sphere`: the shadow maps' and
+    the light volume's march, its far level's field and octaves,
+    ``_deck_octaves``), so the CPU's shade is the maps'; the terrain's
+    per-pixel march leaves a recipe genus to the maps (clouds.md, "Where
+    the recipe is evaluated").
 
     :param points: (m, 3) planet frame, metres
     :param sun: toward the sun (unit)
@@ -256,6 +366,23 @@ def genus_sun_depth(
     """
     weather = genus.weather
     source = getattr(genus, "coverage_source", None)
+    recipe = getattr(genus, "recipe", None)
+    if recipe is not None:
+        shift_at = None
+        if source is not None:
+            cube, index, table = source
+            shift_at = lambda p: genus_weather_at(cube, index, table, p)[1]  # noqa: E731
+        return recipe_shadow_on_sphere(
+            _noise(genus._seed),
+            _cells(),
+            replace(recipe, field=genus._deck_field, optics=genus._deck_optics),
+            points,
+            sun,
+            genus.radius,
+            max_steps,
+            shift_at=shift_at,
+            octaves=genus._deck_octaves,
+        )
 
     def channel(k):
         if source is not None:

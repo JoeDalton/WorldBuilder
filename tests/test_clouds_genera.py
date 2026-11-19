@@ -484,11 +484,13 @@ def test_the_raymarch_marches_both_genera_and_casts_one_summed_shadow(
     volume): each genus its own field and weather (the stratus's from cube
     A and its shift table), one shadow of both (one caster, its layer genus
     0's far level, the sky bands, the union's shade the product of the
-    genera's); every genus has all the detail levels asked for."""
+    genera's); every genus has all the detail levels asked for (the
+    default's stratocumulus, no feature of its own, is not marched)."""
     from world_builder.clouds.cloud import CloudSettings
     from world_builder.clouds.march import CloudMarch
     from world_builder.clouds.planet import PlanetClouds
 
+    assert "stratocumulus" in genera.genera
     clouds = PlanetClouds(
         showbase.render,
         R,
@@ -555,6 +557,30 @@ def test_the_raymarch_marches_both_genera_and_casts_one_summed_shadow(
             assert attrib.get_shader_input(name).get_texture() == march._textures[name]
     finally:
         clouds.remove()
+
+
+def test_the_march_takes_the_genera_that_hold_cloud(genera):
+    """genus_specs(covered=True), the march's: the primary genus always,
+    another only where a feature is its (an empty genus would cost the
+    march as a full one)."""
+    from world_builder.clouds.genera import (
+        genus_specs,
+        has_coverage,
+        showcase_features,
+    )
+
+    assert [s[0] for s in genus_specs(genera)] == list(genera.genera)
+    assert [s[0] for s in genus_specs(genera, covered=True)] == [
+        "convective",
+        "stratus",
+    ]
+    # The default's genera with no feature (normal scenes pay nothing)
+    for name in ("stratocumulus", "nimbostratus", "altostratus", "altocumulus"):
+        assert name in genera.genera and not has_coverage(genera, name)
+    showcase = replace(genera, features=showcase_features(), background=False)
+    assert [s[0] for s in genus_specs(showcase, covered=True)] == list(genera.genera)
+    alone = replace(genera, features=())
+    assert [s[0] for s in genus_specs(alone, covered=True)] == ["convective"]
 
 
 def test_the_genera_may_overlap(genera):

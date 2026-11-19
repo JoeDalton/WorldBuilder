@@ -89,6 +89,8 @@ from world_builder.clouds.noise import (
     cell_shift,
     march_pairs,
     mix_pairs,
+    recipe_density_from,
+    recipe_terms,
     shadow_calibration,
 )
 from world_builder.terrain.chart import TangentFrame, latlon
@@ -193,13 +195,19 @@ class GenusShade:
     """One genus as the light volume's CPU twin marches it: its shadow's
     field and optics, and its weather (planet-frame positions (m, 3) ->
     (m,); None none): the fbm's shift, the convective depth, the anvil's
-    spread."""
+    spread. A recipe genus has its :class:`noise.GenusField` (its field the
+    shadow's) and the Worley volume: its recipe's density
+    (``genusRecipeDensity``, the footprint one ``sun_step_length``), its
+    octaves *octaves*."""
 
     spec: Any
     optics: Any
     shift_at: Any = None
     depth_at: Any = None
     spread_at: Any = None
+    recipe: Any = None
+    cells: Any = None
+    octaves: int = 4
 
 
 def light_depth_union(
@@ -272,16 +280,24 @@ def _genus_density(
     """A genus's density at the march's samples (..., steps, 3), its weather
     and cell octave taken at each (``slabSampleDensity``)."""
     spec = genus.spec
-    base, thickness = spec.slab
-    h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
-    coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    pairs = march_pairs(volume, coords, spec)
     flat = positions.reshape(-1, 3)
 
     def at(sample):
         if sample is None:
             return np.zeros(positions.shape[:-1])
         return np.reshape(sample(flat), positions.shape[:-1])
+
+    if genus.recipe is not None:
+        recipe = genus.recipe
+        terms = recipe_terms(
+            volume, genus.cells, recipe, positions, radius, genus.octaves,
+            recipe.optics.sun_step_length,
+        )  # fmt: skip
+        return recipe_density_from(recipe, *terms, at(genus.shift_at))
+    base, thickness = spec.slab
+    h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
+    coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    pairs = march_pairs(volume, coords, spec)
 
     convective = at(genus.depth_at)
     cell = cell_shift(volume, spec, coords, convective, octave_mean)

@@ -2119,10 +2119,19 @@ mixed_mid +0.79, high +0.01, desert +0.53, forest_dusk +2.38 ms.
 
 ## 37. Cloud genera baseline (2026-11-15)
 
-Before the genera work (docs/superpowers/plans/2026-11-15-cloud-genera.md),
-from the user's start (`terrain_shots.py --start 29.7159 29.8232`), HIGH,
-2560 x 1440, RTX 3070, the raymarch, the mean of 60 frames once settled
-(terrain_shots prints no percentile):
+**Windowed and offscreen rows are not comparable.** The rows up to Task 17
+were timed in a window (`terrain_shots.py` without `--offscreen`); from Task
+18 on the desktop throttled windowed runs to 1 s frames, so they were timed
+offscreen (`--offscreen`), which measures about 1.5 ms less for the same
+tree. Each table below says which it is; compare a row only with rows of the
+same kind. [The phase 5 summary](#phase-5-summary-offscreen) is the current
+state.
+
+**Windowed.** Before the genera work
+(docs/superpowers/plans/2026-11-15-cloud-genera.md), from the user's start
+(`terrain_shots.py --start 29.7159 29.8232`), HIGH, 2560 x 1440, RTX 3070,
+the raymarch, the mean of 60 frames once settled (terrain_shots prints no
+percentile):
 
 | Pose | Frame | FPS |
 |---|---|---|
@@ -2136,7 +2145,7 @@ before any genus is added: the later phases are measured against these rows
 (no regression) as well as against the target.
 
 After the congestus and anvil changes and the billboards' removal (phases 1
-and 2), the same poses:
+and 2), the same poses (windowed):
 
 | Pose | Frame | Against the baseline |
 |---|---|---|
@@ -2153,8 +2162,8 @@ octaves, two more noise fetches where the anvil weight or the shelf is
 non-zero, with no early-out there (clouds.md, "The anvil is smooth").
 
 **Phase 3 (union march).** One march of all the genera over the sky bands,
-one light volume and one map pair (clouds.md, "Genera"). 2560 x 1440, HIGH,
-the medians of interleaved runs of the tree before and after (run to run
+one light volume and one map pair (clouds.md, "Genera"). Windowed, 2560 x
+1440, HIGH, the medians of interleaved runs of the tree before and after (run to run
 ±0.8 ms):
 
 | Pose | Before | Union march |
@@ -2168,10 +2177,146 @@ the 0.58-0.84 ms the tree before measured. Every genus keeping all its
 the band of one genus's own sample loop (no genus loop) and the skipped
 genera at zero coverage take back.
 
-The showcase (`demo_genera.py`, phase 4), the same settings, from 1 km over
+The showcase (`demo_genera.py`, phase 4), the same settings (windowed), from 1 km over
 the start: `genus_congestus` 9.39 ms, `genus_cumulonimbus` 9.72 ms,
 `genus_stratus` (from the ground, the terrain in view) 12.42 ms: above the
 showcase's 60 FPS.
+
+**Phase 5, Task 16 (the stratus on the recipe, the stratocumulus).** The
+demo now compiles the march's recipe variant (`cloud_march_recipes.frag`:
+its stratus is a recipe genus). Windowed, interleaved runs of the tree
+before and after, 2560 x 1440, HIGH, the means of 60 frames (each run's first pose
+dropped: 0.5-1.3 ms slow after idle):
+
+| Pose | Before | After | |
+|---|---|---|---|
+| `genera_cb` | 12.36 ms | 12.43 ms | +0.07 ms |
+| `genera_congestus` | 12.69 ms | 12.67 ms | -0.02 ms |
+
+Task 15 predicted +0.2 ms for the variant; it is within the noise (±0.15
+ms) here, where the stratus deck is out of view. The stratocumulus, a genus
+of the default's with no feature of its own, first cost +0.65 ms
+(`genera_cb` 13.0 ms): it shares the stratus's sky band, and a band of two
+genera takes the generic genus loop, not the band's own (Phase 3's ruling);
+the same with its slab made the stratus's (13.1 ms), so the band's
+thickness was not it, and skipping a recipe genus's bake steps where its
+coverage is 0 changed nothing (the bakes were not it). The march now takes
+only the genera holding cloud somewhere (clouds.md, "An empty genus is not
+marched"). Each genus added to a shared band costs about this much where
+the band is in view: Tasks 17-18 (Ns, As, Ac) should keep their slabs
+apart where they can.
+
+The showcase's southern sheets from under them (`terrain_shots.py
+--showcase`, 2560 x 1440, windowed): `genus_stratus` 8.93 ms, `genus_stratocumulus`
+10.74 ms (St and Sc share a band there: the genus loop).
+
+**Phase 5, Task 17 (nimbostratus, altostratus).** The default's genera now
+list both, with no feature: the demo marches the convective clouds and the
+stratus alone, its shaders, uniforms and sky bands as before (the bands
+change only where a slab bridges two groups). Windowed, 2560 x 1440, HIGH, the means
+of 60 frames, three interleaved runs each: `genera_cb` 12.07, 12.00, 11.99
+ms, `genera_congestus` 12.24, 12.22, 12.28 ms (Task 16, another session:
+12.43 and 12.67); the 1600 x 900 shots of `genera_cb`, `genera_congestus`
+and `clouds_noon` are at the noise floor against before the task (mean
+difference 0.48, 0.28, 0.04 levels; p99 6, 4, 1).
+
+The showcase (`terrain_shots.py --showcase`), 2560 x 1440, windowed:
+
+| Pose | Task 16 | Task 17 | |
+|---|---|---|---|
+| `genus_nimbostratus` | | 10.91, 10.98 ms | |
+| `genus_altostratus` | | 10.65, 10.70 ms | |
+| `genus_stratus` | 8.93 ms | 9.55 ms | +0.6 ms |
+| `genus_stratocumulus` | 10.74 ms | 11.72 ms | +1.0 ms |
+
+The low sheets' band now holds the nimbostratus too (three genera in the
+genus loop), and the convective band the nimbostratus and the altostratus.
+Merged into one 9.9 km band (`march.sky_bands` before the bridge split:
+clouds.md, "The nimbostratus") the cumulus poses cost +1.1-1.2 ms at 1600 x
+900 and the low sheets lost their light-volume slices; split, the cumulus
+poses are +1.0 ms there. All well under 16.6 ms.
+
+**Phase 5, Task 18 (altocumulus; the opaque cutoff eased).** The default's
+genera list the altocumulus with no feature (cube B's channel 0, unused
+elsewhere): the demo does not march it. The eased cutoff
+(`march.opaque_residual`) is a few instructions a pixel, after the march.
+**Offscreen** (`--offscreen`: the desktop throttled windowed runs to 1 s
+frames this session, so these are not comparable with the windowed rows
+above), 2560 x 1440, HIGH, the means of 60 frames, three interleaved runs
+of the tree before and after:
+
+| Pose | Before | After | |
+|---|---|---|---|
+| `genera_cb` | 10.53, 10.48, 10.55 ms | 10.58, 10.51, 10.53 ms | +0.02 ms |
+| `genera_congestus` | 10.46, 10.49, 10.50 ms | 10.51, 10.53, 10.49 ms | +0.03 ms |
+
+Within the noise (±0.05 ms between runs). The 1600 x 900 shots of
+`genera_cb`, `genera_congestus` and `clouds_noon` against before: mean
+difference 0.40, 0.26, 0.04 levels, p99 5, 3, 1 (before against itself:
+0.47, 0.34, 0.05).
+
+The showcase, offscreen, 2560 x 1440, one run each:
+
+| Pose | Before | After | |
+|---|---|---|---|
+| `genus_altocumulus` | | 10.00 ms | |
+| `genus_altostratus` | 9.74 ms | 10.10 ms | +0.36 ms |
+| `genus_nimbostratus` | 9.75 ms | 9.93 ms | +0.18 ms |
+| `genus_stratus` | 8.51 ms | 8.63 ms | +0.12 ms |
+| `genus_stratocumulus` | 10.25 ms | 10.46 ms | +0.21 ms |
+| `genus_humilis` | 12.20 ms | 12.55 ms | +0.35 ms |
+| `genus_mediocris` | 12.05 ms | 12.44 ms | +0.39 ms |
+| `genus_congestus` | 11.92 ms | 12.31 ms | +0.39 ms |
+| `genus_cumulonimbus` | 12.11 ms | 12.51 ms | +0.40 ms |
+
+The altocumulus sits inside the convective band (with the nimbostratus
+and the altostratus): one more genus in its genus loop, +0.35-0.4 ms where
+that band is in view (Task 16's estimate was 0.6 ms a genus). All well
+under 16.6 ms.
+
+### Phase 5 summary (offscreen)
+
+The end of phase 5 (Task 19: the recipe genera St, Sc, Ns, As and Ac, the
+showcase's two rows). **Offscreen** (`--offscreen`), 2560 x 1440, HIGH, RTX
+3070, from the user's start (`--start 29.7159 29.8232`), the means of 60
+frames once settled, in one session: the demo's poses and the showcase's
+(`--showcase`) run twice, interleaved, each run's first pose dropped (a
+throwaway `ground`). The two runs differ by 0.06 ms at most.
+
+| Pose | Run 1 | Run 2 | FPS |
+|---|---|---|---|
+| `genera_cb` | 10.50 ms | 10.52 ms | 95 |
+| `genera_congestus` | 10.48 ms | 10.52 ms | 95 |
+| `clouds_noon` | 9.39 ms | 9.41 ms | 106 |
+| `genus_humilis` (showcase) | 12.45 ms | 12.46 ms | 80 |
+| `genus_mediocris` | 12.42 ms | 12.44 ms | 80 |
+| `genus_congestus` | 12.22 ms | 12.27 ms | 82 |
+| `genus_cumulonimbus` | 12.41 ms | 12.46 ms | 80 |
+| `genus_stratus` | 8.58 ms | 8.60 ms | 116 |
+| `genus_stratocumulus` | 10.39 ms | 10.43 ms | 96 |
+| `genus_nimbostratus` | 9.93 ms | 9.93 ms | 101 |
+| `genus_altostratus` | 10.04 ms | 10.09 ms | 99 |
+| `genus_altocumulus` | 10.02 ms | 10.07 ms | 99 |
+
+- **The showcase** (>60 FPS, 16.6 ms): met at every pose, 12.5 ms at
+  worst (the cumulus row: the convective band's genus loop holds Ns, As
+  and Ac too), about 14 ms windowed.
+- **demo_terrain** (>160 FPS, 6.25 ms): not met. 10.5 ms offscreen at the
+  towers, about 12 ms windowed: back at the pre-project baseline (12.57
+  ms, 80 FPS, windowed) after phases 1-2's +1.2 ms, and about 1.7 times
+  the target. The gap predates the genera: the march alone took about 4.5
+  ms at a tower pose before them (§35), the rest of the frame is the
+  terrain's, the sky's and the passes' (§32).
+- **No regression in phase 5.** Task 18's offscreen rows (`genera_cb`
+  10.53 ms, `genera_congestus` 10.51 ms) and these agree within 0.03 ms.
+  Against Task 15's tree (Task 16's "Before", windowed: 12.36 and 12.69
+  ms; less the ~1.5 ms offscreen offset, about 10.9 and 11.2 ms) phase 5
+  is 0.4-0.7 ms faster at these poses: the default's empty genera are not
+  marched, and the demo's bands are as before. The offset is an estimate
+  from one session (Task 18), so read that as "no regression", not as a
+  gain.
+- **The showcase against Task 18's offscreen row:** within 0.1 ms at every
+  pose.
 
 ## Not covered
 

@@ -227,9 +227,10 @@ field where it is and has no shells to crossfade.
 
 ## Genera
 
-[`genera.py`](../../src/world_builder/clouds/genera.py) adds stratus, and the
-convective continuum from fair-weather cumulus through congestus to
-cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
+[`genera.py`](../../src/world_builder/clouds/genera.py) adds the low and
+middle genera (stratus, stratocumulus, nimbostratus, altostratus and
+altocumulus) and the convective continuum from fair-weather cumulus through
+congestus to cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
 `--genera` in the demo and the scripts sharing its options, on by default
 there, `--no-genera` for the plain field; opt-in in `cloud_bench.py`). Its maps are
 a **placeholder** for the weather (issue #8): features laid out around one
@@ -238,13 +239,27 @@ point. One `CloudMarch` draws them all, as one union of genera.
 **The genera and their sky bands.** A genus is one field (one cloud type)
 over its own slab, with its own coverage, shift table and far table
 (`GeneraSpec.genera`, each a `genera.GENUS_PRESETS` entry: its cloud type,
-coverage source, `far_shadow` and slab). Today there are two:
+coverage source, `far_shadow` and slab). There are six, in
+`GeneraSpec.genera`'s order:
 
-- **convective** (`CloudType.CONVECTIVE`), the primary genus (genus 0): the
-  cumulus field, its clouds growing with the convective **depth** (0 to 1, a
-  map of its own);
-- **stratus** (`CloudType.STRATUS`): a sheet 500 m thick, its base at
-  `GeneraSpec.stratus_altitude`.
+| Genus | Slab | Coverage | Density |
+|---|---|---|---|
+| convective (`CloudType.CONVECTIVE`; humilis, mediocris, congestus, cumulonimbus) | 2.2-10.5 km | the weather cube (coverage, shift, depth, spread) | its own field: depth, cell octave, anvil, shelf |
+| stratus | 0.9-1.4 km (`GeneraSpec.stratus_altitude`, the type's 500 m) | cube A, channel 0 | recipe: value fbm, stretched 3x, wispy base |
+| stratocumulus | 0.8-1.8 km | cube A, channel 1 | recipe: closed cells 1.5 km, billowy |
+| nimbostratus | 0.6-5 km | cube A, channel 2 | recipe: value fbm 20 km, dense, ragged base |
+| altostratus | 4.7-6 km | cube A, channel 3 | recipe: value fbm stretched 5x, thin |
+| altocumulus | 3.5-3.8 km | cube B, channel 0 | recipe: closed cells 350 m, a lens |
+
+The convective genus is the primary one (genus 0): the cumulus field, its
+clouds growing with the convective **depth** (0 to 1, a map of its own); the
+cumulus species are depths of it, not genera of the march. The others are
+[recipe genera](#the-recipe-genera), one generic density driven by knobs.
+The default (`GeneraSpec()`) lists all six but has features only for the
+convective clouds and the stratus; the others are not marched there
+([an empty genus is not marched](#the-recipe-genera)). The high layer
+(cirrus, cirrostratus, cirrocumulus) is still the cirrus sheet
+([the parts](#the-parts)).
 
 Slabs may overlap: `march.sky_bands` merges them into at most four
 (`MAX_SKY_BANDS`) disjoint bands of sky, each with a bit mask of the genera
@@ -266,11 +281,15 @@ entry, its own weather (once per `uWeatherStretch` of ray, per genus), its
 own footprint fades, billows and far mean, and adds its extinction
 `σ_g`; the sample's alpha is that of `Σσ_g`, its light `Σ (σ_g / σ)` of
 each genus's `cloudRadianceAt(genus, ...)` (one lighting path, its far table
-the genus's). A band of one genus (every band today) takes its samples in a
-loop of its own, without the genus loop: through it the same light cost
-0.4-0.6 ms more between the towers (`cloud_bench.py --genera`, 2560 × 1440),
-its lighting inside a second loop; a single (sample, genus) loop, and slots
-of weather per genus, cost 0.2-0.4 ms more too. Every genus has all the
+the genus's). A band of one genus (the demo's: the convective clouds, the
+stratus) takes its samples in a loop of its own, without the genus loop:
+through the genus loop the same light cost 0.4-0.6 ms more between the
+towers (`cloud_bench.py --genera`, 2560 × 1440), its lighting inside a second
+loop; a single (sample, genus) loop, and slots of weather per genus, cost
+0.2-0.4 ms more too. A band shared by several genera pays the genus loop,
+and each genus in it about 0.35-0.4 ms more where the band is in view
+(performance §37): in the showcase the convective band holds the
+nimbostratus, the altostratus and the altocumulus too. Every genus has all the
 `octave_bands` asked for (with two marches, the convective clouds' and the
 stratus's, each had used to halve them to fit eight layers). The reflection's deck is genus 0's
 alone.
@@ -278,8 +297,10 @@ alone.
 **The weather of the other genera.** Genus 0 reads the weather cube
 (coverage, shift, depth, spread), so a planet without genera is one genus
 and unchanged. The others read their coverage from a channel of **coverage
-cube A** (`genusCoverA`, RGBA16F, `genera.coverage_cube`: the stratus in
-channel 0), and turn it into their fbm shift through their row of the
+cube A** (`genusCoverA`, RGBA16F, `genera.coverage_cube`: the stratus,
+the stratocumulus, the nimbostratus and the altostratus in channels 0-3) or
+of **cube B** (`genusCoverB`: the altocumulus in channel 0, three channels
+free for the high layer), and turn it into their fbm shift through their row of the
 **shift table** (`genusShift`, `SHIFT_TABLE_SIZE` × `MAX_GENERA`, R32F;
 `weather.build_shift_texture`), their channel and row in row 13 of their
 entry (`genusWeatherAt`); no depth, no spread. Their far tables are pages of
@@ -302,7 +323,7 @@ slices it had alone. Each genus takes its own sun window from the volume and
 its **`far_shadow`** (`noise.GenusField`, `genera.GENUS_PRESETS`; row 13's w
 of its entry) of the depth beyond it: 0 for the convective clouds (their
 window carries their form; the whole chord blackens a tower), 1 for the
-stratus, which so takes the whole chord of the towers above it. Under the
+recipe genera: a stratus so takes the whole chord of the towers above it. Under the
 towers its sky light dims too (the volume's up depth holds them). The ground,
 sea and models take one shadow, `exp2(-sum)`, the product of the genera's
 shades (`PlanetClouds.shadow_caster()`, `planetCloudShadow`;
@@ -427,28 +448,288 @@ genera"); §37 is the genera's baseline from the user's start.
 **The showcase.** [`scripts/demo_genera.py`](../../scripts/demo_genera.py)
 (the terrain demo with `--showcase`) shows every genus alone, for look
 development: `genera.showcase_features` lays out one feature per genus and
-cumulus species (`SHOWCASE_ROW`: stratus, humilis, mediocris, congestus,
-cumulonimbus, west to east) in a row along the northern horizon, 35-45 km
-from the start, apart (a test checks no feature's cloud reaches another's,
-the cumulonimbus's anvil counted at 4 radii), and
+cumulus species, the cumulus in a row along the northern horizon
+(`SHOWCASE_ROW`: humilis, mediocris, congestus, cumulonimbus, west to east,
+35-45 km from the start), the stratiform and mid-level genera along the
+southern (`SHOWCASE_SOUTH`, east to west: stratocumulus at bearing 120,
+stratus 150, nimbostratus 180, altostratus 210 and altocumulus 240, 38
+km out, sheets 14 km wide; a slot whose genus is not a preset is left out,
+`showcase_slots`), apart (a test checks no
+feature's cloud reaches another's, the cumulonimbus's anvil counted at 4
+radii, the slots to come too, and that sheets 15 km wide fit every
+southern slot). Ruling: one horizon cannot hold sheets 10-15 km wide and
+the cumulus at a readable distance. The low sheets sit east of south, away
+from the sun (azimuth 210 at the start), the altostratus at it ("ground
+glass"), the altocumulus beyond it. A stratiform feature fills its own genus's coverage map
+(`genera.genus_coverage`), and
 `GeneraSpec(background=False)` removes the fair-weather cumulus between
 them. The cumulus species are convective depths (`GENUS_DEPTHS`: humilis 0,
 mediocris 0.2, congestus 0.5). Keys 1-9 hide or show each genus of the march
 (`CloudMarch.set_genus_visible`, a bit of `uGenusMask` the view's samples
 test before any noise); a hidden genus still shades the others and the
 ground, and the cumulus species, one genus, go together.
-`terrain_shots.py --showcase` has a `genus_<name>` pose per feature (1 km up,
-the stratus's from the ground). At 50-60 km the features were specks in the
+`terrain_shots.py --showcase` has a `genus_<name>` pose per feature: a
+cumulus from 1 km over the start, along its bearing; a low sheet (St, Sc,
+Ns) from 60 m over the ground under its centre, looking along its bearing 6
+degrees over its far edge (its underside the ceiling, its outline in the
+lower third); the altostratus from by its near edge, looking at it against
+the sun (`SHOWCASE_AGAINST_SUN`: its "ground glass"); the altocumulus from
+under its centre, as the low sheets (its pattern of patches is its
+identity). From the start the
+stratus, 38 km off, was a line 1.5 degrees up; from just outside its near
+edge, a slab side-on, a lenticular's look; the WMO's photos of St and Sc are
+from under them. At 50-60 km the features were specks in the
 haze; at 30 km the cumulus species gave a cloud or two each, hence wider,
-sparser discs a little farther. At 2560 x 1440 HIGH: 9.4-12.4 ms.
+sparser discs a little farther. At 2560 x 1440 HIGH, offscreen, every pose
+takes 8.6-12.5 ms, above the showcase's 60 FPS: the cumulus row 12.2-12.5
+ms, the southern sheets 8.6 (St) to 10.4 ms (Sc) (performance §37, "Phase
+5 summary").
 
-**Not yet.** The anvil does not lean downwind with height (a shear; it is
+**Not yet, for the convective clouds.** The anvil does not lean downwind with height (a shear; it is
 the genus framework's, docs/superpowers/plans/2026-11-15-cloud-genera.md).
 The plume is straight: the wind is read at the tower, not
 along the plume. Its underside is lit as the rest of the cloud: no darker base
 for deep clouds. The tower's stem, at coverage 1, has
 straight sides. From the ground, the air hazes out a cumulonimbus's lower half at
 40 km, and its top half reads as a large cumulus.
+
+### The recipe genera
+
+The convective clouds are a field of their own (the cumulus field's depth,
+cell octave, anvil and shelf). Every other genus (the stratus, the
+stratocumulus, the nimbostratus, the altostratus and the altocumulus) is instead
+a **recipe genus**: one generic density, `genusRecipeDensity` in `cloud_field.glsl`
+(`noise.recipe_density_on_sphere` on the CPU), driven by knobs of its
+`noise.GenusField` (a `GenusPreset.recipe` dict, and `GenusPreset.field` for
+its `DensityField`'s own: window, noise scale, density):
+
+- **base value**: the field's value fbm and/or Worley cells at
+  `cell_size`, mixed in by `cell_fill`, from `noise.worley_volume` (a
+  tileable F1/F2 volume, 8 cells of 8 texels a side, the `cloudCells`
+  texture): `noise_kind` `"worley"` reads `1 - F1` (round blobs about the
+  cells' points, which merge into one mass as the coverage rises), `"cells"`
+  reads `F2 - F1` (0 on the walls between cells, highest at their points:
+  however high the coverage, the walls stay thinner than the cells, a
+  tessellation; its mean, `noise.cell_means`, in the deck entry's row 14);
+- **anisotropy**: coordinates squeezed along the genera's focus's east by
+  `stretch` (a fixed axis, the deck entry's row 15: a direction that turned
+  with the position would tear the field) and in height by
+  `vertical_stretch`, about the slab's base;
+- the weather's **shift** and the field's **threshold window and lift**, as
+  every genus; the coverage is calibrated on the recipe's own column peaks
+  (`noise.recipe_column_peaks`, `field_setup.recipe_field`; within 5 % of
+  the coverage asked, tested);
+- a **profile** multiplying the density: a soft bottom and a soft top (slab
+  shares), or the lens `4h(1 - h)`;
+- **erosion** at the edge only: small Worley cells (`cell_size / 6`) move the
+  threshold about their mean, billowy (> 0, the cells' centres stay) or
+  wispy (< 0, their walls stay), over the window and a skin past it, so the
+  core holds; with `erosion_base`, only near the slab's base (whole at the
+  base, gone by that share of the slab: a stratus's fractus). The erosion's
+  noise still lifts each column's highest value, so the coverage
+  calibration takes it in (`noise.recipe_column_peaks`: the cells'
+  deviation, a window's share of it, where a column's cloud begins);
+  without, the stratus's wispy erosion gave 5 % too much cover at 0.3.
+
+Octaves, cells and erosion finer than a pixel (or a step) resolves fade to
+their means, as the view's `resolved()`. The knobs pack into rows 14-15 of
+the genus's entry and row 10's free x (`noise.pack_genus_params`: zero for a
+genus without the recipe); the deck entry's row 15 holds the shared frame
+(the stretch axis, the cells' mean F1). A genus's coverage may come from
+coverage cube A or B (`genusCoverB`).
+
+**The stratus** (`GENUS_PRESETS["stratus"]`, 0.9-1.4 km, cube A channel
+0): WMO's "flat, uniform base", grey, fog-like, its outline sharp. Value fbm
+of 10 km features (`noise_scale` 0.0004; the research's 10-30 km) stretched
+three times along the focus's east, its two fine octaves weak (weights
+0.6, 0.3, 0.08, 0.02: at full weight, stretched, they drew streaks under
+it, an altostratus's striations), a window of 1.2 sigma (2.5 left the
+inside half-dense, a light, thin-looking veil; narrower, the inside is
+solid, so the base is a uniform grey and the outline sharp), a soft top
+(`profile` 0.03, 0.3), a flat base, and wispy erosion (-1.5) near the base
+only (`erosion_base` 0.4): its rim ragged low down, as fractus. From under
+it: a grey ceiling to its edge, the sky under that.
+
+**The stratocumulus** (`GENUS_PRESETS["stratocumulus"]`, 0.8-1.8 km, cube A
+channel 1): tessellations or rounded masses, non-fibrous, flat-based,
+lumpy-topped, grey or white with "always some dark parts". Closed cells
+(`"cells"`, `F2 - F1`) 1.5 km wide, twice as tall as wide (columns through
+the slab: `vertical_stretch` 2), three quarters of the base value, the
+rest fbm of 2 km features; the threshold rising 0.4 by the top with
+exponent 1.5 (`top_erosion`, `top_exponent`): a cell's centre, its value
+highest, reaches higher than its rim, so its top is a dome; a flat base
+(`profile` 0.08, a soft top 0.1); billowy erosion (3 windows: at 1 the
+domes stayed smooth). `density` 0.045 a metre: the research gives it more
+water than the stratus (0.45 against 0.25-0.3 g/m³), but the stratus's
+type is already at 0.05, and at 0.07 the stratocumulus's undersides went
+navy; its closed cells and narrow window (0.8 sigma) make its cores
+denser than the stratus's wider-windowed sheet.
+`1 - F1` was tried first: at the showcase's coverage the blobs merged into
+one mass with holes, a cumulus field's look, not a tessellation. The cells
+at its edge, where the coverage fades, are thin wisps at the base (the
+lift cuts them low, flat-topped) and sunlit, brighter than the shadowed
+bases behind them; real decks break up the same way, so they stay.
+
+**The nimbostratus** (`GENUS_PRESETS["nimbostratus"]`, 0.6-5 km, cube A
+channel 2): WMO's thick, dark, diffuse rain-cloud layer that blots out the
+sun. Value fbm of 20 km features (`noise_scale` 0.0002; the research's
+20-50 km) stretched three times along east, its fine octaves faint (0.6,
+0.3, 0.08, 0.02: featureless), a narrow window (1 sigma: solid inside, a
+uniform ceiling), a top-hat with soft ends (`profile` 0.12, 0.15: a diffuse
+base), wispy erosion of 500 m cells over its lowest 15 % (ragged where it
+thins), and the threshold rising 0.15 toward the top (`top_erosion`: where
+the coverage fades its top slopes down; at 0.05 the showcase's disc stood
+as a dark brick, at 0.3 a dome). The densest genus (`density` 0.08 a
+metre, against the stratus's 0.05): its far table lets under 2 % of the
+noon sun through a full sheet (tested). It is lit darker than the stratus
+it shares a type with (`GenusPreset.optics`: sky fill 0.05, forward gain
+1.6) and steps the bakes 250 m toward the sun. From under it: a dark grey
+ceiling, the sky under its far edge.
+
+Its slab spans the low sheets' and the convective clouds' altitudes, which
+merged all of them into one 9.9 km sky band: the stratus and the
+stratocumulus took that band's light-volume slices (310 m, not 31) and its
+bakes' steps, and in the showcase their shading turned grainy and the
+stratocumulus's ground shadow patchy (mean difference 10-15 levels against
+before). `march.sky_bands` now splits a band at a gap that only one slab
+bridges (not the band's thickest: the convective slab holding mid-level
+sheets stays whole), each part holding its side's genera and the bridge
+(`band_masks`: every genus reaching into a band); the low sheets' shots are
+back within 1-3 levels of before. The nimbostratus is marched in both
+bands; the cut runs through it at 2 km, unseen in its dense body.
+
+**The altostratus** (`GENUS_PRESETS["altostratus"]`, 4.7-6 km, cube A
+channel 3): a grey or bluish, uniform or striated sheet through whose
+thinner parts the sun shows as through ground glass. Value fbm of 16 km
+features stretched five times along east, a wide window (2 sigma: its
+density varies, thin and thicker parts), soft at both ends (`profile` 0.3,
+0.3), no erosion (at -0.5 the 500 m cells, squeezed along east like the
+rest, sawed its rim into teeth), its last octave dropped (weights 0.6, 0.3,
+0.1, 0: the march's far levels drop it, and in a window this wide the cut
+drew a contour across the sheet). Thin (`density` 0.0015: at 0.004 the
+sheet hid the sun; now its disc shows, dimmed, and the far table lets
+8-60 % of the noon sun through a full sheet, tested) and lit as ice
+(`GenusPreset.optics`: sky fill 0.2, an ice cloud's forward lobe). Its slab
+sits above the altocumulus's 3.5-3.8 km: a sample inside two genera's
+slabs evaluates both. Its showcase pose looks at it against the sun
+(`terrain_shots.SHOWCASE_AGAINST_SUN`).
+
+A faint contour crossed the sheet near that pose's far side, in the
+flat-colour debug view too (an alpha step, not lighting). Not the steps
+(each segment takes at least `SEGMENT_SAMPLES`, and the sheet is thin
+enough that a step's alpha is linear in its density): the march stops a
+ray at transmittance `OPAQUE` (0.04) and counted it opaque, its alpha
+snapped from 0.96 to 1. A dense cloud crosses that point inside itself;
+a thin sheet seen at a grazing angle, whose path through it lengthens
+across the view, crosses it along a line on the screen: a step of 0.04 in
+alpha there, about 1.7 levels in the flat view, a brighter line lit (its
+far side, past the line, a flat plateau: opaque). The light let through is
+now eased to 0 over [OPAQUE, 2 OPAQUE] (`march.opaque_residual`,
+`opaqueResidual` in `cloud_march.glsl`: value and slope continuous; the
+transmittance itself above 0.08), so only rays already nearly opaque
+change: the convective scenes' shots stayed at the noise floor and their
+time did not move (performance §37).
+
+**The altocumulus** (`GENUS_PRESETS["altocumulus"]`, 3.5-3.8 km, cube B
+channel 0): WMO's white or grey patches, rounded masses or rolls,
+regularly arranged, with shading, small clear gaps between them, most of
+the elements 1-5 degrees wide seen more than 30 degrees up. Closed cells
+(`"cells"`, `F2 - F1`) 350 m apart, 80 % of the base value, the rest fbm of
+3 km features (the cells' sizes jitter); half again taller than wide
+(`vertical_stretch` 1.5: one element per column) in a lens (`profile`
+`4h(1 - h)`: rounded tops and bases) 300 m thick; billowy erosion (3
+windows) at a sixth of the cells; unstretched; its last octave dropped; a
+narrow window (0.8 sigma); `density` 0.05 a metre. Choices made on the
+shots (its pose from under its centre, as the low sheets: its pattern is
+its identity, and the sun, 30 degrees off the view, lights the rims):
+
+- An element is about 1.2 cells wide (a Voronoi cell's). At the plan's 800
+  m cells the elements were 10 degrees across overhead, cumulus humilis's
+  size; at 350 m they are 3-7 degrees, the research's 50-450 m.
+- A slab 1 km thick (the plan's 3.5-4.5 km) made elements thicker than
+  wide: seen at 30-50 degrees up, tall pebbles; at 300 m they are flat
+  patches (the research's 0.1-1 km).
+- `1 - F1` (round blobs) merged into chains and clumps with wide gaps; the
+  closed cells keep the regular arrangement and the small gaps at any
+  coverage. Erosion 2 left their rims polygonal; 3 rounds them.
+- At `density` 0.012 the patches were all white; at 0.05 their cores are
+  grey and the rims lit. Its far table: three-quarter cover lets 61 % of
+  the noon sun through (the stratocumulus 40 %), a full layer (opacus)
+  4 %, less than the altostratus's 41 % (tested).
+- Stretched, the erosion's cells (read in the recipe's squeezed
+  coordinates) would saw the rim into teeth, as on the altostratus: no
+  stretch (rolls, undulatus, would need one; not done).
+- The Worley volume (8 cells a side) repeats every 2.8 km at this size.
+  From 26 km up over the 14 km disc no repeat shows (the autocorrelation
+  of its cloud mask has no peak at the period): the sheet is a sphere
+  cutting the 3D volume obliquely, and the fbm and the coverage vary over
+  it. Nothing is done to break it ([not yet](#not-yet-for-the-recipe-genera)).
+
+Why one recipe instead of shader code per genus: the research's recipe table
+(cloud_genera_research.md §3) differs between the stratiform and mid-level
+genera only in these knobs, and one code path keeps one CPU mirror, one
+coverage calibration and one cost; a new genus is a preset, not shader work.
+Rejected: a `switch` on the genus with a hand-written density each, which
+multiplies the CPU twins and the shader's size (and, measured, every branch
+in the shared loops costs the convective clouds).
+
+**Where the recipe is evaluated.** In the view march, in its variant
+`cloud_march_recipes.frag` (`cloud_march.glsl` with `CLOUD_RECIPES`), which
+`CloudMarch` compiles only when one of its genera is a recipe genus; and in
+the bakes of the summed depths (the light volume's and the shadow maps',
+`CLOUD_RECIPE_SHADOWS` in `skyShadowLevels`). Everywhere else (the
+terrain's and the models' per-pixel shadow march, the sun march's local
+steps) a recipe genus contributes nothing of its own: its depth comes from
+the light volume and the maps, from the sample itself (`cloudSunDepth`
+takes no local steps for a recipe genus: the march's local steps skip it,
+so the volume read past them lost the first 180 m toward the sun, the
+densest at a cloud's base, and the stratocumulus's undersides came out
+light). Measured at 2560 x 1440, a never-taken
+branch to the recipe in those shared loops cost the convective clouds
+0.15-0.2 ms in the view's sample loop and 0.3-1 ms in the shadow march
+(register pressure in the inlined loops), hence the variants.
+
+The CPU's are the bakes': `field_setup.genus_sun_depth` (hence
+`sun_visibility`) marches a recipe genus's own density as the maps do
+(`noise.recipe_shadow_on_sphere`: the chord, steps and weather of
+`cloud_shadow_on_sphere`, the recipe at its far level, the footprint one
+step), and the light volume's twin too (`light_volume.GenusShade`'s
+`recipe`). The terrain's per-pixel march without maps leaves recipe genera
+out, so there the CPU's shade (the test balls') is darker than the
+ground's under a stratus: the maps cover the view's surroundings, where it
+shows. A recipe genus's far table (its far shading and the ground's mean
+shadow, `genusDeckLight`) is its recipe's (`noise.recipe_deck_light_table`,
+`field_setup._recipe_deck_light`): from its field's fbm, the ground's mean
+shadow under the stratocumulus was 0.2 off at a quarter cover and a low
+sun.
+
+**An empty genus is not marched.** `GeneraSpec.genera` lists the genera a
+planet may have; the march takes those holding cloud somewhere
+(`genera.genus_specs(covered=True)`, `has_coverage`: the primary genus
+always, another where a feature is its). The default's stratocumulus,
+nimbostratus, altostratus and altocumulus have no feature, so the demo marches the
+convective clouds and the stratus alone. An empty stratocumulus sharing the
+stratus's band cost the demo 0.65 ms at 2560 x 1440: a band of two genera
+takes the generic genus loop, not the band's own (performance §37).
+`planet.check_layers` still counts them all.
+
+#### Not yet, for the recipe genera
+
+- **Altostratus striations.** The stretch is there (five times along east)
+  but at its density (0.0015) no streak shows: the sheet reads uniform.
+- **Nimbostratus virga and pannus.** The virga tail under the base needs a
+  second, lower slab (not cheap); pannus, a stratus under it, would be a
+  feature of its own.
+- **Altocumulus species.** Lenticularis, castellanus, undulatus (rolls:
+  they need a stretch, which saws the erosion's cells) and virga. From
+  below its patches can read polygonal and flat-white.
+- **No tiling breaker.** The Worley volume repeats every 8 cells (2.8 km
+  for the altocumulus, 12 km for the stratocumulus); nothing hides the
+  period, which may show over a cube face's centre.
+- **The terrain's per-pixel shadow march** (and the models', and the sun
+  march's local steps) leave the recipe genera out (above, "Where the
+  recipe is evaluated"): they shade the ground only through the light
+  volume and the shadow maps.
 
 ## The raymarch
 

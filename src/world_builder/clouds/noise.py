@@ -962,11 +962,28 @@ COVERAGE_SOURCES = {"weather": 0, "A": 1, "B": 2}
 DECK_LAYER = MAX_GENERA * DETAIL_LEVELS
 
 
+#: A recipe genus's flags (row 14's x, :func:`pack_genus_params`): the
+#: recipe on, its base Worley cells, its lens profile, its cells closed
+#: (``F2 - F1``, not ``1 - F1``). MUST match cloud_field.glsl's RECIPE_* bits.
+RECIPE_ON = 1
+RECIPE_WORLEY = 2
+RECIPE_LENS = 4
+RECIPE_CELLS = 8
+
+
 @dataclass(frozen=True)
 class GenusField:
     """One genus of the union march: a density field over its own slab (which
     may overlap another genus's), its optics, where its coverage comes from,
     and how much of the light volume's depth beyond its sun window shades it.
+
+    A genus with :attr:`recipe` set is a **recipe genus** (cloud_field.glsl's
+    ``genusRecipeDensity``, :func:`recipe_density_on_sphere`): its base value
+    is its field's fbm and/or Worley cells, read at coordinates stretched
+    horizontally and vertically, thresholded by its field's window and lift,
+    times a vertical profile, its edge eroded in a skin. The recipe's knobs
+    are neutral by default (and packed as zeros for a genus without the
+    recipe: the convective clouds, the stratus).
 
     :ivar name: the genus's name (:data:`genera.GENUS_PRESETS`' key)
     :ivar field: its resolved density field (slab, noise, profile)
@@ -979,7 +996,33 @@ class GenusField:
         (the light volume's, toward the sun) that shades it: 1 for a genus
         under deep clouds (the stratus under a cumulonimbus), 0 for the
         convective clouds (their own window carries their form)
-    :ivar noise_kind: its base noise (``"value"``: the field's fbm)
+    :ivar noise_kind: its base noise: ``"value"`` the field's fbm alone,
+        ``"worley"`` the fbm and Worley cells (``1 - F1``: round blobs about
+        the cells' points, merging as the coverage rises) mixed by
+        :attr:`cell_fill`, ``"cells"`` the fbm and closed cells (``F2 -
+        F1``: 0 on the walls between cells, highest at their points, so a
+        high coverage keeps them apart: a tessellation)
+    :ivar recipe: whether it is a recipe genus
+    :ivar cell_size: a Worley cell's side, metres (the erosion's cells are
+        :data:`RECIPE_EROSION_SCALE` times smaller, for either kind)
+    :ivar cell_fill: the cells' weight in the base value, 0 to 1 (the fbm's
+        ``1 - cell_fill``)
+    :ivar stretch: horizontal anisotropy (>= 1): features this many times
+        longer along :attr:`east` (the local east of the genera's focus,
+        :class:`terrain.chart.TangentFrame`) than across it
+    :ivar vertical_stretch: features this many times taller (> 0)
+    :ivar profile: (bottom softness, top softness, lens): the density fades
+        in over the slab's lowest share and out over its highest (0: a hard
+        edge), times ``4h(1 - h)`` with lens
+    :ivar erosion: (amount, skin): the edge's erosion by small Worley cells,
+        in threshold windows (> 0 billowy, < 0 wispy), over a skin of this
+        many windows past the window's top (the core within it untouched)
+    :ivar erosion_base: the erosion only near the base: full at the slab's
+        base, gone by this share of it (a stratus's fractus); 0 = at every
+        height
+    :ivar east: the stretch's axis, a unit vector in the planet frame (the
+        march sets the focus's east; the GPU reads the genera's shared one,
+        :func:`pack_recipe_frame`)
     """
 
     name: str
@@ -988,6 +1031,48 @@ class GenusField:
     coverage: tuple = ("weather", 0)
     far_shadow: float = 0.0
     noise_kind: str = "value"
+    recipe: bool = False
+    cell_size: float = 1500.0
+    cell_fill: float = 0.0
+    stretch: float = 1.0
+    vertical_stretch: float = 1.0
+    profile: tuple = (0.0, 0.0, False)
+    erosion: tuple = (0.0, 1.0)
+    erosion_base: float = 0.0
+    east: tuple = (0.0, 1.0, 0.0)
+
+    def __post_init__(self):
+        if self.noise_kind not in ("value", "worley", "cells"):
+            raise ValueError(
+                f"noise_kind {self.noise_kind!r}: 'value', 'worley' or 'cells'"
+            )
+        if not 0.0 <= self.cell_fill <= 1.0:
+            raise ValueError(f"cell_fill {self.cell_fill} not in [0, 1]")
+        if self.stretch < 1.0 or self.vertical_stretch <= 0.0 or self.cell_size <= 0:
+            raise ValueError("stretch >= 1, vertical_stretch > 0, cell_size > 0")
+        if not 0.0 <= self.erosion_base <= 1.0:
+            raise ValueError(f"erosion_base {self.erosion_base} not in [0, 1]")
+        if self.recipe and self.field.cell_weight:
+            # Its row 12's w carries the erosion's base (pack_genus_params).
+            raise ValueError("a recipe genus's field has no cell octave")
+
+    @property
+    def worley(self) -> bool:
+        """Whether its base value reads the Worley cells."""
+        return self.noise_kind in ("worley", "cells") and self.cell_fill > 0.0
+
+
+def recipe_flags(genus: GenusField) -> int:
+    """:returns: row 14's x for *genus* (:data:`RECIPE_ON` and the rest), 0
+    without the recipe"""
+    if not genus.recipe:
+        return 0
+    return (
+        RECIPE_ON
+        | (RECIPE_WORLEY if genus.worley else 0)
+        | (RECIPE_LENS if genus.profile[2] else 0)
+        | (RECIPE_CELLS if genus.worley and genus.noise_kind == "cells" else 0)
+    )
 
 
 def pack_genus_params(
@@ -999,8 +1084,16 @@ def pack_genus_params(
 ) -> np.ndarray:
     """One genus's :data:`GENUS_VEC4S` rows of the layer parameters: its
     field's (:func:`pack_layer_params`), then (coverage source, channel, its
-    shift table's row, far shadow), then rows reserved for the genus recipes
-    to come (zero).
+    shift table's row, far shadow), then its recipe's two rows:
+
+    * row 14: (flags: :func:`recipe_flags`, cell size, cell fill, stretch);
+    * row 15: (vertical stretch, bottom softness, top softness, erosion);
+    * row 10's free x: the erosion's skin; row 12's w (the cell octave's
+      power, unused without a cell octave, which a recipe genus has not): the
+      erosion's base (:attr:`GenusField.erosion_base`).
+
+    All zero for a genus without the recipe. The stretch's axis is the
+    genera's shared one, in the deck entry's row 15 (:func:`pack_recipe_frame`).
 
     :returns: a (GENUS_VEC4S, 4) float32 array
     """
@@ -1012,7 +1105,411 @@ def pack_genus_params(
     rows[: len(field)] = field
     source, channel = genus.coverage
     rows[LAYER_VEC4S] = (COVERAGE_SOURCES[source], channel, shift_row, genus.far_shadow)
+    if genus.recipe:
+        bottom, top, _ = genus.profile
+        amount, skin = genus.erosion
+        rows[LAYER_VEC4S + 1] = (
+            recipe_flags(genus),
+            genus.cell_size,
+            genus.cell_fill,
+            genus.stretch,
+        )
+        rows[LAYER_VEC4S + 2] = (genus.vertical_stretch, bottom, top, amount)
+        rows[10, 0] = skin
+        rows[12, 3] = genus.erosion_base
     return rows
+
+
+def cell_means(cells: np.ndarray) -> tuple[float, float]:
+    """A :func:`worley_volume`'s means of ``F1`` and of ``F2 - F1`` (what the
+    cells fade to where a footprint does not resolve them)."""
+    return float(cells[..., 0].mean()), float((cells[..., 1] - cells[..., 0]).mean())
+
+
+def pack_recipe_cells(edges_mean: float) -> np.ndarray:
+    """The deck entry's row 14 (free: the deck has no recipe): the Worley
+    volume's mean ``F2 - F1`` (:func:`cell_means`), the closed cells'
+    mean.
+
+    :returns: (4,) float32
+    """
+    return np.array([edges_mean, 0.0, 0.0, 0.0], dtype=np.float32)
+
+
+def pack_recipe_frame(east: ArrayLike, cells_mean: float) -> np.ndarray:
+    """The deck entry's row 15 (its rows 14-15 are otherwise free): the recipe
+    genera's shared stretch axis (the genera's focus's east, planet frame)
+    and the Worley volume's mean F1 (:func:`worley_volume`), which the
+    cells and the erosion fade to.
+
+    :returns: (4,) float32
+    """
+    east = np.asarray(east, dtype=np.float64)
+    east = east / max(float(np.linalg.norm(east)), 1e-12)
+    return np.array([*east, cells_mean], dtype=np.float32)
+
+
+# ── The recipe genera's cells (Worley noise) ─────────────────────────────────
+
+#: The Worley volume's texels per side and cells per side (8 texels a cell),
+#: and its seed. MUST match WORLEY_CELLS in cloud_field.glsl.
+WORLEY_SIZE = 64
+WORLEY_CELLS = 8
+WORLEY_SEED = 23
+#: The erosion's cells: this many times smaller than the base's
+#: (:attr:`GenusField.cell_size`; the research's L/6), from this offset in
+#: cells. MUST match cloud_field.glsl's RECIPE_EROSION_*.
+RECIPE_EROSION_SCALE = 6.0
+RECIPE_EROSION_OFFSET = (0.21, 0.67, 0.43)
+#: What a pixel resolves (cloud_march.frag's RESOLVED): a feature spanning
+#: fewer footprints than the first fades to its mean, by the second whole.
+RECIPE_RESOLVED = (2.0, 4.0)
+
+
+def worley_points(cells: int = WORLEY_CELLS, seed: int = WORLEY_SEED) -> np.ndarray:
+    """The Worley volume's feature points: one per cell, jittered anywhere in
+    it, in cell units.
+
+    :returns: (cells, cells, cells, 3) float64 (x, y, z), indexed [z, y, x]
+    """
+    rng = np.random.default_rng(seed)
+    index = np.indices((cells, cells, cells)).transpose(1, 2, 3, 0)[..., ::-1]
+    return index + rng.random((cells, cells, cells, 3))
+
+
+def worley_volume(
+    size: int = WORLEY_SIZE, cells: int = WORLEY_CELLS, seed: int = WORLEY_SEED
+) -> np.ndarray:
+    """A tileable Worley (cellular) noise: at each texel's centre the distance
+    to the nearest feature point (F1) and the second nearest (F2), one point
+    per cell (:func:`worley_points`), the volume wrapping, in cells (about
+    [0, 1] for F1). ``1 - F1`` is closed cells, bright at their points.
+
+    :returns: (size, size, size, 2) float32 (F1, F2), indexed [z, y, x]
+    """
+    if size % cells != 0:
+        raise ValueError(f"size {size} must be a whole multiple of cells {cells}")
+    points = worley_points(cells, seed)
+    centre = (np.arange(size) + 0.5) * (cells / size)
+    z, y, x = np.meshgrid(centre, centre, centre, indexing="ij")
+    at = np.stack([x, y, z], axis=-1)
+    home = np.floor(at).astype(np.int64)
+    f1 = np.full(at.shape[:-1], np.inf)
+    f2 = np.full(at.shape[:-1], np.inf)
+    for dz in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                cell = home + np.array([dx, dy, dz])
+                wrapped = cell % cells
+                point = points[wrapped[..., 2], wrapped[..., 1], wrapped[..., 0]]
+                d = np.linalg.norm(point + (cell - wrapped) - at, axis=-1)
+                f2 = np.where(d < f1, f1, np.minimum(f2, d))
+                f1 = np.minimum(f1, d)
+    return np.stack([f1, f2], axis=-1).astype(np.float32)
+
+
+def build_cells_texture(volume: np.ndarray) -> Texture:
+    """A :func:`worley_volume` as a repeat-wrapped, linearly filtered RG32F
+    3D texture (``cloudCells``): r F1, g F2."""
+    size = volume.shape[0]
+    texture = Texture("cloud_cells")
+    texture.setup_3d_texture(size, size, size, Texture.T_float, Texture.F_rg32)
+    texture.set_ram_image(np.ascontiguousarray(volume, np.float32).tobytes())
+    for set_wrap in (texture.set_wrap_u, texture.set_wrap_v, texture.set_wrap_w):
+        set_wrap(Texture.WM_repeat)
+    texture.set_magfilter(SamplerState.FT_linear)
+    texture.set_minfilter(SamplerState.FT_linear)
+    return texture
+
+
+def sample_cells(cells: np.ndarray, at: np.ndarray) -> np.ndarray:
+    """F1 of a :func:`worley_volume` at positions in cells, as the shader's
+    ``texture(cloudCells, at / WORLEY_CELLS).r`` (trilinear, repeat-wrapped).
+
+    :param at: (..., 3) positions, in cells
+    """
+    size = cells.shape[0]
+    per = size / WORLEY_CELLS
+    f1 = np.ascontiguousarray(cells[..., 0], dtype=np.float32)
+    return sample_volume(f1, np.asarray(at, dtype=np.float64) * per)
+
+
+def sample_cell_edges(cells: np.ndarray, at: np.ndarray) -> np.ndarray:
+    """``F2 - F1`` of a :func:`worley_volume` at positions in cells (the
+    shader's ``recipeCellEdges``: both trilinear, then their difference)."""
+    size = cells.shape[0]
+    per = size / WORLEY_CELLS
+    edges = np.ascontiguousarray(cells[..., 1] - cells[..., 0], dtype=np.float32)
+    return sample_volume(edges, np.asarray(at, dtype=np.float64) * per)
+
+
+def recipe_resolved(feature: float, footprint: ArrayLike) -> np.ndarray:
+    """How much of a feature *feature* metres wide a footprint resolves, 0 to 1
+    (cloud_field.glsl's ``recipeResolved``)."""
+    ratio = feature / np.maximum(np.asarray(footprint, dtype=np.float64), 1e-3)
+    return _smoothstep(*RECIPE_RESOLVED, ratio)
+
+
+def recipe_position(genus: GenusField, points: np.ndarray, radius: float) -> np.ndarray:
+    """The recipe's coordinates, metres (cloud_field.glsl's
+    ``recipePosition``): the points squeezed along :attr:`GenusField.east`
+    by its stretch, their height in the slab by its vertical stretch (about
+    the slab's base: the horizontal scale holds), then moved by the field's
+    offset (its noise origin, in metres).
+
+    :param points: (..., 3) planet frame, metres
+    """
+    p = np.asarray(points, dtype=np.float64)
+    r = np.linalg.norm(p, axis=-1, keepdims=True)
+    q = p
+    if genus.stretch > 1.0:
+        axis = np.asarray(genus.east, dtype=np.float64)
+        axis = axis / np.linalg.norm(axis)
+        q = q - (q @ axis)[..., None] * (1.0 - 1.0 / genus.stretch) * axis
+    base = radius + genus.field.slab[0]
+    q = q * (
+        (base + (r - base) / genus.vertical_stretch)
+        / np.linalg.norm(q, axis=-1, keepdims=True)
+    )
+    spec = genus.field
+    return q + np.asarray(spec.offset) / np.asarray(spec.noise_scale)
+
+
+def recipe_profile(genus: GenusField, h: ArrayLike) -> np.ndarray:
+    """The recipe's vertical profile at slab height *h* (cloud_field.glsl's
+    ``recipeProfile``): the soft bottom, the soft top, the lens."""
+    h = np.asarray(h, dtype=np.float64)
+    bottom, top, lens = genus.profile
+    out = np.ones_like(h)
+    if bottom > 0.0:
+        out = out * _smoothstep(0.0, bottom, h)
+    if top > 0.0:
+        out = out * (1.0 - _smoothstep(1.0 - top, 1.0, h))
+    if lens:
+        out = out * 4.0 * h * (1.0 - h)
+    return out
+
+
+def recipe_value(
+    volume: np.ndarray,
+    cells: np.ndarray,
+    genus: GenusField,
+    m: np.ndarray,
+    octaves: int = 4,
+    footprint: ArrayLike = 0.0,
+    octave_mean: float | None = None,
+    cells_mean: float | None = None,
+) -> np.ndarray:
+    """The recipe's base value at recipe coordinates *m* (:func:`recipe_position`):
+    the field's fbm (each octave faded to the mean where *footprint* metres
+    cannot resolve it; those past *octaves* the mean), mixed with the cells'
+    ``1 - F1`` (``F2 - F1`` for closed cells; faded to its mean the same
+    way) by the cell fill.
+    """
+    spec = genus.field
+    if octave_mean is None:
+        octave_mean = float(volume.mean())
+    coords = np.asarray(m, dtype=np.float64) * np.asarray(spec.noise_scale)
+    unit = NOISE_FEATURE / spec.noise_scale[0]
+    total = 0.0
+    for index, (scale, weight, offset) in enumerate(
+        zip(spec.octave_scales, spec.octave_weights, OCTAVE_OFFSETS)
+    ):
+        kept = recipe_resolved(unit / scale, footprint) if index < octaves else 0.0
+        if np.all(np.asarray(kept) <= 0.0):
+            total = total + octave_mean * weight
+            continue
+        sample = sample_volume(
+            volume, _turned(coords, index) * scale + np.asarray(offset)
+        )
+        total = total + weight * (octave_mean + (sample - octave_mean) * kept)
+    if not genus.worley:
+        return np.asarray(total)
+    at = np.asarray(m) / genus.cell_size
+    if genus.noise_kind == "cells":
+        cell = sample_cell_edges(cells, at)
+        mean = cell_means(cells)[1]
+    else:
+        if cells_mean is None:
+            cells_mean = float(cells[..., 0].mean())
+        cell = 1.0 - sample_cells(cells, at)
+        mean = 1.0 - cells_mean
+    kept = recipe_resolved(genus.cell_size, footprint)
+    cell = mean + (cell - mean) * kept
+    return total + (cell - total) * genus.cell_fill
+
+
+def recipe_erosion_weight(genus: GenusField, h: ArrayLike) -> np.ndarray:
+    """How much of the erosion a recipe genus keeps at slab height *h*
+    (cloud_field.glsl's ``recipeErosionBase``): 1, or with
+    :attr:`GenusField.erosion_base`, 1 at the base fading to 0 by that share
+    of the slab."""
+    h = np.asarray(h, dtype=np.float64)
+    if genus.erosion_base <= 0.0:
+        return np.ones_like(h)
+    return 1.0 - _smoothstep(0.0, genus.erosion_base, h)
+
+
+def recipe_terms(
+    volume: np.ndarray,
+    cells: np.ndarray,
+    genus: GenusField,
+    points: np.ndarray,
+    radius: float,
+    octaves: int = 4,
+    footprint: ArrayLike = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """What a recipe genus's density at *points* takes before the weather
+    (which only shifts it): their slab heights, the base value less the
+    threshold lift (:func:`recipe_value`), and the erosion's deviation (the
+    small cells about their mean, signed by the erosion's kind, resolved by
+    the footprint, times :func:`recipe_erosion_weight`; None without
+    erosion). :func:`recipe_density_from` finishes it for a shift.
+
+    :returns: (h, value, deviation), each (...)
+    """
+    spec = genus.field
+    points = np.asarray(points, dtype=np.float64)
+    base, thickness = spec.slab
+    h = (np.linalg.norm(points, axis=-1) - radius - base) / max(thickness, 1e-3)
+    m = recipe_position(genus, points, radius)
+    cells_mean = float(cells[..., 0].mean())
+    value = recipe_value(volume, cells, genus, m, octaves, footprint, None, cells_mean)
+    value = value - threshold_lift(spec, np.clip(h, 0.0, 1.0))
+    amount = genus.erosion[0]
+    if not amount:
+        return h, value, None
+    offset = np.asarray(RECIPE_EROSION_OFFSET)
+    e = sample_cells(cells, m * (RECIPE_EROSION_SCALE / genus.cell_size) + offset)
+    kept = recipe_resolved(genus.cell_size / RECIPE_EROSION_SCALE, footprint)
+    deviation = (e - cells_mean if amount > 0.0 else cells_mean - e) * kept
+    deviation = deviation * recipe_erosion_weight(genus, np.clip(h, 0.0, 1.0))
+    return h, value, deviation
+
+
+def recipe_density_from(
+    genus: GenusField,
+    h: np.ndarray,
+    value: np.ndarray,
+    deviation: np.ndarray | None,
+    shift: ArrayLike,
+) -> np.ndarray:
+    """A recipe genus's density from :func:`recipe_terms` and the weather's
+    *shift* (broadcast): eroded at its edge, through its window, times its
+    profile, 0 outside its slab."""
+    spec = genus.field
+    _require_resolved(spec)
+    raw = value + np.asarray(shift, dtype=np.float64)
+    lo, hi = spec.threshold
+    window = hi - lo
+    amount, skin = genus.erosion
+    if deviation is not None:
+        t = (raw - lo) / window
+        w = np.clip(1.0 - (t - 1.0) / max(skin, 1e-3), 0.0, 1.0)
+        raw = raw - abs(amount) * window * w * deviation
+    t = np.clip((raw - lo) / max(window, 1e-9), 0.0, 1.0)
+    density = t * t * (3.0 - 2.0 * t) * recipe_profile(genus, np.clip(h, 0.0, 1.0))
+    return np.where((h > 0.0) & (h < 1.0), density, 0.0)
+
+
+def recipe_density_on_sphere(
+    volume: np.ndarray,
+    cells: np.ndarray,
+    weather: np.ndarray,
+    genus: GenusField,
+    points: np.ndarray,
+    radius: float,
+    octaves: int = 4,
+    footprint: ArrayLike = 0.0,
+) -> np.ndarray:
+    """A recipe genus's density (cloud_field.glsl's ``genusRecipeDensity``):
+    its base value (:func:`recipe_value`) plus the weather's shift, less its
+    field's threshold lift, eroded at its edge (the threshold moved by small
+    Worley cells about their mean, in a skin past the window's top: the core
+    and, on average, the coverage hold; near the base only with
+    :attr:`GenusField.erosion_base`), through its field's threshold window,
+    times its profile (:func:`recipe_profile`).
+
+    :param volume: the noise octave (quantised, to match the GPU)
+    :param cells: the Worley volume (:func:`worley_volume`)
+    :param weather: (6, n, n, k) cube with the shift in channel 1, or its
+        (6, n, n) shift plane alone
+    :param genus: a recipe genus, its field resolved
+    :param points: (..., 3) planet frame, metres
+    :param radius: sea-level radius, metres
+    :param octaves: the fbm's octaves (the level's)
+    :param footprint: what a pixel spans, metres (0: everything resolved)
+    :returns: (...) density in [0, 1]
+    """
+    from world_builder.clouds.weather import sample_cube
+
+    _require_resolved(genus.field)
+    points = np.asarray(points, dtype=np.float64)
+    plane = weather[..., 1] if weather.ndim == 4 else weather
+    shift = sample_cube(plane, points)
+    h, value, deviation = recipe_terms(
+        volume, cells, genus, points, radius, octaves, footprint
+    )
+    return recipe_density_from(genus, h, value, deviation, shift)
+
+
+def recipe_window(volume: np.ndarray, cells: np.ndarray, genus: GenusField) -> float:
+    """A recipe genus's threshold window: its field's resolved one, else the
+    one it will resolve to (``edge_softness`` of :func:`recipe_sigma`)."""
+    if genus.field.threshold is not None:
+        lo, hi = genus.field.threshold
+        return float(hi - lo)
+    return float(genus.field.edge_softness) * recipe_sigma(volume, cells, genus)
+
+
+def recipe_column_peaks(
+    volume: np.ndarray,
+    cells: np.ndarray,
+    genus: GenusField,
+    radius: float,
+    octaves: int = 4,
+    columns: int = COVERAGE_GRID * COVERAGE_GRID,
+    levels: int = COVERAGE_LEVELS,
+) -> np.ndarray:
+    """:func:`sphere_column_peaks` for a recipe genus: each column's peak of
+    its base value (:func:`recipe_value`, everything resolved) less its
+    field's threshold lift, its erosion in it, sorted, so
+    :func:`weather.shift_table` and :func:`threshold_from_peaks` calibrate
+    its coverage. The profile scales density, never whether a column is
+    cloud (0 only at the slab's ends). The erosion is whole where a column's
+    cloud begins (under the window's top: :func:`recipe_density_from`'s
+    skin), a window's share (:func:`recipe_window`) of the cells' deviation:
+    left out, its noise lifts each column's peak and the coverage came out
+    high (the stratus's wispy erosion: +5 % at coverage 0.3, +4 % at 0.75;
+    the stratocumulus's billowy one, under 1 %).
+
+    :returns: (columns,) sorted peaks
+    """
+    dirs = _fibonacci_dirs(columns)
+    base, thickness = genus.field.slab
+    h = (np.arange(levels) + 0.5) / levels
+    points = dirs[:, None, :] * (radius + base + h * thickness)[None, :, None]
+    _, value, deviation = recipe_terms(volume, cells, genus, points, radius, octaves)
+    if deviation is not None:
+        window = recipe_window(volume, cells, genus)
+        value = value - abs(genus.erosion[0]) * window * deviation
+    peaks = value.max(axis=1)
+    peaks.sort()
+    return peaks
+
+
+def recipe_sigma(volume: np.ndarray, cells: np.ndarray, genus: GenusField) -> float:
+    """The spread of a recipe genus's base value, the unit of its field's
+    ``edge_softness``: the fbm's (:func:`fbm_sigma`) and the cells' ``1 - F1``
+    mixed by the cell fill, as independent."""
+    fbm = fbm_sigma(volume, genus.field)
+    if not genus.worley:
+        return fbm
+    c = genus.cell_fill
+    cell = (
+        cells[..., 1] - cells[..., 0] if genus.noise_kind == "cells" else cells[..., 0]
+    )
+    return float(np.hypot((1.0 - c) * fbm, c * float(cell.std())))
 
 
 # ── On a planet ────────────────────────────────────────────────────────────────
@@ -1381,6 +1878,29 @@ def _cloud_shadow_samples(
     at the clouds' own top where it enters (*depth_at*, *spread_at*: the
     weather's convective depth and anvil spread there; the shader's
     ``cloudChordToTop``)."""
+    positions, counted, step_length, alive, start = _shadow_chords(
+        spec, optics, points, sun_dirs, radius, max_steps, depth_at, spread_at
+    )
+    base, thickness = spec.slab
+    h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
+    coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
+    pair = march_pairs(volume, coords, spec)
+    return h, pair, counted, step_length, alive, start
+
+
+def _shadow_chords(
+    spec: DensityField,
+    optics: CloudOptics,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    max_steps: int,
+    depth_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    spread_at: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> tuple[np.ndarray, ...]:
+    """The chords of :func:`_cloud_shadow_samples` (``cloudShadowChord``):
+    their samples' positions (..., max_steps, 3), which steps count, each
+    chord's step length, whether it crosses the slab, where it enters it."""
     dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
     base, thickness = spec.slab
     inner, outer = radius + base, radius + base + thickness
@@ -1408,11 +1928,8 @@ def _cloud_shadow_samples(
         start[..., None, :]
         + dirs[..., None, :] * ((k + 0.5) * step_length[..., None])[..., None]
     )
-    h = (np.linalg.norm(positions, axis=-1) - radius - base) / max(thickness, 1e-3)
-    coords = positions * np.asarray(spec.noise_scale) + np.asarray(spec.offset)
-    pair = march_pairs(volume, coords, spec)
     counted = k < steps[..., None]
-    return h, pair, counted, step_length, alive, start
+    return positions, counted, step_length, alive, start
 
 
 def _cloud_shadow_depth(
@@ -1809,6 +2326,182 @@ def deck_light_table(
         octave = vis**optics.octave_attenuation
         table[row, :, 2] = ((octave * (alpha * powder_term)).sum(axis=1) + 1.0) / total
     return table
+
+
+# ── A recipe genus's shadow and far averages, from its own density ───────────
+
+
+def recipe_shadow_on_sphere(
+    volume: np.ndarray,
+    cells: np.ndarray,
+    genus: GenusField,
+    points: np.ndarray,
+    sun_dirs: np.ndarray,
+    radius: float,
+    max_steps: int,
+    shift_at: Callable[[np.ndarray], np.ndarray] | None = None,
+    octaves: int = 4,
+) -> np.ndarray:
+    """A recipe genus's optical depth toward the sun from points (below or
+    in its slab): :func:`cloud_shadow_on_sphere`'s chord and steps, the
+    density its recipe's (:func:`recipe_density_on_sphere`, the footprint
+    one ``sun_step_length``), the weather where the chord enters the slab.
+    This is the bakes' march (``skyShadowLevels`` with
+    ``CLOUD_RECIPE_SHADOWS``: the shadow maps and the light volume), so the
+    CPU's shade agrees with the maps'.
+
+    :param genus: the recipe genus, its field the far level's (resolved) and
+        its optics the deck's (step length, shadow strength)
+    :param octaves: the far level's octaves
+    :returns: (...) optical depth
+    """
+    spec, optics = genus.field, genus.optics
+    _require_resolved(spec)
+    points = np.asarray(points, dtype=np.float64)
+    depth = np.zeros(points.shape[:-1])
+    if max_steps <= 0:
+        return depth
+    dirs = np.broadcast_to(np.asarray(sun_dirs, dtype=np.float64), points.shape)
+    under = np.linalg.norm(points, axis=-1) < radius + sum(spec.slab)
+    if not under.any():
+        return depth
+    positions, counted, step_length, alive, start = _shadow_chords(
+        spec, optics, points[under], dirs[under], radius, max_steps
+    )
+    terms = recipe_terms(
+        volume, cells, genus, positions, radius, octaves, optics.sun_step_length
+    )
+    shift = np.zeros(start.shape[:-1])
+    if shift_at is not None:
+        shift = np.reshape(shift_at(start.reshape(-1, 3)), start.shape[:-1])
+    density = recipe_density_from(genus, *terms, shift[..., None])
+    density = np.where(counted, density, 0.0).sum(axis=-1)
+    total = density * step_length * spec.density * optics.shadow_strength
+    depth[under] = np.where(alive, total, 0.0)
+    return depth
+
+
+def _table_frame(columns: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    """The far tables' columns (a Fibonacci lattice) and, at each, a level
+    direction at a random azimuth (the sun's): (columns, 3) each."""
+    up = _fibonacci_dirs(columns)
+    reference = np.where(
+        (np.abs(up[:, 2]) < 0.9)[:, None], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]
+    )
+    east = np.cross(reference, up)
+    east /= np.linalg.norm(east, axis=1, keepdims=True)
+    north = np.cross(up, east)
+    azimuth = np.random.default_rng(seed).uniform(0.0, 2.0 * np.pi, columns)
+    level = np.cos(azimuth)[:, None] * east + np.sin(azimuth)[:, None] * north
+    return up, level
+
+
+def recipe_deck_light_table(
+    volume: np.ndarray,
+    cells: np.ndarray,
+    genus: GenusField,
+    radius: float,
+    shift_table: ArrayLike,
+    octaves: int = 4,
+    max_steps: int = 8,
+    cosines: int = 32,
+    coverages: int = 17,
+    columns: int = 2048,
+    ground_columns: int = 1024,
+    seed: int = 0,
+) -> np.ndarray:
+    """:func:`deck_light_table` and :func:`ground_shadow_table` for a recipe
+    genus, from its recipe's own density (:func:`recipe_terms`) rather than
+    its field's fbm: the far view's lighting (the mean of its close-up
+    light, a sun march of ``sun_steps`` from mid-slab, weighted by the
+    columns' alpha from overhead), and the mean of its shadow on the ground
+    (:func:`recipe_shadow_on_sphere`), so the far shading and the ground's
+    mean shadow are the genus's (its cells, profile and erosion).
+
+    :param genus: the recipe genus, its field the far level's (resolved) and
+        its optics the deck's
+    :param octaves: the far level's octaves
+    :param max_steps: the ground shadow's most steps
+    :returns: (coverages, cosines, 4) float32: :func:`deck_light_table`'s
+        three channels with the ground's mean shadow third (the deck light
+        texture's layout, field_setup's ``_deck_light``)
+    """
+    from world_builder.clouds.weather import coverage_to_shift
+
+    spec, optics = genus.field, genus.optics
+    _require_resolved(spec)
+    base, thickness = spec.slab
+    shifts = coverage_to_shift(
+        np.linspace(0.0, 1.0, coverages), np.asarray(shift_table)
+    )
+    mu = np.linspace(DECK_LIGHT_COS_MIN, 1.0, cosines)
+    out = np.ones((coverages, cosines, 4), dtype=np.float32)
+
+    # The view's: two samples through the slab, the sun march from mid-slab.
+    up, level = _table_frame(columns, seed)
+    heights = np.array([0.3, 0.7])
+    layers = up[:, None, :] * (radius + base + heights * thickness)[None, :, None]
+    view = recipe_terms(volume, cells, genus, layers, radius, octaves)
+    sun = (
+        mu[:, None, None] * up[None]
+        + np.sqrt(1.0 - mu * mu)[:, None, None] * level[None]
+    )
+    march = None
+    if optics.sun_steps > 0:
+        mid = up * (radius + base + 0.5 * thickness)
+        steps = np.arange(optics.sun_steps) + 0.5
+        positions = mid[None, :, None, :] + sun[..., None, :] * (
+            steps[:, None] * optics.sun_step_length
+        )
+        march = recipe_terms(
+            volume, cells, genus, positions, radius, octaves, optics.sun_step_length
+        )
+
+    # The ground's: chords from sea level toward the sun.
+    g_up, g_level = _table_frame(ground_columns, seed)
+    lit = np.maximum(mu, 0.0)
+    g_sun = (
+        lit[:, None, None] * g_up[None]
+        + np.sqrt(1.0 - lit * lit)[:, None, None] * g_level[None]
+    )
+    ground = np.broadcast_to(g_up * radius, g_sun.shape)
+    positions, counted, step_length, alive, _ = _shadow_chords(
+        spec, optics, ground, g_sun, radius, max_steps
+    )
+    chords = recipe_terms(
+        volume, cells, genus, positions, radius, octaves, optics.sun_step_length
+    )
+    scale = np.where(alive, step_length, 0.0) * spec.density * optics.shadow_strength
+
+    for row, shift in enumerate(shifts):
+        density = recipe_density_from(genus, *view, shift).mean(axis=1)
+        alpha = 1.0 - np.exp2(
+            -np.minimum(spec.density * density * thickness, optics.max_optical_depth)
+        )
+        total = alpha.sum() + 1.0  # one clear column (deck_light_table's)
+        if total > 1.0 + 1e-9:
+            if march is not None:
+                along = recipe_density_from(genus, *march, shift).sum(axis=-1)
+                vis = np.exp2(
+                    -along
+                    * optics.sun_step_length
+                    * spec.density
+                    * optics.shadow_strength
+                )
+            else:
+                vis = np.ones((cosines, columns))
+            powder = 1.0 - np.exp2(-spec.density * density * optics.powder_length * 2.0)
+            powder_term = 1.0 + optics.powder_strength * (powder - 1.0)
+            weight = alpha * powder_term
+            out[row, :, 0] = ((vis * weight).sum(axis=1) + 1.0) / total
+            out[row, :, 1] = ((vis * alpha).sum(axis=1) + 1.0) / total
+            octave = vis**optics.octave_attenuation
+            out[row, :, 3] = ((octave * weight).sum(axis=1) + 1.0) / total
+        shade = recipe_density_from(genus, *chords, shift)
+        depth = np.where(counted, shade, 0.0).sum(axis=-1) * scale
+        out[row, :, 2] = np.exp2(-depth).mean(axis=1)
+    out[:, mu < 0.0, 2] = 0.0  # below the horizon: the planet's shadow
+    return out
 
 
 def build_deck_light_texture(table: np.ndarray) -> Texture:

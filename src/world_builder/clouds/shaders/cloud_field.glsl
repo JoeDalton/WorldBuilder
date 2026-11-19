@@ -12,8 +12,11 @@ uniform float noiseSize;         // volume resolution, for the coord → uvw div
 uniform vec3  sunDir;            // FROM the scene TOWARD the sun, normalised
 
 // GENUS_VEC4S per genus of the union march (noise.pack_genus_params: its
-// field's LAYER_VEC4S rows, then its coverage row), MAX_GENERA of them, then
-// the deck's. Size (MAX_GENERA + 1) * GENUS_VEC4S (a test checks it): too
+// field's LAYER_VEC4S rows, then its coverage row, then its recipe's two:
+// row 14 (flags, cell size, cell fill, stretch), row 15 (vertical stretch,
+// bottom softness, top softness, erosion), and row 10's x the erosion's
+// skin; all 0 without the recipe), MAX_GENERA of them, then the deck's (its
+// row 15 the recipe genera's shared frame: noise.pack_recipe_frame). Size (MAX_GENERA + 1) * GENUS_VEC4S (a test checks it): too
 // small reads out of bounds.
 uniform vec4 layerParams[176];
 // A genus's detail levels (the march's octave bands by distance, then its far
@@ -76,6 +79,8 @@ uniform int   uSkyBandCount;
 // (genusFarTable): a page each of genusDeckLight, page = genus
 // (noise.build_deck_light_array). Genus 0 reads weatherMap and deckLight.
 uniform samplerCube genusCoverA;
+// Coverage cube B: the same for a genus whose row 13's x is 2 (source "B").
+uniform samplerCube genusCoverB;
 uniform sampler2D genusShift;
 uniform sampler2DArray genusDeckLight;
 
@@ -146,6 +151,23 @@ struct Field {
     // (noise.GenusField.far_shadow; row 13's w): 1 for the stratus under a
     // cumulonimbus, 0 for the convective clouds.
     float farShadow;
+    // A recipe genus's knobs (noise.GenusField; rows 14-15, row 10's x):
+    // its flags (RECIPE_ON, RECIPE_WORLEY, RECIPE_LENS; 0: no recipe), its
+    // cells' size (metres) and weight, its horizontal and vertical stretch,
+    // its profile's soft bottom and top (slab shares), its erosion (in
+    // windows: > 0 billowy, < 0 wispy) and the erosion's skin (windows),
+    // and the share of the slab over which the erosion fades out from the
+    // base (row 12's w, unused without a cell octave; 0: at every height).
+    int   recipe;
+    float cellSize;
+    float cellFill;
+    float stretch;
+    float verticalStretch;
+    float profileBottom;
+    float profileTop;
+    float erosion;
+    float erosionSkin;
+    float erosionBase;
 };
 
 Field getField(int layer) {
@@ -216,6 +238,19 @@ Field getField(int layer) {
     f.deepErosion = v10.w;
     f.cellPower = v12.w;
     f.farShadow = layerParams[b + LAYER_VEC4S].w;
+    // The deck's entry has no recipe (its row 15 is the recipe frame).
+    vec4 v14 = layerParams[b + LAYER_VEC4S + 1];
+    vec4 v15 = layerParams[b + LAYER_VEC4S + 2];
+    f.recipe = genus < MAX_GENERA ? int(v14.x + 0.5) : 0;
+    f.cellSize = v14.y;
+    f.cellFill = v14.z;
+    f.stretch = v14.w;
+    f.verticalStretch = v15.x;
+    f.profileBottom = v15.y;
+    f.profileTop = v15.z;
+    f.erosion = v15.w;
+    f.erosionSkin = v10.x;
+    f.erosionBase = f.recipe != 0 ? v12.w : 0.0;
     return f;
 }
 
@@ -494,6 +529,153 @@ float cloudDensity(Field f, vec3 p) {
     return cloudDensityAt(f, p, weatherAt(p));
 }
 
+// ── The recipe genera (noise.recipe_density_on_sphere on the CPU) ─────────
+// A genus whose flags hold RECIPE_ON evaluates one generic recipe instead of
+// the convective field: a base value (its field's fbm and/or Worley cells,
+// 1 - F1, mixed by its cell fill) at coordinates stretched along the
+// genera's focus's east and in height, plus the weather's shift, less its
+// field's threshold lift, its edge eroded by small cells in a skin, through
+// its threshold window, times its vertical profile. noise.GenusField has
+// the knobs; clouds.md, "The recipe genera".
+// The Worley volume (noise.worley_volume): r F1, g F2, in cells, WORLEY_CELLS
+// cells a side, repeat-wrapped.
+uniform sampler3D cloudCells;
+const float WORLEY_CELLS = 8.0;                     // noise.WORLEY_CELLS
+const int RECIPE_ON = 1;                            // noise.RECIPE_ON
+const int RECIPE_WORLEY = 2;                        // noise.RECIPE_WORLEY
+const int RECIPE_LENS = 4;                          // noise.RECIPE_LENS
+const int RECIPE_CELLS = 8;                         // noise.RECIPE_CELLS
+// The erosion's cells, this many times smaller than the base's, from this
+// offset in cells (noise.RECIPE_EROSION_SCALE, RECIPE_EROSION_OFFSET).
+const float RECIPE_EROSION_SCALE = 6.0;
+const vec3 RECIPE_EROSION_OFFSET = vec3(0.21, 0.67, 0.43);
+// What a footprint resolves (cloud_march.frag's RESOLVED; noise.RECIPE_RESOLVED).
+const vec2 RECIPE_RESOLVED = vec2(2.0, 4.0);
+
+float recipeResolved(float feature, float footprint) {
+    return smoothstep(RECIPE_RESOLVED.x, RECIPE_RESOLVED.y, feature / max(footprint, 1e-3));
+}
+
+// The recipe genera's shared frame (the deck entry's row 15): the stretch's
+// axis, the cells' mean F1.
+vec4 recipeFrame() {
+    return layerParams[MAX_GENERA * GENUS_VEC4S + LAYER_VEC4S + 2];
+}
+
+// The recipe's coordinates of p, metres (noise.recipe_position): squeezed
+// along the frame's east by the stretch, the height in the slab by the
+// vertical stretch (about the slab's base), moved by the field's noise
+// origin (its offset and the wind).
+vec3 recipePosition(Field f, vec3 p) {
+    float r = length(p);
+    vec3 q = p;
+    if (f.stretch > 1.0) {
+        vec3 axis = recipeFrame().xyz;
+        q -= dot(q, axis) * (1.0 - 1.0 / f.stretch) * axis;
+    }
+    float base = planetRadius + f.slabBase;
+    q *= (base + (r - base) / f.verticalStretch) / length(q);
+    return q + f.noiseOrigin / f.noiseScale;
+}
+
+// F1 at a position in cells.
+float recipeCellF1(vec3 cell) {
+    return texture(cloudCells, cell / WORLEY_CELLS).r;
+}
+
+// The closed cells' value at a position in cells, F2 - F1 (noise.sample_cell_edges):
+// 0 on the walls between cells.
+float recipeCellEdges(vec3 cell) {
+    vec2 f = texture(cloudCells, cell / WORLEY_CELLS).rg;
+    return f.y - f.x;
+}
+
+// The closed cells' mean F2 - F1 (the deck entry's row 14: noise.pack_recipe_cells).
+float recipeEdgesMean() {
+    return layerParams[MAX_GENERA * GENUS_VEC4S + LAYER_VEC4S + 1].x;
+}
+
+// The vertical profile at slab height h (noise.recipe_profile).
+float recipeProfile(Field f, float h) {
+    float profile = 1.0;
+    if (f.profileBottom > 0.0) {
+        profile *= smoothstep(0.0, f.profileBottom, h);
+    }
+    if (f.profileTop > 0.0) {
+        profile *= 1.0 - smoothstep(1.0 - f.profileTop, 1.0, h);
+    }
+    if ((f.recipe & RECIPE_LENS) != 0) {
+        profile *= 4.0 * h * (1.0 - h);
+    }
+    return profile;
+}
+
+// How much of the erosion is kept at slab height h (noise.recipe_erosion_weight):
+// all of it, or full at the base fading out by erosionBase of the slab.
+float recipeErosionBase(Field f, float h) {
+    return f.erosionBase > 0.0 ? 1.0 - smoothstep(0.0, f.erosionBase, h) : 1.0;
+}
+
+// An octave of the recipe's fbm (index k, its coord scaled): its sample,
+// faded to the mean where the footprint does not resolve its feature (unit
+// over its scale) and past the field's octaves.
+float recipeOctave(Field f, int k, vec3 coord, float feature, float footprint) {
+    float kept = f.octaves > k ? recipeResolved(feature, footprint) : 0.0;
+    return kept > 0.0 ? mix(f.octaveMean, sampleNoise(coord), kept) : f.octaveMean;
+}
+
+// A recipe genus's density at p (weather: genusWeatherAt's, its shift in
+// y), footprint the metres a pixel (or a step) spans: the octaves, the cells
+// and the erosion finer than it resolves fade to their means (as
+// cloud_march.frag's resolved()), so far views do not alias.
+float genusRecipeDensity(Field f, vec3 p, vec4 weather, float footprint) {
+    float h = slabHeight(f, heightOf(p));
+    if (h <= 0.0 || h >= 1.0) {
+        return 0.0;
+    }
+    vec3 m = recipePosition(f, p);
+    vec3 coord = m * f.noiseScale;
+    float unit = NOISE_FEATURE / f.noiseScale.x;
+    float value = f.octaveWeights.x * recipeOctave(
+        f, 0, coord * f.octaveScales.x, unit / f.octaveScales.x, footprint);
+    value += f.octaveWeights.y * recipeOctave(
+        f, 1, coord * f.octaveScales.y + OCTAVE_2_OFFSET, unit / f.octaveScales.y, footprint);
+    value += f.octaveWeights.z * recipeOctave(
+        f, 2, OCTAVE_3_TURN * (coord * f.octaveScales.z) + OCTAVE_3_OFFSET,
+        unit / f.octaveScales.z, footprint);
+    value += f.octaveWeights.w * recipeOctave(
+        f, 3, OCTAVE_4_TURN * (coord * f.octaveScales.w) + OCTAVE_4_OFFSET,
+        unit / f.octaveScales.w, footprint);
+    float meanF1 = recipeFrame().w;
+    if ((f.recipe & RECIPE_WORLEY) != 0) {
+        // Round blobs (1 - F1) or closed cells (F2 - F1), faded to their mean
+        // where the footprint does not resolve them.
+        bool closed = (f.recipe & RECIPE_CELLS) != 0;
+        float mean = closed ? recipeEdgesMean() : 1.0 - meanF1;
+        float sample = closed ? recipeCellEdges(m / f.cellSize)
+                              : 1.0 - recipeCellF1(m / f.cellSize);
+        float cell = mix(mean, sample, recipeResolved(f.cellSize, footprint));
+        value = mix(value, cell, f.cellFill);
+    }
+    float raw = value + weather.y - thresholdLift(f, h, 0.0);
+    if (f.erosion != 0.0) {
+        // The threshold moved by small cells about their mean (billowy: the
+        // cells' centres stay; wispy: their walls), over the window and a
+        // skin past it: the core, and on average the coverage, hold.
+        float window = f.threshHi - f.threshLo;
+        float t = (raw - f.threshLo) / window;
+        float skin = clamp(1.0 - (t - 1.0) / max(f.erosionSkin, 1e-3), 0.0, 1.0)
+                   * recipeResolved(f.cellSize / RECIPE_EROSION_SCALE, footprint)
+                   * recipeErosionBase(f, h);
+        if (skin > 0.0) {
+            float e = recipeCellF1(m * (RECIPE_EROSION_SCALE / f.cellSize)
+                                   + RECIPE_EROSION_OFFSET);
+            raw -= abs(f.erosion) * window * skin * (f.erosion > 0.0 ? e - meanF1 : meanF1 - e);
+        }
+    }
+    return smoothstep(f.threshLo, f.threshHi, raw) * recipeProfile(f, h);
+}
+
 // Optical depth along a straight stretch of the field: steps samples
 // stepLength apart along dir (unit) from start, the first half a step out,
 // through the two lowest octaves calibrated onto the full field
@@ -546,6 +728,15 @@ float slabOpticalDepthCell(Field f, vec3 start, vec3 dir, float stepLength,
     // shelf's are its own, the rest their mean.
     float shift = f.shadowBias + cell;
     float mean = f.octaveMean * (f.octaveWeights.z + f.octaveWeights.w) + cell;
+#ifdef CLOUD_RECIPES
+    if (f.recipe != 0) {
+        // A recipe genus: none of its own here (the light volume and the
+        // maps hold its depth, skyShadowLevels' bakes). Its recipe in this
+        // loop cost the convective clouds' view 0.2-0.4 ms at 2560 x 1440;
+        // shaders without CLOUD_RECIPES never meet a recipe genus here.
+        return 0.0;
+    }
+#endif
     for (int i = 0; i < steps; i++, position += increment) {
         density += slabSampleDensity(f, position, weather, shift, mean);
     }
@@ -649,6 +840,9 @@ bool cloudShadowMarch(Field f, samplerCube weatherCube, vec3 p, vec3 dir, int ma
         return false;
     }
     cell = cellShift(f, start * f.noiseScale + f.noiseOrigin, weather.y);
+    if (f.recipe != 0) {
+        return true;  // the early-out bounds the convective field's octaves
+    }
     float most = f.octaveWeights.x + f.octaveWeights.y;
     float column = most * f.shadowGain + f.shadowBias + cell + weather.x
                  + f.anvil * smoothstep(0.6, 1.0, weather.y);
@@ -686,13 +880,14 @@ int genusShadowLayer(int genus) {
 }
 
 // A genus's coverage at p (unit or not): genus 0's the weather's, the
-// others' their channel of coverage cube A.
+// others' their channel of coverage cube A or B (row 13's x: 1 or 2).
 float genusCoverageAt(int genus, vec3 p) {
     if (genus == 0) {
         return texture(weatherMap, p).r;
     }
-    int channel = int(layerParams[genus * GENUS_VEC4S + LAYER_VEC4S].y + 0.5);
-    return texture(genusCoverA, p)[channel];
+    vec4 row = layerParams[genus * GENUS_VEC4S + LAYER_VEC4S];
+    vec4 cover = row.x > 1.5 ? texture(genusCoverB, p) : texture(genusCoverA, p);
+    return cover[int(row.y + 0.5)];
 }
 
 // A genus's weather at p (unit or not): r its coverage, then its fbm shift,
@@ -705,7 +900,8 @@ vec4 genusWeatherAt(int genus, vec3 p) {
         return texture(weatherMap, p);
     }
     vec4 row = layerParams[genus * GENUS_VEC4S + LAYER_VEC4S];
-    float coverage = texture(genusCoverA, p)[int(row.y + 0.5)];
+    vec4 cover = row.x > 1.5 ? texture(genusCoverB, p) : texture(genusCoverA, p);
+    float coverage = cover[int(row.y + 0.5)];
     vec2 at = vec2((coverage * float(SHIFT_TABLE_SIZE - 1) + 0.5) / float(SHIFT_TABLE_SIZE),
                    (row.z + 0.5) / float(MAX_GENERA));
     return vec4(coverage, texture(genusShift, at).r, 0.0, 0.0);
@@ -823,9 +1019,14 @@ float skyShadowLevels(vec3 p, vec3 dir, int maxSteps, float stepScale, bool cut,
                 continue;
             }
             Field f = getField(genusShadowLayer(g));
+#ifndef CLOUD_RECIPE_SHADOWS
+            if (f.recipe != 0) {
+                continue;  // the maps' and the light volume's alone
+            }
+#endif
             vec3 weather = genusWeatherAt(g, start).gba;
             float cell = cellShift(f, start * f.noiseScale + f.noiseOrigin, weather.y);
-            if (atStart) {
+            if (atStart && f.recipe == 0) {
                 // cloudShadowMarch's exact early-out: the weather leaves no cloud.
                 float most = f.octaveWeights.x + f.octaveWeights.y;
                 float column = most * f.shadowGain + f.shadowBias + cell + weather.x
@@ -847,8 +1048,15 @@ float skyShadowLevels(vec3 p, vec3 dir, int maxSteps, float stepScale, bool cut,
                     weather = genusWeatherAt(g, position).gba;
                     cell = cellShift(f, position * f.noiseScale + f.noiseOrigin, weather.y);
                 }
+#ifdef CLOUD_RECIPE_SHADOWS
+                float density = (f.recipe != 0
+                    ? genusRecipeDensity(f, position, vec4(1.0, weather), f.sunStepLength)
+                    : slabSampleDensity(f, position, weather, f.shadowBias + cell, rest + cell))
+                    * scale;
+#else
                 float density = slabSampleDensity(f, position, weather, f.shadowBias + cell,
                                                   rest + cell) * scale;
+#endif
                 for (int k = 0; k < 3; k++) {
                     if (float(i) < boundary[k] && boundary[k] <= float(i + 1)) {
                         levels[k] += own + density * (boundary[k] - float(i));
@@ -1271,6 +1479,14 @@ float cloudSunDepth(Field f, vec3 p, vec3 weather) {
     float held = 0.0;
     if (f.sunSteps > 0 && (uCloudDebug & 64) == 0) {
         int localSteps = min(f.sunSteps, MAP_LOCAL_STEPS);
+#ifdef CLOUD_RECIPES
+        if (f.recipe != 0) {
+            // A recipe genus has no local steps of its own (slabOpticalDepthCell):
+            // the volume's or the maps' depth from the sample itself, or the
+            // first steps' cloud (its densest, at its base) would go missing.
+            localSteps = 0;
+        }
+#endif
         // The light volume where it is whole (debug bit 512: the maps').
         if (cloudLightOn != 0 && (uCloudDebug & 512) == 0) {
             held = cloudLightSunDepth(f, cloudLight, cloudLightChart, p, sunDir, weather,

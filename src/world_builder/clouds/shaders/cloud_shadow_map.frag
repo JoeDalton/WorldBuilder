@@ -10,6 +10,9 @@
 // a node of an azimuthal equidistant chart on the base's sphere (uMapChart:
 // its centre's up and the base's radius, east and the spacing, north and the
 // nodes per side).
+// The recipe genera's density in the summed depths (cloud_field.glsl's
+// skyShadowLevels); elsewhere they are left to these bakes.
+#define CLOUD_RECIPE_SHADOWS
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "cloud_field.glsl"
 

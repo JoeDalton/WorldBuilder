@@ -115,7 +115,7 @@ def test_the_shader_fades_the_fine_octaves_and_billows_in_the_anvil():
     assert tuple(map(float, numbers.groups())) == (*ANVIL_DEPTH, *ANVIL_SMOOTH_BAND)
     # both density functions take the faded high octaves
     assert field.count("anvilColumnValue(f, coord, v, low, mean, aw)") == 2
-    march = (SHADERS / "cloud_march.frag").read_text()
+    march = (SHADERS / "cloud_march.glsl").read_text()
     assert "1.0 - anvilWeight(" in march
 
 

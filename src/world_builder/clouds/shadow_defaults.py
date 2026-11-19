@@ -39,7 +39,7 @@ def _no_deck_light() -> Texture:
 
 @functools.cache
 def _no_coverage() -> Texture:
-    """A 1-texel coverage cube (``genusCoverA``), no cloud."""
+    """A 1-texel coverage cube (``genusCoverA``, ``genusCoverB``), no cloud."""
     return build_coverage_texture(np.zeros((6, 1, 1, 4), dtype=np.float32))
 
 
@@ -64,6 +64,15 @@ def _no_noise() -> Texture:
     return tex
 
 
+@functools.cache
+def _no_cells() -> Texture:
+    """A 1x1x1 Worley volume (``cloudCells``), for shaders that never read it."""
+    tex = Texture("no_cloud_cells")
+    tex.setup_3d_texture(1, 1, 1, Texture.T_float, Texture.F_rg32)
+    tex.set_ram_image(bytes(8))
+    return tex
+
+
 def cloud_shadow_defaults(node: NodePath) -> None:
     """Give a node "no clouds overhead" inputs for cloud_field.glsl's
     ``planetCloudShadow`` (``uCloudShadowLayer`` -1), so a shader that
@@ -73,6 +82,7 @@ def cloud_shadow_defaults(node: NodePath) -> None:
     params = PTA_LVecBase4f.empty_array((MAX_GENERA + 1) * GENUS_VEC4S)
     node.set_shader_inputs(
         cloudNoise=_no_noise(),
+        cloudCells=_no_cells(),
         layerParams=params,
         genusLevelOffset=PTA_LVecBase4f.empty_array(MAX_GENERA * DETAIL_LEVELS // 4),
         detailOctaves=PTA_LVecBase4f.empty_array(DETAIL_LEVELS // 4),
@@ -94,6 +104,7 @@ def cloud_shadow_defaults(node: NodePath) -> None:
         uSkyBands=PTA_LVecBase4f.empty_array(4),
         uSkyBandCount=0,
         genusCoverA=_no_coverage(),
+        genusCoverB=_no_coverage(),
         genusShift=_no_shift(),
         genusDeckLight=_no_deck_light_array(),
         cloudLight=_no_cloud_map(),

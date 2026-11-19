@@ -15,6 +15,9 @@
 // a voxel beside a tower marched through it with its own column's
 // (shallower) depth, and the tower's face streaked.
 // light_volume.light_depth_union on the CPU.
+// The recipe genera's density in the summed depths (cloud_field.glsl's
+// skyShadowLevels); elsewhere they are left to these bakes.
+#define CLOUD_RECIPE_SHADOWS
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "cloud_field.glsl"
 

@@ -77,8 +77,11 @@ anvil), genera_congestus (the same, north-west 6 degrees up: the congestus
 line), cirrus_overhead and cirrus_grazing (the same, south-south-west, 75
 and 4 degrees up: the cirrus above and toward the horizon); the genera are
 laid out around the start, so pass the demo's --start; with --showcase,
-genus_<name> (each genus of the showcase row from the start, along its
-bearing), night_orbit (1.5 radii up,
+genus_<name> (each cumulus of the northern showcase row from 1 km over the
+start, along its bearing; each stratiform genus of the southern row from
+the ground under its centre, looking up at its far edge; the altostratus
+from by its near edge, the sun behind it; the altocumulus from under it, as
+the low sheets: its pattern of patches), night_orbit (1.5 radii up,
 looking down at the terminator: the sun 60 degrees below the nadir's horizon),
 night_sea (3 m over the sea, the sun 8 degrees down: the sky's reflection must
 be as dark as the sky), beach (40 m up, 300 m off the coast nearest the
@@ -149,6 +152,7 @@ from panda3d.core import Filename
 sys.path.insert(0, str(Path(__file__).parent))
 
 from demo_terrain import (  # noqa: E402
+    START_CLEARANCE,
     TEST_BALL_DIAMETER,
     TerrainDemo,
     _quat_from_axes,
@@ -156,9 +160,14 @@ from demo_terrain import (  # noqa: E402
     add_world_arguments,
     describe_window,
     settings_from_args,
+    start_pose,
     window_config,
 )
-from world_builder.clouds.genera import SHOWCASE_ROW  # noqa: E402
+from world_builder.clouds.genera import (  # noqa: E402
+    SHOWCASE_ROW,
+    SHOWCASE_SOUTH,
+    showcase_slots,
+)
 from world_builder.terrain.chart import (  # noqa: E402
     AzimuthalEquidistantChart,
     TangentFrame,
@@ -167,15 +176,34 @@ from world_builder.terrain.chart import (  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
 
 CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
-#: The middle height of each showcase genus's cloud, metres above sea level
-#: (its pose aims at it).
+#: The middle height of each showcase cumulus's cloud, metres above sea
+#: level (its pose aims at it).
 SHOWCASE_MIDDLES = {
-    "stratus": 1150.0,
     "humilis": 2700.0,
     "mediocris": 3000.0,
     "congestus": 4500.0,
     "cumulonimbus": 6000.0,
 }
+#: The base of each genus of the southern showcase row, metres above sea
+#: level (genera.GENUS_PRESETS' slabs; the stratus's GeneraSpec's
+#: stratus_altitude): its pose looks up at its far edge from under it.
+SHOWCASE_BASES = {
+    "stratus": 900.0,
+    "stratocumulus": 800.0,
+    "nimbostratus": 600.0,
+    "altostratus": 4700.0,
+    "altocumulus": 3500.0,
+}
+#: A southern genus's pose: the eye this high over the ground under the
+#: sheet's centre (over the trees), the view's centre this many degrees
+#: over its far edge (the edge in the view's lower third).
+SHOWCASE_EYE = 60.0
+SHOWCASE_OVER_EDGE = 6.0
+#: A southern genus seen against the sun instead (the altostratus: the sun
+#: through it, "ground glass"): the eye this far short of the sheet's
+#: centre, metres, the view's centre on it at this height above sea level
+#: (the sheet's middle; the sun, 35 degrees up at 210, behind it).
+SHOWCASE_AGAINST_SUN = {"altostratus": (7.5e3, 5350.0)}
 
 
 @dataclass(frozen=True)
@@ -312,17 +340,43 @@ def _poses(demo: TerrainDemo) -> dict:
     poses["genera_congestus"] = (lat0, lon0, ground_alt, 45.0, 6.0, 0, 0)
     poses["cirrus_overhead"] = (lat0, lon0, ground_alt, 150.0, 75.0, 0, 0)
     poses["cirrus_grazing"] = (lat0, lon0, ground_alt, 150.0, 4.0, 0, 0)
-    # The showcase (--showcase): each genus from 1 km over the start (the
+    # The showcase (--showcase): each cumulus from 1 km over the start (the
     # test balls, at the start's height, below the view), along its bearing
     # (headings turn west), the view's centre a little above its cloud's
     # middle.
     for genus, bearing, distance, _, _ in SHOWCASE_ROW:
-        # The stratus from the ground, under it (from 1 km up, level with
-        # its top, it was a line)
-        eye = ground_alt + (0.0 if genus == "stratus" else 1000.0)
+        eye = ground_alt + 1000.0
         middle = SHOWCASE_MIDDLES[genus]
         pitch = math.degrees(math.atan2(middle - eye, distance)) + 2.0
         poses[f"genus_{genus}"] = (lat0, lon0, eye, -bearing, pitch, 0, 0)
+    # The southern row's sheets: from the start, 38 km off, one was a line
+    # on the horizon (the stratus, from the ground, 1.5 degrees up); from
+    # just outside its near edge, a slab seen side-on (a lenticular's
+    # look, not a stratus's). From under its centre, near the ground,
+    # looking along its bearing: its underside the ceiling over the view,
+    # its far edge's outline in the lower third, the sky under it (the
+    # WMO's photos of St and Sc are from under them).
+    frame = TangentFrame.at(lat0, lon0)
+    shown = {slot[0] for slot in showcase_slots()}
+    for genus, bearing, distance, radius_m, _ in SHOWCASE_SOUTH:
+        if genus not in shown:
+            continue  # a slot for a genus still to come
+        base = SHOWCASE_BASES.get(genus, 1000.0)
+        heading = (
+            math.sin(math.radians(bearing)) * frame.east
+            + math.cos(math.radians(bearing)) * frame.north
+        )
+        back, middle = SHOWCASE_AGAINST_SUN.get(genus, (0.0, 0.0))
+        arc = (distance - back) / radius
+        where = math.cos(arc) * frame.up + math.sin(arc) * heading
+        lat, lon = (float(v[0]) for v in latlon(where[None, :]))
+        ground = start_pose(demo.terrain.spec, None, (lat, lon))["alt"]
+        eye = ground - START_CLEARANCE + SHOWCASE_EYE
+        edge = math.degrees(math.atan2(base - eye, radius_m))
+        pitch = edge + SHOWCASE_OVER_EDGE
+        if back:
+            pitch = math.degrees(math.atan2(middle - eye, back))
+        poses[f"genus_{genus}"] = (lat, lon, eye, -bearing, pitch, 0, 0)
     if demo.ring is not None:
         poses["ring_ground"] = (ref_lat, ref_lon, 1500.0, 180.0, 12.0, 0, 0)
         poses["ring_orbit"] = (35.0, lon0, 6.0 * radius, 0.0, -89.9, 0, 0)

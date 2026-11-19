@@ -1,27 +1,34 @@
 """
-A planet's low clouds by genus: stratus, and the convective continuum from
-fair-weather cumulus through congestus to cumulonimbus. A PLACEHOLDER for the
-weather (issue #8): its maps are features laid out around one point.
+A planet's low and middle clouds by genus: stratus, stratocumulus,
+nimbostratus, altostratus, altocumulus, and the convective
+continuum from fair-weather cumulus through congestus to cumulonimbus. A
+PLACEHOLDER for the weather (issue #8): its maps are features laid out
+around one point.
 
 The genera (:data:`GENUS_PRESETS`, :attr:`GeneraSpec.genera`), each one
 density field over its own slab, which the raymarch marches as one union
 (:class:`march.CloudMarch`; slabs may overlap):
 
-* **stratus** (:attr:`cloud.CloudType.STRATUS`): a flat sheet low down,
-  its coverage a map of its own;
+* **stratus**, **stratocumulus**, **nimbostratus**, **altostratus** and
+  **altocumulus**: recipe genera (:attr:`GenusPreset.recipe`; clouds.md,
+  "The recipe genera"), a flat grey sheet low down, a layer of lumpy closed
+  cells, a thick dark rain-cloud layer, a thin sheet the sun shows through
+  and a thin layer of small rounded patches, each its coverage a map of its
+  own (:func:`genus_coverage`);
 * **convective** (:attr:`cloud.CloudType.CONVECTIVE`): the cumulus field,
   whose clouds grow with the convective **depth** (0 to 1, a third map):
   their top rises from the cumulus's 1 km to the slab's cap
   (:attr:`noise.DensityField.min_top`), a coarse cell octave gathers them
   into towers kilometres wide (``cell_weight``), the threshold falls under
-  the cap of the deepest into an anvil (``anvil``), and their billboards grow
-  with it (``CloudSpec.deep_radius``). The anvil spreads past its tower as
-  a smooth lens, over a fourth map (its spread: :func:`noise.shelf_lift`),
-  streaming downwind on the upper wind (:func:`anvil_spread`).
+  the cap of the deepest into an anvil (``anvil``). The anvil spreads past
+  its tower as a smooth lens, over a fourth map (its spread:
+  :func:`noise.shelf_lift`), streaming downwind on the upper wind
+  (:func:`anvil_spread`).
 
 The maps (:func:`genus_planes`, cube maps as the weather's) are the
 weather's own coverage for the fair-weather cumulus everywhere, plus, around
-:attr:`GeneraSpec.focus`, the features of :attr:`GeneraSpec.features`.
+:attr:`GeneraSpec.focus`, the features of :attr:`GeneraSpec.features`; each
+other genus's coverage is its own features' (:func:`genus_coverage`).
 
 **Coverage to the field.** The share of columns holding cloud depends on
 how tall they may grow, so the convective field's fbm shift is tabulated by
@@ -44,8 +51,10 @@ import numpy as np
 
 from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.noise import (
+    MIE_ASYMMETRY_ICE,
     DensityField,
     _smoothstep,
+    delta_eddington,
     sphere_column_peaks,
 )
 from world_builder.clouds.weather import (
@@ -91,11 +100,14 @@ class Feature:
     :ivar east: its centre east of the focus, metres
     :ivar north: north of it, metres
     :ivar radius: its radius, metres; it fades out over its outer third
-    :ivar genus: ``"cumulonimbus"`` (depth 1 to 1.4 radii: its core, then
-        its anvil's overhang; a ring of congestus to 2.2 radii; its anvil's
-        shelf to 3 radii),
-        ``"congestus"`` (depth ~0.5) or ``"stratus"`` (a stratiform
-        genus)
+    :ivar genus: a cumulus species (:data:`CONVECTIVE_SPECIES`):
+        ``"cumulonimbus"`` (depth 1 to 1.4 radii: its core, then its anvil's
+        overhang; a ring of congestus to 2.2 radii; its anvil's shelf to 3
+        radii), ``"congestus"`` (depth 0.5) and the rest of
+        :data:`GENUS_DEPTHS`; or another genus of :data:`GENUS_PRESETS`
+        (``"stratus"``, ``"stratocumulus"``, ``"nimbostratus"``,
+        ``"altostratus"``, ``"altocumulus"``), which fills its own coverage map
+        (:func:`genus_coverage`)
     :ivar coverage: the share of its columns holding cloud at its core (a
         cumulonimbus's near 1: a solid tower, the noise carving its edges;
         less, and a deep column holds scattered blobs at every height)
@@ -116,19 +128,199 @@ class GenusPreset:
 
     :ivar slab: (base, thickness) above sea level, metres; None = the type's
         (the stratus's base is :attr:`GeneraSpec.stratus_altitude`)
+    :ivar recipe: a recipe genus's knobs (:class:`noise.GenusField`'s
+        ``noise_kind``, ``cell_size``, ``cell_fill``, ``stretch``,
+        ``vertical_stretch``, ``profile``, ``erosion``, ``erosion_base``):
+        the genus evaluates the recipe (``genusRecipeDensity``); None = its
+        type's field as it is (the convective clouds)
+    :ivar field: overrides of its type's :class:`noise.DensityField`
+        (``edge_softness``, ``noise_scale``, ``density``...), its threshold
+        then resolved anew; None = none
+    :ivar optics: overrides of its type's :class:`noise.CloudOptics`
+        (``multiple_scattering``, ``forward_gain``...): genera of one type
+        that are lit apart (the lighting carries a sheet's identity:
+        cloud_genera_research.md, section 5); None = none
     """
 
     cloud_type: CloudType
     coverage: tuple = ("weather", 0)
     far_shadow: float = 0.0
     slab: tuple | None = None
+    recipe: dict | None = None
+    field: dict | None = None
+    optics: dict | None = None
 
 
 #: The genera by name: the primary one (the convective clouds) reads the
-#: weather cube, the others a channel of a coverage cube.
+#: weather cube, the others a channel of a coverage cube. The stratiform
+#: ones are recipe genera (clouds.md, "The recipe genera", has the why of
+#: each knob; cloud_genera_research.md, section 3, the recipes).
 GENUS_PRESETS = {
     "convective": GenusPreset(CloudType.CONVECTIVE),
-    "stratus": GenusPreset(CloudType.STRATUS, ("A", 0), far_shadow=1.0),
+    # A low, grey, uniform sheet (WMO: "a flat, uniform base, sometimes
+    # fractus"; outline sharp): value fbm of 10 km features (the research's
+    # 10-30 km), three times longer along the focus's east, a wide window
+    # (soft, even density inside), the top soft, the base flat, its outline
+    # ragged (wispy erosion) only low down.
+    "stratus": GenusPreset(
+        CloudType.STRATUS,
+        ("A", 0),
+        far_shadow=1.0,
+        recipe=dict(
+            noise_kind="value",
+            stretch=3.0,
+            profile=(0.03, 0.3, False),
+            erosion=(-1.5, 1.0),
+            erosion_base=0.4,
+        ),
+        field=dict(
+            noise_scale=(0.0004, 0.0004, 0.0004),
+            octave_weights=(0.6, 0.3, 0.08, 0.02),
+            edge_softness=1.2,
+            top_erosion=0.1,
+            top_exponent=2.0,
+        ),
+    ),
+    # Lumpy, tessellated grey-white cells with dark parts (WMO: "always some
+    # dark parts", non-fibrous, flat-based, lumpy-topped): closed Worley
+    # cells 1.5 km wide (F2 - F1, twice as tall as wide: columns) mixed
+    # with a little fbm, the threshold rising toward the top (domes:
+    # a cell's centre reaches higher than its rim), the base flat, billowy
+    # erosion. Density 0.045 a metre, about the stratus's 0.05 (its water,
+    # 0.45 against 0.25-0.3 g/m3, argues for more; at 0.07 its undersides
+    # went navy).
+    "stratocumulus": GenusPreset(
+        CloudType.STRATUS,
+        ("A", 1),
+        far_shadow=1.0,
+        slab=(800.0, 1000.0),
+        recipe=dict(
+            noise_kind="cells",
+            cell_size=1500.0,
+            cell_fill=0.75,
+            vertical_stretch=2.0,
+            profile=(0.08, 0.1, False),
+            erosion=(3.0, 1.0),
+        ),
+        field=dict(
+            noise_scale=(0.002, 0.002, 0.002),
+            edge_softness=0.8,
+            top_erosion=0.4,
+            top_exponent=1.5,
+            density=0.045,
+        ),
+    ),
+    # A thick, dark, featureless rain-cloud layer spanning the low and
+    # middle etages (WMO: "grey, often dark ... thick enough throughout to
+    # blot out the sun"): value fbm of 20 km features (the research's 20-50
+    # km) three times longer along east, its fine octaves faint
+    # (featureless), a narrow window (solid inside: uniform), a top-hat over
+    # 0.6-5 km, its base diffuse (soft over its lowest 12 %, wispy erosion
+    # of 500 m cells over its lowest 15 %: ragged where it thins), the
+    # threshold rising a little toward the top (shoulders, not a brick, where
+    # the coverage fades). Denser than the stratus and lit darker: little sky
+    # fill, a weak forward lobe; its sun steps longer (4.4 km of it).
+    "nimbostratus": GenusPreset(
+        CloudType.STRATUS,
+        ("A", 2),
+        far_shadow=1.0,
+        slab=(600.0, 4400.0),
+        recipe=dict(
+            noise_kind="value",
+            stretch=3.0,
+            cell_size=3000.0,
+            profile=(0.12, 0.15, False),
+            erosion=(-2.0, 1.0),
+            erosion_base=0.15,
+        ),
+        field=dict(
+            noise_scale=(0.0002, 0.0002, 0.0002),
+            octave_weights=(0.6, 0.3, 0.08, 0.02),
+            edge_softness=1.0,
+            top_erosion=0.15,
+            top_exponent=2.0,
+            density=0.08,
+        ),
+        optics=dict(
+            sun_steps=3,
+            sun_step_length=250.0,
+            multiple_scattering=0.05,
+            forward_gain=1.6,
+            backward_gain=1.1,
+        ),
+    ),
+    # A grey or bluish sheet, uniform or striated, through whose thinner
+    # parts the sun shows as through ground glass (WMO; never a halo):
+    # value fbm of 16 km features stretched five times along east, its last
+    # octave dropped (the march's far levels drop it: in a window this wide
+    # the cut drew a contour across the sheet), a wide window (its density
+    # varies: thin and thicker parts), soft at both ends, no erosion (at
+    # -0.5 its 500 m cells, squeezed along east, sawed its rim). Thin (a
+    # thirtieth of the stratus's density: the sun's disc shows through) and
+    # lit as ice: more sky fill (grey-bluish), an ice cloud's forward lobe.
+    # Over 4.7-6 km: clear of the altocumulus's 3.5-3.8 km (a sample inside
+    # two genera's slabs costs both).
+    "altostratus": GenusPreset(
+        CloudType.STRATUS,
+        ("A", 3),
+        far_shadow=1.0,
+        slab=(4700.0, 1300.0),
+        recipe=dict(
+            noise_kind="value",
+            stretch=5.0,
+            cell_size=3000.0,
+            profile=(0.3, 0.3, False),
+        ),
+        field=dict(
+            noise_scale=(0.00025, 0.00025, 0.00025),
+            octave_weights=(0.6, 0.3, 0.1, 0.0),
+            edge_softness=2.0,
+            top_erosion=0.05,
+            top_exponent=2.0,
+            density=0.0015,
+        ),
+        optics=dict(
+            multiple_scattering=0.2,
+            forward_gain=3.0,
+            forward_anisotropy=delta_eddington(MIE_ASYMMETRY_ICE, applicability=0.5),
+        ),
+    ),
+    # Rounded white or grey patches in a thin layer, with shading, small
+    # clear gaps between them, each 1-5 degrees across seen from the ground
+    # (WMO): closed Worley cells (F2 - F1: their walls stay clear however
+    # high the coverage; 1 - F1's blobs merged into chains) 350 m apart (an
+    # element is about 1.2 cells: 4-6 degrees overhead at 3.5 km; at 800 m,
+    # 10 degrees), most of the base value, the rest fbm of 3 km features
+    # (the cells' sizes jitter), half again taller than wide (one element
+    # per column), a lens (4h(1-h): rounded tops and bases) over a slab
+    # 300 m thick (flatter than wide: at 1 km the elements were tall
+    # pebbles seen from the side), billowy erosion at a sixth of the cells
+    # (at 2 their rims were polygonal). Dense enough for grey cores (at
+    # 0.012 all white). Unstretched: the erosion's cells are read in the
+    # recipe's coordinates, which a stretch squeezes (the altostratus's
+    # rim sawn into teeth). Its last octave dropped (the far levels' cut).
+    # Over 3.5-3.8 km: inside the nimbostratus's slab, under the
+    # altostratus's base.
+    "altocumulus": GenusPreset(
+        CloudType.STRATUS,
+        ("B", 0),
+        far_shadow=1.0,
+        slab=(3500.0, 300.0),
+        recipe=dict(
+            noise_kind="cells",
+            cell_size=350.0,
+            cell_fill=0.8,
+            vertical_stretch=1.5,
+            profile=(0.0, 0.0, True),
+            erosion=(3.0, 1.0),
+        ),
+        field=dict(
+            noise_scale=(0.0013, 0.0013, 0.0013),
+            octave_weights=(0.6, 0.3, 0.1, 0.0),
+            edge_softness=0.8,
+            density=0.05,
+        ),
+    ),
 }
 
 
@@ -136,24 +328,52 @@ GENUS_PRESETS = {
 #: cumulonimbus is depth 1 and its anvil, :func:`genus_planes`): its clouds'
 #: top rises with it (``DensityField.min_top``), a congestus's to 6.85 km.
 GENUS_DEPTHS = {"humilis": 0.0, "mediocris": 0.2, "congestus": 0.5}
+#: The features of the convective genus (the weather cube's coverage and
+#: depth); every other feature's genus has a coverage map of its own.
+CONVECTIVE_SPECIES = ("cumulonimbus", *GENUS_DEPTHS)
 
-#: The showcase's row (:func:`showcase_features`): (genus, bearing east of
-#: north in degrees, distance in metres, radius in metres, coverage), west
-#: to east. A cumulonimbus last, east of the rest: its anvil streams to 3
-#: radii and farther downwind.
+#: The showcase's northern row (:func:`showcase_features`): (genus,
+#: bearing east of north in degrees, distance in metres, radius in metres,
+#: coverage), west to east: the cumulus species. A cumulonimbus last, east
+#: of the rest: its anvil streams to 3 radii and farther downwind.
 SHOWCASE_ROW = (
-    ("stratus", -72.0, 35e3, 8e3, 0.9),
     ("humilis", -42.0, 35e3, 8e3, 0.35),
     ("mediocris", -12.0, 35e3, 8e3, 0.45),
     ("congestus", 16.0, 35e3, 7e3, 0.65),
     ("cumulonimbus", 60.0, 45e3, 5e3, 1.0),
 )
+#: The southern row, as :data:`SHOWCASE_ROW`, east to west: the stratiform
+#: and mid-level genera, sheets 14 km wide, a slot each 30 degrees apart
+#: (19.7 km between centres). A slot whose genus is not a preset is
+#: left out (:func:`showcase_features`). The low
+#: genera east of south, away from the sun (azimuth 210 at the start), so
+#: their undersides are not shot against it; the altostratus at the sun
+#: ("ground glass"), the altocumulus beyond it (shot from under it: its
+#: pattern of patches is its identity).
+SHOWCASE_SOUTH = (
+    ("stratocumulus", 120.0, 38e3, 7e3, 0.88),
+    ("stratus", 150.0, 38e3, 7e3, 0.9),
+    ("nimbostratus", 180.0, 38e3, 7e3, 0.95),
+    ("altostratus", 210.0, 38e3, 7e3, 0.9),
+    ("altocumulus", 240.0, 38e3, 7e3, 0.85),
+)
+
+
+def showcase_slots() -> tuple[tuple, ...]:
+    """The showcase's rows (:data:`SHOWCASE_ROW`, :data:`SHOWCASE_SOUTH`)
+    less the slots whose genus is neither a cumulus species nor a preset."""
+    return tuple(
+        slot
+        for slot in SHOWCASE_ROW + SHOWCASE_SOUTH
+        if slot[0] in CONVECTIVE_SPECIES or slot[0] in GENUS_PRESETS
+    )
 
 
 def showcase_features() -> tuple[Feature, ...]:
     """The separated-genera showcase: one feature per genus of the march (and
-    per cumulus species), in a row along the northern horizon from the focus,
-    apart (:data:`SHOWCASE_ROW`). With ``GeneraSpec(background=False)``
+    per cumulus species), the cumulus in a row along the northern horizon
+    from the focus, the stratiform and mid-level genera along the southern,
+    apart (:func:`showcase_slots`). With ``GeneraSpec(background=False)``
     there is no other cloud: each genus is seen alone."""
     return tuple(
         Feature(
@@ -163,7 +383,7 @@ def showcase_features() -> tuple[Feature, ...]:
             genus,
             coverage,
         )
-        for genus, bearing, distance, radius, coverage in SHOWCASE_ROW
+        for genus, bearing, distance, radius, coverage in showcase_slots()
     )
 
 
@@ -200,20 +420,45 @@ class GeneraSpec:
     features: tuple[Feature, ...] = field(default=DEFAULT_FEATURES)
     stratus_altitude: float = 900.0
     wind: tuple[float, float] | None = None
-    genera: tuple[str, ...] = ("convective", "stratus")
+    genera: tuple[str, ...] = (
+        "convective",
+        "stratus",
+        "stratocumulus",
+        "nimbostratus",
+        "altostratus",
+        "altocumulus",
+    )
     background: bool = True
 
 
-def genus_specs(spec: GeneraSpec, altitude: float | None = None) -> list[tuple]:
+def has_coverage(spec: GeneraSpec, name: str) -> bool:
+    """Whether genus *name* of *spec* holds cloud anywhere: the primary one
+    (the weather's) always; another where a feature is its
+    (:func:`genus_coverage`; the placeholder's maps are features alone)."""
+    if GENUS_PRESETS[name].coverage[0] == "weather":
+        return True
+    return any(f.genus == name for f in spec.features)
+
+
+def genus_specs(
+    spec: GeneraSpec, altitude: float | None = None, covered: bool = False
+) -> list[tuple]:
     """Each genus of *spec* as the march builds it (:data:`GENUS_PRESETS`):
     its name, cloud type, slab and coverage source.
 
     :param altitude: the convective clouds' base, metres; None = the type's
+    :param covered: only the genera holding cloud somewhere
+        (:func:`has_coverage`), as the march takes them: an empty genus
+        would cost it all the same (in a band it shares, the generic genus
+        loop instead of the band's dedicated one: +0.65 ms at 2560 x 1440
+        for an empty stratocumulus over the stratus's band)
     :returns: (name, cloud type, base or None, thickness or None, coverage)
         per genus, in :attr:`GeneraSpec.genera`'s order (None: the type's)
     """
     out = []
     for name in spec.genera:
+        if covered and not has_coverage(spec, name):
+            continue
         preset = GENUS_PRESETS[name]
         base, thickness = preset.slab if preset.slab is not None else (None, None)
         if preset.slab is None and preset.cloud_type is CloudType.CONVECTIVE:
@@ -310,27 +555,46 @@ def anvil_spread(
 
 
 @functools.cache
+def genus_coverage(spec: GeneraSpec, name: str, size: int = GENUS_SIZE) -> np.ndarray:
+    """A genus's own coverage map (a genus other than the convective one):
+    its features' (:attr:`Feature.genus` *name*), each its coverage over its
+    core, fading out over its outer third; 0 elsewhere (cached per process).
+
+    :returns: (6, size, size) float32, the layout of
+        :func:`sky.starfield.cube_directions`
+    """
+    dirs = cube_directions(size).reshape(-1, 3)
+    cover = np.zeros(len(dirs))
+    for f, centre, angle in _feature_dirs(spec):
+        if f.genus != name:
+            continue
+        distance = np.arccos(np.clip(dirs @ centre, -1.0, 1.0)) / angle
+        core = 1.0 - _smoothstep(2.0 / 3.0, 1.0, distance)
+        cover = np.maximum(cover, f.coverage * core)
+    return cover.reshape(6, size, size).astype(np.float32)
+
+
+@functools.cache
 def genus_planes(spec: GeneraSpec, size: int = GENUS_SIZE) -> np.ndarray:
-    """The genera's maps as cube maps (cached per process).
+    """The convective genus's maps as cube maps (cached per process).
 
     :returns: (6, size, size, 4) float32: the convective coverage (the
         weather's, smooth, upsampled from its own map), the convective depth,
-        the stratiform coverage and the anvil shelf's spread, the layout of
-        :func:`sky.starfield.cube_directions`
+        the stratus's coverage (:func:`genus_coverage`) and the anvil
+        shelf's spread, the layout of :func:`sky.starfield.cube_directions`
     """
     dirs = cube_directions(size).reshape(-1, 3)
     convective = sample_cube(coverage_map(spec.weather), dirs).astype(np.float64)
     if not spec.background:
         convective = np.zeros(len(dirs))
     depth = np.zeros(len(dirs))
-    stratiform = np.zeros(len(dirs))
+    stratiform = genus_coverage(spec, "stratus", size).reshape(-1)
     shelf = np.zeros(len(dirs))
     for f, centre, angle in _feature_dirs(spec):
+        if f.genus not in CONVECTIVE_SPECIES:
+            continue  # a map of its own (genus_coverage)
         distance = np.arccos(np.clip(dirs @ centre, -1.0, 1.0)) / angle
         core = 1.0 - _smoothstep(2.0 / 3.0, 1.0, distance)
-        if f.genus == "stratus":
-            stratiform = np.maximum(stratiform, f.coverage * core)
-            continue
         if f.genus == "cumulonimbus":
             # Depth 1 over the core and around it, where the sparser columns
             # hold cloud mostly in the anvil's band (an overhang); congestus
@@ -421,22 +685,18 @@ def coverage_cube(
 ) -> np.ndarray:
     """A coverage cube of the union march: each genus of *spec* whose
     coverage is a channel of *cube* (:attr:`GenusPreset.coverage`) has its
-    coverage map there, the others' channels 0. The shift comes from each
-    genus's own table (:func:`genus_weather_at`, ``genusShift`` on the GPU).
+    coverage map there (:func:`genus_coverage`: its own features'), the
+    others' channels 0. The shift comes from each genus's own table
+    (:func:`genus_weather_at`, ``genusShift`` on the GPU).
 
     :param cube: ``"A"`` or ``"B"``
     :returns: (6, size, size, 4) float32
     """
-    planes = genus_planes(spec, size)
-    out = np.zeros(planes.shape[:-1] + (4,), dtype=np.float32)
-    # The placeholder's maps by cloud type: every stratiform genus the
-    # stratus features' (genus_planes' third plane).
-    maps = {CloudType.STRATUS: planes[..., 2]}
+    out = np.zeros((6, size, size, 4), dtype=np.float32)
     for name in spec.genera:
-        preset = GENUS_PRESETS[name]
-        source, channel = preset.coverage
-        if source == cube and preset.cloud_type in maps:
-            out[..., channel] = maps[preset.cloud_type]
+        source, channel = GENUS_PRESETS[name].coverage
+        if source == cube:
+            out[..., channel] = genus_coverage(spec, name, size)
     return out
 
 

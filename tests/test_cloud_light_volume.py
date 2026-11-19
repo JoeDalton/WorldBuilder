@@ -221,8 +221,11 @@ def test_the_genera_bake_is_one_volume_of_their_summed_depth(window):
     and SLICES through the convective one's, each voxel the genera's summed
     depth (the towers' convective depth and anvil spread taken at every step,
     the stratus deck under them) against the CPU twin, over both feature
-    sites at once."""
+    sites at once. The stratus is a recipe genus (its twin the recipe's
+    density, light_volume.GenusShade's recipe); the stratocumulus has no
+    feature here."""
     from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.field_setup import _cells
     from world_builder.clouds.genera import GeneraSpec, genus_weather_at
     from world_builder.clouds.planet import PlanetClouds
     from world_builder.clouds.weather import WeatherSpec
@@ -291,9 +294,16 @@ def test_the_genera_bake_is_one_volume_of_their_summed_depth(window):
             optics = replace(
                 optics, sun_step_length=optics.sun_step_length * STEP_SCALE
             )
+            recipe = None
+            if genus.recipe is not None:
+                # A recipe genus: its recipe at its far level (the bake's)
+                recipe = replace(
+                    genus.recipe, field=genus._deck_field, optics=genus._deck_optics
+                )
             return GenusShade(
-                genus.shadow_field, optics, channel(1), channel(2), channel(3)
-            )
+                genus.shadow_field, optics, channel(1), channel(2), channel(3),
+                recipe=recipe, cells=_cells(), octaves=genus._deck_octaves,
+            )  # fmt: skip
 
         shades = [shade(march.genus_caster(g)) for g in range(march.genera_count)]
         chart = [tuple(volume.front.chart[k]) for k in range(4)]

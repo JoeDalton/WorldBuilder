@@ -964,12 +964,15 @@ def test_the_raymarchs_shadow_map_is_the_genera_summed_against_the_cpu(window):
         points = dirs.reshape(-1, 3) * base
         expected = _union_depth(clouds, points, sun, steps).reshape(got.shape)
         march = clouds.volume
-        for g in range(march.genera_count):  # both genera cast here
-            from world_builder.clouds.field_setup import genus_sun_depth
+        from world_builder.clouds.field_setup import genus_sun_depth
 
-            assert (
-                genus_sun_depth(march.genus_caster(g), points, sun, steps).max() > 0.2
-            )
+        # The convective clouds and the stratus (a recipe genus: its recipe,
+        # as the bake's CLOUD_RECIPE_SHADOWS) cast here (the stratocumulus,
+        # no feature in the default's, is not marched)
+        assert march.genus_names == ["convective", "stratus"]
+        for g in range(march.genera_count):
+            depth = genus_sun_depth(march.genus_caster(g), points, sun, steps)
+            assert depth.max() > 0.2, march.genus_names[g]
         assert got.max() > 0.5  # drawn
         shade_error = np.abs(np.exp2(-got) - np.exp2(-expected))
         assert np.median(shade_error) < 5e-3
@@ -983,7 +986,11 @@ def test_the_raymarchs_shadow_map_is_the_genera_summed_against_the_cpu(window):
 def test_the_ground_shadow_is_the_genera_product_as_on_the_cpu(window):
     """planetCloudShadow on a node the genera's raymarch shades (no maps:
     marched through the sky bands) is the CPU's sun_visibility, the product
-    of the two genera's shades, under the towers and under the stratus."""
+    of the genera's shades, under the towers and under the stratus. That
+    march leaves the recipe genera (the stratus) to the maps (clouds.md,
+    "Where the recipe is evaluated"), so it is checked against the product
+    of the others' shades; the CPU's own (sun_visibility) has them, as the
+    maps do."""
     from panda3d.core import (
         Geom,
         GeomNode,
@@ -1023,6 +1030,13 @@ def test_the_ground_shadow_is_the_genera_product_as_on_the_cpu(window):
         for g in range(march.genera_count):
             both *= march.genus_caster(g).sun_visibility(points, sun, steps)
         np.testing.assert_allclose(expected, both, atol=1e-9)
+        # The march's: the genera without the recipe
+        expected = np.ones(len(points))
+        for g in range(march.genera_count):
+            caster = march.genus_caster(g)
+            if caster.recipe is None:
+                expected *= caster.sun_visibility(points, sun, steps)
+        assert expected.min() < 0.5 and expected.max() > 0.9
 
         vdata = GeomVertexData("points", GeomVertexFormat.get_v3(), Geom.UH_static)
         position = GeomVertexWriter(vdata, "vertex")

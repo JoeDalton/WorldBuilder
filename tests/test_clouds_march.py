@@ -31,6 +31,7 @@ from world_builder.clouds.march import (
     march_steps,
     march_transmittance,
     min_step,
+    opaque_residual,
     slab_segments,
     sphere_interval,
     step_scale,
@@ -54,7 +55,7 @@ from world_builder.terrain.workers import ChunkExecutor
 R = 600e3
 SLAB = (2200.0, 1000.0)
 SHADER = (
-    Path(__file__).parent.parent / "src/world_builder/clouds/shaders/cloud_march.frag"
+    Path(__file__).parent.parent / "src/world_builder/clouds/shaders/cloud_march.glsl"
 )
 UP = np.array([0.0, 0.0, 1.0])
 
@@ -256,6 +257,41 @@ def test_the_shader_shares_the_opaque_cutoff():
     assert "transmittance > OPAQUE" in text
 
 
+def test_the_opaque_cutoff_leaves_no_step_in_a_thin_sheets_alpha():
+    # A thin sheet seen at a grazing angle crosses the cutoff gradually
+    # across the view: snapped from 1 - OPAQUE to 1 there, its alpha drew a
+    # contour across the altostratus (clouds.md, "The recipe genera"). The
+    # residual eases to 0 over [OPAQUE, 2 OPAQUE], value and slope matching.
+    assert opaque_residual(OPAQUE) == 0.0
+    assert opaque_residual(OPAQUE / 2) == 0.0
+    for t in (2 * OPAQUE, 0.1, 0.5, 1.0):
+        assert opaque_residual(t) == pytest.approx(t)
+    eps = 1e-6
+    slope = (opaque_residual(2 * OPAQUE + eps) - opaque_residual(2 * OPAQUE - eps)) / (
+        2 * eps
+    )
+    assert slope == pytest.approx(1.0, abs=1e-3)
+    # A sheet thickening across the view: its alpha has no jump at the cutoff
+    t = np.linspace(0.02, 0.12, 2001)
+    alpha = 1.0 - np.array([opaque_residual(v) for v in t])
+    assert np.all(np.diff(alpha) <= 1e-12)  # monotonic in the light let through
+    assert np.max(np.abs(np.diff(alpha))) < 2e-4  # no step (the snap was 0.04)
+
+
+def test_the_shader_eases_the_opaque_cutoff():
+    text = SHADER.read_text()
+    assert "opaqueResidual(transmittance)" in text
+    assert "transmittance <= OPAQUE ? 1.0" not in text
+
+
+def test_a_ray_reports_the_eased_residual():
+    segments = np.array([[0.0, 3000.0]])
+    # Optical depth (log2) 4.32: transmittance ~ 0.05, inside the ease
+    left, _ = march_ray(segments, 50.0, STEP_GROWTH, 4096, lambda t: 4.32 / 3000.0)
+    assert 0.0 < left < 0.05
+    assert left == pytest.approx(opaque_residual(2.0**-4.32), rel=0.05)
+
+
 def test_the_steps_do_not_lengthen_as_the_light_is_spent():
     # A step's length from the light already spent made the steps' grid
     # depend on what the samples found: the visits' jitter no longer averaged
@@ -282,7 +318,7 @@ def test_the_steps_do_not_lengthen_as_the_light_is_spent():
 @pytest.mark.parametrize(
     "name",
     [
-        "cloud_march.frag",
+        "cloud_march.glsl",
         "cloud.frag",
         "cloud_deck.vert",
         "cirrus.vert",
@@ -493,7 +529,7 @@ def test_the_march_casts_a_shadow_and_reads_the_maps_for_its_own_light(
     finally:
         clouds.remove()
     shaders = Path(__file__).parents[1] / "src/world_builder/clouds/shaders"
-    assert "#define CLOUD_MAP_LIGHTING" in (shaders / "cloud_march.frag").read_text()
+    assert "#define CLOUD_MAP_LIGHTING" in (shaders / "cloud_march.glsl").read_text()
     for name in ("cloud.frag", "cloud_deck.frag"):
         path = shaders / name
         if path.exists():

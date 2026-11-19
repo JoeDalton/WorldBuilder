@@ -109,17 +109,21 @@ from world_builder.clouds.deck import (
 from world_builder.clouds.field_setup import (
     DECK_MAX_OPTICAL_DEPTH,
     OctaveBand,
+    _cells,
     _coverage_cube,
     _deck_light,
     _depth_tables,
     _genus_weather,
     _noise,
     _peaks,
+    _recipe_deck_light,
     _weather,
+    genus_field,
     octave_bands,
     octave_offset,
     planet_field,
     planet_weather,
+    recipe_peaks,
     sun_visibility,
 )
 from world_builder.clouds.genera import (
@@ -139,13 +143,17 @@ from world_builder.clouds.noise import (
     NOISE_SIZE,
     DensityField,
     GenusField,
+    build_cells_texture,
     build_curl_texture,
     build_deck_light_array,
     build_deck_light_texture,
     build_noise_texture,
+    cell_means,
     curl_noise_volume,
     pack_genus_params,
     pack_layer_params,
+    pack_recipe_cells,
+    pack_recipe_frame,
 )
 from world_builder.clouds.passes import composite_card, pass_camera, pass_states
 from world_builder.clouds.shadow_defaults import (
@@ -174,6 +182,7 @@ from world_builder.depth import (
     SplitDepthCameras,
 )
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
+from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.cubesphere import grid_for
 from world_builder.terrain.planet import PlanetSpec
 
@@ -194,6 +203,24 @@ SEGMENT_SAMPLES = 8
 #: The march stops at this transmittance and counts the cloud opaque
 #: (cloud_march.frag's OPAQUE).
 OPAQUE = 0.04
+
+
+def opaque_residual(transmittance: float) -> float:
+    """The light a ray lets through once composited (cloud_march.glsl's
+    ``opaqueResidual``): its transmittance, eased to 0 over [:data:`OPAQUE`,
+    2 :data:`OPAQUE`] (value and slope continuous), 0 below. Snapped from
+    OPAQUE to 0, a thin sheet seen at a grazing angle, whose rays cross the
+    cutoff gradually across the view, took a step of 0.04 in alpha there: a
+    contour across the altostratus (clouds.md, "The recipe genera").
+    """
+    if transmittance <= OPAQUE:
+        return 0.0
+    if transmittance >= 2.0 * OPAQUE:
+        return float(transmittance)
+    x = transmittance - OPAQUE
+    return float(3.0 * x - x * x / OPAQUE)
+
+
 #: The view ray's extinction over the field's (the sun march keeps the
 #: field's own). The billboards' look: each of their quads carries its
 #: sample's density over a whole chord, which keeps a cloud's edge crisp;
@@ -294,32 +321,65 @@ def slab_segments(
 MAX_SKY_BANDS = 4
 
 
+def _merged(slabs: list[tuple[float, float]]) -> list[list[float]]:
+    """Slabs merged where they overlap or touch: [base, top] each, lowest
+    first."""
+    out: list[list[float]] = []
+    for base, thickness in sorted(slabs):
+        top = base + thickness
+        if out and base <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], top)
+        else:
+            out.append([base, top])
+    return out
+
+
 def sky_bands(slabs: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """The genera's slabs merged into the disjoint bands of sky the march
-    takes a ray through (overlapping or touching slabs are one band; a gap
-    between two costs no steps), lowest first.
+    """The genera's slabs merged into the bands of sky the march takes a ray
+    through (overlapping or touching slabs are one band; a gap between two
+    costs no steps), lowest first.
+
+    A slab that bridges a gap (the nimbostratus's 0.6-5 km, between the low
+    sheets' band and the convective clouds') does not merge the slabs on
+    either side: its band is split at the gap's middle, each part taking
+    the genera on its side and the bridge. A band's thickest slab is never
+    a bridge (the convective clouds' 2.2-10.5 km holding mid-level sheets
+    stays one band). Merged, the low sheets took a
+    9.9 km band's shares, its light volume's slices (310 m, not 31) and its
+    bakes' steps: their shading turned grainy and their ground shadow
+    patchy (clouds.md, "The nimbostratus").
 
     :param slabs: each genus's (base, thickness) above sea level, metres
     :returns: each band's (base, thickness)
     :raises ValueError: for more than :data:`MAX_SKY_BANDS` bands
     """
-    bands: list[list[float]] = []
-    for base, thickness in sorted(slabs):
-        top = base + thickness
-        if bands and base <= bands[-1][1]:
-            bands[-1][1] = max(bands[-1][1], top)
-        else:
-            bands.append([base, top])
+    bands: list[tuple[float, float]] = []
+    for base, top in _merged(slabs):
+        inside = [s for s in slabs if s[0] >= base - 1e-6 and s[0] + s[1] <= top + 1e-6]
+        # The bridges: the slabs without which the band falls apart, but
+        # its thickest (a convective slab holding mid-level sheets: cut, a
+        # tower would take two bands' steps, a seam up its face)
+        thickest = max(inside, key=lambda s: s[1])
+        bridges = [
+            s
+            for k, s in enumerate(inside)
+            if s is not thickest and len(_merged(inside[:k] + inside[k + 1 :])) > 1
+        ]
+        cores = _merged([s for s in inside if s not in bridges]) if bridges else []
+        cuts = [0.5 * (a[1] + b[0]) for a, b in zip(cores, cores[1:])]
+        edges = [base, *cuts, top]
+        bands += [(float(lo), float(hi - lo)) for lo, hi in zip(edges, edges[1:])]
     if len(bands) > MAX_SKY_BANDS:
         raise ValueError(f"{len(bands)} bands of sky; the march takes {MAX_SKY_BANDS}")
-    return [(float(b), float(t - b)) for b, t in bands]
+    return bands
 
 
 def band_masks(
     slabs: list[tuple[float, float]], bands: list[tuple[float, float]]
 ) -> list[int]:
     """Which genera each sky band holds, as bit masks (bit *g*: genus *g*;
-    cloud_field.glsl's ``uSkyBands`` z).
+    cloud_field.glsl's ``uSkyBands`` z): those whose slab reaches into it
+    (a bridge, :func:`sky_bands`, both of its bands).
 
     :param slabs: each genus's (base, thickness) above sea level, metres
     :param bands: :func:`sky_bands` of *slabs*
@@ -331,7 +391,7 @@ def band_masks(
             sum(
                 1 << g
                 for g, (b, t) in enumerate(slabs)
-                if b >= base - 1e-6 and b + t <= top + 1e-6
+                if b < top - 1e-6 and b + t > base + 1e-6
             )
         )
     return masks
@@ -471,8 +531,8 @@ def march_ray(
     contours away: bands on a tower's face), stopping at :data:`OPAQUE`.
 
     :param extinction_at: the optical depth per metre at a distance along the ray
-    :returns: the transmittance left (0 once the cloud is counted opaque), and
-        the samples taken
+    :returns: the transmittance left as composited (:func:`opaque_residual`:
+        0 once the cloud is counted opaque), and the samples taken
     """
     scales = step_scales(segments, min_step, growth, budget, split)
     cap = _step_cap(budget, split)
@@ -489,7 +549,7 @@ def march_ray(
             alpha = 1.0 - 2.0 ** (-extinction_at(a + dt * jitter) * dt)
             transmittance *= 1.0 - alpha
             a += dt
-    return (0.0 if transmittance <= OPAQUE else transmittance), samples
+    return opaque_residual(transmittance), samples
 
 
 def min_step(field: DensityField) -> float:
@@ -623,6 +683,12 @@ def blue_noise(size: int = BLUE_NOISE_SIZE, sigma: float = 1.9) -> np.ndarray:
         work.flat[void] = 1.0
         work_field += shifted(*divmod(void, size))
     return (rank.reshape(size, size) / n).astype(np.float32)
+
+
+@functools.cache
+def _cells_texture() -> Texture:
+    """The recipe genera's Worley cells (``cloudCells``)."""
+    return build_cells_texture(_cells())
 
 
 @functools.cache
@@ -984,6 +1050,7 @@ class _MarchLayer:
         gather: bool = True,
         moving_block: tuple[int, int] | None = None,
         ground: Texture | None = None,
+        recipes: bool = False,
     ) -> None:
         self.lens = near_lens
         self.far_lens = far_lens
@@ -1058,8 +1125,11 @@ class _MarchLayer:
             GraphicsOutput.RTP_aux_hrgba_0, (0.0, 0.0, 0.0, 0.0)
         )
         self.buffer.set_clear_active(GraphicsOutput.RTP_aux_hrgba_0, True)
+        # The recipe genera's variant only for a march that has one
+        # (cloud_march.glsl's CLOUD_RECIPES).
+        fragment = "cloud_march_recipes.frag" if recipes else "cloud_march.frag"
         self.card = _fullscreen(
-            self.buffer, name, _shader("cloud_march.vert", "cloud_march.frag")
+            self.buffer, name, _shader("cloud_march.vert", fragment)
         )
         #: The march's region: the corner of its buffer this frame's block fills
         self.march_region = self.buffer.get_display_region(
@@ -1382,6 +1452,11 @@ class _Genus:
     deck_optics: Any = None
     coverage: tuple = ("weather", 0)
     cover: np.ndarray | None = None
+    #: A recipe genus's resolved :class:`noise.GenusField` (its optics the
+    #: preset's until _configure); None for the others
+    recipe: GenusField | None = None
+    #: The far level's octaves (its shadow's field's: _configure)
+    deck_octaves: int = 4
 
 
 class _GenusCaster:
@@ -1428,12 +1503,22 @@ class _GenusCaster:
         return genus.cover, genus.coverage[1], np.asarray(genus.table)
 
     @property
+    def recipe(self) -> GenusField | None:
+        """A recipe genus's field (:func:`field_setup.genus_sun_depth` skips
+        it), None for the others."""
+        return self._genus.recipe
+
+    @property
     def _deck_field(self):
         return self._genus.deck_field
 
     @property
     def _deck_optics(self):
         return self._genus.deck_optics
+
+    @property
+    def _deck_octaves(self) -> int:
+        return self._genus.deck_octaves
 
     @property
     def shadow_field(self) -> DensityField:
@@ -1536,7 +1621,7 @@ class CloudMarch:
         self._octave_mean = float(volume.mean())
         self._genera_spec = genera
         specs = (
-            genus_specs(genera, altitude)
+            genus_specs(genera, altitude, covered=True)
             if genera is not None
             else [(None, cloud_type, altitude, None, ("weather", 0))]
         )
@@ -1545,15 +1630,22 @@ class CloudMarch:
         if len(specs) > MAX_GENERA:
             raise ValueError(f"{len(specs)} genera; the march takes {MAX_GENERA}")
         self._genera: list[_Genus] = []
-        cover_job = None
+        cover_jobs: dict[str, Any] = {}
         for index, (name, kind, base, thickness, coverage) in enumerate(specs):
             if (coverage[0] == "weather") != (index == 0):
                 raise ValueError(
                     f"genus {name!r}: the first genus, and it alone, reads the weather"
                 )
-            preset, field, peaks = planet_field(
-                kind, base, seed, self.radius, thickness
-            )
+            if genera is None:
+                preset, field, peaks = planet_field(
+                    kind, base, seed, self.radius, thickness
+                )
+                recipe = None
+            else:
+                east = tuple(float(v) for v in TangentFrame.at(*genera.focus).east)
+                preset, field, peaks, recipe = genus_field(
+                    name, base, thickness, seed, self.radius, east
+                )
             table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
             if genera is None:
                 job = executor.submit_once(_weather, weather, table)
@@ -1567,14 +1659,15 @@ class CloudMarch:
                     )
                 job = executor.submit_once(_genus_weather, genera, CONVECTIVE, tables)
             else:
-                if coverage[0] != "A":
-                    raise ValueError(f"genus {name!r}: only coverage cube A exists")
-                if cover_job is None:
-                    cover_job = executor.submit_once(_coverage_cube, genera, "A")
-                job = cover_job
+                if coverage[0] not in cover_jobs:
+                    cover_jobs[coverage[0]] = executor.submit_once(
+                        _coverage_cube, genera, coverage[0]
+                    )
+                job = cover_jobs[coverage[0]]
             self._genera.append(
-                _Genus(name, preset, field, peaks, table, job, coverage=coverage)
-            )
+                _Genus(name, preset, field, peaks, table, job, coverage=coverage,
+                       recipe=recipe)
+            )  # fmt: skip
         first = self._genera[0]
         self.field = first.field
         self._preset = first.preset
@@ -1649,6 +1742,7 @@ class CloudMarch:
             "genusLevelOffset": self._level_offsets,
             "detailOctaves": self._level_octaves,
             "cloudNoise": build_noise_texture(volume),
+            "cloudCells": _cells_texture(),
             "noiseSize": float(NOISE_SIZE),
             "noiseOffset": Vec3(0, 0, 0),
             "deckLightCosMin": DECK_LIGHT_COS_MIN,
@@ -1807,6 +1901,7 @@ class CloudMarch:
                 else None
             ),
             ground=self._ground_texture,
+            recipes=any(genus.recipe is not None for genus in self._genera),
         )
         self._bind(layer.card)
         self._bind(layer.ground.card)
@@ -1900,12 +1995,13 @@ class CloudMarch:
             )  # fmt: skip
             for k in range(stride):
                 octaves = int(octave_counts[k])
+                fewer = (
+                    recipe_peaks(seed, genus.recipe, self.radius, octaves)
+                    if genus.recipe is not None
+                    else _peaks(seed, field, self.radius, octaves)
+                )
                 layer = OctaveBand(
-                    0,
-                    (0.0, 0.0),
-                    1.0,
-                    octaves,
-                    octave_offset(peaks, _peaks(seed, field, self.radius, octaves)),
+                    0, (0.0, 0.0), 1.0, octaves, octave_offset(peaks, fewer)
                 )
                 offsets[index * DETAIL_LEVELS + k] = layer.threshold_offset
             # The far level is the reflection's deck too: its cap, no fade.
@@ -1919,6 +2015,22 @@ class CloudMarch:
             # The deck's field and optics: the one its shadow is marched in.
             genus.deck_field = deck
             genus.deck_optics = layer_optics
+            genus.deck_octaves = octaves
+            if genus.recipe is not None:
+                # A recipe genus's far averages from its recipe's density
+                # at its far level (the bakes' field and octaves).
+                far_genus = replace(genus.recipe, field=deck, optics=layer_optics)
+                jobs.append(
+                    self.executor.submit_once(
+                        _recipe_deck_light,
+                        seed,
+                        far_genus,
+                        self.radius,
+                        genus.table,
+                        octaves,
+                    )  # fmt: skip
+                )
+                continue
             jobs.append(
                 self.executor.submit_once(
                     _deck_light,
@@ -1930,6 +2042,14 @@ class CloudMarch:
                     schedule[-1],
                 )
             )
+        # The recipe genera's shared frame, in the deck entry's free row 15:
+        # the stretch's axis (the focus's east) and the cells' mean F1.
+        east = (0.0, 1.0, 0.0)
+        if self._genera_spec is not None:
+            east = TangentFrame.at(*self._genera_spec.focus).east
+        f1_mean, edges_mean = cell_means(_cells())
+        params[MAX_GENERA, LAYER_VEC4S + 2] = pack_recipe_frame(east, f1_mean)
+        params[MAX_GENERA, LAYER_VEC4S + 1] = pack_recipe_cells(edges_mean)
         self._layers_used = stride
         self._far_values = far
         self._offset_values = offsets
@@ -1941,9 +2061,11 @@ class CloudMarch:
         coverage source and far shadow (:data:`genera.GENUS_PRESETS`; a
         planet without genera is one primary genus)."""
         genus = self._genera[index]
+        if genus.recipe is not None:
+            return replace(genus.recipe, optics=optics)
         if self._genera_spec is None:
             return GenusField("primary", genus.field, optics)
-        name = self._genera_spec.genera[index]
+        name = genus.name
         preset = GENUS_PRESETS[name]
         return GenusField(name, genus.field, optics, preset.coverage, preset.far_shadow)
 
@@ -2012,6 +2134,7 @@ class CloudMarch:
         """
         node.set_shader_inputs(
             cloudNoise=self._inputs["cloudNoise"],
+            cloudCells=self._inputs["cloudCells"],
             layerParams=self._layer_params,
             genusLevelOffset=self._level_offsets,
             detailOctaves=self._level_octaves,
@@ -2022,6 +2145,7 @@ class CloudMarch:
             deckLightCosMin=DECK_LIGHT_COS_MIN,
             uCloudDebug=0,
             genusCoverA=_no_coverage(),
+            genusCoverB=_no_coverage(),
             genusShift=_no_shift(),
             genusDeckLight=_no_deck_light_array(),
             **self._shadow_inputs(),
@@ -2201,8 +2325,10 @@ class CloudMarch:
             depth = np.zeros_like(coverage)
             genus.weather = np.stack([coverage, shift, depth], -1).astype(np.float32)
             tables[index] = genus.table
-            if "genusCoverA" not in self._textures:
-                self._textures["genusCoverA"] = build_coverage_texture(genus.cover)
+            # Each coverage cube once (genusCoverA, genusCoverB).
+            name = "genusCover" + genus.coverage[0]
+            if name not in self._textures:
+                self._textures[name] = build_coverage_texture(genus.cover)
         for genus in self._genera:
             genus.weather_job = None
         if len(self._genera) > 1:

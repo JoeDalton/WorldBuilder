@@ -23,13 +23,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The cloud genera showcase: `scripts/demo_genera.py` (the terrain demo's
-  `--showcase`), every genus alone in a row along the horizon
-  (`genera.showcase_features`, `GeneraSpec.background`), keys 1-9 to show or
-  hide each (`PlanetClouds.set_genus_visible`), and `terrain_shots.py`'s
-  `genus_<name>` poses; cumulus humilis and mediocris features
-  (`genera.GENUS_DEPTHS`).
+  `--showcase`), every genus alone (`genera.showcase_features`,
+  `GeneraSpec.background`) in two rows: the cumulus species along the
+  northern horizon (`genera.SHOWCASE_ROW`: humilis, mediocris, congestus,
+  cumulonimbus) and the stratiform and mid-level genera along the southern
+  (`genera.SHOWCASE_SOUTH`: stratocumulus, stratus, nimbostratus,
+  altostratus, altocumulus, 38 km out; `showcase_slots`). Keys 1-9 show or
+  hide each genus of the march (`PlanetClouds.set_genus_visible`; the
+  cumulus species are one genus), and `terrain_shots.py --showcase` has a
+  `genus_<name>` pose per feature (a cumulus from 1 km over the start; a
+  low sheet and the altocumulus from under it; the altostratus against the
+  sun). Cumulus humilis and mediocris features (`genera.GENUS_DEPTHS`).
 - `docs/source/cloud_genera_research.md`: the ten cloud genera and the
   density functions the literature draws them with.
+- Recipe genera: every genus but the convective one evaluates one generic
+  density (`genusRecipeDensity` in `cloud_field.glsl`,
+  `noise.recipe_density_on_sphere` on the CPU) from its preset's knobs
+  (`GenusPreset.recipe`, `noise.GenusField`: value fbm, Worley blobs
+  `"worley"` or closed cells `"cells"`, horizontal and vertical stretch, a
+  profile, billowy or wispy erosion, `erosion_base` to keep it to the
+  base), its coverage calibrated on its own column peaks, erosion included
+  (`noise.recipe_column_peaks`), its far table its own
+  (`noise.recipe_deck_light_table`), and the CPU's cloud shadow marching it
+  as the shadow maps do (`noise.recipe_shadow_on_sphere`,
+  `field_setup.genus_sun_depth`). A tileable Worley F1/F2 volume
+  (`noise.worley_volume`, the `cloudCells` texture) and a second coverage
+  cube (`genusCoverB`). A genus preset may override its type's field
+  (`GenusPreset.field`) and optics (`GenusPreset.optics`). The march
+  compiles the recipe only where a genus needs it
+  (`cloud_march_recipes.frag`; the bakes' `CLOUD_RECIPE_SHADOWS`).
+- Five recipe genera, all in `GeneraSpec.genera` by default and marched only
+  where a feature holds them (each non-convective feature fills its own
+  genus's coverage map, `genera.genus_coverage`):
+  - stratocumulus (cube A channel 1), 0.8-1.8 km: closed cells 1.5 km
+    wide (Worley `F2 - F1`, apart however high the coverage), domed,
+    flat-based, billowy;
+  - nimbostratus (cube A channel 2), 0.6-5 km: a thick, dark, featureless
+    layer that blots out the sun, its base ragged;
+  - altostratus (cube A channel 3), 4.7-6 km: a thin grey sheet stretched
+    along east, the sun dimly through it;
+  - altocumulus (cube B channel 0), 3.5-3.8 km: a thin lens of closed
+    cells 350 m apart with billowy erosion: small rounded patches, shaded,
+    regularly arranged with small clear gaps, 1-5 degrees across from the
+    ground;
+  - and the stratus, now on the recipe (Changed).
 
 - `AsteroidField.reach(camera_world)`: how far a field's rocks can still be
   drawn (its largest rock at the settings' `min_pixels`, at most the field's
@@ -58,6 +95,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `families`). `CloudLightVolumes.volume` and `CloudShadowMaps.pair` are
   single (were the lists `volumes` and `pairs`).
 - `ShadowSettings.cloud_light_slices` counts slices of each sky band a frame.
+- The stratus is a recipe genus: a grey, uniform sheet of 10 km value fbm
+  stretched three times east, a soft top, a flat base, ragged (wispy) near
+  its base only, its outline sharper; its coverage calibrated with its
+  erosion in (`noise.recipe_column_peaks`).
+- The march takes only the genera holding cloud somewhere
+  (`genera.genus_specs(covered=True)`): an empty genus sharing a band
+  cost the demo 0.65 ms. `planet.check_layers` still counts them all.
+- A slab bridging two groups of slabs (the nimbostratus between the low
+  sheets and the convective clouds) splits its sky band at the gap
+  (`march.sky_bands`; `band_masks` takes each genus reaching into a band):
+  merged, the low sheets took a 9.9 km band's light-volume slices and bake
+  steps.
 
 - The far plane reaches the asteroid fields' rocks (#39):
   `World.depth_ranges` returns the larger of the bodies' far distance (or
@@ -70,6 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A faint contour across a thin cloud sheet seen at a grazing angle (the
+  altostratus): the march counted a ray opaque at transmittance 0.04 and
+  snapped its alpha from 0.96 to 1 there; the light let through now eases to
+  0 over 0.04-0.08 (`march.opaque_residual`, `opaqueResidual` in
+  `cloud_march.glsl`).
 - A field's haze ended abruptly at the depth split (#39): only the far
   camera drew it, from the split on, on the assumption that every rock
   nearer is drawn. A ring's dust never is, and from orbit the split sits

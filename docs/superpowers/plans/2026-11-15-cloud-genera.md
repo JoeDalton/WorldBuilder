@@ -429,38 +429,97 @@ every genus name.
 1–0 that toggle each genus. `terrain_shots.py` gets a `genus_<name>` pose per genus. Timing:
 >60 FPS with all of them in view.
 
-## Phase 5: Volumetric genera (one task each, in this order)
+## Phase 5: Volumetric genera (refined 2026-11-15)
 
-| Task | Genus | Requires |
-|---|---|---|
-| 12 | Worley noise (prerequisite) | `noise.worley_volume(size, cells, seed) -> np.ndarray` (F1, F2 in two channels, tileable) and its texture; tests check tiling and the range |
-| 13 | St | the existing stratus moved to the genus recipe (fractus base) |
-| 14 | Sc | Worley cells, open or closed by a weather channel |
-| 15 | Ns | fbm, thick, ragged base, virga tail |
-| 16 | As | stretched fbm, low extinction, striations |
-| 17 | Ac | thin Worley lens, few samples |
+Design:
+- **Recipe genera.** Genera other than the convective one evaluate a generic
+  recipe, `genusRecipeDensity`, read from their entry's rows 14–15:
+  - `noise_kind`: 0 is value fbm, 1 is Worley cells;
+  - cell size and cell fill (`1-F1` closed cells);
+  - horizontal anisotropy (stretch along a fixed per-genus direction in the
+    local tangent frame) and vertical stretch;
+  - the profile: bottom softness, top softness and a lens (`4h(1-h)`) flag;
+  - erosion: billowy or wispy amount, and the skin.
 
-Each task covers:
+  The stratus keeps its field path until T16 moves it onto the recipe. The
+  coverage-to-shift tables are computed from the recipe's own CPU mirror.
+- **Worley noise:** `noise.worley_volume(size, cells, seed)` gives a
+  tileable F1 and F2, uploaded as an RG texture `cloudCells`.
+- **Coverage cube B** is wired (`genusCoverB`).
+- **Showcase:** a second row on the southern horizon for the stratiform and
+  mid-level genera (St, Sc, Ns, As, Ac). The cumulus row stays north.
+  Ruling: one horizon cannot hold sheets 10–15 km wide plus five cumulus
+  features at a readable distance.
 
-- the recipe from the spec;
+### Task 15: Recipe framework, Worley volume, cube B — done
+Outcome: `genusRecipeDensity` and its CPU mirror, `noise.worley_volume`, cube B wired; the recipe compiled only in a march variant (`cloud_march_recipes.frag`) and the bakes, since a never-taken branch cost the convective clouds 0.15-1 ms.
+
+Tests:
+- Worley tiling and range;
+- recipe packing rows 14–15;
+- the recipe's CPU mirror against hand-computed points;
+- coverage calibration within 5 % for a synthetic recipe genus;
+- a GPU smoke test (a recipe genus renders finite);
+- shader constants against the CPU.
+
+### Task 16: Stratocumulus (cube A ch1, 0.8–1.8 km), stratus on the recipe — done
+Outcome: Sc as closed cells (`F2 - F1`, not `1 - F1`), St on the recipe; the southern showcase row pulled forward from Task 19; empty genera no longer marched (an empty Sc cost 0.65 ms).
+
+- Sc: Worley closed cells L≈1.5 km × fbm, flat base, domed top, billowy
+  erosion.
+- St: wide window, low-frequency fbm stretched 3× horizontally, wispy base.
+
+### Task 17: Nimbostratus (cube A ch2, 0.6–5 km) and altostratus (ch3, 3–5.5 km) — done
+Outcome: Ns over 0.6–5 km as planned; As shipped at 4.7–6.0 km (not 3–5.5, clear of the Ac slab); `GenusPreset.optics`; `march.sky_bands` splits a band where one slab bridges a gap (the band split), else the low sheets lost their light-volume slices. No Ns virga/pannus; As striations invisible.
+
+- Ns: low-frequency fbm, high coverage, dark (high extinction), ragged base.
+- As: stretched fbm, low extinction ("ground glass"), soft ends.
+
+### Task 18: Altocumulus (cube B ch0, 3.5–3.8 km) — done
+Outcome: shipped as below (the plan had 0.8 km cells over 3.5–4.5 km); timings offscreen from here on (~1.5 ms under windowed).
+- A thin lens of closed Worley cells, L≈350 m (0.8 km gave humilis-sized elements), billowy erosion. Also fixed the thin-sheet contour (opaque snap in the final alpha).
+
+### Task 19: Showcase rows, docs, performance — done
+- The southern showcase row and `genus_<name>` poses for the new genera.
+- `clouds.md`, the CHANGELOG, `performance.md`.
+- Showcase > 60 FPS; demo_terrain must not regress.
+
+Outcome: offscreen at 2560×1440 HIGH, the showcase 8.6–12.5 ms (met), the
+demo 10.5 ms at the towers (no regression against Tasks 15/18; the >160 FPS
+target still unmet, as before the project); `performance.md` §37 "Phase 5
+summary", windowed and offscreen rows labelled; `clouds.md` genus table and
+known gaps; CHANGELOG merged.
+
+**Shipped deviations from the phase 5 design:**
+- Ac: cells 350 m (not 0.8 km), slab 3.5–3.8 km (not 3.5–4.5 km).
+- As: slab 4.7–6.0 km (not 3–5.5 km), clear of the Ac.
+- Ns: 0.6–5 km as planned, but it bridges the low sheets and the convective
+  slab, hence the band split: `march.sky_bands` splits a band at a gap only
+  one slab bridges (not the band's thickest).
+- The southern row is a second horizon (`SHOWCASE_SOUTH`, 38 km south, sheets
+  14 km wide), built in Task 16, not 19; its poses are from under each sheet
+  (As against the sun).
+- Sc closed cells use `F2 - F1` (`"cells"`), not `1 - F1`.
+
+Each genus task covers:
 - a coverage test;
-- a showcase shot compared with its WMO photo;
-- a `--stability` run;
-- a timing row.
+- showcase shots compared against the research's description and WMO
+  photos;
+- timing.
 
 ## Phase 6: The high layer
 
 | Task | What |
 |---|---|
-| 18 | Thin-layer sampling in the march: 1–2 jittered samples per crossing of the high slab, with `cirrus.frag`'s thin-slab lighting moved into `cloud_shading.glsl` |
-| 19 | Cs veil |
-| 20 | Cc grains with a footprint fade |
-| 21 | Ci flow streaks: the upper-wind warp plus curl, Worley tufts, 4–8 taps along the flow for tails, sheared fall streaks. A tuning preview in the style of `cirrus_preview.py`, procedural, top-down beside the WMO photo |
-| 22 | Delete `CloudSheet`, `cirrus_atlas.*`, `bake_cirrus_atlas.py`, `cirrus_preview.py` and `cirrus.frag`/`.vert`; keep `cirrus_cover_map` and the upper wind (rewired as the Ci channel's source) |
+| 20 | Thin-layer sampling in the march: 1–2 jittered samples per crossing of the high slab, with `cirrus.frag`'s thin-slab lighting moved into `cloud_shading.glsl` |
+| 21 | Cs veil |
+| 22 | Cc grains with a footprint fade |
+| 23 | Ci flow streaks: the upper-wind warp plus curl, Worley tufts, 4–8 taps along the flow for tails, sheared fall streaks. A tuning preview in the style of `cirrus_preview.py`, procedural, top-down beside the WMO photo |
+| 24 | Delete `CloudSheet`, `cirrus_atlas.*`, `bake_cirrus_atlas.py`, `cirrus_preview.py` and `cirrus.frag`/`.vert`; keep `cirrus_cover_map` and the upper wind (rewired as the Ci channel's source) |
 
 ## Phase 7: Docs and performance
 
-### Task 23
+### Task 25
 Update `clouds.md` and `atmosphere.md` (cirrus) for the genus framework. Finish the
 `performance.md` rows: demo_terrain >160 FPS, showcase >60 FPS. Republish the research artifact
 if the findings changed.

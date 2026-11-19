@@ -12,7 +12,12 @@ import pytest
 
 from world_builder.clouds.cloud import PRESETS, CloudType
 from world_builder.clouds.genera import GENUS_PRESETS
-from world_builder.clouds.march import band_segments, sky_bands, slab_segments
+from world_builder.clouds.march import (
+    band_masks,
+    band_segments,
+    sky_bands,
+    slab_segments,
+)
 from world_builder.clouds.noise import (
     COVERAGE_SOURCES,
     DETAIL_LEVELS,
@@ -45,6 +50,20 @@ def test_overlapping_slabs_merge():
 def test_nested_and_touching_slabs_merge():
     assert sky_bands([(1000.0, 1000.0), (2000.0, 500.0)]) == [(1000.0, 1500.0)]
     assert sky_bands([(1000.0, 5000.0), (2000.0, 500.0)]) == [(1000.0, 5000.0)]
+
+
+def test_a_bridging_slab_splits_its_band_at_the_gap():
+    """A slab joining two groups (the nimbostratus between the low sheets
+    and the convective clouds) splits the band at the gap's middle, each
+    part holding its side's genera and the bridge; the thickest slab never
+    bridges (the convective one holding mid-level sheets)."""
+    slabs = [(2200.0, 8300.0), (900.0, 500.0), (800.0, 1000.0), (600.0, 4400.0)]
+    bands = sky_bands(slabs)
+    assert bands == [(600.0, 1400.0), (2000.0, 8500.0)]
+    assert band_masks(slabs, bands) == [0b1110, 0b1001]
+    nested = [(2200.0, 8300.0), (3500.0, 1000.0), (4700.0, 1300.0)]
+    assert sky_bands(nested) == [(2200.0, 8300.0)]
+    assert band_masks(nested, sky_bands(nested)) == [0b111]
 
 
 def test_more_than_four_bands_is_refused():
@@ -253,13 +272,13 @@ def test_the_shaders_share_the_genus_and_band_sizes():
     ):
         assert int(re.search(rf"const int {name} = (\d+);", field).group(1)) == value
     assert f"uniform vec4  uSkyBands[{MAX_SKY_BANDS}];" in field
-    march = (SHADERS / "cloud_march.frag").read_text()
+    march = (SHADERS / "cloud_march.glsl").read_text()
     # Two segments a band, sorted; a genus loop per sample, one lighting path
     assert "vec2 segments[2 * MAX_SKY_BANDS];" in march
     assert "weather = genusWeatherAt(g, p);" in march  # the genus loop
     assert "bool alone = (genera & (genera - 1)) == 0;" in march  # its fast path
     for gone in ("uFamilies", "otherWeather", "otherDeckLight", "cloudRadianceOther"):
-        for name in ("cloud_march.frag", "cloud_field.glsl", "cloud_shading.glsl"):
+        for name in ("cloud_march.glsl", "cloud_field.glsl", "cloud_shading.glsl"):
             assert gone not in (SHADERS / name).read_text(), (gone, name)
 
 
@@ -279,25 +298,36 @@ def mid_genus(monkeypatch):
         MID,
         GenusPreset(CloudType.STRATUS, ("A", 1), far_shadow=1.0, slab=(3000.0, 1000.0)),
     )
-    from world_builder.clouds.genera import GeneraSpec
+    from world_builder.clouds.genera import DEFAULT_FEATURES, Feature, GeneraSpec
     from world_builder.clouds.weather import WeatherSpec
     from world_builder.terrain.planet import PlanetSpec
 
     spec = PlanetSpec(name="clouds", radius=R)
-    return GeneraSpec(WeatherSpec(spec, seed=11), genera=("convective", "stratus", MID))
+    features = DEFAULT_FEATURES + (Feature(20e3, -30e3, 10e3, MID, 0.8),)
+    return GeneraSpec(
+        WeatherSpec(spec, seed=11), features=features,
+        genera=("convective", "stratus", MID),
+    )  # fmt: skip
 
 
 def test_a_third_genus_takes_its_slab_and_its_channel(mid_genus):
-    from world_builder.clouds.genera import coverage_cube, genus_planes, genus_specs
+    from world_builder.clouds.genera import (
+        coverage_cube,
+        genus_coverage,
+        genus_planes,
+        genus_specs,
+    )
 
     specs = genus_specs(mid_genus, 2200.0)
     assert [s[0] for s in specs] == ["convective", "stratus", MID]
     assert specs[0][2] == 2200.0 and specs[1][2] == mid_genus.stratus_altitude
     assert specs[2][2:] == (3000.0, 1000.0, ("A", 1))
-    cube = coverage_cube(mid_genus, "A", 32)
-    planes = genus_planes(mid_genus, 32)
+    cube = coverage_cube(mid_genus, "A", 256)
+    planes = genus_planes(mid_genus, 256)
     np.testing.assert_array_equal(cube[..., 0], planes[..., 2])
-    np.testing.assert_array_equal(cube[..., 1], planes[..., 2])
+    # Its own feature's map, not the stratus's
+    np.testing.assert_array_equal(cube[..., 1], genus_coverage(mid_genus, MID, 256))
+    assert cube[..., 1].max() > 0.5 and not np.array_equal(cube[..., 1], cube[..., 0])
     assert not cube[..., 2:].any()
 
 
