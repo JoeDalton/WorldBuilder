@@ -1,30 +1,33 @@
 """
-The weather over a planet: how much of the sky is cloud, by direction.
+The weather over a planet: how much of the sky is cloud, by direction and
+by genus, at a time.
 
-A cube map of target **coverage** (the share of the slab's columns holding
-cloud) built with numpy from:
+The weather is synoptic (:mod:`synoptic`): jets meandering as Rossby waves,
+lows with their fronts, highs, cut-off lows and tropical cyclones, each an
+analytic object on a closed-form track, so the weather at any
+:attr:`WeatherSpec.time_s` is a pure function of the spec. Its cube map
+(:func:`synoptic_cube`) holds, per direction:
 
-1. **zonal circulation**: a wet equatorial band, dry subtropical highs,
-   mid-latitude storm tracks, polar caps (:attr:`WeatherSpec.zonal`);
-2. **extratropical cyclones** in the storm tracks: a vortex that winds the
-   mesoscale texture into spiral arms, and a comma of cloud along one wound
-   arm (the head poleward of the low, the cold front trailing equatorward and
-   west), with clear air in the cold sector behind it;
-3. **tropical cyclones** over warm sea: a tight spiral with a clear eye;
-4. **mesoscale texture**: fbm warped by the same vortices, for ragged edges;
-5. **the planet's climate and terrain** (:class:`terrain.planet.Planet`):
-   humidity scales the cover, hot dry land is cleared, the sea adds a little,
-   and slopes facing the prevailing wind lift cloud (their lee loses it).
+1. the **convective** continuum's coverage (the share of the slab's columns
+   holding cloud), its **depth** (humilis to cumulonimbus) and the anvils'
+   **shelf**: a fair-weather background from the climate (the wet tropics,
+   the storm tracks, the planet's humidity, deserts cleared, the sea, slopes
+   facing the wind lifting cloud, a mesoscale texture curled round the
+   systems), with the cold fronts' cumulonimbus lines, the cold air's open
+   cells, the tropical cyclones' eyewalls and bands, air-mass convection;
+2. every other genus's coverage (:data:`synoptic.rules.LAYERS`): the warm
+   fronts' cirrus, cirrostratus, altostratus and nimbostratus, the warm
+   sectors' stratus and stratocumulus, the highs' stratocumulus decks and
+   fog (:mod:`synoptic.rules`).
 
-Lengths follow the planet's feature scale, like the terrain's.
+Highs, eyes and dry slots clear what lies under them.
 
 The cirrus above (the march's high layer, :mod:`genera`) has a weather of
-its own, from the same systems: an **upper wind** (the jet streams,
-deflected around the cyclones), whose stream function sets the direction of
-its fibres
-(:func:`stream_table`, :func:`stream_vortices`), and a cube map of its
-**cover** (:func:`cirrus_cover_map`): along the jets, over the wet tropics
-(anvils), in a shield ahead of each cyclone.
+its own, from the same systems: an **upper wind** (the meandering jets,
+swirled round the systems: :func:`upper_stream`), whose stream function
+sets the direction of its fibres, and a cube map of its **cover**
+(:func:`cirrus_cover_map`): along the jets, over the wet tropics (anvils),
+and the systems' own cirrus.
 
 The clouds never see coverage directly: :func:`shift_table` turns it into the
 fbm shift that gives that coverage, exactly, from the field's sorted column
@@ -46,11 +49,22 @@ from dataclasses import dataclass
 import numpy as np
 from panda3d.core import SamplerState, Texture
 
+from world_builder.clouds.synoptic.fields import wind as surface_wind
+from world_builder.clouds.synoptic.jets import across_axis, system_rows
+from world_builder.clouds.synoptic.jets import upper_stream as jets_upper_stream
+from world_builder.clouds.synoptic.rules import (
+    LAYERS,
+    GenusFields,
+    apply_systems,
+    instability,
+    swirled,
+    zonal_cover,
+)
+from world_builder.clouds.synoptic.state import synoptic_state
 from world_builder.sky.starfield import cube_directions, directions_to_texels
 from world_builder.terrain.chart import latlon
 from world_builder.terrain.noise import fbm
 from world_builder.terrain.planet import (
-    REFERENCE_RADIUS_M,
     Planet,
     PlanetSpec,
     scaled_params,
@@ -69,7 +83,6 @@ CIRRUS_SIZE = 128
 STREAM_TABLE_SIZE = 1024
 
 _SEED_MESO = 401
-_SEED_PLACEMENT = 409
 _SEED_CIRRUS = 419
 
 
@@ -77,32 +90,26 @@ _SEED_CIRRUS = 419
 class WeatherSpec:
     """Everything that defines a planet's weather; frozen and picklable.
 
-    Lengths are for a :data:`terrain.planet.REFERENCE_RADIUS_M` planet and
-    follow its feature scale. Coverages are shares of the sky in [0, 1].
+    The weather's scales (the systems' sizes, the belts' latitudes, the
+    jets) follow the planet's radius and rotation (:class:`synoptic.Scales`).
+    Lengths here are for a :data:`terrain.planet.REFERENCE_RADIUS_M` planet
+    and follow its feature scale. Coverages are shares of the sky in [0, 1].
 
     :ivar planet: the planet whose climate and terrain the weather follows
-    :ivar seed: placement of the weather systems and the mesoscale texture
+    :ivar seed: the jets, the weather systems and the mesoscale texture
     :ivar time_s: the time the weather is evaluated at, seconds: the
         systems move and live on closed-form tracks (:mod:`synoptic`), so
         any time is as cheap as any other
-    :ivar zonal: (|latitude| degrees, coverage) control points of the zonal
-        mean: wet tropics, dry subtropics, storm tracks, polar caps
-    :ivar season: degrees north the zonal pattern is moved (the equatorial
-        band follows the sun)
-    :ivar storm_tracks: latitude band (degrees) of extratropical cyclones
-    :ivar cyclones: how many on a reference planet (scaled by area)
-    :ivar cyclone_radius: radius of one, metres
-    :ivar cyclone_swirl: radians the vortex turns the texture at its centre
-    :ivar cyclone_strength: cover added at the core
-    :ivar front_strength: cover added along the comma's arm (its head, body
-        and the cold front trailing from it)
-    :ivar tropical: how many tropical cyclones (over sea only)
-    :ivar tropical_radius: radius of one, metres
-    :ivar tropical_swirl: radians the vortex turns the texture at its centre
-    :ivar tropical_strength: cover added by its spiral arms and eyewall
+    :ivar systems: False for a weather without systems (no lows, highs or
+        tropical cyclones: the climate's background alone)
+    :ivar zonal: (|latitude| degrees, coverage) control points of the
+        fair-weather background, or None for the planet's own
+        (:func:`synoptic.rules.zonal_cover`)
+    :ivar season: degrees north the equatorial band is moved (it follows
+        the sun)
     :ivar meso_wavelength: the mesoscale texture's largest feature, metres
     :ivar meso_strength: its amplitude, in coverage
-    :ivar dry_floor: what the zonal cover is multiplied by with no humidity
+    :ivar dry_floor: what the background is multiplied by with no humidity
     :ivar desert_clearing: share of the cover hot, dry land loses
     :ivar maritime: cover added over the sea
     :ivar orographic: cover added on a steep windward slope of humid land
@@ -110,44 +117,25 @@ class WeatherSpec:
     :ivar orographic_slope: the slope along the wind that gives 76 % of it
     :ivar climate_wavelength: the shortest relief and climate features the
         weather follows, metres (the mountain ranges, not single peaks)
-    :ivar jets: (|latitude| degrees, eastward wind) control points of the
-        upper wind, the jet streams' 1 the fastest: weak tropical easterlies,
-        the subtropical jet, the polar-front jet. The cirrus fibres follow it
-    :ivar jet_vortex: the cyclones' upper wind at its fastest, relative to
-        the jets' (the fibres bend around them)
+    :ivar jets: (|latitude| degrees, eastward wind) control points of a
+        zonal upper wind replacing the meandering jets, the fastest 1, or
+        None for the planet's own (:mod:`synoptic.jets`)
+    :ivar jet_vortex: the systems' upper wind at its fastest, relative to
+        the fastest jet's (the cirrus fibres bend around them)
     :ivar cirrus_zonal: (|latitude| degrees, cover) control points of the
-        cirrus: anvils over the wet tropics, streaks along the jets
-    :ivar cirrus_shield: cirrus cover added ahead of a cyclone (poleward and
-        east of its low), and over a tropical one
+        cirrus's background, or None for the planet's own: anvils over the
+        wet tropics, streaks along the jets
+    :ivar cirrus_shield: the share of the systems' own cirrus (the warm
+        fronts' shields, the tropical cyclones' outflow) the cirrus keep
     :ivar cirrus_meso: amplitude of the cirrus cover's mesoscale texture
     """
 
     planet: PlanetSpec
     seed: int = 11
     time_s: float = 0.0
-    zonal: tuple = (
-        (0.0, 0.72),
-        (8.0, 0.66),
-        (16.0, 0.40),
-        (24.0, 0.15),
-        (33.0, 0.16),
-        (42.0, 0.36),
-        (52.0, 0.55),
-        (62.0, 0.55),
-        (72.0, 0.44),
-        (90.0, 0.40),
-    )
+    systems: bool = True
+    zonal: tuple | None = None
     season: float = 0.0
-    storm_tracks: tuple = (42.0, 62.0)
-    cyclones: int = 6
-    cyclone_radius: float = 80e3
-    cyclone_swirl: float = 3.4
-    cyclone_strength: float = 0.4
-    front_strength: float = 0.5
-    tropical: int = 2
-    tropical_radius: float = 45e3
-    tropical_swirl: float = 5.0
-    tropical_strength: float = 0.8
     meso_wavelength: float = 160e3
     meso_strength: float = 0.4
     dry_floor: float = 0.12
@@ -156,50 +144,11 @@ class WeatherSpec:
     orographic: float = 0.3
     orographic_slope: float = 0.03
     climate_wavelength: float = 60e3
-    jets: tuple = (
-        (0.0, -0.25),
-        (12.0, -0.2),
-        (22.0, 0.45),
-        (30.0, 1.0),
-        (38.0, 0.55),
-        (48.0, 0.7),
-        (55.0, 0.9),
-        (64.0, 0.4),
-        (75.0, -0.05),
-        (90.0, 0.0),
-    )
+    jets: tuple | None = None
     jet_vortex: float = 0.8
-    cirrus_zonal: tuple = (
-        (0.0, 0.55),
-        (10.0, 0.42),
-        (20.0, 0.2),
-        (30.0, 0.38),
-        (40.0, 0.28),
-        (52.0, 0.45),
-        (64.0, 0.32),
-        (78.0, 0.12),
-        (90.0, 0.08),
-    )
-    cirrus_shield: float = 0.45
+    cirrus_zonal: tuple | None = None
+    cirrus_shield: float = 1.0
     cirrus_meso: float = 0.3
-
-
-@dataclass(frozen=True)
-class Vortex:
-    """One weather system.
-
-    :ivar centre: (3,) unit direction of its centre
-    :ivar radius: angular radius, radians
-    :ivar swirl: radians it turns the texture at its centre (signed:
-        counter-clockwise seen from above in the north)
-    :ivar tropical: a tropical cyclone (eye, spiral arms) rather than an
-        extratropical one (comma, fronts)
-    """
-
-    centre: tuple
-    radius: float
-    swirl: float
-    tropical: bool
 
 
 # ── Cube maps ──────────────────────────────────────────────────────────────────
@@ -348,189 +297,49 @@ def coverage_to_shift(coverage: np.ndarray, table: np.ndarray) -> np.ndarray:
     return np.interp(coverage, np.linspace(0.0, 1.0, len(table)), table)
 
 
-# ── The weather systems ───────────────────────────────────────────────────────
+# ── The climate ──────────────────────────────────────────────────────────────
 
 
 def _feature_scale(spec: WeatherSpec) -> float:
     return scaled_params(spec.planet)[0].feature_scale
 
 
-def _random_dirs(rng, lat_lo: float, lat_hi: float, count: int) -> np.ndarray:
-    """Uniform on the sphere between two |latitudes|, either hemisphere."""
-    s_lo, s_hi = math.sin(math.radians(lat_lo)), math.sin(math.radians(lat_hi))
-    z = rng.uniform(s_lo, s_hi, count) * rng.choice([-1.0, 1.0], count)
-    lon = rng.uniform(-math.pi, math.pi, count)
-    r = np.sqrt(1.0 - z * z)
-    return np.stack([r * np.cos(lon), r * np.sin(lon), z], axis=1)
-
-
-def vortices(spec: WeatherSpec, planet: Planet | None = None) -> list[Vortex]:
-    """The planet's weather systems, placed deterministically from the seed.
-
-    Extratropical cyclones go in the storm tracks, apart from each other;
-    tropical ones over open sea at 10-25 degrees (none on a dry planet).
-
-    :param spec: the weather
-    :param planet: the evaluated planet (built from the spec if None)
-    :returns: the extratropical cyclones, then the tropical ones
-    """
-    planet = planet or Planet(spec.planet)
-    radius = spec.planet.radius
-    scale = _feature_scale(spec)
-    rng = np.random.default_rng([spec.seed, _SEED_PLACEMENT])
-    # The count follows the area in features: a constant while the features
-    # follow the radius, more where the feature scale is clamped.
-    count = round(spec.cyclones * (radius / (scale * REFERENCE_RADIUS_M)) ** 2)
-    found: list[Vortex] = []
-    extratropical = spec.cyclone_radius * scale / radius
-    candidates = _random_dirs(rng, *spec.storm_tracks, 40 * max(count, 1))
-    for centre in candidates:
-        if sum(not v.tropical for v in found) >= count:
-            break
-        if all(
-            math.acos(np.clip(centre @ np.array(v.centre), -1, 1)) > 3.5 * extratropical
-            for v in found
-        ):
-            north = 1.0 if centre[2] >= 0.0 else -1.0
-            swirl = spec.cyclone_swirl * north * rng.uniform(0.8, 1.2)
-            size = extratropical * rng.uniform(0.75, 1.3)
-            found.append(Vortex(tuple(centre), size, swirl, False))
-    if spec.planet.has_ocean and spec.tropical > 0:
-        tropical = spec.tropical_radius * scale / radius
-        candidates = _random_dirs(rng, 10.0, 25.0, 64 * spec.tropical)
-        elevation, _, _ = _sampler(spec, planet)[0](candidates)
-        placed = 0
-        for centre, height in zip(candidates, elevation):
-            if placed >= spec.tropical:
-                break
-            if height > -200.0:  # over open sea only
-                continue
-            if all(
-                math.acos(np.clip(centre @ np.array(v.centre), -1, 1))
-                > 3.0 * max(v.radius, tropical)
-                for v in found
-            ):
-                north = 1.0 if centre[2] >= 0.0 else -1.0
-                swirl = spec.tropical_swirl * north
-                found.append(Vortex(tuple(centre), tropical, swirl, True))
-                placed += 1
-    return found
-
-
-def _rotate(points: np.ndarray, axis: np.ndarray, angle: np.ndarray) -> np.ndarray:
-    """Rodrigues: *points* (N, 3) turned about the unit *axis* by *angle* (N,)."""
-    cos, sin = np.cos(angle)[:, None], np.sin(angle)[:, None]
-    along = (points @ axis)[:, None] * axis
-    return points * cos + np.cross(axis, points) * sin + along * (1.0 - cos)
-
-
-def _local(points: np.ndarray, vortex: Vortex):
-    """Gnomonic (east, poleward) coordinates around a vortex, in its radii.
-
-    Poleward is north in the north and south in the south, so one layout
-    (comma head poleward, cold front trailing equatorward and west) serves
-    both hemispheres.
-    """
-    c = np.asarray(vortex.centre)
-    pole = np.array([0.0, 0.0, 1.0])
-    east = np.cross(pole, c)
-    east /= max(np.linalg.norm(east), 1e-9)
-    north = np.cross(c, east)
-    poleward = north if c[2] >= 0.0 else -north
-    depth = np.maximum(points @ c, 1e-6)
-    x = (points @ east) / depth / vortex.radius
-    y = (points @ poleward) / depth / vortex.radius
-    return x, y
-
-
-def _reach(v: Vortex) -> float:
-    """How far a vortex turns the texture, in its radii (a Gaussian's width)."""
-    return 0.8 if v.tropical else 1.6
-
-
-def _near(dirs: np.ndarray, v: Vortex) -> np.ndarray:
-    """:returns: the mask of the directions a vortex reaches"""
-    return dirs @ np.asarray(v.centre) > math.cos(min(6.0 * v.radius, 1.2))
-
-
-def _wind_up(dirs: np.ndarray, warped: np.ndarray, v: Vortex) -> np.ndarray:
-    """*warped* (the texture's coordinates at *dirs*) wound by the vortex's
-    swirl, most at its centre: a line of constant wound angle is a spiral."""
-    c = np.asarray(v.centre)
-    angle = np.arccos(np.clip(dirs @ c, -1.0, 1.0))
-    turn = v.swirl * np.exp(-((angle / (_reach(v) * v.radius)) ** 2))
-    return _rotate(warped, c, -turn)
-
-
-def _gauss(x, y, cx, cy, sx, sy):
-    return np.exp(-(((x - cx) / sx) ** 2) - ((y - cy) / sy) ** 2)
-
-
-#: Where an extratropical cyclone's cloud arm points far from its centre,
-#: radians in (east, poleward) coordinates: equatorward and a little west,
-#: the cold front. Wound inward by the swirl it curls round the east side
-#: into the comma head, poleward of the low.
-ARM_ANGLE = math.radians(-105.0)
-
-
-def _vortex_cover(points: np.ndarray, warped: np.ndarray, v: Vortex, spec) -> tuple:
-    """Cover a vortex adds around its centre (zero far away), and the factor
-    clearing a tropical cyclone's eye.
-
-    :param points: (N, 3) unit directions near the vortex
-    :param warped: the same, wound by its swirl: a line of constant wound
-        angle is a spiral arm
-    """
-    x, y = _local(points, v)
-    r = np.hypot(x, y)
-    wx, wy = _local(warped, v)
-    wound = np.arctan2(wy, wx)
-    if v.tropical:
-        # Two arms, the eyewall, a clear eye.
-        arms = np.cos(2.0 * wound) * 0.5 + 0.5
-        cover = spec.tropical_strength * (
-            np.exp(-((r / 0.7) ** 2)) + 0.7 * arms**3 * np.exp(-((r / 2.4) ** 2))
-        )
-        eye = np.clip((r - 0.06) / 0.1, 0.0, 1.0)
-        return cover, eye
-    off = np.angle(np.exp(1j * (wound - ARM_ANGLE)))
-    arm = (
-        np.exp(-((off / 0.5) ** 2))
-        * np.clip((r - 0.1) / 0.5, 0.0, 1.0)
-        * np.exp(-((r / 3.2) ** 2))
-    )
-    cover = (
-        spec.cyclone_strength * np.exp(-((r / 0.6) ** 2))  # the core
-        + spec.front_strength * arm  # comma head, body and cold front
-        - 0.35 * _gauss(x, y, -1.5, -0.9, 1.1, 1.1)  # the cold sector behind
-    )
-    return cover, np.ones_like(r)
-
-
 def _wind_east(lat: np.ndarray) -> np.ndarray:
     """Prevailing wind toward the east (+1) or west (-1) by latitude: the
-    easterly trades, the westerlies, the polar easterlies."""
+    easterly trades, the westerlies, the polar easterlies (when no wind is
+    given)."""
     return np.interp(np.abs(lat), [0, 25, 35, 55, 65, 90], [-1, -1, 1, 1, -1, -1])
 
 
 def orographic(
-    dirs: np.ndarray, elevation_at, spec: WeatherSpec, step: float
+    dirs: np.ndarray,
+    elevation_at,
+    spec: WeatherSpec,
+    step: float,
+    wind: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Cover from the terrain lifting the prevailing wind: more on windward
-    slopes, less in the lee.
+    """Cover from the terrain lifting the wind: more on windward slopes,
+    less in the lee.
 
     :param dirs: (N, 3) unit directions
     :param elevation_at: ``(N, 3) dirs -> (N,)`` metres above sea level
     :param spec: the weather (its orographic gain and slope)
     :param step: metres upwind the slope is measured over
+    :param wind: (N, 2) the surface wind (east, north), any speed; None for
+        the prevailing wind by latitude
     :returns: (N,) coverage to add (negative in the lee)
     """
     lat, _ = latlon(dirs)
     pole = np.array([0.0, 0.0, 1.0])
     east = np.cross(pole, dirs)
     east /= np.maximum(np.linalg.norm(east, axis=1, keepdims=True), 1e-9)
-    wind = east * _wind_east(lat)[:, None]
-    upwind = dirs - wind * (step / spec.planet.radius)
+    if wind is None:
+        along = east * _wind_east(lat)[:, None]
+    else:
+        north = np.cross(dirs, east)
+        along = east * wind[:, :1] + north * wind[:, 1:]
+        along /= np.maximum(np.linalg.norm(along, axis=1, keepdims=True), 1e-9)
+    upwind = dirs - along * (step / spec.planet.radius)
     upwind /= np.linalg.norm(upwind, axis=1, keepdims=True)
     # Positive where the ground rises along the wind: the air is lifted.
     slope = (elevation_at(dirs) - elevation_at(upwind)) / step
@@ -545,8 +354,8 @@ def _wetness(humidity) -> np.ndarray:
 def climate_factor(
     spec: WeatherSpec, temperature: np.ndarray, humidity: np.ndarray
 ) -> np.ndarray:
-    """What the zonal cover is multiplied by: humidity, and hot dry land
-    cleared (deserts stay clear).
+    """What the background cover is multiplied by: humidity, and hot dry
+    land cleared (deserts stay clear).
 
     :param temperature: degrees Celsius, as :meth:`terrain.planet.Planet.sample_dirs`
     :param humidity: in [0, 1], likewise
@@ -555,22 +364,6 @@ def climate_factor(
     hot = np.clip((temperature - 22.0) / 12.0, 0.0, 1.0)
     dry = 1.0 - np.clip((humidity - 0.2) / 0.35, 0.0, 1.0)
     return moist * (1.0 - spec.desert_clearing * hot * dry)
-
-
-def coverage_at(
-    spec: WeatherSpec, dirs: np.ndarray, planet: Planet | None = None
-) -> np.ndarray:
-    """The weather's target coverage at arbitrary directions (no cube map).
-
-    The climate is sampled directly here; :func:`coverage_map` samples it on
-    a coarse grid and upsamples, which is what makes the map cheap.
-
-    :param dirs: (N, 3) unit directions
-    :param planet: the evaluated planet (built from the spec if None)
-    :returns: (N,) in [0, 1]
-    """
-    planet = planet or Planet(spec.planet)
-    return _compose(spec, dirs, planet, _climate_direct(spec, planet))
 
 
 def _sampler(spec, planet):
@@ -586,10 +379,15 @@ def _sampler(spec, planet):
 
 
 def _climate(spec, planet, dirs):
-    """:returns: elevation, temperature, humidity and orographic cover"""
+    """:returns: elevation, temperature, humidity and orographic cover (the
+    terrain lifting the systems' surface wind)"""
     sample, step = _sampler(spec, planet)
     elevation, temperature, humidity = sample(dirs)
-    lift = orographic(dirs, lambda d: sample(d)[0], spec, step)
+    wind = None
+    if spec.systems:
+        state = synoptic_state(spec)
+        wind = surface_wind(dirs, state.systems, state.scales, state.t)
+    lift = orographic(dirs, lambda d: sample(d)[0], spec, step, wind)
     return elevation, temperature, humidity, lift * _wetness(humidity)
 
 
@@ -611,48 +409,113 @@ def _climate_gridded(spec, planet):
     return climate
 
 
-def _compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate):
-    radius = spec.planet.radius
-    scale = _feature_scale(spec)
-    lat, _ = latlon(dirs)
-    points = np.array(spec.zonal, dtype=np.float64)
-    zonal = np.interp(np.abs(lat - spec.season), points[:, 0], points[:, 1])
+# ── The genera ────────────────────────────────────────────────────────────────
 
+#: How much the mesoscale texture modulates the systems' layers, relative to
+#: its share of the cumulus's coverage.
+LAYER_TEXTURE = 2.0
+#: The channels of :func:`synoptic_cube`.
+SYNOPTIC_CHANNELS = ("convective", "depth", "shelf") + LAYERS
+
+
+def _background_zonal(spec: WeatherSpec, lat: np.ndarray) -> np.ndarray:
+    if spec.zonal is not None:
+        points = np.array(spec.zonal, dtype=np.float64)
+        return np.interp(np.abs(lat - spec.season), points[:, 0], points[:, 1])
+    return zonal_cover(lat, synoptic_state(spec).scales, itcz=spec.season)
+
+
+def genus_fields(
+    spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate
+) -> GenusFields:
+    """The genera at *dirs* (:mod:`synoptic.rules`): the climate's
+    background of fair-weather cumulus and air-mass convection, with the
+    systems drawn over it.
+
+    :param climate: ``dirs -> (elevation, temperature, humidity, lift)``
+    """
+    state = synoptic_state(spec)
+    radius = spec.planet.radius
+    lat, _ = latlon(dirs)
     elevation, temperature, humidity, lift = climate(dirs)
-    cover = zonal * climate_factor(spec, temperature, humidity) + lift
+    sea = np.zeros(len(dirs))
     if spec.planet.has_ocean:
         sea = np.clip(-elevation / 200.0, 0.0, 1.0)
-        cover = cover + spec.maritime * sea
-
-    # Vortices: wind the texture's coordinates, add each system's cover.
-    warped = dirs.copy()
-    eye = np.ones(len(dirs))
-    for v in vortices(spec, planet):
-        near = _near(dirs, v)
-        if not near.any():
-            continue
-        warped[near] = _wind_up(dirs[near], warped[near], v)
-        add, clear = _vortex_cover(dirs[near], warped[near], v, spec)
-        cover[near] += add
-        eye[near] *= clear
+    base = _background_zonal(spec, lat) * climate_factor(spec, temperature, humidity)
+    base = base + lift + spec.maritime * sea
+    warped = swirled(dirs, state.systems, state.scales, state.t)
     meso = fbm(
-        warped * radius, spec.meso_wavelength * scale, 3, spec.seed * 1000 + _SEED_MESO
+        warped * radius,
+        spec.meso_wavelength * _feature_scale(spec),
+        3,
+        spec.seed * 1000 + _SEED_MESO,
     )
-    cover = cover + spec.meso_strength * meso
-    return np.clip(cover * eye, 0.0, 1.0)
+    base = np.clip(base + spec.meso_strength * meso, 0.0, 1.0)
+    unstable = instability(humidity, temperature)
+    tropics = 0.5 + 0.5 * np.exp(-(((lat - spec.season) / 6.0) ** 2))
+    base = 1.0 - (1.0 - base) * (1.0 - 0.4 * unstable * tropics)
+    out = apply_systems(
+        dirs,
+        state.systems,
+        state.scales,
+        state.t,
+        base=base,
+        sea=sea,
+        temperature=temperature,
+        elevation=elevation,
+        depth=unstable,
+    )
+    # The systems' layers carry the mesoscale texture too: decks and shields
+    # break up as the cumulus do, with no stencilled edges.
+    texture = np.clip(1.0 + LAYER_TEXTURE * spec.meso_strength * meso, 0.0, 2.0)
+    for genus, cover in out.layers.items():
+        out.layers[genus] = np.clip(cover * texture, 0.0, 1.0)
+    return out
+
+
+def coverage_at(
+    spec: WeatherSpec, dirs: np.ndarray, planet: Planet | None = None
+) -> np.ndarray:
+    """The weather's convective coverage at arbitrary directions (no cube
+    map). The climate is sampled directly here; :func:`synoptic_cube`
+    samples it on a coarse grid and upsamples, which is what makes the map
+    cheap.
+
+    :param dirs: (N, 3) unit directions
+    :param planet: the evaluated planet (built from the spec if None)
+    :returns: (N,) in [0, 1]
+    """
+    planet = planet or Planet(spec.planet)
+    return genus_fields(spec, dirs, planet, _climate_direct(spec, planet)).convective
+
+
+def synoptic_cube(spec: WeatherSpec, size: int = WEATHER_SIZE) -> np.ndarray:
+    """The weather's genera as a cube map (cached per process).
+
+    :returns: (6, size, size, len(:data:`SYNOPTIC_CHANNELS`)) float32, the
+        layout of :func:`sky.starfield.cube_directions`
+    """
+    return _synoptic_cube(spec, int(size))
+
+
+@functools.cache
+def _synoptic_cube(spec: WeatherSpec, size: int) -> np.ndarray:
+    planet = Planet(spec.planet)
+    dirs = cube_directions(size).reshape(-1, 3)
+    out = genus_fields(spec, dirs, planet, _climate_gridded(spec, planet))
+    channels = [out.convective, out.depth, out.shelf] + [out.layers[g] for g in LAYERS]
+    cube = np.stack(channels, axis=-1).reshape(6, size, size, len(channels))
+    return cube.astype(np.float32)
 
 
 @functools.cache
 def coverage_map(spec: WeatherSpec, size: int = WEATHER_SIZE) -> np.ndarray:
-    """The weather's target coverage as a cube map (cached per process).
+    """The weather's convective coverage as a cube map (cached per process).
 
     :returns: (6, size, size) float32 in [0, 1], the layout of
         :func:`sky.starfield.cube_directions`
     """
-    planet = Planet(spec.planet)
-    dirs = cube_directions(size).reshape(-1, 3)
-    cover = _compose(spec, dirs, planet, _climate_gridded(spec, planet))
-    return cover.reshape(6, size, size).astype(np.float32)
+    return np.ascontiguousarray(synoptic_cube(spec, size)[..., 0])
 
 
 def weather_cube(
@@ -672,27 +535,33 @@ def weather_cube(
 
 # ── The cirrus: the upper wind and the cover ─────────────────────────────────
 
-#: The steepest slope of exp(-x^2) (at x = 1/sqrt(2)): a Gaussian stream
-#: function of amplitude A and width s blows at most this * A / s.
-_GAUSS_SLOPE = math.sqrt(2.0) * math.exp(-0.5)
-
 
 def upper_wind(spec: WeatherSpec, lat: np.ndarray) -> np.ndarray:
-    """The upper wind toward the east by latitude, the jets' 1 the fastest
-    (:attr:`WeatherSpec.jets`, moved north by the season).
+    """The zonal-mean upper wind toward the east by latitude, the fastest
+    jet's 1: :attr:`WeatherSpec.jets`, or the planet's jets' profiles at
+    their mean latitudes (moved north by the season).
 
     :param lat: latitudes, degrees
     """
-    points = np.array(spec.jets, dtype=np.float64)
-    return np.interp(np.abs(np.asarray(lat) - spec.season), points[:, 0], points[:, 1])
+    lat = np.asarray(lat, dtype=np.float64)
+    if spec.jets is not None:
+        points = np.array(spec.jets, dtype=np.float64)
+        return np.interp(np.abs(lat - spec.season), points[:, 0], points[:, 1])
+    state = synoptic_state(spec)
+    top = max(j.speed for j in state.jets)
+    out = np.zeros_like(lat)
+    for jet in state.jets:
+        y = spec.planet.radius * np.radians(
+            lat - spec.season - jet.hemisphere * jet.lat0
+        )
+        out = np.maximum(out, jet.speed / top * np.exp(-((y / jet.width) ** 2)))
+    return out
 
 
 def stream_table(spec: WeatherSpec, size: int = STREAM_TABLE_SIZE) -> np.ndarray:
-    """The zonal upper wind's stream function at *size* latitudes evenly
-    from -90 to 90 degrees, metres: ``psi = -R * integral(u dlat)``, so
-    the wind blows along its contours and ``|grad psi|`` is its speed. The
-    cirrus's streaks follow those contours (:func:`genera.upper_stream`,
-    the march's ``cirrusStreaks``).
+    """The zonal-mean upper wind's stream function at *size* latitudes
+    evenly from -90 to 90 degrees, metres: ``psi = -R * integral(u dlat)``,
+    so the wind blows along its contours and ``|grad psi|`` is its speed.
 
     :returns: (size,) float64
     """
@@ -706,31 +575,22 @@ def stream_table(spec: WeatherSpec, size: int = STREAM_TABLE_SIZE) -> np.ndarray
 def stream_vortices(spec: WeatherSpec, planet: Planet | None = None) -> np.ndarray:
     """The weather systems' share of the upper wind's stream function: one
     Gaussian each, ``a * exp(-|d - c|^2 * k)`` over unit directions d, so
-    the wind turns around each low (cyclonic) and over each tropical
+    the wind turns around each low (cyclonic), each high and each tropical
     cyclone's outflow (anticyclonic), at most :attr:`WeatherSpec.jet_vortex`
-    of the jets' speed.
+    of the fastest jet's speed (:func:`synoptic.jets.system_rows`).
 
-    :param planet: the evaluated planet (built from the spec if None)
+    :param planet: unused (the systems are the spec's)
     :returns: (N, 5) float64: centre (3), k, a (metres)
     """
-    radius = spec.planet.radius
-    rows = []
-    for v in vortices(spec, planet):
-        width = _reach(v) * v.radius
-        amplitude = spec.jet_vortex * width * radius / _GAUSS_SLOPE
-        # A low's stream function is a minimum where it turns counter-
-        # clockwise (swirl > 0); the outflow aloft a tropical cyclone turns
-        # the other way.
-        sign = -math.copysign(1.0, v.swirl) * (-1.0 if v.tropical else 1.0)
-        rows.append((*v.centre, 1.0 / width**2, sign * amplitude))
-    return np.array(rows, dtype=np.float64).reshape(-1, 5)
+    state = synoptic_state(spec)
+    return system_rows(state.systems, state.t, spec.planet.radius, spec.jet_vortex)
 
 
 def stream_function(
     table: np.ndarray, vortex_rows: np.ndarray, dirs: np.ndarray
 ) -> np.ndarray:
-    """The upper wind's stream function at *dirs* (without the cirrus's
-    meanders), as the cirrus shader evaluates it.
+    """The zonal-mean upper wind's stream function at *dirs*, with the
+    systems' bumps (the meandering jets are :func:`upper_stream`'s).
 
     :param table: :func:`stream_table`
     :param vortex_rows: :func:`stream_vortices`
@@ -745,29 +605,56 @@ def stream_function(
     return psi
 
 
+def upper_stream(spec: WeatherSpec, dirs: np.ndarray) -> np.ndarray:
+    """The upper wind's stream function at *dirs*, metres (the fastest jet's
+    speed is 1): the meandering jets swirled round the systems
+    (:func:`synoptic.jets.upper_stream`), or the zonal one of
+    :attr:`WeatherSpec.jets`. The wind is ``up x grad psi``.
+
+    :param dirs: (N, 3) unit directions
+    """
+    dirs = np.asarray(dirs, dtype=np.float64)
+    if spec.jets is not None:
+        return stream_function(stream_table(spec), stream_vortices(spec), dirs)
+    state = synoptic_state(spec)
+    return jets_upper_stream(state.jets, state.systems, state.t, dirs, spec.jet_vortex)
+
+
+def _cirrus_zonal(spec: WeatherSpec, dirs: np.ndarray, lat: np.ndarray) -> np.ndarray:
+    """The cirrus's background: anvils over the wet tropics, streaks along
+    the meandering jets."""
+    if spec.cirrus_zonal is not None:
+        points = np.array(spec.cirrus_zonal, dtype=np.float64)
+        return np.interp(np.abs(lat - spec.season), points[:, 0], points[:, 1])
+    state = synoptic_state(spec)
+    _, lon = latlon(dirs)
+    tropics = np.exp(-(((lat - spec.season) / (0.5 * state.scales.hadley_edge)) ** 2))
+    streaks = np.zeros_like(lat)
+    for jet in state.jets:
+        y = across_axis(jet, lat, lon, state.t)
+        streaks = np.maximum(streaks, np.exp(-((y / jet.width) ** 2)))
+    return 0.08 + 0.45 * tropics + 0.3 * streaks
+
+
 def _cirrus_compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate):
     radius = spec.planet.radius
     scale = _feature_scale(spec)
     lat, _ = latlon(dirs)
-    points = np.array(spec.cirrus_zonal, dtype=np.float64)
-    cover = np.interp(np.abs(lat - spec.season), points[:, 0], points[:, 1])
+    cover = _cirrus_zonal(spec, dirs, lat)
     # Ice cloud high above the ground cares less for its humidity than the
     # cumulus: jet cirrus streams over deserts too.
     _, _, humidity, _ = climate(dirs)
     cover = cover * (0.4 + 0.6 * _wetness(humidity))
-
-    warped = dirs.copy()
-    for v in vortices(spec, planet):
-        near = _near(dirs, v)
-        if not near.any():
-            continue
-        warped[near] = _wind_up(dirs[near], warped[near], v)
-        x, y = _local(dirs[near], v)
-        if v.tropical:
-            shield = _gauss(x, y, 0.0, 0.0, 1.6, 1.6)  # the outflow's canopy
-        else:
-            shield = _gauss(x, y, 0.9, 1.0, 1.3, 1.0)  # ahead of the warm front
-        cover[near] += spec.cirrus_shield * shield
+    # The systems' own: the warm fronts' shields, the tropical cyclones'
+    # outflow.
+    cube = synoptic_cube(spec)
+    pick = [
+        SYNOPTIC_CHANNELS.index(g) for g in ("cirrus", "cirrostratus", "cirrocumulus")
+    ]
+    own = spec.cirrus_shield * sample_cube(cube[..., pick], dirs).max(axis=-1)
+    cover = 1.0 - (1.0 - np.clip(cover, 0.0, 1.0)) * (1.0 - np.clip(own, 0.0, 1.0))
+    state = synoptic_state(spec)
+    warped = swirled(dirs, state.systems, state.scales, state.t)
     meso = fbm(
         warped * radius,
         spec.meso_wavelength * scale,

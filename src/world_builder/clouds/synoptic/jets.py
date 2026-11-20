@@ -35,8 +35,10 @@ MEANDER_DEG = 8.0
 MEANDER_SPACING = 0.25
 #: The subtropical jet meanders this share of the eddy-driven ones' amplitude.
 SUBTROPICAL_MEANDER = 0.5
-#: The jet's half-width across its axis, in jet spacings.
+#: The jet's half-width across its axis, in jet spacings, and at most this
+#: share of the gap to its neighbouring jet.
 JET_WIDTH = 0.25
+JET_GAP_WIDTH = 0.4
 #: A weather system's upper-wind swirl at its fastest, in the fastest jet's
 #: speed (the cirrus bend around it), and its reach in its radii.
 SYSTEM_SWIRL = 0.8
@@ -98,6 +100,12 @@ def jet_waves(
     radius = scales.radius
     k = wavenumbers(scales)
     total = meander_amplitude(scales)
+    # A jet is narrower than the gap to its neighbour (on a slow rotator the
+    # subtropical and eddy-driven jets crowd together).
+    gaps = np.diff(scales.jet_lats)
+    width = JET_WIDTH * scales.jet_spacing
+    if len(gaps):
+        width = min(width, JET_GAP_WIDTH * radius * math.radians(float(gaps.min())))
     out = []
     for hi, hemisphere in enumerate((1, -1)):
         for ji, lat0 in enumerate(scales.jet_lats):
@@ -127,7 +135,7 @@ def jet_waves(
                     omega=omega,
                     phase=phase,
                     speed=speed,
-                    width=JET_WIDTH * scales.jet_spacing,
+                    width=width,
                     radius=radius,
                     subtropical=subtropical,
                 )
@@ -214,47 +222,71 @@ def _stream_scale() -> float:
     return max(JET_SPEED, SUBTROPICAL_JET_SPEED)
 
 
-def upper_stream(jets, systems, t: float, dirs: np.ndarray) -> np.ndarray:
+def across_axis(jet: JetWave, lat: np.ndarray, lon: np.ndarray, t: float) -> np.ndarray:
+    """Distance from a jet's meandering axis, metres, measured across it
+    (perpendicular, not along the meridian: where the axis tilts, the
+    meridian crosses it at a slant), positive to the north."""
+    north = jet.radius * np.radians(lat - jet_lat(jet, lon, t))
+    slope = jet.hemisphere * meander_slope(jet, lon, t)  # d(lat)/d(lon), deg/deg
+    tilt = slope / np.maximum(np.cos(np.radians(lat)), 1e-6)
+    return north / np.sqrt(1.0 + tilt * tilt)
+
+
+def system_rows(
+    systems, t: float, radius: float, swirl: float = SYSTEM_SWIRL
+) -> np.ndarray:
+    """Each active system's Gaussian bump of the upper wind's stream
+    function, ``a exp(-|d - c|^2 k)`` over unit directions d: cyclonic over
+    a low (a minimum in the north), anticyclonic over a high and over a
+    tropical cyclone's outflow, its fastest wind *swirl* of the fastest
+    jet's, scaled by its intensity.
+
+    :returns: (N, 5) float64: centre (3), k, a (metres)
+    """
+    from world_builder.clouds.synoptic.systems import Kind, intensity, position
+
+    rows = []
+    for obj in systems:
+        strength = intensity(obj, t)
+        if strength <= 0.0:
+            continue
+        clat, clon = position(obj, t)
+        reach = 0.8 if obj.kind is Kind.TROPICAL else 1.6
+        width = reach * obj.radius / radius
+        amplitude = swirl * width * radius / _GAUSS_SLOPE * strength
+        h = 1.0 if clat >= 0.0 else -1.0
+        sign = -h if obj.kind in (Kind.LOW, Kind.CUTOFF) else h
+        rows.append((*_unit(clat, clon), 1.0 / width**2, sign * amplitude))
+    return np.array(rows, dtype=np.float64).reshape(-1, 5)
+
+
+def upper_stream(
+    jets, systems, t: float, dirs: np.ndarray, swirl: float = SYSTEM_SWIRL
+) -> np.ndarray:
     """The upper wind's stream function at *dirs*, metres (the fastest jet's
     speed is 1): each jet a Gaussian speed profile across its meandering
     axis, ``psi = -(U / U_max) w sqrt(pi)/2 erf(y / w)``, plus a Gaussian
-    bump per active system (cyclonic over a low, anticyclonic over a high
-    and over a tropical cyclone's outflow).
+    bump per active system (:func:`system_rows`).
 
     :param jets: :func:`jet_waves`
     :param systems: :class:`systems.SynopticObject` s
     :param dirs: (N, 3) unit directions
+    :param swirl: the systems' fastest wind, in the fastest jet's
     """
     from scipy.special import erf
-
-    from world_builder.clouds.synoptic.systems import Kind, intensity, position
 
     dirs = np.asarray(dirs, dtype=np.float64)
     lat, lon = latlon(dirs)
     psi = np.zeros(len(dirs))
     top = _stream_scale()
     for jet in jets:
-        y = jet.radius * np.radians(lat - jet_lat(jet, lon, t))
+        y = across_axis(jet, lat, lon, t)
         share = jet.speed / top
         psi -= share * jet.width * 0.5 * math.sqrt(math.pi) * erf(y / jet.width)
-    for obj in systems:
-        strength = intensity(obj, t)
-        if strength <= 0.0:
-            continue
-        clat, clon = position(obj, t)
-        centre = _unit(clat, clon)
-        reach = 0.8 if obj.kind is Kind.TROPICAL else 1.6
-        width = reach * obj.radius / jets[0].radius if jets else 0.0
-        if width <= 0.0:
-            continue
-        amplitude = SYSTEM_SWIRL * width * jets[0].radius / _GAUSS_SLOPE * strength
-        h = 1.0 if clat >= 0.0 else -1.0
-        cyclonic = obj.kind in (Kind.LOW, Kind.CUTOFF)
-        sign = -h if cyclonic else h
-        offset = dirs - centre
-        psi += (
-            sign * amplitude * np.exp(-np.einsum("ij,ij->i", offset, offset) / width**2)
-        )
+    if jets:
+        for cx, cy, cz, k, a in system_rows(systems, t, jets[0].radius, swirl):
+            offset = dirs - np.array([cx, cy, cz])
+            psi += a * np.exp(-np.einsum("ij,ij->i", offset, offset) * k)
     return psi
 
 

@@ -1,9 +1,9 @@
 """
 A planet's low and middle clouds by genus: stratus, stratocumulus,
 nimbostratus, altostratus, altocumulus, and the convective
-continuum from fair-weather cumulus through congestus to cumulonimbus. A
-PLACEHOLDER for the weather (issue #8): its maps are features laid out
-around one point.
+continuum from fair-weather cumulus through congestus to cumulonimbus,
+drawn from the weather (:func:`weather.synoptic_cube`), with optional
+hand-placed features over it.
 
 The genera (:data:`GENUS_PRESETS`, :attr:`GeneraSpec.genera`), each one
 density field over its own slab, which the raymarch marches as one union
@@ -26,9 +26,10 @@ density field over its own slab, which the raymarch marches as one union
   (:func:`anvil_spread`).
 
 The maps (:func:`genus_planes`, cube maps as the weather's) are the
-weather's own coverage for the fair-weather cumulus everywhere, plus, around
-:attr:`GeneraSpec.focus`, the features of :attr:`GeneraSpec.features`; each
-other genus's coverage is its own features' (:func:`genus_coverage`).
+weather's own: its convective coverage, depth and anvil shelf, and each
+other genus's coverage its channel of the weather (:func:`genus_coverage`);
+plus, around :attr:`GeneraSpec.focus`, the features of
+:attr:`GeneraSpec.features`.
 
 **Coverage to the field.** The share of columns holding cloud depends on
 how tall they may grow, so the convective field's fbm shift is tabulated by
@@ -59,6 +60,7 @@ from world_builder.clouds.noise import (
     sphere_column_peaks,
 )
 from world_builder.clouds.weather import (
+    SYNOPTIC_CHANNELS,
     WEATHER_SIZE,
     WeatherSpec,
     cirrus_cover_map,
@@ -66,9 +68,10 @@ from world_builder.clouds.weather import (
     coverage_to_shift,
     sample_cube,
     shift_table,
-    stream_function,
-    stream_table,
-    stream_vortices,
+    synoptic_cube,
+)
+from world_builder.clouds.weather import (
+    upper_stream as weather_upper_stream,
 )
 from world_builder.sky.starfield import cube_directions
 from world_builder.terrain.chart import TangentFrame, latlon
@@ -586,13 +589,28 @@ def high_jet(spec: GeneraSpec) -> np.ndarray:
     return axis / norm
 
 
+#: A weather genus channel under this everywhere holds no cloud
+#: (:func:`has_coverage`): the march skips the genus.
+WEATHER_COVER_FLOOR = 0.01
+
+
 def has_coverage(spec: GeneraSpec, name: str) -> bool:
     """Whether genus *name* of *spec* holds cloud anywhere: the primary one
-    (the weather's) always; another where a feature is its
-    (:func:`genus_coverage`; the placeholder's maps are features alone)."""
+    (the weather's) always; another where the weather's channel of it
+    (with :attr:`GeneraSpec.background`) or a feature is its
+    (:func:`genus_coverage`)."""
     if GENUS_PRESETS[name].coverage[0] == "weather":
         return True
-    return any(f.genus == name for f in spec.features)
+    if any(f.genus == name for f in spec.features):
+        return True
+    return (
+        spec.background
+        and name in SYNOPTIC_CHANNELS
+        and bool(
+            synoptic_cube(spec.weather)[..., SYNOPTIC_CHANNELS.index(name)].max()
+            > WEATHER_COVER_FLOOR
+        )
+    )
 
 
 def genus_specs(
@@ -649,9 +667,9 @@ def _frame(centre: np.ndarray) -> TangentFrame:
 
 
 def upper_wind_at(spec: WeatherSpec, centre: np.ndarray) -> np.ndarray:
-    """The upper wind at a direction: the cirrus's (the jets, swirled by
-    the weather systems: :func:`weather.stream_function`), which blows
-    along its stream function's contours, ``up x grad psi``.
+    """The upper wind at a direction: the cirrus's (the meandering jets,
+    swirled by the weather systems: :func:`weather.upper_stream`), which
+    blows along its stream function's contours, ``up x grad psi``.
 
     :param centre: (3,) unit direction
     :returns: (east, north), the jets' fastest 1
@@ -667,7 +685,7 @@ def upper_wind_at(spec: WeatherSpec, centre: np.ndarray) -> np.ndarray:
         ]
     )
     probes /= np.linalg.norm(probes, axis=1, keepdims=True)
-    psi = stream_function(stream_table(spec), stream_vortices(spec), probes)
+    psi = weather_upper_stream(spec, probes)
     grad_east = (psi[0] - psi[1]) / (2.0 * _WIND_STEP)
     grad_north = (psi[2] - psi[3]) / (2.0 * _WIND_STEP)
     return np.array([-grad_north, grad_east])
@@ -688,7 +706,7 @@ def _tangent_east_north(dirs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 def upper_stream(spec: GeneraSpec, dirs: ArrayLike) -> np.ndarray:
     """The upper wind's stream function at unit *dirs*, metres: the
-    weather's (:func:`weather.stream_function`), or with
+    weather's (:func:`weather.upper_stream`), or with
     :attr:`GeneraSpec.wind` set, a uniform wind's, that wind at the focus
     (``psi = speed * R * dirs . (axis x up)``), the jets' fastest 1. The
     wind blows along its contours, ``up x grad psi`` (:func:`upper_wind_at`).
@@ -697,8 +715,7 @@ def upper_stream(spec: GeneraSpec, dirs: ArrayLike) -> np.ndarray:
     """
     dirs = np.asarray(dirs, dtype=np.float64).reshape(-1, 3)
     if spec.wind is None:
-        weather = spec.weather
-        return stream_function(stream_table(weather), stream_vortices(weather), dirs)
+        return weather_upper_stream(spec.weather, dirs)
     frame = TangentFrame.at(*spec.focus)
     up = np.asarray(frame.up, dtype=np.float64)
     wind = np.asarray(spec.wind, dtype=np.float64)
@@ -784,17 +801,37 @@ def anvil_spread(
     return 1.0 - _smoothstep(*_ANVIL_REACH, np.hypot(x, y))
 
 
+def _weather_channels(spec: GeneraSpec, names: tuple, size: int) -> np.ndarray:
+    """The weather's genus channels *names* (:data:`weather.SYNOPTIC_CHANNELS`)
+    at the cube's directions, smooth, upsampled from its own map; zeros
+    without :attr:`GeneraSpec.background`.
+
+    :returns: (6 * size * size, len(names)) float64
+    """
+    if not spec.background:
+        return np.zeros((6 * size * size, len(names)))
+    dirs = cube_directions(size).reshape(-1, 3)
+    picks = [SYNOPTIC_CHANNELS.index(n) for n in names]
+    return sample_cube(synoptic_cube(spec.weather)[..., picks], dirs).astype(np.float64)
+
+
 @functools.cache
 def genus_coverage(spec: GeneraSpec, name: str, size: int = GENUS_SIZE) -> np.ndarray:
     """A genus's own coverage map (a genus other than the convective one):
-    its features' (:attr:`Feature.genus` *name*), each its coverage over its
-    core, fading out over its outer third; 0 elsewhere (cached per process).
+    the weather's (its channel of :func:`weather.synoptic_cube`, with
+    :attr:`GeneraSpec.background`; a high genus's weather is the cirrus
+    cover instead, :attr:`GeneraSpec.cirrus_weather`), and over it its features'
+    (:attr:`Feature.genus` *name*), each its coverage over its core, fading
+    out over its outer third (cached per process).
 
     :returns: (6, size, size) float32, the layout of
         :func:`sky.starfield.cube_directions`
     """
     dirs = cube_directions(size).reshape(-1, 3)
-    cover = np.zeros(len(dirs))
+    if name in SYNOPTIC_CHANNELS and name not in HIGH_CHANNELS:
+        cover = _weather_channels(spec, (name,), size)[:, 0]
+    else:
+        cover = np.zeros(len(dirs))
     for f, centre, angle in _feature_dirs(spec):
         if f.genus != name:
             continue
@@ -806,20 +843,23 @@ def genus_coverage(spec: GeneraSpec, name: str, size: int = GENUS_SIZE) -> np.nd
 
 @functools.cache
 def genus_planes(spec: GeneraSpec, size: int = GENUS_SIZE) -> np.ndarray:
-    """The convective genus's maps as cube maps (cached per process).
+    """The convective genus's maps as cube maps (cached per process): the
+    weather's (:func:`weather.coverage_map` and
+    :func:`weather.synoptic_cube`, smooth, upsampled from their own maps),
+    the features over them.
 
-    :returns: (6, size, size, 4) float32: the convective coverage (the
-        weather's, smooth, upsampled from its own map), the convective depth,
-        the stratus's coverage (:func:`genus_coverage`) and the anvil
-        shelf's spread, the layout of :func:`sky.starfield.cube_directions`
+    :returns: (6, size, size, 4) float32: the convective coverage, the
+        convective depth, the stratus's coverage (:func:`genus_coverage`) and
+        the anvil shelf's spread, the layout of
+        :func:`sky.starfield.cube_directions`
     """
     dirs = cube_directions(size).reshape(-1, 3)
     convective = sample_cube(coverage_map(spec.weather), dirs).astype(np.float64)
     if not spec.background:
         convective = np.zeros(len(dirs))
-    depth = np.zeros(len(dirs))
+    weather = _weather_channels(spec, ("depth", "shelf"), size)
+    depth, shelf = weather[:, 0], weather[:, 1]
     stratiform = genus_coverage(spec, "stratus", size).reshape(-1)
-    shelf = np.zeros(len(dirs))
     for f, centre, angle in _feature_dirs(spec):
         if f.genus not in CONVECTIVE_SPECIES:
             continue  # a map of its own (genus_coverage)

@@ -203,11 +203,7 @@ def uniform_weather(planet, coverage: float) -> WeatherSpec:
     return WeatherSpec(
         planet,
         zonal=((0.0, coverage), (90.0, coverage)),
-        cyclones=0,
-        tropical=0,
-        cyclone_strength=0.0,
-        front_strength=0.0,
-        tropical_strength=0.0,
+        systems=False,
         meso_strength=0.0,
         dry_floor=1.0,
         desert_clearing=0.0,

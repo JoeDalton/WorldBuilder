@@ -246,3 +246,48 @@ def test_weather_spec_has_a_time():
     spec = WeatherSpec(EARTH)
     assert spec.time_s == 0.0
     assert replace(spec, time_s=3.0 * DAY).time_s == 3.0 * DAY
+
+
+def test_upper_wind_on_a_tilted_axis_is_the_jet_speed(earth):
+    """Across a meandering axis the profile is measured perpendicular to
+    it: the wind on the axis is the jet's speed wherever it tilts."""
+    from world_builder.clouds.synoptic.jets import upper_stream
+
+    _, scales, jets, _ = earth
+    jet = _eddy(jets, scales)[0]
+    lon = np.linspace(-180.0, 180.0, 37)
+    lat = jet_lat(jet, lon, 0.0)
+    on_axis = _dir(lat, lon)
+    pole = np.array([0.0, 0.0, 1.0])
+    east = np.cross(pole, on_axis)
+    east /= np.linalg.norm(east, axis=1, keepdims=True)
+    north = np.cross(on_axis, east)
+    step = 1000.0 / EARTH.radius
+    probes = np.concatenate(
+        [
+            on_axis + step * east,
+            on_axis - step * east,
+            on_axis + step * north,
+            on_axis - step * north,
+        ]
+    )
+    probes /= np.linalg.norm(probes, axis=1, keepdims=True)
+    psi = upper_stream([jet], [], 0.0, probes).reshape(4, -1)
+    grad = np.stack([psi[0] - psi[1], psi[2] - psi[3]], -1) / 2000.0
+    speed = np.linalg.norm(grad, axis=-1)
+    np.testing.assert_allclose(speed, jet.speed / 30.0, rtol=0.03)
+
+
+@pytest.mark.parametrize("which", ["earth", "kerbin"])
+def test_jets_do_not_overlap(which, request):
+    """A jet is narrower than the gap to its neighbour: on each axis the
+    other jets add little to its speed."""
+    _, scales, jets, _ = request.getfixturevalue(which)
+    north = [j for j in jets if j.hemisphere == 1]
+    for jet in north:
+        for other in north:
+            if other is jet:
+                continue
+            gap = scales.radius * math.radians(abs(jet.lat0 - other.lat0))
+            share = other.speed / jet.speed * math.exp(-((gap / other.width) ** 2))
+            assert share < 0.05, (jet.lat0, other.lat0)

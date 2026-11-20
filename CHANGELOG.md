@@ -57,6 +57,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel per system, Holland's profile for tropical cyclones) and the wind
   (geostrophic, gradient wind in a tropical cyclone, friction at the
   surface, the trades near the equator), culled by cube-face tiles.
+- Synoptic weather, part 3: the clouds come from the weather (closes the
+  placeholder of issue #8). `clouds.synoptic.fronts`: each low's warm, cold
+  and occluded fronts (Norwegian), or its fractured cold front and
+  bent-back warm front (Shapiro-Keyser), shaped by its stage.
+  `clouds.synoptic.rules`: the genera each zone holds: the warm front's
+  cirrus, cirrostratus, altostratus and nimbostratus shield, the cold
+  front's cumulonimbus line, the warm sector's stratus and
+  stratocumulus, the comma head and the dry slot, the cold air's open
+  cells, a high's clear core, stratocumulus deck over cold sea and fog, a
+  tropical cyclone's eye, eyewall, spiral bands and outflow cirrostratus;
+  all eight other genera are computed. `weather.synoptic_cube` holds
+  them; `coverage_map`, `weather_cube` and `genera.genus_planes` read it
+  (the convective family's coverage, depth and anvil shelf; the
+  stratiform sheet's stratus and stratocumulus) and the cirrus sheet takes
+  the systems' cirrus. The cirrus and the anvils follow the meandering
+  jets (`weather.upper_stream`); the orographic cloud follows the
+  systems' surface wind.
+
+### Changed
+
+- `WeatherSpec` loses the placeholder systems' fields (`storm_tracks`,
+  `cyclones`, `tropical` and their radii, swirls and strengths): the
+  systems follow the planet. `zonal`, `jets` and `cirrus_zonal` default
+  to None (the planet's own); `systems=False` gives the climate's
+  background alone (`cloud_bench.py`'s uniform weather); `cirrus_shield`
+  is now the share of the systems' cirrus the sheet keeps.
+- `weather.vortices` and its comma-shaped `Vortex` are gone (the
+  synoptic systems replace them). `stream_table`, `stream_vortices` and
+  `stream_function` keep their signatures as the zonal-mean upper wind.
 
 - The terrain demo's `B` key: a burst capture of the next 12 frames into
   `--capture-dir` (default `captures/`, git-ignored), a folder each. Per

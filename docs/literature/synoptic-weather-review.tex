@@ -468,11 +468,18 @@ Troughs are the minima of $h\,\phi_j$ in $\lambda$ (equatorward excursions), and
 maxima. Both are found on a grid of $\max(512,16\max_m k_m)$ points in $\lambda$, refined by a
 parabolic fit; the one a system is born at is the deepest within its sector (65 points).
 
-The upper wind has a Gaussian jet profile across the meandering axis, with half-width
-$w_j=0.25\,L_\beta$$^\dagger$:
+The upper wind has a Gaussian jet profile across the meandering axis. Its half-width is a
+quarter of the jet spacing, but never more than 0.4 of the gap to the neighbouring jet (on a slow
+rotator the subtropical and eddy-driven jets crowd together):
+\begin{equation}
+  w_j=\min\!\big(0.25\,L_\beta,\ 0.4\,a\,\min_i|\phi_{0,i+1}-\phi_{0,i}|\big)^\dagger.
+\end{equation}
+The distance $y$ is measured across the axis, not along the meridian (where the axis tilts, the
+meridian crosses it at a slant, and the wind would come out too fast):
 \begin{equation}
   u_\parallel = U_j\,G(y;0,w_j),\qquad
-  y = a\,(\phi-\phi_j(\lambda,t)).
+  y = \frac{a\,(\phi-\phi_j(\lambda,t))}{\sqrt{1+\tau^2}},\quad
+  \tau=\frac{\partial\phi_j/\partial\lambda}{\cos\phi}.
 \end{equation}
 Its stream function, with contours along the axis, is
 \begin{equation}
@@ -680,7 +687,11 @@ the centre to the triple point $\mathbf{P}_T$, curving poleward (it wraps):
 \paragraph{Shapiro--Keyser variant} \cite{shapiro1990}, a seeded 30\,\% of LOWs:
 \begin{itemize}
 \item the warm front continues as a bent-back front, with
-  $\vartheta(\sigma)=-10^\circ+\max(0,\sigma-1)\cdot150^\circ\!/r$;
+  $\vartheta(\sigma)=-10^\circ+\max(0,\sigma-1)\cdot150^\circ\!/r$ and length
+  $1.5\,S(0,0.2,s)+S(0.3,0.7,s)$. Past its bend ($\sigma>1$) it is kept apart: inside its
+  curl a point is on the cold side of one part and the warm side of another, so it has no
+  signed distance. It is wrapped in cloud on both sides instead (the cloud head):
+  $c_{Ns}\mathrel{+}=0.8\,G(|d_b|;0,0.25)\,\Sigma'$, $c_{As}\mathrel{+}=0.6\,G(|d_b|;0,0.5)\,\Sigma'$;
 \item the cold front is fractured, with $\sigma_0=0.4\,S(0.3,0.6,s)$;
 \item the cold front meets the warm front at a T-bone, with $\vartheta_0=-90^\circ$;
 \item there is no occlusion: $\ell_o=0$, and a warm seclusion $G(\rho;0,0.3)$ clears the core
@@ -688,14 +699,24 @@ the centre to the triple point $\mathbf{P}_T$, curving poleward (it wraps):
 \end{itemize}
 
 \paragraph{Signed distances.}
-For a point $\mathbf{q}$ and front $f$, let $\sigma^*$ be the parameter of the closest point on
-the front. The signed distance, positive on the cold side, is
+Every front is stored with its cold side on its left (the warm front from the triple point east,
+the cold front from its tip back to the triple point). For a point $\mathbf{q}$, let $\sigma^*$
+be the arc length of the closest point on the front. The signed distance, positive on the cold
+side, is
 \begin{equation}
-  d_f(\mathbf{q})=\pm\min_{\sigma}|\mathbf{q}-\boldsymbol{\gamma}_f(\sigma)|.
+  d_f(\mathbf{q})=\pm\min_{\sigma}|\mathbf{q}-\boldsymbol{\gamma}_f(\sigma)|,
 \end{equation}
-The sign is positive on the left of the warm front's heading (poleward) and on the right of
-the cold front's heading (west, behind it). $\sigma^*$ also gives the along-front taper
-$T_f=1-S(0.7\ell,\ell,\sigma^*)$. The warm sector is $\{d_w<0\}\cap\{d_c<0\}\cap\{\rho<2.5\}$.
+except past either end, where it is the signed distance from the end segment's extended line:
+that crosses 0 smoothly, where the distance to the end point, signed by side, would jump. A
+point past an end overshoots it by $o_f$, measured along the front's direction there. The
+along-front tapers are
+\begin{equation}
+  T_f=\big(1-S(0.7\ell,\ell,\sigma^*)\big)\big(1-S(0,0.3,o_f)\big)
+\end{equation}
+for the fronts' own bands, and $P_f=1-S(0,1,o_f)$ for the broad zones they bound (the warm
+sector, the cold air), where which side of a front a point is on no longer means anything
+past its end. Points farther than 2.5 radii from a front's bounding box get $d_f=+\infty$
+without being measured: every rule gives nothing there.
 
 %--------------------------------------------------------------------
 \subsection{Genus rules}
@@ -705,7 +726,7 @@ $c_g=1-\prod_i(1-c_{g,i})$, and is clamped to $[0,1]$. Distances are in units of
 $r$. $\Sigma'=\Sigma(s)/P$ is the normalised intensity.
 
 \paragraph{Warm-front shield} \cite{carlson1980}. Let $\xi=d_w$ on the cold side
-($\xi\ge0$), with taper $T_w$ and edge softness $e=0.08$. Each layer is
+($\xi\ge0$), with taper $T_w$ and edge softness $e=0.15$. Each layer is
 $c_g=C_g\,\Pi(\xi;\xi_0,\xi_1,e)\,T_w\,\Sigma'$, with:
 
 \begin{center}
@@ -730,29 +751,36 @@ band ahead of it on the warm side:
   \mathrm{depth}&\mathrel{+}=0.5\,\Pi(-d_c;0.08,0.25,0.05).
 \end{align}
 The anvil shelf is
-$\mathrm{shelf}=\max(\mathrm{shelf},\,S(0.8,0.95,\mathrm{depth}))$, stretched downwind by the
-existing \texttt{anvil\_spread}.
+$\mathrm{shelf}=S(0.8,0.95,\mathrm{depth})$ wherever the convective cover exceeds 0.05. It is
+not yet stretched downwind as the hand-placed features' anvils are (\texttt{anvil\_spread}).
 
 \paragraph{Warm sector.} Overcast with drizzle near the warm front; stratocumulus elsewhere,
 mostly over sea. With $m$ the sea fraction:
 \begin{equation}
   c_{St}=0.6\,G(d_w;0,0.4)\,W\,\Sigma',\qquad
-  c_{Sc}=(0.35+0.3\,m)\,W\,\Sigma',\qquad
-  W=\mathbf{1}_{\text{warm sector}}\cdot S(2.5,2.0,\rho).
+  c_{Sc}=(0.35+0.3\,m)\,W\,\Sigma',
+\end{equation}
+with soft edges at both fronts (the warm sector's stratus carries on a little under the warm
+front's nimbostratus: pre-frontal stratus):
+\begin{equation}
+  W=\big(1-S(-0.25,0.25,d_w)\big)\big(1-S(-0.25,0.25,d_c)\big)\,\big(1-S(2,2.5,\rho)\big)\,P_w\,P_c.
 \end{equation}
 
 \paragraph{Comma head and dry slot} \cite{carlson1980,browning1994}.
 \begin{align}
-  H&=G(x;0.3,0.9)\,G(y;0.6,0.5)\,S(0.3,0.6,s)\,\Sigma':&
-  c_{Ns}&\mathrel{+}=0.8H,\, c_{As}\mathrel{+}=0.6H,\, \mathrm{depth}\mathrel{+}=0.3H;\\
-  D&=G(x;-0.3,0.4)\,G(y;-0.6,0.5)\,S(0.2,0.4,s):&
-  c_g&\leftarrow c_g\,(1-0.9D).
+  H&=G(x;0.3,0.9)\,G(y;0.6,0.5)\,S(0.3,0.6,s)\,\big(1-S(0.85,1,s)\big),\\
+  c_{Ns}&\mathrel{+}=0.8H,\quad c_{As}\mathrel{+}=0.6H,\quad c_{\mathrm{conv}}\mathrel{+}=0.3H,
+  \quad \mathrm{depth}\mathrel{+}=0.3H;\\
+  D&=G(x;-0.3,0.4)\,G(y;-0.6,0.5)\,S(0.2,0.4,s),\qquad
+  c_g\leftarrow c_g\,(1-0.9D).
 \end{align}
-The dry-slot factor $D$ multiplies every genus channel.
+The cloud head outlives the low's deepening (it lasts through the occlusion
+\cite{schultz2011}), so it follows its own life curve, not $\Sigma'$. The dry-slot factor $D$
+multiplies every genus channel.
 
 \paragraph{Post-frontal cold air.} Open-cell convection over sea, behind the cold front:
 \begin{equation}
-  Q=\Pi(d_c;0.2,2.0,0.2)\,m\,\Sigma':\qquad
+  Q=\Pi(d_c;0.2,2.0,0.2)\,m\,\Sigma'\,P_c:\qquad
   c_{\mathrm{conv}}\mathrel{+}=0.45Q,\ \mathrm{depth}\mathrel{+}=0.3Q,\ c_{Sc}\mathrel{+}=0.3Q.
 \end{equation}
 
@@ -793,6 +821,10 @@ $\alpha_b=15^\circ$ the band pitch angle:
 GP is a stand-in for the Camargo et al.\ index \cite{camargo2007}: $|\eta|\propto|\sin\phi|$,
 there is no shear term, and sea temperature is replaced by the climate temperature.
 
+\paragraph{Cut-off lows.} No fronts: a blob of rain cloud and showers,
+$c_{Ns}\mathrel{+}=0.5\,G(\rho;0,0.8)\Sigma'$, $c_{As}\mathrel{+}=0.4\,G(\rho;0,1.2)\Sigma'$,
+$c_{\mathrm{conv}}\mathrel{+}=0.3\,G(\rho;0,1)\Sigma'$, depth $\ge0.5\,G(\rho;0,1)$.
+
 \paragraph{Climate terms (kept from today's \texttt{weather.py}).} Let $W(H)$ be the existing
 wetness smoothstep and $\mathbf{v}_s$ the surface wind of \S\ref{sec:eq-wind}:
 \begin{align}
@@ -807,6 +839,27 @@ The background fair-weather cover follows the belts:
 \begin{equation}
   Z(\phi)=0.15+0.5\,G(\phi;\phi_{\mathrm{ITCZ}},\phi_H/3)+0.35\,G(|\phi|;\phi_{st},12^\circ).
 \end{equation}
+The mesoscale texture's coordinates are wound by each system, most at its centre, so it curls
+into spiral arms round the lows: a rotation of $\mathbf{q}$ about the centre $\mathbf{c}$ by
+\begin{equation}
+  \alpha=-h\,\Omega_k\,\Sigma'\exp\!\big(-(\angle(\mathbf{q},\mathbf{c})/w)^2\big),\quad
+  w=\rho_k\,r/a,
+\end{equation}
+within $2w$, with $(\Omega_k,\rho_k)$ = $(3.4,1.6)$ for a LOW, $(2,1.2)$ for a CUTOFF,
+$(5,0.8)$ for a TROPICAL and $(-1,1.6)$ for a HIGH (anticyclonic). The same texture
+modulates every system layer, so decks and shields break up as the cumulus do, with no
+stencilled edges:
+\begin{equation}
+  c_g\leftarrow\operatorname{clamp}\big(c_g\cdot\operatorname{clamp}(1+2A\operatorname{fbm},0,2),0,1\big).
+\end{equation}
+
+\paragraph{Where the layers go on this branch.} The cloud renderer here has two families
+(convective and stratiform) and the cirrus sheet. The convective family reads the convective
+coverage, depth and shelf; the stratiform sheet reads $\max(c_{St},c_{Sc})$; the cirrus sheet's
+cover is its background (anvils over the wet tropics $0.45\,G(\phi;\phi_{\mathrm{ITCZ}},\phi_H/2)$,
+streaks along the meandering jets $0.3\,G(y;0,w_j)$, a floor of 0.08, scaled by
+$0.4+0.6\,W(H)$) combined with $\max(c_{Ci},c_{Cs},c_{Cc})$ by the soft maximum, plus its
+mesoscale texture. The other layers are computed for the eight-genus renderer.
 
 \paragraph{Coverage to fbm shift (unchanged).} For each genus table,
 \begin{equation}
