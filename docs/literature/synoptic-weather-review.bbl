@@ -1,0 +1,348 @@
+\begin{thebibliography}{45}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Bauer(2019)]{bauer2019}
+Fabian Bauer.
+\newblock Creating the atmospheric world of {R}ed {D}ead {R}edemption 2: A
+  complete and integrated solution.
+\newblock Advances in Real-Time Rendering in Games, SIGGRAPH 2019 Course, 2019.
+\newblock URL \url{https://advances.realtimerendering.com/s2019/index.htm}.
+
+\bibitem[Bjerknes and Solberg(1922)]{bjerknes1922}
+J.~Bjerknes and H.~Solberg.
+\newblock Life cycle of cyclones and the polar front theory of atmospheric
+  circulation.
+\newblock \emph{Geofysiske Publikationer}, 3\penalty0 (1), 1922.
+\newblock 18 pp.
+
+\bibitem[Bloemendaal et~al.(2020)Bloemendaal, Haigh, de~Moel, Muis, Haarsma,
+  and Aerts]{bloemendaal2020}
+Nadia Bloemendaal, Ivan~D. Haigh, Hans de~Moel, Sanne Muis, Reindert~J.
+  Haarsma, and Jeroen C. J.~H. Aerts.
+\newblock Generation of a global synthetic tropical cyclone hazard dataset
+  using {STORM}.
+\newblock \emph{Scientific Data}, 7\penalty0 (1):\penalty0 40, 2020.
+\newblock \doi{10.1038/s41597-020-0381-2}.
+
+\bibitem[Browning(1990)]{browning1990}
+K.~A. Browning.
+\newblock Organization of clouds and precipitation in extratropical cyclones.
+\newblock In Chester~W. Newton and Eero~O. Holopainen, editors,
+  \emph{Extratropical Cyclones: The Erik Palm{\'e}n Memorial Volume}, pages
+  129--153. American Meteorological Society, Boston, MA, 1990.
+\newblock \doi{10.1007/978-1-944970-33-8_8}.
+
+\bibitem[Browning and Roberts(1994)]{browning1994}
+K.~A. Browning and N.~M. Roberts.
+\newblock Structure of a frontal cyclone.
+\newblock \emph{Quarterly Journal of the Royal Meteorological Society},
+  120\penalty0 (520):\penalty0 1535--1557, 1994.
+\newblock \doi{10.1002/qj.49712052006}.
+
+\bibitem[Camargo et~al.(2007)Camargo, Sobel, Barnston, and
+  Emanuel]{camargo2007}
+Suzana~J. Camargo, Adam~H. Sobel, Anthony~G. Barnston, and Kerry~A. Emanuel.
+\newblock Tropical cyclone genesis potential index in climate models.
+\newblock \emph{Tellus A: Dynamic Meteorology and Oceanography}, 59\penalty0
+  (4):\penalty0 428--443, 2007.
+\newblock \doi{10.1111/j.1600-0870.2007.00238.x}.
+
+\bibitem[Carlson(1980)]{carlson1980}
+Toby~N. Carlson.
+\newblock Airflow through midlatitude cyclones and the comma cloud pattern.
+\newblock \emph{Monthly Weather Review}, 108\penalty0 (10):\penalty0
+  1498--1509, 1980.
+\newblock \doi{10.1175/1520-0493(1980)108<1498:ATMCAT>2.0.CO;2}.
+
+\bibitem[Emanuel et~al.(2006)Emanuel, Ravela, Vivant, and Risi]{emanuel2006}
+Kerry Emanuel, Sai Ravela, Emmanuel Vivant, and Camille Risi.
+\newblock A statistical deterministic approach to hurricane risk assessment.
+\newblock \emph{Bulletin of the American Meteorological Society}, 87\penalty0
+  (3):\penalty0 299--314, 2006.
+\newblock \doi{10.1175/BAMS-87-3-299}.
+
+\bibitem[Goswami and Neyret(2017)]{goswami2017}
+Prashant Goswami and Fabrice Neyret.
+\newblock Real-time landscape-size convective clouds simulation and rendering.
+\newblock In \emph{Workshop on Virtual Reality Interaction and Physical
+  Simulation (VRIPHYS)}, pages 1--8. The Eurographics Association, 2017.
+\newblock \doi{10.2312/vriphys.20171078}.
+
+\bibitem[Gray(1968)]{gray1968}
+William~M. Gray.
+\newblock Global view of the origin of tropical disturbances and storms.
+\newblock \emph{Monthly Weather Review}, 96\penalty0 (10):\penalty0 669--700,
+  1968.
+\newblock \doi{10.1175/1520-0493(1968)096<0669:GVOTOO>2.0.CO;2}.
+
+\bibitem[Harris et~al.(2003)Harris, Baxter, Scheuermann, and
+  Lastra]{harris2003}
+Mark~J. Harris, William~V. Baxter, Thorsten Scheuermann, and Anselmo Lastra.
+\newblock Simulation of cloud dynamics on graphics hardware.
+\newblock In M.~Doggett, W.~Heidrich, W.~Mark, and A.~Schilling, editors,
+  \emph{Graphics Hardware 2003}, pages 92--101. The Eurographics Association,
+  2003.
+\newblock URL \url{https://diglib.eg.org/handle/10.2312/EGGH.EGGH03.092-101}.
+
+\bibitem[Held and Hou(1980)]{held1980}
+Isaac~M. Held and Arthur~Y. Hou.
+\newblock Nonlinear axially symmetric circulations in a nearly inviscid
+  atmosphere.
+\newblock \emph{Journal of the Atmospheric Sciences}, 37\penalty0 (3):\penalty0
+  515--533, 1980.
+\newblock \doi{10.1175/1520-0469(1980)037<0515:NASCIA>2.0.CO;2}.
+
+\bibitem[Hersbach et~al.(2020)Hersbach, Bell, Berrisford, Hirahara,
+  Hor{\'a}nyi, Mu{\~n}oz-Sabater, et~al.]{hersbach2020}
+Hans Hersbach, Bill Bell, Paul Berrisford, Shoji Hirahara, Andr{\'a}s
+  Hor{\'a}nyi, Joaqu{\'i}n Mu{\~n}oz-Sabater, et~al.
+\newblock The {ERA5} global reanalysis.
+\newblock \emph{Quarterly Journal of the Royal Meteorological Society},
+  146\penalty0 (730):\penalty0 1999--2049, 2020.
+\newblock \doi{10.1002/qj.3803}.
+
+\bibitem[Hillaire(2016)]{hillaire2016}
+S{\'e}bastien Hillaire.
+\newblock Physically based sky, atmosphere and cloud rendering in {F}rostbite.
+\newblock Physically Based Shading in Theory and Practice, SIGGRAPH 2016
+  Course, 2016.
+\newblock URL
+  \url{https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/s2016_pbs_frostbite_sky_clouds.pdf}.
+
+\bibitem[Holland(1980)]{holland1980}
+Greg~J. Holland.
+\newblock An analytic model of the wind and pressure profiles in hurricanes.
+\newblock \emph{Monthly Weather Review}, 108\penalty0 (8):\penalty0 1212--1218,
+  1980.
+\newblock \doi{10.1175/1520-0493(1980)108<1212:AAMOTW>2.0.CO;2}.
+
+\bibitem[Holton and Hakim(2013)]{holton2013}
+James~R. Holton and Gregory~J. Hakim.
+\newblock \emph{An Introduction to Dynamic Meteorology}.
+\newblock Academic Press, 5th edition, 2013.
+\newblock ISBN 978-0-12-384866-6.
+
+\bibitem[Hoskins and Hodges(2002)]{hoskins2002}
+Brian~J. Hoskins and Kevin~I. Hodges.
+\newblock New perspectives on the {N}orthern {H}emisphere winter storm tracks.
+\newblock \emph{Journal of the Atmospheric Sciences}, 59\penalty0 (6):\penalty0
+  1041--1061, 2002.
+\newblock \doi{10.1175/1520-0469(2002)059<1041:NPOTNH>2.0.CO;2}.
+
+\bibitem[Hoskins and Valdes(1990)]{hoskins1990}
+Brian~J. Hoskins and Paul~J. Valdes.
+\newblock On the existence of storm-tracks.
+\newblock \emph{Journal of the Atmospheric Sciences}, 47\penalty0
+  (15):\penalty0 1854--1864, 1990.
+\newblock \doi{10.1175/1520-0469(1990)047<1854:OTEOST>2.0.CO;2}.
+
+\bibitem[Kaspi and Showman(2015)]{kaspi2015}
+Yohai Kaspi and Adam~P. Showman.
+\newblock Atmospheric dynamics of terrestrial exoplanets over a wide range of
+  orbital and atmospheric parameters.
+\newblock \emph{The Astrophysical Journal}, 804\penalty0 (1):\penalty0 60,
+  2015.
+\newblock \doi{10.1088/0004-637X/804/1/60}.
+
+\bibitem[Klein and Hartmann(1993)]{klein1993}
+Stephen~A. Klein and Dennis~L. Hartmann.
+\newblock The seasonal cycle of low stratiform clouds.
+\newblock \emph{Journal of Climate}, 6\penalty0 (8):\penalty0 1587--1606, 1993.
+\newblock \doi{10.1175/1520-0442(1993)006<1587:TSCOLS>2.0.CO;2}.
+
+\bibitem[{meteoblue}(n.d.)]{meteoblue_msfs}
+{meteoblue}.
+\newblock meteoblue live weather data in {M}icrosoft {F}light {S}imulator.
+\newblock meteoblue blog (vendor page, undated), n.d.
+\newblock URL
+  \url{https://www.meteoblue.com/en/blog/article/show/40088_meteoblue+live+weather+data+in+Microsoft+Flight+Simulator}.
+\newblock Accessed 2026-11-19.
+
+\bibitem[Paradise et~al.(2022)Paradise, Macdonald, Menou, Lee, and
+  Fan]{paradise2022}
+Adiv Paradise, Evelyn Macdonald, Kristen Menou, Christopher Lee, and Bo~Lin
+  Fan.
+\newblock {ExoPlaSim}: Extending the {P}lanet {S}imulator for exoplanets.
+\newblock \emph{Monthly Notices of the Royal Astronomical Society},
+  511\penalty0 (3):\penalty0 3272--3303, 2022.
+\newblock \doi{10.1093/mnras/stac172}.
+
+\bibitem[Rex(1950{\natexlab{a}})]{rex1950a}
+Daniel~F. Rex.
+\newblock Blocking action in the middle troposphere and its effect upon
+  regional climate. {I}. {A}n aerological study of blocking action.
+\newblock \emph{Tellus}, 2\penalty0 (3):\penalty0 196--211, 1950{\natexlab{a}}.
+\newblock \doi{10.1111/j.2153-3490.1950.tb00331.x}.
+
+\bibitem[Rex(1950{\natexlab{b}})]{rex1950b}
+Daniel~F. Rex.
+\newblock Blocking action in the middle troposphere and its effect upon
+  regional climate. {II}. {T}he climatology of blocking action.
+\newblock \emph{Tellus}, 2\penalty0 (4):\penalty0 275--301, 1950{\natexlab{b}}.
+\newblock \doi{10.1111/j.2153-3490.1950.tb00339.x}.
+
+\bibitem[Rhines(1975)]{rhines1975}
+Peter~B. Rhines.
+\newblock Waves and turbulence on a beta-plane.
+\newblock \emph{Journal of Fluid Mechanics}, 69\penalty0 (3):\penalty0
+  417--443, 1975.
+\newblock \doi{10.1017/S0022112075001504}.
+
+\bibitem[Richardson(1981)]{richardson1981}
+C.~W. Richardson.
+\newblock Stochastic simulation of daily precipitation, temperature, and solar
+  radiation.
+\newblock \emph{Water Resources Research}, 17\penalty0 (1):\penalty0 182--190,
+  1981.
+\newblock \doi{10.1029/WR017i001p00182}.
+
+\bibitem[Rossby(1945)]{rossby1945}
+C.-G. Rossby.
+\newblock On the propagation of frequencies and energy in certain types of
+  oceanic and atmospheric waves.
+\newblock \emph{Journal of Meteorology}, 2\penalty0 (4):\penalty0 187--204,
+  1945.
+\newblock \doi{10.1175/1520-0469(1945)002<0187:OTPOFA>2.0.CO;2}.
+
+\bibitem[Rossby et~al.(1939)Rossby, Willett, Holmboe, Namias, Page, and
+  Allen]{rossby1939}
+C.-G. Rossby, H.~C. Willett, J.~Holmboe, J.~Namias, L.~Page, and R.~Allen.
+\newblock Relation between variations in the intensity of the zonal circulation
+  of the atmosphere and the displacements of the semi-permanent centers of
+  action.
+\newblock \emph{Journal of Marine Research}, 2\penalty0 (1):\penalty0 38--55,
+  1939.
+\newblock \doi{10.1357/002224039806649023}.
+
+\bibitem[Schneider(2022)]{schneider2022}
+Andrew Schneider.
+\newblock Nubis, evolved: Real-time volumetric clouds for skies, environments,
+  and {VFX}.
+\newblock Advances in Real-Time Rendering in Games, SIGGRAPH 2022 Course, 2022.
+\newblock URL \url{https://www.guerrilla-games.com/read/nubis-evolved}.
+
+\bibitem[Schneider(2023)]{schneider2023}
+Andrew Schneider.
+\newblock Nubis$^3$: Methods (and madness) to model and render immersive
+  real-time voxel-based clouds.
+\newblock Advances in Real-Time Rendering in Games, SIGGRAPH 2023 Course, 2023.
+\newblock URL \url{https://advances.realtimerendering.com/s2023/index.html}.
+
+\bibitem[Schneider and Vos(2015)]{schneider2015}
+Andrew Schneider and Nathan Vos.
+\newblock The real-time volumetric cloudscapes of {H}orizon: {Z}ero {D}awn.
+\newblock Advances in Real-Time Rendering in Games, SIGGRAPH 2015 Course, 2015.
+\newblock URL \url{https://advances.realtimerendering.com/s2015/index.html}.
+
+\bibitem[Schneider and Vos(2017)]{schneider2017}
+Andrew Schneider and Nathan Vos.
+\newblock Nubis: Authoring real-time volumetric cloudscapes with the {D}ecima
+  engine.
+\newblock Advances in Real-Time Rendering in Games, SIGGRAPH 2017 Course, 2017.
+\newblock URL \url{https://advances.realtimerendering.com/s2017/}.
+
+\bibitem[Schneider(2006)]{schneider2006}
+Tapio Schneider.
+\newblock The general circulation of the atmosphere.
+\newblock \emph{Annual Review of Earth and Planetary Sciences}, 34:\penalty0
+  655--688, 2006.
+\newblock \doi{10.1146/annurev.earth.34.031405.125144}.
+
+\bibitem[Schultz and Vaughan(2011)]{schultz2011}
+David~M. Schultz and Geraint Vaughan.
+\newblock Occluded fronts and the occlusion process: A fresh look at
+  conventional wisdom.
+\newblock \emph{Bulletin of the American Meteorological Society}, 92\penalty0
+  (4):\penalty0 443--466, 2011.
+\newblock \doi{10.1175/2010BAMS3057.1}.
+
+\bibitem[Shapiro and Keyser(1990)]{shapiro1990}
+M.~A. Shapiro and Daniel Keyser.
+\newblock Fronts, jet streams and the tropopause.
+\newblock In Chester~W. Newton and Eero~O. Holopainen, editors,
+  \emph{Extratropical Cyclones: The Erik Palm{\'e}n Memorial Volume}, pages
+  167--191. American Meteorological Society, Boston, MA, 1990.
+\newblock \doi{10.1007/978-1-944970-33-8_10}.
+
+\bibitem[Showman et~al.(2009)Showman, Cho, and Menou]{showman2009}
+Adam~P. Showman, James Y-K. Cho, and Kristen Menou.
+\newblock Atmospheric circulation of exoplanets, 2009.
+\newblock URL \url{https://arxiv.org/abs/0911.3170}.
+
+\bibitem[Uccellini and Kocin(1987)]{uccellini1987}
+Louis~W. Uccellini and Paul~J. Kocin.
+\newblock The interaction of jet streak circulations during heavy snow events
+  along the east coast of the {U}nited {S}tates.
+\newblock \emph{Weather and Forecasting}, 2\penalty0 (4):\penalty0 289--308,
+  1987.
+\newblock \doi{10.1175/1520-0434(1987)002<0289:TIOJSC>2.0.CO;2}.
+
+\bibitem[Vallis(2017)]{vallis2017}
+Geoffrey~K. Vallis.
+\newblock \emph{Atmospheric and Oceanic Fluid Dynamics: Fundamentals and
+  Large-Scale Circulation}.
+\newblock Cambridge University Press, 2nd edition, 2017.
+\newblock \doi{10.1017/9781107588417}.
+
+\bibitem[Vallis et~al.(2018)Vallis, Colyer, Geen, Gerber, Jucker, Maher,
+  Paterson, Pietschnig, Penn, and Thomson]{vallis2018}
+Geoffrey~K. Vallis, Greg Colyer, Ruth Geen, Edwin Gerber, Martin Jucker,
+  Penelope Maher, Alexander Paterson, Marianne Pietschnig, James Penn, and
+  Stephen~I. Thomson.
+\newblock Isca, v1.0: A framework for the global modelling of the atmospheres
+  of {E}arth and other planets at varying levels of complexity.
+\newblock \emph{Geoscientific Model Development}, 11\penalty0 (3):\penalty0
+  843--859, 2018.
+\newblock \doi{10.5194/gmd-11-843-2018}.
+
+\bibitem[Walker and Schneider(2006)]{walker2006}
+Christopher~C. Walker and Tapio Schneider.
+\newblock Eddy influences on {H}adley circulations: Simulations with an
+  idealized {GCM}.
+\newblock \emph{Journal of the Atmospheric Sciences}, 63\penalty0
+  (12):\penalty0 3333--3350, 2006.
+\newblock \doi{10.1175/JAS3821.1}.
+
+\bibitem[Webanck et~al.(2018)Webanck, Cortial, Gu{\'e}rin, and
+  Galin]{webanck2018}
+A.~Webanck, Y.~Cortial, E.~Gu{\'e}rin, and E.~Galin.
+\newblock Procedural cloudscapes.
+\newblock \emph{Computer Graphics Forum}, 37\penalty0 (2):\penalty0 431--442,
+  2018.
+\newblock \doi{10.1111/cgf.13373}.
+
+\bibitem[Williams(1978)]{williams1978}
+Gareth~P. Williams.
+\newblock Planetary circulations: 1. barotropic representation of {J}ovian and
+  terrestrial turbulence.
+\newblock \emph{Journal of the Atmospheric Sciences}, 35\penalty0 (8):\penalty0
+  1399--1426, 1978.
+\newblock \doi{10.1175/1520-0469(1978)035<1399:PCBROJ>2.0.CO;2}.
+
+\bibitem[Willoughby and Rahn(2004)]{willoughby2004}
+H.~E. Willoughby and M.~E. Rahn.
+\newblock Parametric representation of the primary hurricane vortex. part {I}:
+  Observations and evaluation of the {H}olland (1980) model.
+\newblock \emph{Monthly Weather Review}, 132\penalty0 (12):\penalty0
+  3033--3048, 2004.
+\newblock \doi{10.1175/MWR2831.1}.
+
+\bibitem[Wood(2012)]{wood2012}
+Robert Wood.
+\newblock Stratocumulus clouds.
+\newblock \emph{Monthly Weather Review}, 140\penalty0 (8):\penalty0 2373--2423,
+  2012.
+\newblock \doi{10.1175/MWR-D-11-00121.1}.
+
+\bibitem[{World Meteorological Organization}(2017)]{wmo2017}
+{World Meteorological Organization}.
+\newblock International cloud atlas: Manual on the observation of clouds and
+  other meteors ({WMO}-no. 407).
+\newblock Online edition, 2017.
+\newblock URL \url{https://cloudatlas.wmo.int/}.
+
+\end{thebibliography}
