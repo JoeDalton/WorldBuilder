@@ -632,9 +632,12 @@ def test_the_cirrus_must_clear_the_union_of_the_genera(genera, monkeypatch):
         "tall",
         GenusPreset(CloudType.STRATUS, ("A", 0), slab=(500.0, 10800.0)),
     )
-    tall = replace(genera, genera=("convective", "tall"))
-    with pytest.raises(ValueError, match=r"clouds' top \(11300 m\)"):
+    # (no high layer: its own slab is checked first, test_clouds_high.py)
+    tall = replace(genera, genera=("convective", "tall"), high=())
+    with pytest.raises(ValueError, match=r"cirrus's base .* clouds' top \(11300 m\)"):
         check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(), None, tall)
     # The air's top still bounds the cirrus
-    with pytest.raises(ValueError, match="inside the air"):
-        check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(), 11500.0, genera)
+    with pytest.raises(ValueError, match="cirrus's top .* inside the air"):
+        check_layers(
+            CloudType.CUMULUS, 2200.0, CirrusSpec(), 11500.0, replace(genera, high=())
+        )

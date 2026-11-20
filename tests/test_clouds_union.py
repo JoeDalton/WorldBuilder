@@ -274,7 +274,8 @@ def test_the_shaders_share_the_genus_and_band_sizes():
     assert f"uniform vec4  uSkyBands[{MAX_SKY_BANDS}];" in field
     march = (SHADERS / "cloud_march.glsl").read_text()
     # Two segments a band, sorted; a genus loop per sample, one lighting path
-    assert "vec2 segments[2 * MAX_SKY_BANDS];" in march
+    assert "const int MAX_SEGMENTS = 2 * MAX_SKY_BANDS;" in march
+    assert "vec2 segments[MAX_SEGMENTS];" in march
     assert "weather = genusWeatherAt(g, p);" in march  # the genus loop
     assert "bool alone = (genera & (genera - 1)) == 0;" in march  # its fast path
     for gone in ("uFamilies", "otherWeather", "otherDeckLight", "cloudRadianceOther"):

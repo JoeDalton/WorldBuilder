@@ -258,8 +258,9 @@ cumulus species are depths of it, not genera of the march. The others are
 The default (`GeneraSpec()`) lists all six but has features only for the
 convective clouds and the stratus; the others are not marched there
 ([an empty genus is not marched](#the-recipe-genera)). The high layer
-(cirrus, cirrostratus, cirrocumulus) is still the cirrus sheet
-([the parts](#the-parts)).
+(cirrus, cirrostratus, cirrocumulus) is [a band of the march's own](#the-high-layer)
+above them, with its genera's recipes still to come; until they replace it,
+the cirrus sheet ([the parts](#the-parts)) draws the cirrus.
 
 Slabs may overlap: `march.sky_bands` merges them into at most four
 (`MAX_SKY_BANDS`) disjoint bands of sky, each with a bit mask of the genera
@@ -484,6 +485,21 @@ sparser discs a little farther. At 2560 x 1440 HIGH, offscreen, every pose
 takes 8.6-12.5 ms, above the showcase's 60 FPS: the cumulus row 12.2-12.5
 ms, the southern sheets 8.6 (St) to 10.4 ms (Sc) (performance §37, "Phase
 5 summary").
+
+The high genera have an overhead row (`SHOWCASE_HIGH`): the high layer
+(11-12.5 km) lies over the rows, so each is shot from the start's ground
+looking up at its own pitch (`SHOWCASE_HIGH_PITCH`), with the rows' clouds
+under the view's bottom edge or off its sides. The cirrostratus is a veil
+64 km wide to the west (bearing 280, 25 km), in the gap between the
+altocumulus (240) and the humilis (318). Its pose `genus_cirrostratus`
+looks 35° up at the sun, set at azimuth 280 for it, so the veil and its
+halo are seen around the sun. The cirrocumulus is a patch 12 km wide to
+the east-south-east (bearing 120, 16 km), over the low sheets and away
+from the cumulonimbus's anvil (60). Its pose `genus_cirrocumulus` looks 34°
+up at it. Ruling: the high discs never overlap each other (a test checks,
+and that every low feature's top is under each pose's view or off its
+sides). The low clouds under the cirrostratus's west edge (the humilis)
+are never in its pose's view. The cirrus's slot is Task 23's.
 
 **Not yet, for the convective clouds.** The anvil does not lean downwind with height (a shear; it is
 the genus framework's, docs/superpowers/plans/2026-11-15-cloud-genera.md).
@@ -730,6 +746,317 @@ takes the generic genus loop, not the band's own (performance §37).
   march's local steps) leave the recipe genera out (above, "Where the
   recipe is evaluated"): they shade the ground only through the light
   volume and the shadow maps.
+
+## The high layer
+
+The high genera (cirrus, cirrostratus, cirrocumulus: `genera.HIGH_CHANNELS`,
+`GeneraSpec.high`) are thin layers: a cirrostratus's optical depth is
+0.03-0.3. They are not genera of the union march. They have **a sky band of
+their own**, `GeneraSpec.high_slab` (`genera.HIGH_SLAB`, 11-12.5 km), which
+the march crosses in **one sample**, not in steps (a "thin-layer
+path", as cloud_genera_research.md §4 recommends for Ci, Cs and Cc).
+
+**Its slab** is 11-12.5 km, above the convective clouds' top (10.5 km) with a
+gap of 500 m, so `march.sky_bands` never merges it with their band, and an
+anvil's top and the high layer never share a sample. Real cirrus spans about
+6-12 km at mid-latitudes; here it must clear the anvils. Inside the slab one
+band could give each genus a height of its own later.
+`planet.check_layers` refuses a high slab whose base is not above the union's
+top, or whose top is not inside the air. The cirrus sheet (11-12 km) may lie
+inside it: the sheet is what the high layer replaces, and both draw until it
+does. `PlanetClouds.top_radius` counts the high slab while it is drawn.
+
+Rejected:
+
+- **High genera as genera of the union march.** In a band shared with
+  others, each genus costs 0.35-0.4 ms in the genus loop (performance §37),
+  and a band of their own would still march it in steps (the step budget,
+  the light volume's 32 slices, the bakes' samples), where one or two
+  samples hold a layer 1.5 km thick.
+- **Inside the convective band** (cirrus at 8-10 km, as the research's
+  table has it): the anvils and the cirrus would share the genus loop.
+
+**The crossings** (`highCrossing` in `cloud_march.glsl`; the CPU mirrors are
+`march.band_segments`' `high`, `slab_segments` and `thin_optical_depth`):
+
+- The high slab gives up to two segments of the ray, like a band's. They are
+  **not sorted among the bands' segments**: a ray's height along it is
+  convex and the slab is above every band, so its crossing on the way down
+  comes before every band's segment and its crossing on the way up after
+  every one (`band_segments`' order, its test). The march composites the
+  first before its segment loop and the second after it. An anvil in front
+  of the high layer hides it (from the ground). The high layer in front of
+  a tower veils it (from above the slab). Sorted among them (two more
+  segments, the crossing inlined in the segments' loop) the high variant
+  cost the low clouds 0.1-0.2 ms more, with the crossing's own work about
+  nothing (performance §37, "Task 23").
+- Everything is read once a crossing, at its **sheet point**: where the ray
+  crosses the slab's middle (`sheetCrossing`, `march.sheet_crossing`; the
+  crossing's middle where it does not). The coverage (cube B's channels
+  1-3, cirrus, cirrostratus and cirrocumulus, in one fetch) and every
+  genus's pattern, as a thin sheet's: jittered samples through the slab
+  would wander a slant ray over its 1.5 km, many grains of 200 m or fibres
+  of 180 m, and the visits would blur them (and shimmer in motion).
+- Each genus has optics of its own (`genera.HIGH_OPTICS`): a full veil's
+  optical depth straight through the slab (`uHighExtinction`, per metre)
+  and what a crossing's saturates toward (`uHighCap`). The genera's depths
+  over the crossing's path add. The cap is theirs, weighted by their
+  shares (`march.high_optical_depth`). The path is at most
+  `THIN_GRAZING_PATH` (4) slab depths, and the depth saturates softly, as
+  the sheet's does. Otherwise a veil turns into a flat plate toward the
+  horizon.
+- The high segments take none of the step budget, and the march stops at
+  them, as at any step, once the ray is opaque.
+- A feature finer than a pixel's footprint fades to its mean (`resolved()`,
+  as the low clouds' octaves do). On the sheet, the footprint is the view
+  pixel's stretched by the slant, over the cosine of the ray's angle to the
+  vertical (at least `HIGH_MIN_INCIDENCE`, 0.05: `march.slab_footprint`).
+  At a grazing angle a pixel spans many grains along the view, though few
+  across it. The step's fade does not apply: the samples are not a comb of
+  steps.
+
+**The cirrostratus** (`cover.g`; research §3: a transparent whitish veil,
+the sun's outline plain through it, its 22° halo):
+
+- density `cover × swell × fibres`, each about 1. The swells are value
+  noise with features 25 km across the upper jet and 6 times longer along
+  it (`CS_FEATURE`, `CS_STRETCH`: the research's 50-200 km, stretched 5-10
+  times), moving the density by about a fifth. The fibres are 1.5 km
+  across and 12 times longer (`CS_FIBRE`), fainter still. Both fade out
+  where the footprint does not resolve them.
+- Its full veil's optical depth is 0.2 straight up (the research's 0.03-0.3
+  for the thin layers), its cap 1.2: about 13 % of the light, so the sun
+  stays plain through it, and up to about 0.6 at a grazing angle, milky
+  toward the horizon.
+- **The 22° halo** is a term of its phase (`haloRing` in
+  `cloud_shading.glsl`, by the cirrostratus's share of the crossing's
+  depth, `HighOptics.halo` 1): a ring 22° from the sun, sharp inside
+  (light refracts through the crystals' 60° prisms by no less), fading out
+  over a few degrees outside. It costs one `acos` a crossing.
+- **The jet** (`uHighJet`, `genera.high_jet`) is the upper wind at the
+  genera's focus (`GeneraSpec.wind`, else `upper_wind_at`), one axis for the
+  whole layer, as the recipe genera's shared axis. Far from the focus
+  (thousands of kilometres) the stretch drifts off the local wind. The
+  cirrus follows the wind's own form on the GPU (below); the cirrostratus
+  and the cirrocumulus keep the one axis (their stretch, `alongJet`, and
+  the cirrocumulus's ripple phase, `dot(q, jet)`, are linear in the
+  position: with an axis that turns over the planet, `|q|` of 600 km times
+  its turn would shear them).
+
+**The cirrocumulus** (`cover.b`; the WMO: small white flakes, grains or
+ripples without shading, regularly arranged, each under 1° wide):
+
+- grains of the Worley cells (`cloudCells`) 200 m across (`CC_CELL`: 1°
+  from 11 km below), `smoothstep(CC_GRAIN, 1 - F1)`. These are round
+  flakes with sky between, their sizes varied by the slice through the
+  3D cells.
+- In rows: the grains' density is moved by a sine whose crests lie across
+  the jet, 600 m apart (`CC_RIPPLE`, undulatus), bent and thinned by a
+  slow noise 4 km across (`CC_FILL`).
+- A grain is 1.2 optical depth at its core. Lit as a thin slab it has no
+  self-shading: white flakes, not altocumulus's shaded lumps (5 times
+  larger, at 350 m, and 3.5-3.8 km up: about 6° each).
+- **The fade:** where a pixel's footprint resolves fewer than 2-4 of a
+  cell, the grains are their mean (`uHighShape.x`,
+  `march.cirrocumulus_grain_mean`: about a fifth), and the ripple and the
+  fill their 1. A far patch is then a faint veil of the same optical depth
+  (`march.cirrocumulus_grains`, its test).
+
+#### The cirrus
+
+The cirrus (`cover.r`; `cirrusStreaks` in `cloud_march.glsl`, its CPU
+mirror `march.cirrus_streaks`) replaces the old sheet's baked stamps, whose
+square patches showed. WMO: detached white filaments, patches or bands,
+fibrous or silky, often with hooks (uncinus) or tufts (floccus), fall
+streaks slanted by the shear. The research's recipe (§2, "Cirrus in
+practice"): noise warped along the flow plus curl, stretched 8-20 times
+along it, tails from taps along the flow, heads as tufts. The earlier
+per-pixel cirrus (noise across the stream function's contours) gave
+regular parallel bands; each part below breaks them.
+
+**The upper wind on the GPU** (`highWind`, `genera.high_wind_cube`): an
+RGBA32F cube map 128 texels a face (7.4 km on a 600 km planet) of the
+wind (planet frame, the jets' fastest 1, `genera.upper_wind_field`, which
+is `upper_wind_at` for many directions at once) and its **stream
+function** (`genera.upper_stream`, metres: the weather's
+`stream_function`, or a uniform wind's with `GeneraSpec.wind` set). It is
+built in the pool with coverage cube B. 32 bits: the stream function
+spans hundreds of kilometres and the fibres need it to metres.
+
+**The flow's frame** (`cirrusFlow`, `march.cirrus_flow`): the noise is
+read at `(q + δ) / length + axis × ψ / width`. The stream function ψ is the
+across-the-wind coordinate. It is constant along a streamline, so the
+features follow the wind as it turns, around the lows too, with no seam
+and no local frame: the streaks curve with the jets. The position gives
+the along coordinate (and a little of the across). A width W across and
+length L along make features L/W times longer along the wind where it
+blows at the jets' speed; slower wind widens them (ψ's gradient is the
+speed). `axis` (`CI_PSI_AXIS`) is off the noise's lattice, so the
+pattern never repeats across the wind. A shift δ moves ψ by
+`-speed × across · δ` (ψ's gradient), so the taps and the warp need no
+other fetch.
+
+**The domain warp**: the curl noise (`uCurlNoise`) moves the frame by up
+to 1.5 km with features 12 km across (`CI_WARP`, `CI_CURL`): the streaks
+meander and their spacing varies. A second, fine warp (180 m, features
+2.5 km: `CI_WARP_FINE`) bends the fibres, strands and tufts: they wiggle,
+merge and split. Without it the strands were straight, evenly spaced
+lines: the old regular bands.
+
+**The parts** (`march.CI_*`, each its width across the wind and length
+along it, and its smoothstep window on the value noise):
+
+- **Patches** 9 x 30 km (`CI_PATCH`), moved down by 0.55 × the coverage
+  (`CI_PATCH_COVER`): their share of the sheet is about the coverage (0.2
+  gives 0.20, 0.5 gives 0.52, 0.8 gives 0.84), the meaning of the
+  weather's cirrus cover map (the sheet's). The coverage thins the
+  patches. It does not scale the density, which only fades in over its
+  first 0.1 (`CI_COVER_EDGE`): a sky of 0.2 cover holds fewer streaks,
+  not fainter ones.
+- **Fibres** 180 m x 6 km (`CI_FIBRE`, 33 times longer: the research's
+  8-20 and more), in **bundles** 1.2 x 4.5 km (`CI_CLUMP`) that taper out
+  along the wind.
+- **Strands** 70 m x 900 m (`CI_SHEEN`, `CI_STRAND_WINDOW`): thin lines,
+  the fibrous texture of the fibres and the tails (`CI_STRAND_FLOOR` 0.15
+  of their density between the strands).
+- **Tufts** 400 x 650 m (`CI_TUFT`), sparse: where the heads are
+  (uncinus hooks, floccus). **Tails**: the tufts at 5 taps 380 m apart
+  downwind, each `35 k²` m across the wind at tap k (`CI_TAIL_STEP`,
+  `CI_HOOK`: the fall streak's shear bends the tail into a hook),
+  weighted `(1 - k/6)^1.3`, averaged (a line integral: a smooth tail, not
+  the head's copies, which the maximum of the taps showed), times the
+  strands. The tufts lead and the tails lag upwind, as the sheet's did.
+- **Heads** (`CI_HEAD_*`, `CI_FAN`; reworked after Task 23, whose heads,
+  the tuft noise through a narrow window at density 1, read as solid
+  rounded blobs and, from overhead and 14 km up, as smeared chevrons). The
+  WMO's heads, and the user's reference photo, are fibrous themselves: the
+  fibres open up at the head. So the head is no separate lobe:
+  - **The fan.** The taps fan out toward the head. Each fibre shifts them
+    across the wind by its share of 500 m (the fibre noise about its mean,
+    signed), most at tap 0 and none at the tail's end. The fibres meet the
+    head at different places and splay out there like a broom, and run
+    together downstream. This is a shape at the fibres' and the tufts'
+    scale (180-650 m), so a pixel still resolves it from 14 km.
+  - **The head's density**: a wide window (0.60-1.00) on the tuft noise at
+    tap 0, so its edge falls off over the whole tuft, with no outline. Its
+    outline is frayed along the fibres (their noise moves it, 0.25). It is
+    striated by the strands (0.2 between them) and at most 1.2: about 1.8
+    optical depth at a strand's core, translucent around it.
+  - The fan takes the fibre noise (180 m), not the strands' (70 m): with
+    the strands' the taps of neighbouring pixels scattered in the texture
+    cache, +0.4 ms at `genus_cirrus_overhead`. It adds no fetch.
+  - **Rejected, by the shots**: a splay of the strands by the head's mask
+    (300 m folded them into loops and eyelets, 90 m did nothing); fine curly
+    wisps for the head's texture (90 x 220 m read as cottony puffs, ridged
+    70 x 500 m as marbled rings and crescents, 120 x 700 m as crescents).
+    The mask's outline showed through every texture. Far away the fine
+    noise is faded anyway (below), and only the coarse shape remains.
+- The density: `patches × min(head + 1.6 tail × strands + fibres ×
+  strands, 1.3)`: mostly sky, the heads and the fibres 0.2-1.
+
+**Fading** (`resolved()`, 2-4 footprints a feature): each part fades to
+its mean over the sheet (`march.cirrus_means`: `uHighCirrus`, and the
+tufts' `uHighShape.w`), so a far patch keeps its optical depth, and the
+tails' taps are skipped where the tufts are not resolved. The fibres, the
+strands and the patches fade by the footprint **across and along the wind
+apart** (`footprintAlong`, `march.footprint_along`): the slant stretches
+a pixel's footprint along the view, not across it, so fibres running
+across a grazing view stay sharp toward the horizon, and fibres running
+along it fade before they alias. The tufts (nearly round) fade by the
+slant's footprint. Without this the far cirrus was a faint uniform haze
+where the sheet showed streaks.
+
+**Optics** (`HIGH_OPTICS["cirrus"]`): a full density 1.5 optical depth
+straight through, so a head's strands up to about 1.8 and the fibres 0.3-1 (the research's
+0.03-3, SIRTA's typical 0.1-1), the sheet's cap 2.5, and a faint 22° halo
+(0.4, the cirrostratus's 1): it shows only where a streak is, "fragments
+of a halo".
+
+**The showcase**: a cirrus field 80 km wide 90 km north
+(`genera.SHOWCASE_HIGH`), beyond the cumulus row (the cirrostratus's veil
+reaches over the start, the cirrocumulus and the anvil fill the east).
+Its poses stand under its near edge, 55 km north
+(`SHOWCASE_HIGH_EYE`), the row behind: `genus_cirrus` (40° up),
+`genus_cirrus_overhead` (under its centre, straight up: its pattern
+top-down), `genus_cirrus_grazing` (10° up).
+
+**The weather's cirrus** (`--cirrus`): the default scene's cirrus is still
+the old sheet (`--cirrus sheet`), fed by `weather.cirrus_cover_map` and the
+upper wind. `--cirrus march` draws it with the march instead
+(`GeneraSpec.cirrus_weather`: the cover map fills cube B's channel 1,
+under the features, and compiles the high layer); `--cirrus none` (or
+`--no-cirrus`) neither. The two draw the same cover, so Task 24 can compare
+them before the sheet goes. The march's costs less (performance §37, "Task
+23").
+
+#### The light, the shadows, the cost
+
+**The light** is the cirrus sheet's (`thinSlabRadiance` in
+`cloud_shading.glsl`, which `cirrus.frag` uses too):
+
+- no sun march, the sunward half of the slab's own depth instead;
+- the cirrus optics' phase (ice, strongly forward);
+- the sky, plus the sun's light scattered about as fill;
+- the twilight of the lit air above once the slab is in the planet's shadow.
+
+The sun's reddening and the twilight come from `planetCloudLight` at the
+crossing's middle, at the high layer's own height. So it stays lit, and
+reddens, after the cumulus below has gone grey. Like the low clouds in the
+march (and unlike the sheet), it takes no eclipse or mountain shadow on its
+sunlight.
+
+**Shadows: none.** The high layer casts no shadow, into the light volume or
+the cloud shadow maps, so it does not darken the ground or the clouds below.
+The cirrus sheet cast none either. At 0.03-0.3 a full veil would take 2-19 %
+of the sun. Through the light volume it would cost a band of 32 slices for
+that. If a thick cirrostratus deck should dim the ground, its depth fits the
+shadow maps' chord alone. That would be a term in the bakes, not in the
+volume.
+
+**What costs nothing.** `genera.high_genera(spec, covered=True)` lists the
+high genera a feature covers. With none (the demo's default) the march
+compiles no high layer at all: it keeps `cloud_march.frag`
+(`march.march_fragment`, as for the recipes). With one, it compiles
+`cloud_march_high.frag` or `cloud_march_recipes_high.frag` (`CLOUD_HIGH`)
+and builds coverage cube B (and the upper wind's cube) even if no other
+genus reads it. At 2560 x 1440 (performance §37, "Task 23"): a
+cirrostratus filling the view costs about 0.3 ms, the showcase's
+cirrocumulus patch 0.2-0.25 ms, the cirrus field filling the view 0.3-0.35
+ms; the weather's cirrus by the march 0.2 ms, against the old sheet's
+0.35-0.55 ms. (Tasks 21-22 measured about 1.0 and 0.8 ms in a session
+that drifted by 1 ms; the crossings sorted among the segments cost
+0.1-0.2 ms of the difference.)
+
+With `--cirrus march`, the `high_cb`, `high_overhead`, `high_grazing` and
+`high_above` poses show the weather's cirrus toward the cumulonimbus:
+behind the anvil, overhead, at a grazing angle and from 14 km up through
+it.
+
+#### Not yet, for the high layer
+
+- **The sheet's removal** with the comparison of `--cirrus sheet` and
+  `march` (Task 24).
+- **The cirrus's species as choices** (fibratus, uncinus, spissatus,
+  castellanus, floccus): one recipe mixes the fibres and the hooked tufts;
+  no spissatus (dense, greyish) or castellanus (turrets).
+- **The heads' turbulent texture**: the reference photo's dense, curly
+  floccus wisps at the head (every texture tried showed the mask's
+  outline, or made puffs, rings or crescents). Far away the heads are soft
+  lobes: their fine noise fades to its mean before the mask's window, so
+  only the coarse shape remains (a general fix, widening a window by the
+  faded terms' spread, is to be discussed).
+- **The fall streaks' parallax**: the hook is in the sheet (read at its
+  middle); seen from the side no streak hangs below the heads.
+- **The cirrostratus and the cirrocumulus on the GPU wind** (one jet axis:
+  their patterns are linear in the position).
+- **A height of each genus's own** inside the slab (the cirrocumulus
+  lowest, the cirrus highest): all share its middle.
+- **The cirrocumulus's species** (stratiformis, lenticularis,
+  castellanus, floccus) and the cirrostratus's other halo arcs (the
+  parhelia, the 46° halo).
+- **Its own toggle in the showcase** (keys 1-9 hide the march's genera, not
+  the high layer).
+- **The sea's reflection** sees the deck only, without the high layer.
 
 ## The raymarch
 

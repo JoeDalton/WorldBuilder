@@ -271,6 +271,15 @@ def build_coverage_texture(cube: np.ndarray) -> Texture:
     return tex
 
 
+def build_high_wind_texture(cube: np.ndarray) -> Texture:
+    """The upper wind (:func:`genera.high_wind_cube`: the wind, its stream
+    function) as an RGBA32F cube map, linearly filtered (``highWind``): the
+    stream function needs 32 bits (hundreds of kilometres, to metres)."""
+    tex = build_weather_texture(cube)
+    tex.set_name("cloud_high_wind")
+    return tex
+
+
 def build_shift_texture(tables: list) -> Texture:
     """The genera's coverage-to-shift tables (:func:`shift_table`) as one
     R32F texture, a row each (``genusShift``: x the coverage, linearly

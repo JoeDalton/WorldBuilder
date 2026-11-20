@@ -2318,6 +2318,212 @@ throwaway `ground`). The two runs differ by 0.06 ms at most.
 - **The showcase against Task 18's offscreen row:** within 0.1 ms at every
   pose.
 
+### Task 20: the high layer's thin-layer path (offscreen)
+
+This adds the high layer's band (11-12.5 km) and its crossings, with one or
+two samples, no sun march and a placeholder veil (clouds.md, "The high
+layer"). These are **offscreen** (`--offscreen`) times at 2560 x 1440,
+HIGH, RTX 3070, from the user's start (`--start 29.7159 29.8232`), the
+means of 60 frames. Each run's first pose is dropped (`ground`).
+
+**No high genus covered (the demo):** the march compiles the same shader
+as before (`CLOUD_HIGH` off). The tree before (HEAD, exported) and after
+ran interleaved, twice each:
+
+| Pose | Before | After | |
+|---|---|---|---|
+| `cirrus_overhead` | 6.36, 6.35 ms | 6.30, 6.26 ms | -0.08 ms |
+| `cirrus_grazing` | 10.73, 10.68 ms | 10.67, 10.67 ms | -0.04 ms |
+| `genera_cb` | 10.75, 10.73 ms | 10.60, 10.65 ms | -0.12 ms |
+| `genera_congestus` | 10.94, 10.63 ms | 10.59, 10.63 ms | -0.18 ms |
+| `clouds_noon` | 9.46, 9.47 ms | 9.48, 9.49 ms | +0.02 ms |
+
+The "after" times are within the noise or below it. A first, earlier pair
+of runs of the tree before gave 6.30-6.31, 10.63-10.85, 10.55-10.56,
+10.53-10.54 and 9.37-9.41 ms: the session drifts by about 0.2 ms. The shots
+against before: mean difference 0.67-0.85 levels for the cirrus and genera
+poses, 0.27-0.36 for `clouds_noon`, p99 1-8, against 0.39-0.54 before
+against itself. The excess is the march's jitter on the cumulus. The sky,
+where the cirrus sheet draws (its light now through `thinSlabRadiance`),
+does not differ.
+
+**The placeholder in view** (`--high-placeholder`, a cirrus feature 150 km
+across over the cumulonimbus), against the same poses without it. Both ran
+`--no-cirrus`, interleaved, twice each:
+
+| Pose | Without | With | |
+|---|---|---|---|
+| `high_cb` | 8.30, 8.33 ms | 8.59, 8.59 ms | +0.28 ms |
+| `high_overhead` | 5.98, 5.96 ms | 6.27, 6.24 ms | +0.29 ms |
+| `high_grazing` | 10.98, 11.04 ms | 11.21, 11.23 ms | +0.21 ms |
+| `high_above` | 6.62, 6.68 ms | 6.89, 6.91 ms | +0.25 ms |
+| `genera_cb` | 10.27, 10.38 ms | 10.63, 10.64 ms | +0.31 ms |
+
+The high path costs 0.2-0.3 ms where it covers the view. The cirrus sheet
+costs about as much (`cirrus_overhead` 6.30 ms with it, 5.97 ms without).
+This covers the coverage fetch, one or two noise reads, the crossing's light
+(`planetCloudLight`: the air's sunlight twice) and its share of
+`CLOUD_HIGH`'s code. The genera's recipes (Tasks 21-23) will add their own
+noise.
+
+### Tasks 21-22: the cirrostratus and the cirrocumulus (offscreen)
+
+These add the cirrostratus's veil and the cirrocumulus's grains to the high
+layer (clouds.md, "The high layer"). The times are **offscreen**
+(`--offscreen`) at 2560 x 1440, HIGH, RTX 3070, from the user's start
+(`--start 29.7159 29.8232`), the means of 60 frames. Each run's first pose
+is dropped (`ground`). This session drifted by up to 1 ms between runs, more
+than Task 20's.
+
+**The normal scenes** compile the plain variant, as before (no high genus
+covered). The tree before (Task 20's, copied) and after ran interleaved,
+twice each:
+
+| Pose | Before | After | |
+|---|---|---|---|
+| `genera_cb` | 11.56, 11.50 ms | 11.20, 11.24 ms | -0.31 ms |
+| `genera_congestus` | 11.27, 11.58 ms | 11.30, 11.38 ms | -0.09 ms |
+| `clouds_noon` | 11.13, 10.21 ms | 10.06, 11.30 ms | +0.01 ms |
+| `cirrus_overhead` | 6.98, 6.88 ms | 6.76, 7.10 ms | 0.00 ms |
+| `cirrus_grazing` | 11.96, 12.76 ms | 11.39, 12.08 ms | -0.63 ms |
+
+All of these are within the session's noise. The shots against before give
+a mean difference of 0.04-0.36 levels (p99 1-6), against 0.05-0.41 (p99
+1-5) for before against itself. Against Task 20's own shots the figures are
+the same.
+
+**The placeholder cirrus** (`--high-placeholder --no-cirrus`) goes through
+the reworked crossing (the coverage at the sheet point, the optics per
+channel). Before against after, interleaved, twice each:
+
+| Pose | Before | After |
+|---|---|---|
+| `high_overhead` | 6.78, 6.71 ms | 6.76, 6.76 ms |
+| `high_grazing` | 12.36, 12.55 ms | 12.58, 12.37 ms |
+
+It costs the same.
+
+**The new genera in view** (`--showcase --no-cirrus`): the showcase with
+its high features against the same tree with them left out (the plain
+variant). It ran four times without and three times with, interleaved.
+"No pattern" is a build whose cirrostratus is its coverage alone and
+whose cirrocumulus is its grains' mean. That isolates the patterns'
+noise from the crossing's cost.
+
+| Pose | Without | With | No pattern |
+|---|---|---|---|
+| `genus_cirrostratus` | 9.83-10.17 ms (9.96) | 10.85-11.18 ms (10.97) | 10.68-11.50 ms (10.74 median) |
+| `genus_cirrocumulus` | 9.90-10.43 ms (10.17) | 10.82-11.18 ms (10.97) | 10.34-10.65 ms (10.50) |
+
+- **The cirrostratus** costs about 1.0 ms where its veil fills the whole
+  view. Of that, its swells, fibres and halo are 0.1-0.2 ms. The rest is the
+  high path itself: the crossing, the variant, and the light at every pixel
+  of the view. That is more than the placeholder's 0.2-0.3 ms at
+  `high_overhead`, where low clouds share the view.
+- **The cirrocumulus** (a patch over a third of the view) costs about 0.8
+  ms. Its grains are about 0.45 ms: the Worley volume's RG32F trilinear
+  fetch, the slow noise and the ripple's `sin`.
+
+A smaller Worley texture (F1 alone, R16F) would cut the grains' fetch. It
+was not tried.
+
+### Task 23: the cirrus's flow streaks (offscreen)
+
+The times are **offscreen** (`--offscreen`) at 2560 x 1440, HIGH, RTX 3070,
+from the user's start (`--start 29.7159 29.8232`), the medians of 60
+frames. Each run's first pose is dropped (`ground`). This session was
+quiet: repeated runs agree within 0.05-0.1 ms.
+
+**Step 0: where the thin path's time went.** Tasks 21-22 measured about
+1 ms for a cirrostratus filling the view, its patterns 0.1-0.2 ms. Timed in
+one process, the poses settled once and debug bits toggled round-robin
+(temporary bits: no high segments at all; `highCrossing` returning at once;
+returning after the coverage fetch; everything but the composite; the
+existing 256, no lighting), every variant cost the same as the full
+crossing within 0.15 ms at `genus_cirrostratus`. The crossing's own work
+(the bookkeeping, the coverage fetch, `planetCloudLight`,
+`thinSlabRadiance`, the composite and the resolve's full path) is about
+nothing. What costs is the variant itself: `CLOUD_HIGH` grew the sorted
+segments from 8 to 10 and inlined `highCrossing` in the segments' loop,
+which slowed the low clouds' march everywhere. The high slab's crossings
+now stay out of the sorted segments, composited before and after their
+loop (clouds.md, "The high layer": a ray's height is convex). Interleaved,
+the tree before (Task 22's shader) against after, and the same poses with
+the showcase's high features left out (the plain variant):
+
+| Pose | Before | After | No high feature |
+|---|---|---|---|
+| `genus_cirrostratus` | 9.83, 9.95 ms | 9.78, 9.72 ms | 9.43 ms |
+| `genus_cirrocumulus` | 9.79, 9.93 ms | 9.72, 9.70 ms | 9.49 ms |
+
+The high path now costs about 0.3 ms over the plain variant (0.4-0.5 ms
+before). Most of Tasks 21-22's "1 ms" was that session's drift.
+
+**The normal scenes, sheet mode** (`--cirrus sheet`, the default; the
+plain variant, whose code the task did not change). The tree before
+(Task 22's shader) and after, interleaved, twice each:
+
+| Pose | Before | After |
+|---|---|---|
+| `genera_cb` | 10.53, 10.57 ms | 10.59, 10.53 ms |
+| `genera_congestus` | 10.53, 10.55 ms | 10.59, 10.53 ms |
+| `clouds_noon` | 9.47, 9.48 ms | 9.43, 9.50 ms |
+| `cirrus_overhead` | 6.35, 6.34 ms | 6.38, 6.35 ms |
+| `cirrus_grazing` | 10.71, 10.66 ms | 10.70, 10.63 ms |
+
+No regression.
+
+**The weather's cirrus by the march** (`--cirrus march`) against the sheet
+(`--cirrus sheet`) and neither (`--cirrus none`), interleaved, twice each
+(one run's `genera_congestus` in sheet mode, 11.32 ms, an outlier):
+
+| Pose | Sheet | March | None |
+|---|---|---|---|
+| `genera_cb` | 10.59, 10.59 ms | 10.43, 10.49 ms | |
+| `genera_congestus` | 10.55 ms | 10.42, 10.46 ms | |
+| `clouds_noon` | 9.63, 9.42 ms | 9.34, 9.29 ms | |
+| `cirrus_overhead` | 6.39, 6.34 ms | 6.02, 6.03 ms | 5.81 ms |
+| `cirrus_grazing` | 10.70, 10.64 ms | 10.53, 10.51 ms | |
+| `cirrus_up` | 6.71, 6.71 ms | 6.57, 6.59 ms | 6.35 ms |
+
+The march's cirrus costs about 0.2 ms over none, 0.1-0.35 ms **less** than
+the sheet (which costs 0.35-0.55 ms): the target (no more than about 0.5
+ms over the sheet) is met with room. Its streaks are sparse at the demo's
+cover (about 0.2), and the tails' taps are skipped where the tufts are not
+resolved.
+
+**The showcase's cirrus** (`--showcase --no-cirrus`), against the same
+poses with the high features left out:
+
+| Pose | With | No high feature |
+|---|---|---|
+| `genus_cirrus` (the field filling the view) | 8.69, 8.72, 8.78 ms | 8.41 ms |
+| `genus_cirrus_overhead` | 8.71 ms | |
+| `genus_cirrus_grazing` | 8.30 ms | |
+
+About 0.3-0.35 ms where the field fills the view: the variant's 0.25-0.3
+ms plus the streaks' noise (up to 12 fetches a crossing: the wind, two
+curl reads, the patches, fibres, bundles, strands and six tufts).
+
+**The heads reworked** (fibrous, fanned: clouds.md, "The cirrus"), Task
+23's tree against after, interleaved (a session drifting by ±0.4 ms):
+`genus_cirrus` 8.69, 8.74, 9.41 ms before, 8.72, 9.09, 8.74 after;
+`genus_cirrus_overhead` 8.69, 8.83, 8.67 before, 8.73, 8.75, 8.69 after;
+`--cirrus march` `cirrus_overhead` 6.02, 5.94 before, 5.90, 5.92 after
+(5.76, 5.84 with `--cirrus none`). The cost is unchanged: there is no new
+fetch. A fan driven by the strands' noise (70 m) cost +0.4 ms at
+`genus_cirrus_overhead` (9.77, 9.73 against 9.21, 9.37), its taps scattered
+in the texture cache; the fibres' noise (180 m) costs nothing. The
+stability is unchanged (mean 0.02-0.05 levels still, 0.03-0.16 after a
+turn, p99 1).
+
+**Stability.** Still, two frames 0.5 s apart (1600 x 900, the sky's
+pixels): mean difference 0.00-0.05 levels, p99 0-1, at `genus_cirrus`,
+`genus_cirrus_overhead`, `genus_cirrus_grazing`, and with `--cirrus
+march` at `cirrus_up` and `cirrus_between`. After a turn of 1 degree in
+20 frames and 40 to settle: 0.00-0.17 levels, p99 1. The cirrus is read
+at the sheet point, with no jitter: nothing to shimmer.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

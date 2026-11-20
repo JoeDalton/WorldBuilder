@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The temporary `--high-placeholder` of the terrain demo and
+  `terrain_shots.py` (Task 20) and the placeholder cirrus, with
+  `march.thin_samples` and `THIN_TWO_SAMPLES`: every high genus is read
+  once, at the sheet point.
 - The billboard cloud renderer: `clouds.sphere` (`CloudVolume`, its tiles,
   shells and sprite atlas), `clouds.half_res` (`HalfResClouds`), the
   native `billboards.c`, and the `CloudSettings` knobs `renderer`,
@@ -22,6 +26,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The high layer's cirrus as procedural flow streaks (`clouds.md`, "The
+  cirrus"), replacing the placeholder: detached streaks along the upper
+  wind in patches, fibres in tapering bundles with fine strands, tufts
+  (heads) with tails trailing upwind from 6 taps along the flow, hooked
+  across it (the fall streak's shear), the domain warped by the curl
+  noise at two scales. The upper wind has a form on the GPU
+  (`genera.high_wind_cube`, `upper_wind_field`, `upper_stream`;
+  `highWind`, an RGBA32F cube: the wind and its stream function, the
+  streaks' across-the-wind coordinate), so the streaks curve with the jets
+  and around the lows. Each part fades to its mean where a pixel cannot
+  resolve it (`march.cirrus_means`), the fibres by the footprint across
+  and along the wind apart (`march.footprint_along`): fibres across a
+  grazing view stay sharp. The cirrus has real optics (depth 1.5, a faint
+  halo) and is read once at the sheet point, like the cirrostratus and
+  cirrocumulus. CPU mirror: `march.cirrus_streaks`, `cirrus_detail`,
+  `cirrus_tufts`, `cirrus_patches`. The showcase gains a cirrus field far
+  to the north (`genera.SHOWCASE_HIGH`, `SHOWCASE_HIGH_EYE`) and the poses
+  `genus_cirrus`, `genus_cirrus_overhead`, `genus_cirrus_grazing`.
+- The cirrus's heads are fibrous, not solid blobs (`clouds.md`, "The
+  cirrus"). The tails' taps fan out toward the head (`march.CI_FAN`), so
+  the fibres splay out there. The head is a wide, frayed window on the tuft
+  noise, striated by the strands, at most 1.2 (`CI_HEAD_*`). It costs no
+  extra fetch.
+- `--cirrus sheet|march|none` (the terrain demo, `terrain_shots.py`):
+  the weather's cirrus by the old sheet (the default), by the march's
+  high layer (`GeneraSpec.cirrus_weather`: `weather.cirrus_cover_map`
+  fills cube B's channel 1), or none; `--no-cirrus` is `--cirrus none`.
+- The high layer's cirrostratus and cirrocumulus (`clouds.md`, "The high
+  layer"). The cirrostratus is a nearly uniform veil (optical depth 0.2)
+  with slow swells 25 km across stretched 6 times along the upper jet,
+  faint fibres, the sun plain through it, milky toward the horizon, and a
+  22 degree halo in its phase (`haloRing`). The cirrocumulus is white
+  grains of Worley cells 200 m across in rows across the jet, which fade
+  to their mean where a pixel cannot resolve them
+  (`march.cirrocumulus_grains`). Both read their pattern once where the
+  ray crosses the slab's middle (`march.sheet_crossing`), with the pixel's
+  footprint stretched by the slant (`march.slab_footprint`). Each high
+  genus has optics of its own (`genera.HIGH_OPTICS`, `HighOptics`;
+  `uHighExtinction`, `uHighCap`, `march.high_optical_depth`) and the layer
+  a stretch axis (`genera.high_jet`). The showcase gains an overhead row
+  (`genera.SHOWCASE_HIGH`, `SHOWCASE_HIGH_PITCH`) and the poses
+  `genus_cirrostratus` and `genus_cirrocumulus`. `thinSlabRadiance` takes
+  a halo strength.
+- The clouds' high layer in the raymarch (`clouds.md`, "The high layer"): a
+  sky band of its own above the genera (`genera.HIGH_SLAB`, 11-12.5 km;
+  `GeneraSpec.high`, `GeneraSpec.high_slab`), crossed in one or two
+  jittered samples with no sun march, sorted among the bands' stretches.
+  Its genera (cirrus, cirrostratus, cirrocumulus) take coverage cube B's
+  channels 1-3 (`genera.HIGH_CHANNELS`, `high_genera`). It is lit as a
+  thin slab: `cloud_shading.glsl`'s `thinSlabRadiance`, which the cirrus
+  sheet now shares. The shader variant compiles only when a high genus is
+  covered (`march.march_fragment`; `cloud_march_high.frag`,
+  `cloud_march_recipes_high.frag`). For now its density is a placeholder
+  veil. `planet.check_layers` refuses a high slab under the genera's top
+  or above the air. The demo and `terrain_shots.py` gain `--no-cirrus` and
+  a temporary `--high-placeholder` (poses `high_cb`, `high_overhead`,
+  `high_grazing`, `high_above`).
 - The cloud genera showcase: `scripts/demo_genera.py` (the terrain demo's
   `--showcase`), every genus alone (`genera.showcase_features`,
   `GeneraSpec.background`) in two rows: the cumulus species along the
@@ -74,6 +135,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The march takes the high slab's crossings out of its sorted segments:
+  the one on the way down before every band, the one on the way up after
+  (a ray's height is convex, the slab above every band). The high variant
+  cost the low clouds 0.1-0.2 ms more with them sorted among the bands
+  (performance §37, Task 23).
 - `CloudSettings.shells` is `octave_bands` (a saved `shells` loads as it);
   `clouds.sphere`'s helpers the march uses moved to `clouds.field_setup`,
   `clouds.deck` and `clouds.passes`.

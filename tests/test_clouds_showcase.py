@@ -16,6 +16,7 @@ import pytest
 from world_builder.clouds.genera import (
     CONVECTIVE_SPECIES,
     GENUS_DEPTHS,
+    HIGH_CHANNELS,
     SHOWCASE_ROW,
     SHOWCASE_SOUTH,
     Feature,
@@ -41,7 +42,8 @@ def test_the_showcase_has_every_genus_of_the_march_once():
     names = [f.genus for f in showcase_features()]
     assert sorted(names) == sorted(
         ["humilis", "mediocris", "congestus", "cumulonimbus", "stratus",
-         "stratocumulus", "nimbostratus", "altostratus", "altocumulus"]
+         "stratocumulus", "nimbostratus", "altostratus", "altocumulus",
+         "cirrus", "cirrostratus", "cirrocumulus"]
     )  # fmt: skip
     # Every genus of the march but the convective one (its species) is there
     for name in GeneraSpec.__dataclass_fields__["genera"].default[1:]:
@@ -83,7 +85,9 @@ def test_the_showcase_is_two_rows_in_view_from_the_start():
         for b in features[i + 1 :]:
             gap = math.hypot(a.east - b.east, a.north - b.north)
             assert gap > _reach(a) + _reach(b), (a.genus, b.genus, gap)
-    assert {f.genus for f in showcase_features()} <= {f.genus for f in features}
+    # The high genera's slots (overhead: test_clouds_high's) and the rows'
+    low = {f.genus for f in showcase_features()} - set(HIGH_CHANNELS)
+    assert low <= {f.genus for f in features}
 
 
 def test_the_southern_slots_fit_sheets_15_km_wide():
@@ -144,7 +148,8 @@ def test_each_stratiform_genus_fills_its_own_map():
 def test_the_stratiform_genera_fill_cube_a_a_channel_each():
     """Coverage cube A: the stratus channel 0, the stratocumulus 1, the
     nimbostratus 2, the altostratus 3; cube B: the altocumulus channel 0,
-    its others free (genera.coverage_cube)."""
+    the showcase's high genera theirs (the cirrus 1, the cirrostratus 2,
+    the cirrocumulus 3) (genera.coverage_cube)."""
     from world_builder.clouds.genera import GENUS_PRESETS, coverage_cube
 
     spec = _spec(features=showcase_features(), background=False)
@@ -158,7 +163,10 @@ def test_the_stratiform_genera_fill_cube_a_a_channel_each():
     cube_b = coverage_cube(spec, "B")
     own = genus_coverage(spec, "altocumulus")
     np.testing.assert_array_equal(cube_b[..., 0], own)
-    assert own.max() > 0.5 and not cube_b[..., 1:].any()
+    assert own.max() > 0.5
+    for name in ("cirrus", "cirrostratus", "cirrocumulus"):
+        channel = HIGH_CHANNELS[name]
+        np.testing.assert_array_equal(cube_b[..., channel], genus_coverage(spec, name))
 
 
 def test_each_cumulus_species_has_its_convective_depth():

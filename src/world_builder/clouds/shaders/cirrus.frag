@@ -6,6 +6,9 @@
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "cloud_field.glsl"
+// The thin slab's lighting (thinSlabRadiance), the march's high layer's too;
+// and the sun's and the sky's colours and strengths.
+#pragma include "cloud_shading.glsl"
 
 // 0: the behind node, keeping the crossings where sight lines leave the
 // sheet's sphere (behind every cumulus); 1: the front node, where they enter
@@ -19,10 +22,6 @@ uniform vec4  uPhase;           // noise.phase_weights, and the forward g
 // x: multiple scattering, y: shadow strength.
 uniform vec4  uLight;
 
-uniform vec3  sunColor;
-uniform vec3  skyColor;
-uniform float sunBrightness;
-uniform float skyStrength;
 uniform float exposure;
 
 // The longest path through the slab, in slab depths (see main).
@@ -68,17 +67,10 @@ void main() {
         fragColor = vec4(vec3(0.8) * alpha, alpha);
         return;
     }
-    // Thin: no march, the sunward half of the slab at this thickness.
-    float cosSun = dot(up, sunDir);
-    float sunDepth = uExtinction * thickness * 0.5 * uThickness / max(cosSun, 0.1);
-    float sunVisibility = exp2(-uMaxOpticalDepth
-        * (1.0 - exp(-sunDepth * uLight.y / uMaxOpticalDepth)));
-    float ambient = skyStrength + uLight.x * sunBrightness * (1.0 - sunVisibility);
-    float phase = lobePhase(uPhase, dot(sunDir, dir));
-
-    vec3 colour = sunColor * vSunTint * (sunBrightness * sunVisibility * phase)
-                + skyColor * vSkyTint * ambient
-                + sunColor * vTwilight * (sunBrightness * TWILIGHT_GLOW);
+    // Thin: no march (cloud_shading.glsl, the march's high layer's light).
+    vec3 colour = thinSlabRadiance(uExtinction * thickness * uThickness, up, dir,
+                                   uMaxOpticalDepth, uPhase, uLight, 0.0, sunColor * vSunTint,
+                                   skyColor * vSkyTint, sunColor * vTwilight);
     colour = displayColour(colour * exposure);
     fragColor = vec4(colour * alpha, alpha);   // premultiplied "over"
 }

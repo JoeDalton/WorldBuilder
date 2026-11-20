@@ -1,6 +1,7 @@
 // The light a sample of a planet's cloud sends toward the camera, shared by
-// the billboards and the deck (cloud.frag) and the raymarch
-// (cloud_march.frag). Include with #pragma include, after atmosphere.glsl and
+// the deck (cloud.frag) and the raymarch (cloud_march.frag); and the thin
+// slab's (thinSlabRadiance), shared by the march's high layer and the cirrus
+// sheet (cirrus.frag). Include with #pragma include, after atmosphere.glsl and
 // cloud_field.glsl. See docs/source/clouds.md, "Lighting".
 uniform vec3  sunColor;
 uniform vec3  skyColor;
@@ -157,4 +158,48 @@ vec3 cloudRadiance(Field f, vec3 p, float density, vec3 V, float shading,
                    float farCoverage, vec3 sunlight, vec3 skylight, vec3 twilight) {
     return cloudRadianceAt(0, f, p, density, V, shading, farCoverage, sunlight,
                            skylight, twilight, weatherAt(p));
+}
+
+// The radiance of a thin slab of ice cloud (the march's high layer, the
+// cirrus sheet's stamps: cirrus.frag), linear, before the display transform:
+// no sun march, the sunward half of the slab's own depth instead; a phase of
+// its own (strongly forward, ice); the sky's light, and the sunlight the
+// slab scatters about, as its fill; the lit air's twilight once the slab is
+// in the planet's shadow.
+//   verticalDepth  the slab's optical depth straight through it (exp2 units)
+//   up             the slab's up at the sample (unit)
+//   dir            the view ray's direction, toward the slab (unit)
+//   maxDepth       what an optical depth saturates toward, softly
+//   phase          noise.phase_weights of its optics, and its forward g
+//   light          x: its multiple scattering, y: its shadow strength
+//   halo           the 22 degree halo's strength in its phase (haloRing),
+//                  0 = none (the cirrostratus's, by its share of the depth)
+//   sunlight       the sun's colour as it reaches the slab (reddened:
+//                  planetCloudLight's, the sheet's sunColor * cloudSunTint)
+//   skylight       the sky's (faded through twilight)
+//   twilight       the lit air's above it (sunColor * cloudTwilight)
+// The 22 degree halo of hexagonal ice (light refracted through the
+// crystals' 60 degree prisms, the least deviation 22 degrees): a ring about
+// the sun, 1 at its peak, its inner edge sharp (no light refracts less: the
+// sky inside it darker), fading out over a few degrees outside. One acos a
+// crossing: cheaper than any sample.
+float haloRing(float cosAngle) {
+    float x = degrees(acos(clamp(cosAngle, -1.0, 1.0))) - 22.0;
+    return exp(-x * x / (x < 0.0 ? 0.5 : 8.0));
+}
+
+vec3 thinSlabRadiance(float verticalDepth, vec3 up, vec3 dir, float maxDepth, vec4 phase,
+                      vec4 light, float halo, vec3 sunlight, vec3 skylight,
+                      vec3 twilight) {
+    float cosSun = dot(up, sunDir);
+    float sunDepth = 0.5 * verticalDepth / max(cosSun, 0.1);
+    float sunVisibility = exp2(-maxDepth * (1.0 - exp(-sunDepth * light.y / maxDepth)));
+    float ambient = skyStrength + light.x * sunBrightness * (1.0 - sunVisibility);
+    float scattered = lobePhase(phase, dot(sunDir, dir));
+    if (halo > 0.0) {
+        scattered += halo * haloRing(dot(sunDir, dir));
+    }
+    return sunlight * (sunBrightness * sunVisibility * scattered)
+         + skylight * ambient
+         + twilight * (sunBrightness * TWILIGHT_GLOW);
 }

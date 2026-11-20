@@ -86,8 +86,10 @@ def check_layers(
     genera, no more than :data:`noise.MAX_GENERA` of them, their slabs in no
     more than :data:`march.MAX_SKY_BANDS` bands of sky
     (:func:`march.sky_bands`; the genera's slabs may overlap: the march takes
-    them as one); the sheet's base must clear the union of the slabs, its top
-    stay under the air's.
+    them as one); the high layer's slab (:attr:`genera.GeneraSpec.high_slab`)
+    and the sheet's base must clear the union of the slabs (the sheet may lie
+    in the high slab: it is the high layer's predecessor), their tops stay
+    under the air's.
 
     :param cloud_type: the volume's type (the convective one with genera)
     :param altitude: the volume's base, metres; None = the type's
@@ -108,9 +110,23 @@ def check_layers(
             f"the genera's slabs make more than {MAX_SKY_BANDS} bands of sky "
             f"(slabs {slabs}): merge or overlap some"
         ) from None
+    top = bands[-1][0] + bands[-1][1]
+    if genera is not None and genera.high:
+        # The high layer: a band of its own above the union (its crossings
+        # are sorted among the bands'), inside the air
+        base, thickness = genera.high_slab
+        if base <= top:
+            raise ValueError(
+                f"the high layer's base ({base:g} m) must be above the "
+                f"clouds' top ({top:g} m)"
+            )
+        if air_top is not None and base + thickness >= air_top:
+            raise ValueError(
+                f"the high layer's top ({base + thickness:g} m) must be inside "
+                f"the air ({air_top:g} m)"
+            )
     if cirrus is None:
         return
-    top = bands[-1][0] + bands[-1][1]
     if cirrus.base <= top:
         raise ValueError(
             f"the cirrus's base ({cirrus.base:g} m) must be above the "
@@ -384,6 +400,8 @@ class PlanetClouds:
         haze, :meth:`asteroids.haze.FieldHaze.set_clouds_top`)."""
         band = self.volume.sky_bands[-1]  # the genera's union's top
         tops = [self.radius + band[0] + band[1]]
+        if self.volume.high_slab is not None:  # the high layer's, drawn
+            tops.append(self.radius + sum(self.volume.high_slab))
         if self.sheet is not None:
             tops.append(self.radius + self.sheet.spec.top)
         return max(tops)

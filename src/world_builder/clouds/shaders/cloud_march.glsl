@@ -19,7 +19,10 @@
 // CLOUD_RECIPES defined: the recipe genera's density in the view
 // (cloud_field.glsl's genusRecipeDensity), compiled only for a march that has
 // one (CloudMarch picks the shader): its branch in the sample loop cost the
-// convective clouds 0.15-0.2 ms at 2560 x 1440 even never taken.
+// convective clouds 0.15-0.2 ms at 2560 x 1440 even never taken. Likewise
+// CLOUD_HIGH (cloud_march_high.frag, cloud_march_recipes_high.frag): the high
+// layer's thin-layer crossings (highCrossing), only for a march with a high
+// genus covered (march.march_fragment).
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "cloud_field.glsl"
@@ -168,6 +171,302 @@ float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
     return max(smoothstep(f.threshLo, f.threshHi, raw - window * billow) * fill, shelf);
 }
 
+#ifdef CLOUD_HIGH
+// ── The high layer (clouds.md, "The high layer") ───────────────────────────
+// Its slab: x its base and y its thickness above sea level, metres.
+uniform vec4 uHighSlab;
+// Each high genus's optics (genera.HIGH_OPTICS), x the cirrus's, y the
+// cirrostratus's, z the cirrocumulus's (coverage cube B's channels 1-3):
+// the optical depth per metre of a full veil (density 1), and what a
+// crossing's optical depth saturates toward (march.high_optical_depth).
+uniform vec3 uHighExtinction;
+uniform vec3 uHighCap;
+// x: the cirrocumulus's grains' mean (march.cirrocumulus_grain_mean), y:
+// the cirrostratus's halo and z the cirrus's (genera.HighOptics.halo), w:
+// the cirrus's tufts' mean (march.cirrus_means).
+uniform vec4 uHighShape;
+// The cirrostratus's and the cirrocumulus's stretch axis: the upper wind
+// at the genera's focus, planet frame, unit (genera.high_jet).
+uniform vec3 uHighJet;
+uniform vec4 uHighPhase;  // noise.phase_weights of its optics, and its forward g
+uniform vec4 uHighLight;  // x: its multiple scattering, y: its shadow strength
+
+// The longest path through the slab, in slab depths
+// (march.THIN_GRAZING_PATH: past it a veil saturates toward the horizon into
+// a flat plate).
+const float THIN_GRAZING_PATH = 4.0;
+// The footprint on the sheet: a view pixel's over the cosine of the ray's
+// angle to the vertical, at least this (march.slab_footprint).
+const float HIGH_MIN_INCIDENCE = 0.05;
+
+// The cirrostratus (march.CS_*): a veil with features CS_FEATURE metres
+// across the jet, CS_STRETCH times longer along it, its density moved about
+// 1 by CS_VEIL_GAIN of the noise's spread; faint fibres CS_FIBRE metres
+// across, CS_FIBRE_STRETCH times longer, CS_FIBRE_GAIN.
+const float CS_FEATURE = 25000.0;
+const float CS_STRETCH = 6.0;
+const float CS_FIBRE = 1500.0;
+const float CS_FIBRE_STRETCH = 12.0;
+const float CS_VEIL_GAIN = 1.2;
+const float CS_FIBRE_GAIN = 0.5;
+// The cirrocumulus (march.CC_*): grains of Worley cells CC_CELL metres
+// across, smoothstep(CC_GRAIN, 1 - F1); their fill moved by a ripple, its
+// crests across the jet CC_RIPPLE metres apart (CC_RIPPLE_GAIN), bent and
+// thinned by a slow noise with features CC_FILL metres across (CC_FILL_GAIN).
+const float CC_CELL = 200.0;
+const vec2 CC_GRAIN = vec2(0.5, 0.75);
+const float CC_RIPPLE = 600.0;
+const float CC_RIPPLE_GAIN = 1.0;
+const float CC_FILL = 4000.0;
+const float CC_FILL_GAIN = 2.0;
+
+// p squeezed along the jet by stretch: features stretch times longer
+// along it (as recipePosition does along the recipe genera's axis).
+vec3 alongJet(vec3 p, float stretch) {
+    return p - dot(p, uHighJet) * (1.0 - 1.0 / stretch) * uHighJet;
+}
+
+// ── The cirrus (march.CI_*; clouds.md, "The cirrus") ──
+// The upper wind (genera.high_wind_cube): xyz the wind (planet frame, the
+// jets' fastest 1), w its stream function (metres; its contours are the
+// streamlines).
+uniform samplerCube highWind;
+// What the cirrus's parts fade to where a pixel does not resolve them
+// (march.cirrus_means): x the streaks' detail, y and z the patches' at
+// coverage 0 and their slope, w the strands'.
+uniform vec4 uHighCirrus;
+// Its noise in the flow's frame (cirrusFlow): CI_*_WIDTH metres across the
+// wind, CI_*_LENGTH along it. The fibres; the bundles they come in; their
+// strands (the fibrous texture); the tufts (the heads); the patches the
+// streaks come in.
+const float CI_FIBRE_WIDTH = 180.0;
+const float CI_FIBRE_LENGTH = 6000.0;
+const float CI_CLUMP_WIDTH = 1200.0;
+const float CI_CLUMP_LENGTH = 4500.0;
+const float CI_SHEEN_WIDTH = 70.0;
+const float CI_SHEEN_LENGTH = 900.0;
+const float CI_TUFT_WIDTH = 400.0;
+const float CI_TUFT_LENGTH = 650.0;
+const float CI_PATCH_WIDTH = 9000.0;
+const float CI_PATCH_LENGTH = 30000.0;
+// Each one's smoothstep window on its noise; the patches' noise moved up
+// by CI_PATCH_COVER x the coverage (their share of the sheet about it).
+const vec2 CI_FIBRE = vec2(0.45, 0.80);
+const vec2 CI_CLUMP = vec2(0.45, 0.70);
+const vec2 CI_STRAND = vec2(0.48, 0.68);
+const vec2 CI_TUFT = vec2(0.66, 0.90);
+const vec2 CI_PATCH = vec2(0.70, 0.85);
+const float CI_PATCH_COVER = 0.55;
+// The cirrus's density fades in over this much coverage (where a feature's
+// or the weather's coverage begins): the coverage thins the patches, it
+// does not scale the density.
+const float CI_COVER_EDGE = 0.1;
+// The strands' least share of the fibrous texture, the fibres' and the
+// tails' gains against a head's 1, the most a streak's density.
+const float CI_STRAND_FLOOR = 0.15;
+const float CI_FIBRE_GAIN = 1.0;
+const float CI_TAIL_GAIN = 1.6;
+const float CI_MAX_DENSITY = 1.3;
+// The heads: CI_HEAD the window on the tuft noise (wide: a soft, fraying
+// edge), moved by CI_HEAD_FRAY x the fibre noise about its mean (the
+// outline frays along the fibres), CI_HEAD_FLOOR of it between the strands,
+// at most CI_HEAD_GAIN.
+const vec2 CI_HEAD = vec2(0.60, 1.00);
+const float CI_HEAD_FRAY = 0.25;
+const float CI_HEAD_FLOOR = 0.2;
+const float CI_HEAD_GAIN = 1.2;
+// The taps' fan toward the head: at most this many metres across the
+// wind at tap 0, a fibre's share by its noise.
+const float CI_FAN = 500.0;
+// The tails: CI_TAPS taps CI_TAIL_STEP metres apart downwind (each the tufts
+// there, the tail upwind of its head), bent across the wind by
+// CI_HOOK x k^2 metres at tap k (the fall streak's shear: a hook), each
+// weighted (1 - k / CI_TAPS)^CI_TAIL_FADE.
+const int CI_TAPS = 6;
+const float CI_TAIL_STEP = 380.0;
+const float CI_HOOK = 35.0;
+const float CI_TAIL_FADE = 1.3;
+// The domain warp: the curl noise, features CI_CURL metres across, moving
+// the flow's frame by up to CI_WARP metres (the streaks meander, their
+// spacing varies); and finely, CI_CURL_FINE and CI_WARP_FINE (the fibres,
+// strands and tufts wiggle, merge and split).
+const float CI_CURL = 12000.0;
+const float CI_WARP = 1500.0;
+const float CI_CURL_FINE = 2500.0;
+const float CI_WARP_FINE = 180.0;
+const float CI_CURL_FEATURES = 4.0;  // the curl volume's features a tile (noise.CURL_LATTICE)
+// The axis the stream function moves the noise along (any, off the
+// noise's lattice: no repeat across the wind).
+const vec3 CI_PSI_AXIS = vec3(0.5257, 0.6180, 0.5848);
+
+// The noise coordinates (sampleNoise's) of the point q + delta of the flow
+// whose stream function at q is psi: features width metres across the
+// wind, length along it. The stream function is the across coordinate
+// (constant along a streamline, so the features follow the wind as it
+// turns); the position the along one (and a little of the across).
+vec3 cirrusFlow(vec3 q, float psi, vec3 across, float speed, vec3 delta, float width,
+                float length, vec3 offset) {
+    float stream = psi - speed * dot(across, delta);  // grad psi = -speed across
+    return ((q + delta) / length + CI_PSI_AXIS * (stream / width)) * NOISE_FEATURE_UNITS
+         + offset * noiseSize;
+}
+
+// A view pixel's footprint on the sheet along the sheet's unit direction
+// axis, metres: pixel metres across the view, stretched by the slant
+// (incidence: the cosine of the ray's angle to the vertical, at least
+// HIGH_MIN_INCIDENCE) along the view's own direction on the sheet, view
+// (march.footprint_along).
+float footprintAlong(vec3 axis, vec3 view, float pixel, float incidence) {
+    float a = dot(axis, view);
+    return pixel * sqrt(a * a / (incidence * incidence) + max(1.0 - a * a, 0.0));
+}
+
+// The cirrus's density at the sheet point q seen along dir, a view pixel
+// pixel metres across there, its coverage cover: streaks along the upper
+// wind (highWind) in patches, each fibres with strands, tufts at their
+// heads with tails trailing upwind and hooking across. Detail a pixel does
+// not resolve is its mean (uHighCirrus, uHighShape.w), so a far patch
+// keeps its optical depth; the tails' taps are skipped there. The fibres
+// fade by the footprint across the wind and along it apart (a fibre seen
+// across the view at a grazing angle stays resolved: the slant stretches
+// the footprint along the view, not across it), the tufts by the slant's.
+float cirrusStreaks(vec3 q, vec3 dir, float pixel, float cover) {
+    vec4 wind = texture(highWind, q);
+    vec3 up = normalize(q);
+    vec3 flow = wind.xyz - dot(wind.xyz, up) * up;
+    float speed = length(flow);
+    vec3 along = speed > 1e-4 ? flow / speed : uHighJet;
+    vec3 across = cross(up, along);
+    float psi = wind.w;
+    // The footprints: the slant's, across the wind's and along it
+    float incidence = max(abs(dot(up, dir)), HIGH_MIN_INCIDENCE);
+    vec3 view = dir - dot(dir, up) * up;
+    float level = length(view);
+    view = level > 1e-5 ? view / level : along;
+    float footprint = pixel / incidence;
+    float footAcross = footprintAlong(across, view, pixel, incidence);
+    float footAlong = footprintAlong(along, view, pixel, incidence);
+    // The domain warp: the frame moved by the curl noise
+    vec3 curl = texture(uCurlNoise, q * (1.0 / (CI_CURL * CI_CURL_FEATURES))
+                                    + vec3(0.29, 0.61, 0.17)).rgb;
+    vec3 warp = CI_WARP * (2.0 * curl - 1.0);
+    warp -= dot(warp, up) * up;
+    // The patches
+    float patchNoise = sampleNoise(cirrusFlow(q, psi, across, speed, warp, CI_PATCH_WIDTH,
+                                              CI_PATCH_LENGTH, vec3(0.13, 0.71, 0.37)));
+    float patchy = smoothstep(CI_PATCH.x, CI_PATCH.y, patchNoise + CI_PATCH_COVER * cover);
+    float patchMean = clamp(uHighCirrus.y + uHighCirrus.z * cover, 0.0, 1.0);
+    patchy = mix(patchMean, patchy, resolved(CI_PATCH_WIDTH, footAcross)
+                                    * resolved(CI_PATCH_LENGTH, footAlong));
+    if (patchy <= 0.0) {
+        return 0.0;
+    }
+    float detailSeen = resolved(CI_FIBRE_WIDTH, footAcross)
+                     * resolved(CI_FIBRE_LENGTH, footAlong);
+    float detail = uHighCirrus.x;
+    if (detailSeen > 0.0) {
+        // And finely, the fibres and the tufts' edges (they wiggle, merge
+        // and split: no parallel lines)
+        vec3 fine = texture(uCurlNoise, q * (1.0 / (CI_CURL_FINE * CI_CURL_FEATURES))
+                                        + vec3(0.71, 0.13, 0.53)).rgb;
+        vec3 fineWarp = warp + CI_WARP_FINE * (2.0 * fine - 1.0);
+        fineWarp -= dot(fineWarp, up) * up;
+        float fibreNoise = sampleNoise(cirrusFlow(q, psi, across, speed, fineWarp,
+                                                  CI_FIBRE_WIDTH, CI_FIBRE_LENGTH,
+                                                  vec3(0.47, 0.19, 0.83)));
+        float fibre = smoothstep(CI_FIBRE.x, CI_FIBRE.y, fibreNoise);
+        // The fibres in bundles that taper out along the wind
+        fibre *= smoothstep(CI_CLUMP.x, CI_CLUMP.y,
+            sampleNoise(cirrusFlow(q, psi, across, speed, warp, CI_CLUMP_WIDTH,
+                                   CI_CLUMP_LENGTH, vec3(0.23, 0.89, 0.61))));
+        // The strands: thin lines along the wind, the fibrous texture of
+        // the tails, the fibres and the heads (their mean where a pixel does
+        // not resolve them)
+        float strandNoise = sampleNoise(cirrusFlow(q, psi, across, speed, fineWarp,
+                                                   CI_SHEEN_WIDTH, CI_SHEEN_LENGTH,
+                                                   vec3(0.91, 0.37, 0.53)));
+        float strandSeen = resolved(CI_SHEEN_WIDTH, footAcross)
+                         * resolved(CI_SHEEN_LENGTH, footAlong);
+        float strands = mix(uHighCirrus.w, smoothstep(CI_STRAND.x, CI_STRAND.y, strandNoise),
+                            strandSeen);
+        float fibrous = CI_STRAND_FLOOR + (1.0 - CI_STRAND_FLOOR) * strands;
+        // The head and the tail. The taps fan out toward the head: each
+        // fibre shifts them across the wind by its own share of CI_FAN
+        // (its noise about its mean, signed; the fibres' 180 m, not the
+        // strands' 70 m, keeps neighbouring pixels' taps together in the
+        // texture cache: +0.4 ms overhead with the strands'), most at the
+        // head (tap 0), none at the tail's end, so the fibres meet the head at different
+        // places and splay out there like a broom ("explode" at the comma),
+        // and run together downstream. The head: a wide window on the tuft
+        // noise (no outline), frayed along the fibres, striated by the
+        // strands, at most CI_HEAD_GAIN (translucent). The tail: the tufts
+        // downwind averaged along the hooked line (a line integral).
+        float tuftSeen = resolved(CI_TUFT_WIDTH, footprint);
+        float tufts = uHighShape.w;
+        if (tuftSeen > 0.0) {
+            float fan = CI_FAN * 2.0 * (fibreNoise - uBillowRawMean);
+            float head = 0.0;
+            float tail = 0.0;
+            float weights = 0.0;
+            for (int k = 0; k < CI_TAPS; ++k) {
+                float fk = float(k);
+                float spread = fan * (1.0 - fk / float(CI_TAPS));
+                vec3 delta = fineWarp + (CI_TAIL_STEP * fk) * along
+                           + (CI_HOOK * fk * fk + spread) * across;
+                float n = sampleNoise(cirrusFlow(q, psi, across, speed, delta,
+                                                 CI_TUFT_WIDTH, CI_TUFT_LENGTH,
+                                                 vec3(0.67, 0.43, 0.09)));
+                if (k == 0) {
+                    head = CI_HEAD_GAIN
+                         * smoothstep(CI_HEAD.x, CI_HEAD.y,
+                                      n + CI_HEAD_FRAY * (fibreNoise - uBillowRawMean))
+                         * (CI_HEAD_FLOOR + (1.0 - CI_HEAD_FLOOR) * strands);
+                } else {
+                    float w = pow(1.0 - fk / float(CI_TAPS), CI_TAIL_FADE);
+                    tail += w * smoothstep(CI_TUFT.x, CI_TUFT.y, n);
+                    weights += w;
+                }
+            }
+            tufts = mix(tufts, head + CI_TAIL_GAIN * tail / weights * fibrous, tuftSeen);
+        }
+        float streaks = tufts + CI_FIBRE_GAIN * fibre * fibrous;
+        detail = mix(detail, min(streaks, CI_MAX_DENSITY), detailSeen);
+    }
+    return patchy * detail;
+}
+
+// The cirrostratus's veil at the sheet point q, footprint metres there
+// (march.slab_footprint): nearly uniform, about 1, slow swells and faint
+// fibres along the jet, each faded out where the footprint does not
+// resolve it.
+float cirrostratusVeil(vec3 q, float footprint) {
+    float swell = sampleNoise(alongJet(q, CS_STRETCH) * (NOISE_FEATURE_UNITS / CS_FEATURE)
+                              + vec3(0.71, 0.23, 0.47) * noiseSize) - uBillowRawMean;
+    float fibre = sampleNoise(alongJet(q, CS_FIBRE_STRETCH) * (NOISE_FEATURE_UNITS / CS_FIBRE)
+                              + vec3(0.17, 0.83, 0.29) * noiseSize) - uBillowRawMean;
+    return max(0.0, 1.0 + CS_VEIL_GAIN * swell * resolved(CS_FEATURE, footprint))
+         * max(0.0, 1.0 + CS_FIBRE_GAIN * fibre * resolved(CS_FIBRE, footprint));
+}
+
+// The cirrocumulus's grains at the sheet point q, footprint metres there:
+// round flakes, sky between (no shading: a thin sheet's light), in rows
+// across the jet; a grain a pixel does not resolve is the grains' mean
+// (march.cirrocumulus_grains), so a far patch keeps its optical depth.
+float cirrocumulusGrains(vec3 q, float footprint) {
+    float grain = smoothstep(CC_GRAIN.x, CC_GRAIN.y,
+                             1.0 - texture(cloudCells, q / (CC_CELL * WORLEY_CELLS)).r);
+    grain = mix(uHighShape.x, grain, resolved(CC_CELL, footprint));
+    float slow = sampleNoise(q * (NOISE_FEATURE_UNITS / CC_FILL)
+                             + vec3(0.43, 0.11, 0.67) * noiseSize) - uBillowRawMean;
+    // Narrow crests, empty troughs: (1 + sin)^2 / 4 scaled to a mean of 1
+    float crest = 0.5 + 0.5 * sin(6.2831853 * (dot(q, uHighJet) / CC_RIPPLE + 2.0 * slow));
+    float ripple = mix(1.0, crest * crest * (8.0 / 3.0),
+                       CC_RIPPLE_GAIN * resolved(CC_RIPPLE, footprint));
+    float fill = max(0.0, 1.0 + CC_FILL_GAIN * slow * resolved(CC_FILL, footprint));
+    return grain * ripple * fill;
+}
+#endif
+
 // The fewest samples a stretch of the slab takes (march.SEGMENT_SAMPLES).
 const float SEGMENT_SAMPLES = 8.0;
 // The march stops at this transmittance, and counts the cloud opaque.
@@ -199,6 +498,97 @@ const float FAR_ALPHA = 0.92;
 // (its top) changes over a fraction of a tower's width: read once a kilometre
 // it shows as bands across the tower, one per stretch.
 uniform float uWeatherStretch;
+
+// Every band two segments. The high slab's two crossings are not among
+// them (march.slab_segments of the high slab): a ray's height along it is convex and the
+// slab is above every band, so its crossing on the way down comes before
+// every band's and its crossing on the way up after. Kept out of the
+// sorted segments and out of their loop, the high variant costs the low
+// clouds nothing: sorted among them (two more segments, the crossing
+// inlined in the segments' loop) it cost 0.3-1.3 ms at 2560 x 1440 with
+// the crossings' own work 0 (performance.md §37, Task 23).
+const int MAX_SEGMENTS = 2 * MAX_SKY_BANDS;
+
+#ifdef CLOUD_HIGH
+vec2 sphereInterval(vec3 c, vec3 dir, float r);
+
+// Where the crossing seg meets the slab's middle, the sphere of radius r
+// (march.sheet_crossing): every high genus's pattern is read there, once,
+// as a thin sheet's (jittered samples would wander a slant ray over many
+// grains or fibres, and the visits blur them);
+// where it does not meet it, the crossing's middle.
+float sheetCrossing(vec2 seg, vec3 dir, float r) {
+    vec2 s = sphereInterval(camPos, dir, r);
+    if (s.x < s.y) {
+        if (s.x >= seg.x && s.x <= seg.y) {
+            return s.x;
+        }
+        if (s.y >= seg.x && s.y <= seg.y) {
+            return s.y;
+        }
+    }
+    return 0.5 * (seg.x + seg.y);
+}
+
+// One crossing seg of the high slab by the ray from camPos along dir, composited
+// over what the ray holds so far (its crossing on the way down before every
+// band's segment, on the way up after them: an anvil in front hides it, it
+// veils a tower behind it). The coverage (cube B's channels 1-3, all at
+// once) and every genus's pattern at the sheet point (sheetCrossing: a thin
+// sheet's, the same at every visit). The genera's optical depths over the
+// crossing's path add (march.high_optical_depth), lit as a thin slab
+// (thinSlabRadiance, the cirrus sheet's light, with the cirrus's and the
+// cirrostratus's halo by their shares) at the sheet point. No sun march, no
+// steps.
+void highCrossing(vec2 seg, vec3 dir, inout float transmittance,
+                  inout vec3 light, inout float weightedDistance) {
+    float len = seg.y - seg.x;
+    float ts = sheetCrossing(seg, dir, planetRadius + uHighSlab.x + 0.5 * uHighSlab.y);
+    vec3 q = camPos + dir * ts;
+    vec3 cover = texture(genusCoverB, q).gba;
+    if (cover.r + cover.g + cover.b <= 0.0) {
+        return;
+    }
+    // A view pixel's footprint per metre of distance (genusDensity's,
+    // without the step's: the samples are no comb of steps)
+    float perMetre = uPixelAngle / sqrt(float(uBlock.x * uBlock.y));
+    vec3 up = normalize(q);
+    vec3 density = vec3(0.0);
+    if (cover.r > 0.0) {
+        // The coverage thins the patches (cirrusStreaks): its density only
+        // fades in at the coverage's edge
+        density.r = smoothstep(0.0, CI_COVER_EDGE, cover.r)
+                  * cirrusStreaks(q, dir, ts * perMetre, cover.r);
+    }
+    // The sheet's footprint: stretched along the view by the slant
+    float footprint = ts * perMetre / max(abs(dot(up, dir)), HIGH_MIN_INCIDENCE);
+    if (cover.g > 0.0) {
+        density.g = cover.g * cirrostratusVeil(q, footprint);
+    }
+    if (cover.b > 0.0) {
+        density.b = cover.b * cirrocumulusGrains(q, footprint);
+    }
+    vec3 parts = uHighExtinction * density * min(len, THIN_GRAZING_PATH * uHighSlab.y);
+    float total = parts.r + parts.g + parts.b;
+    if (total <= 0.0) {
+        return;
+    }
+    float cap = dot(parts, uHighCap) / total;
+    float depth = cap * (1.0 - exp(-total / cap));
+    float alpha = 1.0 - exp2(-depth);
+    vec3 sunlight, skylight, twilight;
+    planetCloudLight(uOwnAtmosphere, q, sunlight, skylight, twilight);
+    vec3 radiance = (uCloudDebug & 256) != 0 ? vec3(0.8)  // no lighting (profiling)
+        : thinSlabRadiance(dot(uHighExtinction, density) * uHighSlab.y, up, dir,
+                           cap, uHighPhase, uHighLight,
+                           (uHighShape.z * parts.r + uHighShape.y * parts.g) / total,
+                           sunlight, skylight, twilight);
+    float weight = transmittance * alpha;
+    light += weight * radiance;
+    weightedDistance += weight * ts;
+    transmittance *= 1.0 - alpha;
+}
+#endif
 
 vec3 unproject(vec3 ndc) {
     vec4 p = uClipToRender * vec4(ndc, 1.0);
@@ -338,8 +728,8 @@ void main() {
     if (ground.x < ground.y && ground.y > 0.0) {
         tEnd = min(tEnd, max(ground.x, 0.0));
     }
-    vec2 segments[2 * MAX_SKY_BANDS];
-    int bandOf[2 * MAX_SKY_BANDS];
+    vec2 segments[MAX_SEGMENTS];
+    int bandOf[MAX_SEGMENTS];
     int count = 0;
     for (int i = 0; i < MAX_SKY_BANDS; ++i) {
         if (i >= uSkyBandCount) {
@@ -367,14 +757,37 @@ void main() {
             ++count;
         }
     }
-    if (count == 0) {
+#ifdef CLOUD_HIGH
+    // The high layer's slab, above every band: its crossing on the way down
+    // (before every band's segment) and on the way up (after every one;
+    // march.slab_segments of the high slab). A ray that never goes below its base crosses
+    // no band: its one crossing is the first.
+    vec2 highDown, highUp;
+    {
+        float rBase = planetRadius + uHighSlab.x;
+        vec2 top = sphereInterval(camPos, dir, rBase + uHighSlab.y);
+        vec2 base = sphereInterval(camPos, dir, rBase);
+        highDown = top;
+        highUp = vec2(1.0, -1.0);
+        if (base.x < base.y) {
+            highDown = vec2(top.x, base.x);
+            highUp = vec2(base.y, top.y);
+        }
+        highDown = vec2(max(highDown.x, tStart), min(highDown.y, tEnd));
+        highUp = vec2(max(highUp.x, tStart), min(highUp.y, tEnd));
+    }
+    bool anyHigh = highDown.y > highDown.x || highUp.y > highUp.x;
+#else
+    bool anyHigh = false;
+#endif
+    if (count == 0 && !anyHigh) {
         // No cloud on this ray, but its scene for the resolve.
         fragColor = vec4(0.0);
         fragDistance = vec4(0.0, sceneKm, 0.0, 1.0);
         return;
     }
     // Sorted by where they start (at most eight).
-    for (int i = 1; i < 2 * MAX_SKY_BANDS; ++i) {
+    for (int i = 1; i < MAX_SEGMENTS; ++i) {
         for (int k = i; k > 0 && k < count; --k) {
             if (segments[k].x < segments[k - 1].x) {
                 vec2 swapSegment = segments[k];
@@ -396,7 +809,7 @@ void main() {
     float dtMin = uMinStep;
     float growth = uStepGrowth;
     vec2 needed = vec2(0.0);  // near, far
-    for (int i = 0; i < 2 * MAX_SKY_BANDS; ++i) {
+    for (int i = 0; i < MAX_SEGMENTS; ++i) {
         if (i < count) {
             vec2 seg = segments[i];
             needed.x += stepsOver(vec2(seg.x, min(seg.y, uSplit)), dtMin, growth);
@@ -455,7 +868,12 @@ void main() {
     // stretch is shorter than a step (WEATHER_STRETCH_GENERA), so a sample
     // reads each of its genera's anyway.
     vec4 weather = vec4(0.0);
-    for (int s = 0; s < 2 * MAX_SKY_BANDS; ++s) {
+#ifdef CLOUD_HIGH
+    if (highDown.y > highDown.x) {
+        highCrossing(highDown, dir, transmittance, light, weightedDistance);
+    }
+#endif
+    for (int s = 0; s < MAX_SEGMENTS; ++s) {
         if (s >= count) {
             break;
         }
@@ -584,6 +1002,11 @@ void main() {
             transmittance *= 1.0 - alpha;
         }
     }
+#ifdef CLOUD_HIGH
+    if (highUp.y > highUp.x && transmittance > OPAQUE) {
+        highCrossing(highUp, dir, transmittance, light, weightedDistance);
+    }
+#endif
     if ((uCloudDebug & 128) != 0) {
         // Where the steps go: red the share in empty air, green in cloud, blue
         // the steps over the budget.
