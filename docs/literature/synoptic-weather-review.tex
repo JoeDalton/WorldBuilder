@@ -414,11 +414,13 @@ with $Ro_{T,\oplus}$ evaluated for $a=6.371\times10^6$\,m, $d=23.934$\,h and $NH
 
 The belts, in degrees of $|\phi|$, are:
 \begin{align}
-  \text{storm track}\quad & [\phi_H+5^\circ,\ \min(\phi_H+30^\circ, 80^\circ)],\\
   \text{eddy-driven jets}\quad & n_j=\operatorname{clamp}\!\left(\operatorname{round}
      \frac{75^\circ-\phi_H}{L_\beta^\circ},1,8\right),\\
   & \phi_{j,i}=\phi_H+\Big(i+\tfrac12\Big)\frac{75^\circ-\phi_H}{n_j},\ i=0..n_j-1,\\
   \text{subtropical jet}\quad & \phi_{j,\mathrm{st}}=\phi_H,\\
+  \text{storm bands}\quad & [\phi_{j,i}-\delta,\ \phi_{j,i}+\delta],\quad
+     \delta=\min\!\Big(\frac{75^\circ-\phi_H}{2n_j},\,12.5^\circ\Big)\quad\text{(per eddy jet)},\\
+  \text{storm track}\quad & [\phi_{j,0}-\delta,\ \phi_{j,n_j-1}+\delta],\\
   \text{tropical cyclone band}\quad & [5^\circ,\ \min(25^\circ,0.8\,\phi_H)].
 \end{align}
 

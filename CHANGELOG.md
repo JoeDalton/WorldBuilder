@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Synoptic weather, part 1 (issue #8): the weather's scales follow the
+  planet. `PlanetSpec` gains `day_length_h` (6 h by default) and
+  `stratification` (N*H, 100 m/s); `clouds.synoptic.Scales.from_planet`
+  derives the cyclones' size (Eady wavelength of the deformation radius),
+  the storm-track wavenumber, the Hadley cell's edge (eddy-limited, as
+  Omega^-1/2), the jets (Rhines / Williams spacing), one storm band per
+  eddy-driven jet and the tropical cyclones' band and size, calibrated on
+  Earth. A literature review with every equation of the model:
+  `docs/literature/synoptic-weather-review.tex`.
+
 - The terrain demo's `B` key: a burst capture of the next 12 frames into
   `--capture-dir` (default `captures/`, git-ignored), a folder each. Per
   frame: the screen, and per march depth range the clouds' raw march (the

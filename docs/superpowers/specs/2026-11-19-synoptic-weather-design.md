@@ -104,7 +104,7 @@ Derived quantities, each calibrated so the Earth preset gives the observed value
 | Cyclone radius | ≈ 0.5–0.6 λ / 2 (seeded spread) | ~1 000 km |
 | Jet spacing (Rhines/Williams) | L_β = π sqrt(2U/β), U ≈ 20 m/s eddy velocity | ≈ 1 eddy-driven jet per hemisphere |
 | Hadley edge φ_H | ∝ Ro_T^α with Ro_T ∝ (NH / ΩR)², α = 1/4 (eddy-limited, ∝ Ω^-1/2; Held–Hou's 1/2 is the upper bound), clamp 10–60° | 30° |
-| Belts | ITCZ at 0 (+season), subtropical highs at φ_H, storm track φ_H+5° … φ_H+30°, polar front jet inside it | |
+| Belts | ITCZ at 0 (+season), subtropical highs at φ_H, one storm band per eddy-driven jet, centred on it, ± min(half the jet spacing, 12.5°) (Earth 40–65°, rocky Jupiter 8 bands); the storm track spans them | |
 | TC radius | ∝ the Rossby-like scale V/f at 20°, clamped | ≈ 300–500 km |
 
 Consequence to show the user: Kerbin with a 6 h day has ΩR/NH ≈ 1.7 against Earth's 4.6. It behaves

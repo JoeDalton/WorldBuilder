@@ -269,6 +269,10 @@ class PlanetSpec:
     :ivar has_vegetation: False for a barren world (no grass, no forest)
     :ivar has_clouds: False for a world drawn without clouds (the demos and
         benchmarks leave them out; a game's :class:`World` decides its own)
+    :ivar day_length_h: sidereal rotation period, hours: with the radius it
+        sets the weather's scales (:class:`clouds.synoptic.Scales`)
+    :ivar stratification: buoyancy frequency times tropopause height N*H,
+        m/s (100 on Earth): with the rotation it sets the cyclones' size
     :ivar stamps: hand-made heightmaps (:class:`stamps.Stamp`), in order
     :ivar paints: biome paint masks (:class:`stamps.Paint`), in order
     :ivar density_paints: vegetation density paint masks
@@ -284,6 +288,8 @@ class PlanetSpec:
     has_ocean: bool = True
     has_vegetation: bool = True
     has_clouds: bool = True
+    day_length_h: float = 6.0
+    stratification: float = 100.0
     elevation: ElevationParams = field(default_factory=ElevationParams)
     climate: ClimateParams = field(default_factory=ClimateParams)
     stamps: tuple = ()
