@@ -290,15 +290,23 @@ def _band_mean(cover, lat_lo, lat_hi):
     return float(values[band].mean())
 
 
-def test_weather_follows_the_zonal_circulation(weather, earth_map):
+def test_weather_follows_the_zonal_circulation(weather):
     """Wet tropics, dry subtropical highs at the Hadley cell's edge, cloudy
-    storm tracks (the planet's own latitudes: :class:`synoptic.Scales`)."""
+    storm tracks (the planet's own latitudes: :class:`synoptic.Scales`), in
+    every genus (a storm track's warm sectors and shields are stratiform)."""
     scales = Scales.from_planet(weather.planet)
-    equator = _band_mean(earth_map, 0.0, 6.0)
+    cube = synoptic_cube(weather, 64)
+    picks = [
+        SYNOPTIC_CHANNELS.index(n)
+        for n in SYNOPTIC_CHANNELS
+        if n not in ("depth", "shelf")
+    ]
+    cloud = np.ascontiguousarray(cube[..., picks].max(axis=-1))
+    equator = _band_mean(cloud, 0.0, 6.0)
     edge = scales.hadley_edge
-    subtropics = _band_mean(earth_map, edge - 3.0, edge + 1.0)
+    subtropics = _band_mean(cloud, edge - 3.0, edge + 1.0)
     track = 0.5 * (scales.storm_track[0] + scales.storm_track[1])
-    storm_tracks = _band_mean(earth_map, track - 5.0, track + 5.0)
+    storm_tracks = _band_mean(cloud, track - 5.0, track + 5.0)
     assert equator > subtropics + 0.15
     assert storm_tracks > subtropics + 0.15
 

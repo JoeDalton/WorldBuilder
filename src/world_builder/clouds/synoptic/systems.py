@@ -495,18 +495,25 @@ def _too_close(
     kept_radii,
     kept_signs,
     planet_radius,
+    kept_strict=None,
 ) -> bool:
     """Same-sign systems keep 0.75 (r_a + r_b) apart; a low may sit beside
     a high (the gradient between them is the wind), but not on its core:
-    0.75 min(r_a, r_b)."""
+    0.75 min(r_a, r_b). A pinned system (*kept_strict*) keeps every other
+    at the full 0.75 (r_a + r_b): what its pin asks for is what is seen."""
     if not kept_dirs:
         return False
     dirs = np.array(kept_dirs)
     radii = np.array(kept_radii)
     signs = np.array(kept_signs)
     gc = planet_radius * np.arccos(np.clip(dirs @ centre, -1.0, 1.0))
+    strict = (
+        np.zeros(len(signs), bool) if kept_strict is None else np.array(kept_strict)
+    )
     need = np.where(
-        signs == sign, 0.75 * (radii + radius), 0.75 * np.minimum(radii, radius)
+        (signs == sign) | strict,
+        0.75 * (radii + radius),
+        0.75 * np.minimum(radii, radius),
     )
     return bool(np.any(gc < need))
 
@@ -529,18 +536,23 @@ def population(spec, scales: Scales, jets, planet, t: float, pinned=()) -> list:
         + _tropical(spec, scales, planet, t)
     )
     seeded.sort(key=lambda o: (o.birth, o.seed))
-    kept, dirs, radii, signs = [], [], [], []
-    for obj in list(pinned) + seeded:
+    kept, dirs, radii, signs, strict = [], [], [], [], []
+    for i, obj in enumerate(list(pinned) + seeded):
+        is_pinned = i < len(pinned)
         if not active(obj, t):
             continue
         lat, lon = position(obj, t)
         centre = dirs_from_latlon(lat, lon)[0]
         sign = PRESSURE_SIGN[obj.kind]
         room = spacing_radius(obj, t)
-        if _too_close(centre, room, sign, dirs, radii, signs, scales.radius):
+        # Pinned systems are always kept (:mod:`presets` checked them).
+        if not is_pinned and _too_close(
+            centre, room, sign, dirs, radii, signs, scales.radius, strict
+        ):
             continue
         kept.append(obj)
         dirs.append(centre)
         radii.append(room)
         signs.append(sign)
+        strict.append(is_pinned)
     return kept

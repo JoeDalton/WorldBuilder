@@ -227,3 +227,21 @@ def test_pins_hold_at_time(spots, planet):
 def test_unpinned_weather_unchanged():
     spec = WeatherSpec(PLANET)
     assert replace(spec, pins=()) == spec
+
+
+def test_free_systems_keep_clear_of_pinned_ones(planet):
+    """Any free system, high or low, keeps the full spacing from a pinned
+    one: what the pin asks for is what is seen."""
+    spec = WeatherSpec(PLANET, pins=(WeatherPin(LOW_LAT, 10.0, Preset.COLD_FRONT),))
+    state = synoptic_state(spec)
+    low = state.systems[0]
+    centre = dirs_from_latlon(*position(low, spec.time_s))[0]
+    from world_builder.clouds.synoptic.systems import spacing_radius
+
+    for obj in state.systems[1:]:
+        other = dirs_from_latlon(*position(obj, spec.time_s))[0]
+        gap = PLANET.radius * math.acos(np.clip(other @ centre, -1, 1))
+        need = 0.75 * (
+            spacing_radius(obj, spec.time_s) + spacing_radius(low, spec.time_s)
+        )
+        assert gap >= need - 1.0, (obj.kind, gap, need)

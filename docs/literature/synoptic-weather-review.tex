@@ -873,66 +873,84 @@ deck consistent.
 \label{sec:eq-pins}
 A pin is $(\phi^*,\lambda^*,\text{preset},\vartheta_h)$, all at time $t$. Each preset fixes an
 object kind, a target stage $s^*$ and a role point $\mathbf{X}$ in the object's local frame
-(units of $r$):
+(units of $r$; $\boldsymbol\gamma_f(\cdot)$ by share of arc length from the triple point):
 
 \begin{center}
+\small
 \begin{tabular}{llcp{6.3cm}}
 \toprule
 preset & object & $s^*$ & role point $\mathbf{X}$\\
 \midrule
-FAIR\_HIGH & HIGH & 0.5 & $(0,0)$\\
-WARM\_FRONT\_APPROACH & LOW & 0.4 & $\boldsymbol\gamma_w(0.5\ell_w)+0.3\,\mathbf{n}_w$ (As overhead)\\
-COLD\_FRONT & LOW & 0.4 & $\boldsymbol\gamma_c(0.4\ell_c)$\\
-SQUALL\_LINE & LOW & 0.4 & $\boldsymbol\gamma_c(0.4\ell_c)-0.17\,\mathbf{n}_c$ (congestus/Cb band)\\
-OVERCAST\_DRIZZLE & LOW & 0.4 & $\boldsymbol\gamma_w(0.3\ell_w)-0.2\,\mathbf{n}_w$ (warm sector)\\
-HURRICANE & TROPICAL & 0.5 & $(0,0)$\\
-THUNDERSTORMS & none & --- & no object: $I\leftarrow\max(I,0.9)$ within $0.3\,r_c$\\
+FAIR\_HIGH & HIGH, $1.2\,r_c$ & 0.5 & $(0,0)$\\
+WARM\_FRONT\_APPROACH & LOW & 0.4 & $\boldsymbol\gamma_w(0.5)+0.3\,\mathbf{n}_w$ (As overhead)\\
+COLD\_FRONT & LOW & 0.4 & $\boldsymbol\gamma_c(0.3)$ (depth $>0.8$)\\
+SQUALL\_LINE & LOW (squall) & 0.4 & $\boldsymbol\gamma_c(0.3)-0.17\,\mathbf{n}_c$ (the line ahead)\\
+OVERCAST\_DRIZZLE & LOW & 0.4 & $\boldsymbol\gamma_w(0.3)-0.2\,\mathbf{n}_w$ (warm sector)\\
+HURRICANE & TROPICAL & 0.5 & $(0,0)$ (its eye)\\
+THUNDERSTORMS & none & --- & $I\leftarrow\max(I,G(\angle;0,0.3\,r_c/a))$, cover $\mathrel{+}=0.7\,G$\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Here $\mathbf{n}_f$ is the unit normal toward the front's cold side.
-
-\paragraph{Placing the pinned object.} With $\mathsf{R}(\vartheta_h)$ the rotation by the
-heading (default 0), the centre is the exponential map at the pin:
+Here $\mathbf{n}_f$ is the unit normal toward the front's cold side. A squall low's band ahead
+of its cold front is a cumulonimbus line, $c_{\mathrm{conv}}\mathrel{+}=0.85\,\Pi(-d_c;0.08,0.25,0.05)\,T_c\,\Sigma'$
+with depth $\Pi(\cdot)$, where an ordinary low has congestus. Two rules help a pin's genus
+dominate as observed: stable air calms the fair-weather background (not the systems' own
+convection) under the warm front's shield and in the warm sector,
 \begin{equation}
-  \mathbf{c}=\exp_{\mathbf{p}^*}\!\big(-r\,\mathsf{R}(\vartheta_h)\,\mathbf{X}\big).
+  c_{\mathrm{bg}}\leftarrow c_{\mathrm{bg}}\big(1-0.8\max(c_{Ns},c_{As})_{\mathrm{shield}}\big)\big(1-0.8\,W\,\Sigma'\big),
 \end{equation}
-The track is then inverted so that the object is at $\mathbf{c}$ with stage $s^*$ at time $t$:
-\begin{equation}
-  t_b=t-s^*T,\qquad
-  \lambda_0=\lambda_c-\frac{\gamma c_s\,s^*T}{a\cos\phi_0},\qquad
-  \phi_0=\phi_c-h\frac{v_p\,s^*T}{a}.
-\end{equation}
-For a TROPICAL pin, the parabola is inverted for the genesis point. If that point is over
-land or outside the band, the pin is still accepted: the storm is then taken as already
-mature at the pin.
+and free systems keep the full $0.75(\varrho_i+\varrho_k)$ from a pinned one whatever their
+signs (a free high next to a pinned cold front would thin its line and lay its deck over it).
+Pinned systems are always kept.
 
-\paragraph{Refitting the jet phases.} Write each wave as
-$a_m\sin k_m\lambda'+b_m\cos k_m\lambda'$, with $\lambda'$ including $-\varpi_m t$. A pinned
-LOW asks for a trough upstream of it,
-$\lambda_{\mathrm{tr}}=\lambda_c-0.25\lambda_E/(a\cos\phi_c)$, with target
-$\phi_j(\lambda_{\mathrm{tr}})=\phi_{0,j}-hA_{\mathrm{tot}}$. A pinned HIGH asks for a ridge,
-$\phi_j(\lambda_c)=\phi_{0,j}+hA_{\mathrm{tot}}$. The coefficients solve the ridge regression
+\paragraph{Placing the pinned object.} The centre $\mathbf{c}$ is solved so that the pin's
+gnomonic coordinates round it, in its heading frame (\S\ref{sec:eq-rules}), are $\mathbf{X}$:
 \begin{equation}
-  \min_{a,b}\ \sum_{i\in\text{pins}}\big(\phi_j(\lambda_i)-\phi_i^{\mathrm{target}}\big)^2
+  \mathbf{X}\big(\mathbf{p}^*;\mathbf{c}\big)=\mathbf{X}^*.
+\end{equation}
+It starts at the exponential map $\exp_{\mathbf{p}^*}(-r\,\mathsf{R}(\vartheta_h)\mathbf{X}^*)$
+and takes Newton steps of tangent moves of $\mathbf{c}$, with a finite-difference Jacobian
+(steps of $0.01\,r$). A system may span a good share of a small planet, and near a pole a fixed
+point iteration diverges: moving the centre east also turns its frame. The track is then
+inverted so that the object is at $\mathbf{c}$ with stage $s^*$ at time $t$, with
+$\tau=s^*T$ and the drifts of \S\ref{sec:eq-objects}:
+\begin{equation}
+  t_b=t-\tau,\qquad
+  \phi_0=\phi_c-\dot\phi\,\tau,\qquad
+  \lambda_0=\lambda_c-\dot\lambda\,\tau-\tfrac12\ddot\lambda\,\tau^2.
+\end{equation}
+A pinned HIGH stands still (as a blocking high, life $3\,\bar T_{\mathrm{LOW}}$), so the fair spot
+stays fair. A TROPICAL pin is accepted even if its worked-back genesis point is over land:
+the storm is then taken as already mature at the pin, and it does not decay.
+
+\paragraph{Refitting the jets.} Write each wave as
+$a_m\sin\theta_m+b_m\cos\theta_m$ with $\theta_m=k_m\lambda-\varpi_m t$. A pinned LOW asks the
+nearest eddy-driven jet of its hemisphere for a trough upstream of it,
+$\lambda_{\mathrm{tr}}=\lambda_c-0.25\lambda_E/(a\cos\phi_c)$, with target meander
+$-A_{\mathrm{tot}}$. A pinned HIGH asks for a ridge, $+A_{\mathrm{tot}}$ at $\lambda_c$. The
+coefficients solve the ridge regression
+\begin{equation}
+  \min_{a,b}\ \sum_{i\in\text{pins}}\big(g(\lambda_i)-g_i^{\mathrm{target}}\big)^2
   +\mu\sum_m\big[(a_m-a_m^0)^2+(b_m-b_m^0)^2\big],\qquad \mu=0.1,
 \end{equation}
-which is linear in $(a,b)$, so it has a closed-form solution. The result is rescaled so that
-\begin{equation}
-  \sum_m\sqrt{a_m^2+b_m^2}\le1.5\,A_{\mathrm{tot}}.
-\end{equation}
+which is linear in $(a,b)$, so it has a closed-form solution. Both the amplitudes
+$A_m=\sqrt{a_m^2+b_m^2}$ and the phases change, rescaled so that
+$\sum_m A_m\le1.5\,A_{\mathrm{tot}}$.
 
 \paragraph{Feasibility (raise, never move).}
 \begin{align}
-  \text{HURRICANE:}\quad & m(\mathbf{p}^*)>0.5\ \wedge\ |\phi^*|\in\text{TC band}\pm2^\circ
-     \ \wedge\ T(\mathbf{p}^*)\ge24^\circ\mathrm{C};\\
-  \text{LOW presets:}\quad & |\phi^*|\in[\phi_{st,lo}-L_R^\circ,\ \phi_{st,hi}+L_R^\circ];\\
+  \text{HURRICANE:}\quad & \text{ocean},\ |\phi^*|\in\text{TC band}\pm2^\circ,\
+     e(\mathbf{p}^*)<-100\,\mathrm{m},\ T(\mathbf{p}^*)\ge24^\circ\mathrm{C};\\
+  \text{LOW presets:}\quad & |\phi^*|\in[\phi_{b,lo}-L_R^\circ,\ \phi_{b,hi}+L_R^\circ]
+     \ \text{for some storm band } b;\\
   \text{THUNDERSTORMS:}\quad & S(0.4,0.8,H)\,S(20,30,T)\ge0.3;\\
-  \text{two pins:}\quad & \operatorname{gc}(\mathbf{c}_i,\mathbf{c}_k)\ge0.75(r_i+r_k),
+  \text{two pins:}\quad & \operatorname{gc}(\mathbf{c}_i,\mathbf{c}_k)\ge
+     \begin{cases}0.75(r_i+r_k) & \text{same sign,}\\ 0.75\min(r_i,r_k) & \text{opposite;}\end{cases}
 \end{align}
-unless both pins ask for the same kind and their centres fall within $0.5\,r$, in which case
-they share one object (for example COLD\_FRONT and SQUALL\_LINE on one low).
+unless both pins ask for a LOW and their centres fall within $0.6\,r$: then they share it (a
+cold front and the squall line ahead of it). The error names the preset, the place and the
+reason (no ocean, latitude, land, cold sea, outside the storm track, dry air, too close).
 
 %====================================================================
 \section{Open points}

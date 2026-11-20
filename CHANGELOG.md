@@ -74,6 +74,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the systems' cirrus. The cirrus and the anvils follow the meandering
   jets (`weather.upper_stream`); the orographic cloud follows the
   systems' surface wind.
+- Synoptic weather, part 4: local weather presets pinned at coordinates
+  (`WeatherSpec.pins`, `clouds.synoptic.presets.WeatherPin`): a fair-weather
+  high, a warm front approaching, a cold front, a squall line, overcast
+  and drizzle, a hurricane, thunderstorms. A preset is a role relative to
+  a weather system (the pin on the cold front of a mature low): the
+  system is placed so, its track worked back to its birth, the jets
+  refitted so a pinned low lies downstream of a trough and a pinned high
+  under a ridge, and the free systems form round it, keeping clear of
+  it. A pin the planet cannot hold raises with the reason (no ocean,
+  latitude, land, cold sea, outside the storm track, dry air, pins too
+  close); pins on the same low share it. Stable air under a warm front's
+  shield and in its warm sector calms the fair-weather cumulus.
 
 ### Changed
 

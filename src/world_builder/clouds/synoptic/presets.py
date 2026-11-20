@@ -168,8 +168,8 @@ def _local_of(
 
 
 def _centre_for(pin_dir, role: np.ndarray, heading: float, radius: float, r: float):
-    """The centre that puts *pin_dir* at local *role* (radii): a fixed-point
-    iteration, as a system may span a good share of a small planet."""
+    """The centre that puts *pin_dir* at local *role* (radii), solved (a
+    system may span a good share of a small planet: no flat offset)."""
     lat, _ = latlon(pin_dir[None])
     h = 1.0 if lat[0] >= 0.0 else -1.0
     c, s = math.cos(heading), math.sin(heading)
@@ -180,11 +180,23 @@ def _centre_for(pin_dir, role: np.ndarray, heading: float, radius: float, r: flo
         return along * c - across * s, along * s + across * c  # east, north
 
     centre = _offset(pin_dir, *(-np.array(tangent(role))), radius)
-    for _ in range(8):
-        miss = role - _local_of(pin_dir, centre, heading, radius, r)
+    # Newton steps (a fixed-point one oscillates near a pole, where moving
+    # the centre east also turns its frame): the pin's local coordinates
+    # against tangent moves of the centre, by finite differences.
+    step = 0.01 * r
+    for _ in range(12):
+        here = _local_of(pin_dir, centre, heading, radius, r)
+        miss = role - here
         if np.linalg.norm(miss) < 1e-6:
             break
-        centre = _offset(centre, *(-np.array(tangent(miss))), radius)
+        jacobian = np.empty((2, 2))
+        for k, (de, dn) in enumerate(((step, 0.0), (0.0, step))):
+            moved = _local_of(
+                pin_dir, _offset(centre, de, dn, radius), heading, radius, r
+            )
+            jacobian[:, k] = (moved - here) / step
+        de, dn = np.linalg.solve(jacobian, miss)
+        centre = _offset(centre, de, dn, radius)
     return centre
 
 
