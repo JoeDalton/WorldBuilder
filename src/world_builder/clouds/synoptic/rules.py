@@ -72,6 +72,9 @@ WARM_SHIELD = (
 BAND_EDGE = 0.15
 #: A tropical cyclone's spiral bands' pitch, degrees.
 BAND_PITCH_DEG = 15.0
+#: How much stable air (under the warm front's shield, in the warm sector)
+#: clears the fair-weather cumulus.
+STABLE_CLEARING = 0.8
 #: Systems reach this many radii.
 REACH = 4.0
 #: A front's genera fade out over this many radii past its ends, the broad
@@ -106,10 +109,14 @@ def _bump(x, x0, x1, edge):
 
 
 class _Canvas:
-    """The channels being drawn, with soft additions and clearing."""
+    """The channels being drawn, with soft additions and clearing. The
+    convective background is kept apart: stable air calms it alone
+    (:meth:`calm`), not the systems' own convection."""
 
     def __init__(self, n: int, base: np.ndarray, depth: np.ndarray):
-        self.c = {"convective": np.clip(base, 0.0, 1.0).astype(np.float64)}
+        self.base = np.clip(base, 0.0, 1.0).astype(np.float64)
+        self.calmed = np.ones(n)
+        self.c = {"convective": np.zeros(n)}
         for g in LAYERS:
             self.c[g] = np.zeros(n)
         self.depth = depth.astype(np.float64)
@@ -124,6 +131,10 @@ class _Canvas:
     def deepen(self, idx, value):
         self.depth[idx] = np.maximum(self.depth[idx], np.clip(value, 0.0, 1.0))
 
+    def calm(self, idx, factor):
+        """Thin the fair-weather background (stable air)."""
+        self.calmed[idx] *= np.clip(factor, 0.0, 1.0)
+
     def clearing(self, names, idx, factor):
         for name in names:
             self.clear[name][idx] *= np.clip(factor, 0.0, 1.0)
@@ -132,6 +143,8 @@ class _Canvas:
         self.post.append((name, idx, value))
 
     def finish(self) -> GenusFields:
+        background = self.base * self.calmed
+        self.c["convective"] = 1.0 - (1.0 - background) * (1.0 - self.c["convective"])
         for name, factor in self.clear.items():
             self.c[name] *= factor
         for name, idx, value in self.post:
@@ -160,8 +173,14 @@ def _low(canvas, idx, x, y, obj, t, sea):
     taper_w = (1.0 - S(0.7 * length(f.warm), length(f.warm), a_w)) * (
         1.0 - S(0.0, END_FADE, overshoot(pts, f.warm))
     )
+    overcast = np.zeros(len(idx))
     for genus, lo, hi, cover in WARM_SHIELD:
-        canvas.add(genus, idx, cover * _bump(d_w, lo, hi, BAND_EDGE) * taper_w * power)
+        layer = cover * _bump(d_w, lo, hi, BAND_EDGE) * taper_w * power
+        canvas.add(genus, idx, layer)
+        if genus in ("nimbostratus", "altostratus"):
+            overcast = np.maximum(overcast, layer)
+    # Stable overrunning air: no fair-weather cumulus under the shield.
+    canvas.calm(idx, 1.0 - STABLE_CLEARING * overcast)
 
     # A Shapiro-Keyser low's bent-back front, wrapped in its cloud head.
     if len(f.bent) >= 2:
@@ -182,8 +201,13 @@ def _low(canvas, idx, x, y, obj, t, sea):
     canvas.add("convective", idx, 0.9 * line * taper_c * power)
     canvas.deepen(idx, line * (1.0 - 0.5 * from_triple / max(cold_len, 1e-6)))
     ahead = _bump(-d_c, 0.08, 0.25, 0.05) * taper_c
-    canvas.add("convective", idx, 0.5 * ahead * power)
-    canvas.deepen(idx, 0.5 * ahead)
+    if "squall" in obj.variant:
+        # A pre-frontal squall line: the band ahead is cumulonimbus.
+        canvas.add("convective", idx, 0.85 * ahead * power)
+        canvas.deepen(idx, ahead)
+    else:
+        canvas.add("convective", idx, 0.5 * ahead * power)
+        canvas.deepen(idx, 0.5 * ahead)
 
     # The warm sector: overcast and drizzle near the warm front, Sc
     # elsewhere (mostly over sea).
@@ -198,6 +222,9 @@ def _low(canvas, idx, x, y, obj, t, sea):
     sector = warm_side * (1.0 - S(2.0, 2.5, rho)) * past_w * past_c
     canvas.add("stratus", idx, 0.6 * _gauss(d_w, 0.0, 0.4) * sector * power)
     canvas.add("stratocumulus", idx, (0.35 + 0.3 * sea) * sector * power)
+    # The warm sector's moist, stable air: stratus and stratocumulus, not
+    # fair-weather cumulus.
+    canvas.calm(idx, 1.0 - STABLE_CLEARING * sector * power)
 
     # The comma head, then the dry slot cutting in behind the cold front.
     # The cloud head outlives the low's deepening: it forms as the low

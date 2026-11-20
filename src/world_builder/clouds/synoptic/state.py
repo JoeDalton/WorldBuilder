@@ -32,6 +32,7 @@ class SynopticState:
 def synoptic_state(spec) -> SynopticState:
     """:returns: the state of :class:`weather.WeatherSpec` *spec* at its
     ``time_s`` (cached per process)"""
+    from world_builder.clouds.synoptic.presets import solve
     from world_builder.terrain.planet import Planet
 
     scales = Scales.from_planet(spec.planet)
@@ -39,5 +40,8 @@ def synoptic_state(spec) -> SynopticState:
     systems: tuple = ()
     if spec.systems:
         planet = Planet(spec.planet)
-        systems = tuple(population(spec, scales, jets, planet, spec.time_s))
+        pinned: tuple = ()
+        if spec.pins:
+            pinned, jets = solve(spec, scales, planet)
+        systems = tuple(population(spec, scales, jets, planet, spec.time_s, pinned))
     return SynopticState(scales=scales, jets=jets, systems=systems, t=spec.time_s)

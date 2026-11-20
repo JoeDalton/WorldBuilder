@@ -52,6 +52,7 @@ from panda3d.core import SamplerState, Texture
 from world_builder.clouds.synoptic.fields import wind as surface_wind
 from world_builder.clouds.synoptic.jets import across_axis, system_rows
 from world_builder.clouds.synoptic.jets import upper_stream as jets_upper_stream
+from world_builder.clouds.synoptic.presets import thunderstorm_boost
 from world_builder.clouds.synoptic.rules import (
     LAYERS,
     GenusFields,
@@ -102,6 +103,8 @@ class WeatherSpec:
         any time is as cheap as any other
     :ivar systems: False for a weather without systems (no lows, highs or
         tropical cyclones: the climate's background alone)
+    :ivar pins: local presets (:class:`synoptic.presets.WeatherPin`) pinned
+        at coordinates at :attr:`time_s`; the systems form round them
     :ivar zonal: (|latitude| degrees, coverage) control points of the
         fair-weather background, or None for the planet's own
         (:func:`synoptic.rules.zonal_cover`)
@@ -134,6 +137,7 @@ class WeatherSpec:
     seed: int = 11
     time_s: float = 0.0
     systems: bool = True
+    pins: tuple = ()
     zonal: tuple | None = None
     season: float = 0.0
     meso_wavelength: float = 160e3
@@ -414,6 +418,8 @@ def _climate_gridded(spec, planet):
 #: How much the mesoscale texture modulates the systems' layers, relative to
 #: its share of the cumulus's coverage.
 LAYER_TEXTURE = 2.0
+#: A THUNDERSTORMS pin's cluster's cover at its centre.
+THUNDERSTORM_COVER = 0.7
 #: The channels of :func:`synoptic_cube`.
 SYNOPTIC_CHANNELS = ("convective", "depth", "shelf") + LAYERS
 
@@ -451,9 +457,11 @@ def genus_fields(
         spec.seed * 1000 + _SEED_MESO,
     )
     base = np.clip(base + spec.meso_strength * meso, 0.0, 1.0)
-    unstable = instability(humidity, temperature)
+    cluster = thunderstorm_boost(spec, state.scales, dirs)
+    unstable = np.maximum(instability(humidity, temperature), cluster)
     tropics = 0.5 + 0.5 * np.exp(-(((lat - spec.season) / 6.0) ** 2))
     base = 1.0 - (1.0 - base) * (1.0 - 0.4 * unstable * tropics)
+    base = 1.0 - (1.0 - base) * (1.0 - THUNDERSTORM_COVER * cluster)
     out = apply_systems(
         dirs,
         state.systems,
