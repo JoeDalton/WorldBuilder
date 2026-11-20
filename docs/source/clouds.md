@@ -47,13 +47,11 @@ by two techniques:
     sphere at mid-slab carrying the far field (`deck_mesh`, `deck_shader`,
     its bin `CLOUD_BIN`), drawn only in the sea's reflection;
     `shaders/cloud.frag` is its fragment stage;
-- optionally, a **sheet** above it
-  ([`cirrus.py`](../../src/world_builder/clouds/cirrus.py), `CloudSheet`): high
-  cirrus, baked patches stamped along the upper wind.
+- optionally (`PlanetClouds(cirrus=True)`), the weather's **cirrus** in the
+  march's [high layer](#the-high-layer), streaks along the upper wind.
 
-They share the weather, the sun, the settings and the camera, and the part
-checks the one rule the pair must keep: the sheet lies above the volume's slab
-and inside the air.
+The part checks the rules the layers must keep (`check_layers`): the high
+layer's slab lies above the volume's slabs and inside the air.
 
 [`weather.py`](../../src/world_builder/clouds/weather.py) builds the weather
 they follow: a cube map of target coverage (`WeatherSpec`), turned into the fbm
@@ -259,8 +257,8 @@ The default (`GeneraSpec()`) lists all six but has features only for the
 convective clouds and the stratus; the others are not marched there
 ([an empty genus is not marched](#the-recipe-genera)). The high layer
 (cirrus, cirrostratus, cirrocumulus) is [a band of the march's own](#the-high-layer)
-above them, with its genera's recipes still to come; until they replace it,
-the cirrus sheet ([the parts](#the-parts)) draws the cirrus.
+above them; it draws the weather's cirrus too
+([the weather's cirrus](#the-cirrus)).
 
 Slabs may overlap: `march.sky_bands` merges them into at most four
 (`MAX_SKY_BANDS`) disjoint bands of sky, each with a bit mask of the genera
@@ -762,9 +760,9 @@ anvil's top and the high layer never share a sample. Real cirrus spans about
 6-12 km at mid-latitudes; here it must clear the anvils. Inside the slab one
 band could give each genus a height of its own later.
 `planet.check_layers` refuses a high slab whose base is not above the union's
-top, or whose top is not inside the air. The cirrus sheet (11-12 km) may lie
-inside it: the sheet is what the high layer replaces, and both draw until it
-does. `PlanetClouds.top_radius` counts the high slab while it is drawn.
+top, or whose top is not inside the air (with the weather's cirrus, without
+genera too: `check_layers(..., cirrus=True)`). `PlanetClouds.top_radius`
+counts the high slab while it is drawn.
 
 Rejected:
 
@@ -791,8 +789,11 @@ Rejected:
   cost the low clouds 0.1-0.2 ms more, with the crossing's own work about
   nothing (performance §37, "Task 23").
 - Everything is read once a crossing, at its **sheet point**: where the ray
-  crosses the slab's middle (`sheetCrossing`, `march.sheet_crossing`; the
-  crossing's middle where it does not). The coverage (cube B's channels
+  crosses the slab's middle (`sheetCrossing`, `march.sheet_crossing`).
+  A crossing that never meets the middle (a camera inside the slab,
+  looking away from it) draws nothing: read at the crossing's middle
+  instead, another height for every ray, it drew a second, offset copy of
+  the cirrus seen from inside the slab. The coverage (cube B's channels
   1-3, cirrus, cirrostratus and cirrocumulus, in one fetch) and every
   genus's pattern, as a thin sheet's: jittered samples through the slab
   would wander a slant ray over its 1.5 km, many grains of 200 m or fibres
@@ -865,8 +866,9 @@ ripples without shading, regularly arranged, each under 1° wide):
 #### The cirrus
 
 The cirrus (`cover.r`; `cirrusStreaks` in `cloud_march.glsl`, its CPU
-mirror `march.cirrus_streaks`) replaces the old sheet's baked stamps, whose
-square patches showed. WMO: detached white filaments, patches or bands,
+mirror `march.cirrus_streaks`) replaced the old cirrus sheet's baked
+stamps, whose square patches showed (the sheet is gone: Task 24). WMO:
+detached white filaments, patches or bands,
 fibrous or silky, often with hooks (uncinus) or tufts (floccus), fall
 streaks slanted by the shear. The research's recipe (§2, "Cirrus in
 practice"): noise warped along the flow plus curl, stretched 8-20 times
@@ -875,7 +877,12 @@ per-pixel cirrus (noise across the stream function's contours) gave
 regular parallel bands; each part below breaks them.
 
 **The upper wind on the GPU** (`highWind`, `genera.high_wind_cube`): an
-RGBA32F cube map 128 texels a face (7.4 km on a 600 km planet) of the
+RGBA32F cube 128 texels a face (7.4 km on a 600 km planet), stored as a
+2D texture array of its six faces and blended in float by the shader
+(`highWindAt`, as `weather.sample_cube`), not as a cube map: a cube map's
+hardware filter weighs its texels in 8 bits, which stepped the stream
+function by 1/256 of a texel (about 30 m) and drew the fibres as stairs
+up close. It holds the
 wind (planet frame, the jets' fastest 1, `genera.upper_wind_field`, which
 is `upper_wind_at` for many directions at once) and its **stream
 function** (`genera.upper_stream`, metres: the weather's
@@ -909,7 +916,7 @@ along it, and its smoothstep window on the value noise):
 - **Patches** 9 x 30 km (`CI_PATCH`), moved down by 0.55 × the coverage
   (`CI_PATCH_COVER`): their share of the sheet is about the coverage (0.2
   gives 0.20, 0.5 gives 0.52, 0.8 gives 0.84), the meaning of the
-  weather's cirrus cover map (the sheet's). The coverage thins the
+  weather's cirrus cover map. The coverage thins the
   patches. It does not scale the density, which only fades in over its
   first 0.1 (`CI_COVER_EDGE`): a sky of 0.2 cover holds fewer streaks,
   not fainter ones.
@@ -925,7 +932,7 @@ along it, and its smoothstep window on the value noise):
   `CI_HOOK`: the fall streak's shear bends the tail into a hook),
   weighted `(1 - k/6)^1.3`, averaged (a line integral: a smooth tail, not
   the head's copies, which the maximum of the taps showed), times the
-  strands. The tufts lead and the tails lag upwind, as the sheet's did.
+  strands. The tufts lead and the tails lag upwind, as the old sheet's did.
 - **Heads** (`CI_HEAD_*`, `CI_FAN`; reworked after Task 23, whose heads,
   the tuft noise through a narrow window at density 1, read as solid
   rounded blobs and, from overhead and 14 km up, as smeared chevrons). The
@@ -964,11 +971,11 @@ a pixel's footprint along the view, not across it, so fibres running
 across a grazing view stay sharp toward the horizon, and fibres running
 along it fade before they alias. The tufts (nearly round) fade by the
 slant's footprint. Without this the far cirrus was a faint uniform haze
-where the sheet showed streaks.
+where the old sheet showed streaks.
 
 **Optics** (`HIGH_OPTICS["cirrus"]`): a full density 1.5 optical depth
 straight through, so a head's strands up to about 1.8 and the fibres 0.3-1 (the research's
-0.03-3, SIRTA's typical 0.1-1), the sheet's cap 2.5, and a faint 22° halo
+0.03-3, SIRTA's typical 0.1-1), a cap of 2.5, and a faint 22° halo
 (0.4, the cirrostratus's 1): it shows only where a streak is, "fragments
 of a halo".
 
@@ -980,19 +987,32 @@ Its poses stand under its near edge, 55 km north
 `genus_cirrus_overhead` (under its centre, straight up: its pattern
 top-down), `genus_cirrus_grazing` (10° up).
 
-**The weather's cirrus** (`--cirrus`): the default scene's cirrus is still
-the old sheet (`--cirrus sheet`), fed by `weather.cirrus_cover_map` and the
-upper wind. `--cirrus march` draws it with the march instead
-(`GeneraSpec.cirrus_weather`: the cover map fills cube B's channel 1,
-under the features, and compiles the high layer); `--cirrus none` (or
-`--no-cirrus`) neither. The two draw the same cover, so Task 24 can compare
-them before the sheet goes. The march's costs less (performance §37, "Task
-23").
+**The weather's cirrus** (`--cirrus`, on by default; `--no-cirrus`): the
+planet's cirrus, from `weather.cirrus_cover_map` and the upper wind, is
+the march's (`PlanetClouds(cirrus=True)`, `CloudLook(cirrus=True)`). With
+the genera it sets `GeneraSpec.cirrus_weather`: the cover map fills cube
+B's channel 1, under the features, and compiles the high layer. Without
+genera (one cloud type: the demo without `--genera`, `demo_world.py`,
+`cloud_bench.py`) the march takes a high layer of the weather's cirrus
+alone (`genera.weather_cirrus`: a `GeneraSpec` with no genus and no
+feature, only its high layer read), over its one type, on the clouds' own
+weather. With `--showcase` the default is off: the showcase has a cirrus
+feature of its own, which the weather's would bury.
+
+The **C key** shows or hides the march's cirrus, the weather's and the
+features' (`PlanetClouds.set_genus_visible("cirrus", ...)`: the high
+genera have bits of `uGenusMask` past the low genera's,
+`march.HIGH_MASK_SHIFT`, and `highCrossing` drops a hidden one's
+coverage); the HUD's "march cirrus on/off". It replaced the old cirrus
+sheet (baked stamps on a sphere at 11-12 km), deleted with
+its atlas, its bake and preview scripts and its shaders in Task 24: the
+march's draws the same cover, in less time (performance §37, "Task
+24").
 
 #### The light, the shadows, the cost
 
-**The light** is the cirrus sheet's (`thinSlabRadiance` in
-`cloud_shading.glsl`, which `cirrus.frag` uses too):
+**The light** is a thin slab's (`thinSlabRadiance` in
+`cloud_shading.glsl`, moved there from the old cirrus sheet's shader):
 
 - no sun march, the sunward half of the slab's own depth instead;
 - the cirrus optics' phase (ice, strongly forward);
@@ -1002,20 +1022,21 @@ them before the sheet goes. The march's costs less (performance §37, "Task
 The sun's reddening and the twilight come from `planetCloudLight` at the
 crossing's middle, at the high layer's own height. So it stays lit, and
 reddens, after the cumulus below has gone grey. Like the low clouds in the
-march (and unlike the sheet), it takes no eclipse or mountain shadow on its
-sunlight.
+march, it takes no eclipse or mountain shadow on its sunlight (the old
+sheet took both).
 
 **Shadows: none.** The high layer casts no shadow, into the light volume or
 the cloud shadow maps, so it does not darken the ground or the clouds below.
-The cirrus sheet cast none either. At 0.03-0.3 a full veil would take 2-19 %
-of the sun. Through the light volume it would cost a band of 32 slices for
-that. If a thick cirrostratus deck should dim the ground, its depth fits the
+The old cirrus sheet cast none either. At 0.03-0.3 a full veil would take
+2-19 % of the sun. Through the light volume it would cost a band of 32
+slices for that. If a thick cirrostratus deck should dim the ground, its depth fits the
 shadow maps' chord alone. That would be a term in the bakes, not in the
 volume.
 
 **What costs nothing.** `genera.high_genera(spec, covered=True)` lists the
-high genera a feature covers. With none (the demo's default) the march
-compiles no high layer at all: it keeps `cloud_march.frag`
+high genera a feature covers (and the cirrus with the weather's). With
+none (`--no-cirrus` and no high feature) the march compiles no high layer
+at all: it keeps `cloud_march.frag`
 (`march.march_fragment`, as for the recipes). With one, it compiles
 `cloud_march_high.frag` or `cloud_march_recipes_high.frag` (`CLOUD_HIGH`)
 and builds coverage cube B (and the upper wind's cube) even if no other
@@ -1023,19 +1044,20 @@ genus reads it. At 2560 x 1440 (performance §37, "Task 23"): a
 cirrostratus filling the view costs about 0.3 ms, the showcase's
 cirrocumulus patch 0.2-0.25 ms, the cirrus field filling the view 0.3-0.35
 ms; the weather's cirrus by the march 0.2 ms, against the old sheet's
-0.35-0.55 ms. (Tasks 21-22 measured about 1.0 and 0.8 ms in a session
+0.35-0.55 ms (Task 24's comparison: performance §37). (Tasks 21-22 measured about 1.0 and 0.8 ms in a session
 that drifted by 1 ms; the crossings sorted among the segments cost
 0.1-0.2 ms of the difference.)
 
-With `--cirrus march`, the `high_cb`, `high_overhead`, `high_grazing` and
+With `--genera`, the `high_cb`, `high_overhead`, `high_grazing` and
 `high_above` poses show the weather's cirrus toward the cumulonimbus:
 behind the anvil, overhead, at a grazing angle and from 14 km up through
 it.
 
 #### Not yet, for the high layer
 
-- **The sheet's removal** with the comparison of `--cirrus sheet` and
-  `march` (Task 24).
+- **The cirrus in the sea's reflection**: the reflection draws the deck
+  alone, so the weather's cirrus, which the old sheet drew there, is not
+  reflected.
 - **The cirrus's species as choices** (fibratus, uncinus, spissatus,
   castellanus, floccus): one recipe mixes the fibres and the hooked tufts;
   no spissatus (dense, greyish) or castellanus (turrets).
@@ -1311,9 +1333,7 @@ genera's maps and shapes (`test_clouds_genera.py`, `test_clouds_congestus.py`,
 volume and the shadows. They cannot check the pixels, nor even whether the
 GLSL compiles (`Shader.load` succeeds with no graphics context). That needs
 [`scripts/terrain_shots.py`](../../scripts/terrain_shots.py) (its `cirrus_*`,
-`genera_*` and `in_clouds` poses among others) or an offscreen GL context;
-the cirrus's shapes can be previewed without one
-([`scripts/cirrus_preview.py`](../../scripts/cirrus_preview.py)).
+`genera_*` and `in_clouds` poses among others) or an offscreen GL context.
 
 [`scripts/cloud_bench.py`](../../scripts/cloud_bench.py) times and shoots
 the clouds alone (the air, the sky, no terrain) from fixed poses, still or

@@ -18,9 +18,10 @@ cloud) built with numpy from:
 
 Lengths follow the planet's feature scale, like the terrain's.
 
-The cirrus above (:mod:`cirrus`) has a weather of its own, from the same
-systems: an **upper wind** (the jet streams, deflected around the cyclones),
-whose stream function sets the direction of its fibres
+The cirrus above (the march's high layer, :mod:`genera`) has a weather of
+its own, from the same systems: an **upper wind** (the jet streams,
+deflected around the cyclones), whose stream function sets the direction of
+its fibres
 (:func:`stream_table`, :func:`stream_vortices`), and a cube map of its
 **cover** (:func:`cirrus_cover_map`): along the jets, over the wet tropics
 (anvils), in a shield ahead of each cyclone.
@@ -273,10 +274,22 @@ def build_coverage_texture(cube: np.ndarray) -> Texture:
 
 def build_high_wind_texture(cube: np.ndarray) -> Texture:
     """The upper wind (:func:`genera.high_wind_cube`: the wind, its stream
-    function) as an RGBA32F cube map, linearly filtered (``highWind``): the
-    stream function needs 32 bits (hundreds of kilometres, to metres)."""
-    tex = build_weather_texture(cube)
-    tex.set_name("cloud_high_wind")
+    function) as an RGBA32F 2D texture array, a layer per cube face, rows
+    t up (``highWind``). Not a cube map: its hardware filter weighs the
+    texels in 8 bits, which stepped the stream function by about 30 m; the
+    shader blends four texels in float (``highWindAt``, as
+    :func:`sample_cube`). 32 bits: the stream function spans hundreds of
+    kilometres, and the fibres need it to metres."""
+    size = cube.shape[1]
+    tex = Texture("cloud_high_wind")
+    tex.setup_2d_texture_array(size, size, 6, Texture.T_float, Texture.F_rgba32)
+    # Panda keeps an RGBA texture's RAM image as BGRA.
+    data = np.ascontiguousarray(cube[..., [2, 1, 0, 3]], dtype=np.float32)
+    tex.set_ram_image(data.tobytes())
+    tex.set_magfilter(SamplerState.FT_nearest)
+    tex.set_minfilter(SamplerState.FT_nearest)
+    tex.set_wrap_u(SamplerState.WM_clamp)
+    tex.set_wrap_v(SamplerState.WM_clamp)
     return tex
 
 
@@ -674,8 +687,8 @@ def stream_table(spec: WeatherSpec, size: int = STREAM_TABLE_SIZE) -> np.ndarray
     """The zonal upper wind's stream function at *size* latitudes evenly
     from -90 to 90 degrees, metres: ``psi = -R * integral(u dlat)``, so
     the wind blows along its contours and ``|grad psi|`` is its speed. The
-    cirrus fibres are those contours (:mod:`cirrus`), one every fibre
-    spacing where the jet blows its fastest.
+    cirrus's streaks follow those contours (:func:`genera.upper_stream`,
+    the march's ``cirrusStreaks``).
 
     :returns: (size,) float64
     """
@@ -763,7 +776,7 @@ def _cirrus_compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate
 @functools.cache
 def cirrus_cover_map(spec: WeatherSpec, size: int = CIRRUS_SIZE) -> np.ndarray:
     """The cirrus's cover as a cube map (cached per process): the share of
-    the sheet that holds cirrus.
+    the high layer that holds cirrus (:attr:`genera.GeneraSpec.cirrus_weather`).
 
     :returns: (6, size, size) float32 in [0, 1], the layout of
         :func:`sky.starfield.cube_directions`

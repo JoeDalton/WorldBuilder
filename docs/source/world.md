@@ -69,10 +69,11 @@ parts.
     Without one, the terrain still draws its sea, as flat water only.
   - `ambient` and `exposure`: the terrain's sky light and tonemap.
 - **`CloudLook`**: `PlanetClouds`' arguments: altitude, cloud type,
-  `cirrus` (a `CirrusSpec` for high cirrus above the low clouds, or None),
-  weather, seeds, shading. Its `exposure` (0.9) feeds the sky's tonemap, as
-  the sky's and the terrain's do; keep them equal, or hazed clouds stop
-  matching the sky behind them. The cirrus must clear the low clouds' slab
+  `cirrus` (True: the weather's high cirrus above the low clouds, drawn by
+  the march's high layer; default False), weather, seeds, shading,
+  `genera`. Its `exposure` (0.9) feeds the sky's tonemap, as the sky's and
+  the terrain's do; keep them equal, or hazed clouds stop matching the sky
+  behind them. The cirrus's slab (11-12.5 km) must clear the low clouds'
   and stay inside the air, or the world refuses it.
 - **`OceanLook`**: `Sea`'s arguments: water colour, wind, swell, foam,
   `near_band` (the altitudes over which the near look fades into the far

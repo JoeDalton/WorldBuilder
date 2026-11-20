@@ -41,12 +41,11 @@ either. Run it from an environment where world_builder is importable::
                      world_builder.settings.WorldSettings)
     --<part>-quality one part's preset, over --quality
     --no-clouds      no clouds at all (neither cumulus nor cirrus)
-    --cirrus         who draws the weather's cirrus: sheet (the cirrus
-                     sheet, clouds.cirrus: the default), march (the march's
-                     high layer, its flow streaks: clouds.genera's
-                     cirrus_weather; needs the genera) or none; until the
-                     sheet is retired (cloud-genera Task 24)
-    --no-cirrus      --cirrus none
+    --cirrus / --no-cirrus
+                     the weather's cirrus in the march's high layer, its
+                     flow streaks (clouds.genera's cirrus_weather): on by
+                     default, off with --showcase (its own cirrus feature
+                     alone)
     --ring           a small ring around the planet (off by default, so
                      runs compare with earlier ones)
     --test-ship      a model hung beside the white test ball, lit by the
@@ -92,7 +91,7 @@ Controls (AZERTY):
                     terrain, air, sky, clouds, ocean (each part's own
                     settings; a cloud or ocean change may refill a moment)
     F6              cycle every part's preset at once
-    C               show / hide the high cirrus
+    C               show / hide the march's cirrus
     1-9             show / hide each genus of the low clouds (--showcase)
     F7              cycle the shadows' preset (the clouds' shadow on the
                     ground: off at low, more samples above)
@@ -165,7 +164,6 @@ from world_builder.asteroids.haze import ring_depth
 from world_builder.asteroids.spec import PRESETS as FIELD_PRESETS
 from world_builder.asteroids.spec import Annulus, Clumping, Density, FieldSpec
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
-from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.genera import GeneraSpec, showcase_features
 from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds
@@ -223,9 +221,6 @@ CLOUD_SKY_LIGHT = 0.35
 # The sun's elevation the ocean's water colour was tuned in (the start pose).
 WATER_TUNED_ELEVATION = 35.0
 CLOUD_BASE = 2200.0  # metres above sea level: above the start pose
-#: Who draws the weather's cirrus (--cirrus): the sheet (clouds.cirrus),
-#: the march's high layer (GeneraSpec.cirrus_weather), or nobody.
-CIRRUS_MODES = ("sheet", "march", "none")
 # The planet's ring: from and to this many planet radii from its centre, in
 # its equator's plane (the field's xy plane is the world's: the poles are on
 # z), this thick, metres. Seen from the start area, 10-26 degrees over the
@@ -450,7 +445,7 @@ class TerrainDemo(ShowBase):
         cloud_debug: int = 0,
         genera: bool = False,
         showcase: bool = False,
-        cirrus: str | bool = "sheet",
+        cirrus: bool | None = None,
         ocean_debug: int = 0,
         preset: str | None = None,
         seed: int | None = None,
@@ -468,10 +463,10 @@ class TerrainDemo(ShowBase):
         :param clouds: draw the planet's clouds
         :param cloud_debug: the clouds' profiling switches
             (:meth:`PlanetClouds.set_debug`)
-        :param cirrus: who draws the weather's cirrus (:data:`CIRRUS_MODES`):
-            ``"sheet"`` (:mod:`clouds.cirrus`), ``"march"`` (the march's high
-            layer: ``GeneraSpec.cirrus_weather``, with the genera) or
-            ``"none"``; True = sheet, False = none
+        :param cirrus: the weather's cirrus in the march's high layer
+            (``PlanetClouds(cirrus=True)``); None = on, or with the showcase
+            off (it has a cirrus feature of its own, which the weather's
+            would bury)
         :param ocean_debug: the sea's debug view (:meth:`Sea.set_debug_mode`)
         :param preset: overrides the level's planet preset (PRESETS)
         :param test_ship: a model hung beside the white test ball (the
@@ -513,14 +508,7 @@ class TerrainDemo(ShowBase):
         # The showcase is the genera, each alone (--showcase)
         self._showcase = showcase
         self._genera = genera or showcase
-        if isinstance(cirrus, bool):
-            cirrus = "sheet" if cirrus else "none"
-        if cirrus not in CIRRUS_MODES:
-            raise ValueError(f"cirrus {cirrus!r} not one of {CIRRUS_MODES}")
-        if cirrus == "march" and not self._genera:
-            print("--cirrus march needs the genera: no cirrus")
-            cirrus = "none"
-        self._cirrus = cirrus
+        self._cirrus = not showcase if cirrus is None else bool(cirrus)
         print("starting terrain workers ...")
         self.executor = ChunkExecutor(
             backend=backend, workers=world.terrain.workers or None
@@ -1093,9 +1081,9 @@ class TerrainDemo(ShowBase):
             if cs is not None
             else "clouds off"
         )
-        if self.clouds is not None and self.clouds.sheet is not None:
-            shown = not self.clouds.sheet.root.is_hidden()
-            clouds += f"   cirrus {'on' if shown else 'off'} (C)"
+        if self.clouds is not None and "cirrus" in self.clouds.volume.high_genera:
+            shown = self.clouds.genus_visible("cirrus")
+            clouds += f"   march cirrus {'on' if shown else 'off'} (C)"
         if self.clouds is not None and len(self.clouds.genus_names) > 1:
             clouds += "   genera: " + "  ".join(
                 f"{k + 1} {name}{'' if self.clouds.genus_visible(k) else ' (off)'}"
@@ -1170,16 +1158,13 @@ class TerrainDemo(ShowBase):
             atmospheres=self.atmospheres,
             atmosphere=0,
             altitude=CLOUD_BASE,
-            cirrus=CirrusSpec() if self._cirrus == "sheet" else None,
+            cirrus=self._cirrus,
             genera=self._genera_spec(),
             planet=self.terrain.spec,
             settings=self.world.clouds,
         )
-        self.clouds.bind_inputs(functools.partial(self.shadows.bind, body=0))
         self.clouds.bind_shadow_inputs(self.terrain.root)  # their shadow on it
         self.clouds.bind_shadow_inputs(self.home.models.inputs)  # on the models
-        if self.home.shadow_map is not None:  # the peaks' on them
-            self.clouds.bind_inputs(self.home.shadow_map.bind)
         # Their shadow marched once per texel of two maps (Shadows, part E).
         self.cloud_maps = CloudShadowMaps(
             self.win, self.clouds, self.world.shadows.cloud_map_size
@@ -1234,10 +1219,8 @@ class TerrainDemo(ShowBase):
                 features=showcase_features(),
                 background=False,
             )
-        # The weather's cirrus by the march (--cirrus march), not the sheet
-        return GeneraSpec(
-            WeatherSpec(spec), focus=focus, cirrus_weather=self._cirrus == "march"
-        )
+        # The weather's cirrus: PlanetClouds(cirrus=) sets cirrus_weather
+        return GeneraSpec(WeatherSpec(spec), focus=focus)
 
     def _toggle_genus(self, index: int) -> None:
         """Show or hide a genus of the low clouds (keys 1-9; a look toggle:
@@ -1248,14 +1231,12 @@ class TerrainDemo(ShowBase):
         self.clouds.set_genus_visible(index, not visible)
 
     def _toggle_cirrus(self) -> None:
-        """Show or hide the high cirrus (a look toggle)."""
-        if self.clouds is None or self.clouds.sheet is None:
+        """Show or hide the march's cirrus, the weather's and the features'
+        (a look toggle: ``set_genus_visible("cirrus")``)."""
+        if self.clouds is None or "cirrus" not in self.clouds.volume.high_genera:
             return
-        root = self.clouds.sheet.root
-        if root.is_hidden():
-            root.show()
-        else:
-            root.hide()
+        visible = self.clouds.genus_visible("cirrus")
+        self.clouds.set_genus_visible("cirrus", not visible)
 
     def _cycle_quality(self, section: str) -> None:
         """One part (a WorldSettings section) to its next preset."""
@@ -1584,18 +1565,10 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--cirrus",
-        default="sheet",
-        choices=CIRRUS_MODES,
-        help="who draws the weather's cirrus: the sheet (clouds.cirrus, the "
-        "default), the march's high layer (its flow streaks; with the genera) "
-        "or none",
-    )
-    parser.add_argument(
-        "--no-cirrus",
-        dest="cirrus",
-        action="store_const",
-        const="none",
-        help="--cirrus none",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="the weather's cirrus in the march's high layer, its flow streaks "
+        "(on by default; off by default with --showcase: its own cirrus alone)",
     )
 
 

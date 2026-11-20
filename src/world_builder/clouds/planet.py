@@ -1,25 +1,23 @@
 """
-A planet's clouds as one part: the low clouds' volume, the cirrus sheet above.
+A planet's clouds as one part: the low clouds and the cirrus above them,
+one raymarch.
 
 :class:`PlanetClouds` is what a game (or :class:`world_builder.world.World`)
-builds for a planet. It owns two layers, one per technique:
+builds for a planet. It owns the **volume**: the low clouds, cumulus by
+default (any :class:`cloud.CloudType`, or the genera), raymarched
+(:class:`march.CloudMarch`; it needs the split cameras,
+:meth:`PlanetClouds.use_split_depth`), with a deck sphere for the sea's
+reflection, and, with ``cirrus=True``, the weather's cirrus in the march's
+high layer (:func:`weather.cirrus_cover_map`; clouds.md, "The high layer").
 
-* the **volume**: the low clouds, cumulus by default (any
-  :class:`cloud.CloudType`), raymarched (:class:`march.CloudMarch`; it needs
-  the split cameras, :meth:`PlanetClouds.use_split_depth`), with a deck
-  sphere for the sea's reflection;
-* the **sheet** (:class:`cirrus.CloudSheet`, optional): high cirrus as one
-  surface above them.
+The layers follow the planet's weather (the same cyclones carry the cumulus
+and bend the cirrus), the sun, the settings and the camera. They have rules
+of their own (:func:`check_layers`): the high layer's slab must lie above
+the volume's slabs (all the genera's) and inside the air; the genera must
+fit the march (how many, and their bands of sky).
 
-They share the planet's weather (the same cyclones carry the cumulus and bend
-the cirrus), the sun, the settings and the camera, so a game updates, lights
-and removes them as one. The pair also has a rule of its own
-(:func:`check_layers`): the sheet must lie above the volume's slabs (all
-the genera's), which is what makes its draw order hold without sorting (see
-:mod:`cirrus`), and inside the air; the genera must fit the march (how many,
-and their bands of sky).
-
-Design notes: docs/source/atmosphere.md, "Planet clouds" and "Cirrus".
+Design notes: docs/source/clouds.md and docs/source/atmosphere.md, "Planet
+clouds".
 """
 
 from __future__ import annotations
@@ -32,13 +30,11 @@ from numpy.typing import ArrayLike
 from panda3d.core import NodePath
 
 from world_builder.atmosphere import Atmospheres
-from world_builder.clouds.cirrus import CirrusSpec, CloudSheet
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
-from world_builder.clouds.genera import GeneraSpec, genus_specs
+from world_builder.clouds.genera import HIGH_SLAB, GeneraSpec, genus_specs
 from world_builder.clouds.march import MAX_SKY_BANDS, CloudMarch, sky_bands
 from world_builder.clouds.noise import MAX_GENERA, DensityField
 from world_builder.clouds.weather import WeatherSpec
-from world_builder.depth import HIDE_FROM_CLOUD_PASS
 from world_builder.terrain.planet import PlanetSpec
 
 if TYPE_CHECKING:
@@ -78,22 +74,21 @@ def layer_slabs(
 def check_layers(
     cloud_type: CloudType,
     altitude: float | None,
-    cirrus: CirrusSpec | None,
+    cirrus: bool = False,
     air_top: float | None = None,
     genera: GeneraSpec | None = None,
 ) -> None:
-    """Refuse layers the march, the draw order or the air cannot hold: with
-    genera, no more than :data:`noise.MAX_GENERA` of them, their slabs in no
-    more than :data:`march.MAX_SKY_BANDS` bands of sky
-    (:func:`march.sky_bands`; the genera's slabs may overlap: the march takes
-    them as one); the high layer's slab (:attr:`genera.GeneraSpec.high_slab`)
-    and the sheet's base must clear the union of the slabs (the sheet may lie
-    in the high slab: it is the high layer's predecessor), their tops stay
-    under the air's.
+    """Refuse layers the march or the air cannot hold: with genera, no more
+    than :data:`noise.MAX_GENERA` of them, their slabs in no more than
+    :data:`march.MAX_SKY_BANDS` bands of sky (:func:`march.sky_bands`; the
+    genera's slabs may overlap: the march takes them as one); the high
+    layer's slab (:attr:`genera.GeneraSpec.high_slab`, without genera
+    :data:`genera.HIGH_SLAB`), where it has a genus or the weather's cirrus,
+    must clear the union of the slabs, its top stay under the air's.
 
     :param cloud_type: the volume's type (the convective one with genera)
     :param altitude: the volume's base, metres; None = the type's
-    :param cirrus: the sheet; None = none
+    :param cirrus: the march draws the weather's cirrus (its high layer)
     :param air_top: the air's top above sea level, metres; None = unchecked
     :param genera: the genera (:mod:`genera`); None = one type
     :raises ValueError: for layers that do not fit
@@ -111,10 +106,10 @@ def check_layers(
             f"(slabs {slabs}): merge or overlap some"
         ) from None
     top = bands[-1][0] + bands[-1][1]
-    if genera is not None and genera.high:
+    if cirrus or (genera is not None and genera.high):
         # The high layer: a band of its own above the union (its crossings
-        # are sorted among the bands'), inside the air
-        base, thickness = genera.high_slab
+        # come before and after the bands'), inside the air
+        base, thickness = genera.high_slab if genera is not None else HIGH_SLAB
         if base <= top:
             raise ValueError(
                 f"the high layer's base ({base:g} m) must be above the "
@@ -125,38 +120,25 @@ def check_layers(
                 f"the high layer's top ({base + thickness:g} m) must be inside "
                 f"the air ({air_top:g} m)"
             )
-    if cirrus is None:
-        return
-    if cirrus.base <= top:
-        raise ValueError(
-            f"the cirrus's base ({cirrus.base:g} m) must be above the "
-            f"clouds' top ({top:g} m)"
-        )
-    if air_top is not None and cirrus.top >= air_top:
-        raise ValueError(
-            f"the cirrus's top ({cirrus.top:g} m) must be inside the air "
-            f"({air_top:g} m)"
-        )
 
 
 class PlanetClouds:
-    """One planet's clouds: the low clouds' volume, and the cirrus sheet
-    above it when asked for (see the module).
+    """One planet's clouds: the low clouds' volume, and the weather's
+    cirrus in its high layer when asked for (see the module).
 
     Usage::
 
         clouds = PlanetClouds(render, planet_radius, executor,
                               atmospheres=atmospheres, atmosphere=0,
-                              cirrus=CirrusSpec())
+                              cirrus=True)
         clouds.set_sun(sun_direction)
         # every frame, camera in the world frame (float64):
         clouds.update(camera_world)
 
-    :ivar root: the node both layers hang under (:meth:`set_visible` hides
+    :ivar root: the node the volume hangs under (:meth:`set_visible` hides
         the clouds: a march draws in passes of its own)
-    :ivar volume: the low clouds (:class:`march.CloudMarch`)
-    :ivar sheet: the cirrus (:class:`cirrus.CloudSheet`), or None
-    :ivar weather: the weather both follow
+    :ivar volume: the low clouds and the cirrus (:class:`march.CloudMarch`)
+    :ivar weather: the weather they follow
     :ivar radius: the planet's sea-level radius, metres
     :ivar position: its centre, world frame
     """
@@ -174,7 +156,7 @@ class PlanetClouds:
         atmosphere: int | None = None,
         cloud_type: CloudType = CloudType.CUMULUS,
         altitude: float | None = None,
-        cirrus: CirrusSpec | None = None,
+        cirrus: bool = False,
         planet: PlanetSpec | None = None,
         weather: WeatherSpec | None = None,
         seed: int = 7,
@@ -184,7 +166,6 @@ class PlanetClouds:
         sky_strength: float = 0.35,
         sky_occlusion: float = 0.55,
         exposure: float = 0.9,
-        game: Any = None,
         genera: GeneraSpec | None = None,
     ):
         """
@@ -195,13 +176,15 @@ class PlanetClouds:
         :param atmospheres: the world's atmospheres (the clouds are seen
             through them)
         :param atmosphere: the planet's own atmosphere index (reddens the
-            clouds' sunlight, and its top bounds the cirrus); None = none
+            clouds' sunlight, and its top bounds the high layer); None = none
         :param cloud_type: the volume's cloud type (its preset's field and
             optics)
         :param altitude: the volume's base above sea level, metres; None
             keeps the type's
-        :param cirrus: the sheet (:class:`cirrus.CirrusSpec`); None = no
-            cirrus
+        :param cirrus: the march's high layer draws the weather's cirrus
+            (:func:`weather.cirrus_cover_map`, streaming along the upper
+            wind; :attr:`genera.GeneraSpec.cirrus_weather`); False = only the
+            genera's cirrus features, if any
         :param planet: the planet the weather follows (climate, terrain);
             None = an earthlike one of this radius
         :param weather: the weather in full; None = the defaults for
@@ -210,20 +193,18 @@ class PlanetClouds:
         :param weather_seed: the weather systems' seed
         :param settings: what the clouds cost (:class:`cloud.CloudSettings`;
             :meth:`set_settings` changes it); None = HIGH
-        :param sun_brightness: direct-term gain, both layers
-        :param sky_strength: ambient sky weight, both layers (live:
+        :param sun_brightness: direct-term gain
+        :param sky_strength: ambient sky weight (live:
             :meth:`set_sky_light`)
         :param sky_occlusion: the volume's share of sky light reaching its
             slab's underside
-        :param exposure: radiance scale before the sky's tonemap, both layers
-        :param game: the game object, for its asset manager (the cirrus's
-            atlas; None: from disk)
+        :param exposure: radiance scale before the sky's tonemap
         :param genera: the low clouds by genus (:mod:`genera`): the march
             marches every genus as one (*cloud_type* is
             :attr:`cloud.CloudType.CONVECTIVE` for the primary genus,
             *weather* the genera's); None = one type
-        :raises ValueError: a sheet not above the volume or not inside the
-            air, too many genera or bands of sky (:func:`check_layers`)
+        :raises ValueError: a high layer not above the volume or not inside
+            the air, too many genera or bands of sky (:func:`check_layers`)
         """
         air_top = None
         if atmospheres is not None and atmosphere is not None:
@@ -260,15 +241,15 @@ class PlanetClouds:
         )
         if genera is not None:
             self._volume_args.update(genera=genera)
+        if cirrus:
+            self._volume_args.update(cirrus=True)
         self._split: tuple[Any, SplitDepthCameras] | None = None
         # The live state a new volume is given (set_sun, set_sky_light,
         # set_debug).
         self._sun: tuple = ((0.0, 0.0, 1.0), None, None)
         self._sky_light: float | None = None
         self._debug = 0
-        # What every layer's shader also takes (bind_inputs), again for a
-        # new volume.
-        self._binders: list[Callable[[NodePath], None]] = []
+        # The light resources' binders (bind_maps), again for a new volume.
         self._map_binders: list[Callable[[NodePath], None]] = []
         # The ground shadow pass's readers (the terrain) and its card's binders
         self._ground_nodes: list[NodePath] = []
@@ -277,26 +258,6 @@ class PlanetClouds:
         # volume.
         self._shadow_nodes: list[NodePath] = []
         self.volume = self._make_volume(settings)
-        self.sheet: CloudSheet | None = None
-        if cirrus is not None:
-            self.sheet = CloudSheet(
-                self.root,
-                radius,
-                executor,
-                position=position,
-                atmospheres=atmospheres,
-                atmosphere=atmosphere,
-                spec=cirrus,
-                weather=weather,
-                settings=settings,
-                sun_brightness=sun_brightness,
-                sky_strength=sky_strength,
-                exposure=exposure,
-                game=game,
-            )
-
-    def _layers(self) -> list:
-        return [layer for layer in (self.volume, self.sheet) if layer is not None]
 
     def _make_volume(self, settings: CloudSettings) -> CloudMarch:
         volume = CloudMarch(self.root, settings=settings, **self._volume_args)
@@ -312,28 +273,13 @@ class PlanetClouds:
         return self._settings
 
     def set_settings(self, settings: CloudSettings) -> None:
-        """Change what the clouds cost, both layers (see
-        :meth:`march.CloudMarch.set_settings`; the sheet takes ``reflected``
-        alone).
+        """Change what the clouds cost (see
+        :meth:`march.CloudMarch.set_settings`).
 
         :param settings: the new settings
         """
         self._settings = settings
-        for layer in self._layers():
-            layer.set_settings(settings)
-
-    def bind_inputs(self, bind: Callable[[NodePath], None]) -> None:
-        """Have every layer's shader take more inputs (what shades the
-        clouds: the eclipses, a body's shadow maps): *bind* is called with
-        each layer's node now, and with a new volume's on a change of
-        volume. Each layer binds its own defaults on its own node, which a
-        binding on :attr:`root` would not override.
-
-        :param bind: sets inputs on a node (e.g. ``Shadows.bind``)
-        """
-        self._binders.append(bind)
-        for layer in self._layers():
-            self._bind_layer(layer, (bind,))
+        self.volume.set_settings(settings)
 
     def bind_maps(self, bind: Callable[[NodePath], None]) -> None:
         """Have a raymarched volume read a body's cloud shadow maps for its own
@@ -366,12 +312,6 @@ class PlanetClouds:
         for node in self._ground_nodes:
             self.volume.bind_ground_shadow(node, self._ground_binders)
 
-    def _bind_layer(self, layer, binders=None) -> None:
-        if isinstance(layer, CloudMarch):
-            return  # its passes' nodes: not yet
-        for bind in self._binders if binders is None else binders:
-            bind(layer.root)
-
     def shadow_caster(self) -> Any:
         """The caster of the clouds' shadow, all their genera's together
         (:meth:`march.CloudMarch.shadow_caster`)."""
@@ -395,16 +335,21 @@ class PlanetClouds:
     @property
     def top_radius(self) -> float:
         """How far from the planet's centre the clouds reach, metres: the
-        highest layer's top (the cirrus's, when there is one). What a ray
+        highest layer's top (the high layer's, when it draws). What a ray
         meets past where it enters this sphere is behind them (a ring's
         haze, :meth:`asteroids.haze.FieldHaze.set_clouds_top`)."""
         band = self.volume.sky_bands[-1]  # the genera's union's top
         tops = [self.radius + band[0] + band[1]]
         if self.volume.high_slab is not None:  # the high layer's, drawn
             tops.append(self.radius + sum(self.volume.high_slab))
-        if self.sheet is not None:
-            tops.append(self.radius + self.sheet.spec.top)
         return max(tops)
+
+    @property
+    def high_slab(self) -> tuple[float, float] | None:
+        """The high layer's slab while it draws (the cirrus's;
+        :attr:`march.CloudMarch.high_slab`), (base, thickness) above sea
+        level, metres; None = no high layer."""
+        return self.volume.high_slab
 
     @property
     def shadow_layer(self) -> int:
@@ -436,11 +381,8 @@ class PlanetClouds:
 
     @property
     def stats(self) -> dict:
-        """``pending``: the volume's set-up and the sheet's still to come."""
-        stats = dict(self.volume.stats)
-        if self.sheet is not None:
-            stats["pending"] += self.sheet.stats["pending"]
-        return stats
+        """``pending``: the volume's set-up still to come."""
+        return dict(self.volume.stats)
 
     def set_sun(
         self,
@@ -448,8 +390,7 @@ class PlanetClouds:
         sun_color: ArrayLike | None = None,
         sky_color: ArrayLike | None = None,
     ) -> None:
-        """Move the sun and/or restate its colours, both layers (uniform
-        writes only).
+        """Move the sun and/or restate its colours (uniform writes only).
 
         :param direction: toward the sun, world frame (need not be unit)
         :param sun_color: RGB of direct sunlight, or None to keep
@@ -460,19 +401,16 @@ class PlanetClouds:
             sun_color if sun_color is not None else self._sun[1],
             sky_color if sky_color is not None else self._sun[2],
         )
-        for layer in self._layers():
-            layer.set_sun(direction, sun_color=sun_color, sky_color=sky_color)
+        self.volume.set_sun(direction, sun_color=sun_color, sky_color=sky_color)
 
     def set_sky_light(self, strength: float) -> None:
-        """The sky's (ambient) light on both layers, as ``sky_strength``."""
+        """The sky's (ambient) light on the clouds, as ``sky_strength``."""
         self._sky_light = strength
-        for layer in self._layers():
-            layer.set_sky_light(strength)
+        self.volume.set_sky_light(strength)
 
     def set_pixel_angle(self, radians: float, volume_scale: float = 1.0) -> None:
         """The angle one pixel of the view spans (vertical fov / its height):
-        how far the volume draws its own detail before averaging it. The
-        sheet needs none: its atlas is mipmapped.
+        how far the volume draws its own detail before averaging it.
 
         :param radians: the angle per pixel of the view
         :param volume_scale: the volume's pixels over the view's
@@ -480,14 +418,12 @@ class PlanetClouds:
         self.volume.set_pixel_angle(radians * volume_scale)
 
     def set_debug(self, flags: int) -> None:
-        """Profiling switches, both layers (cloud_field.glsl's
-        ``uCloudDebug`` bits).
+        """Profiling switches (cloud_field.glsl's ``uCloudDebug`` bits).
 
         :param flags: the bits, 0 = normal
         """
         self._debug = flags
-        for layer in self._layers():
-            layer.set_debug(flags)
+        self.volume.set_debug(flags)
 
     @property
     def genus_names(self) -> list[str]:
@@ -495,8 +431,8 @@ class PlanetClouds:
         return self.volume.genus_names
 
     def set_genus_visible(self, genus: int | str, visible: bool) -> None:
-        """Draw a genus of the low clouds or not, live
-        (:meth:`march.CloudMarch.set_genus_visible`)."""
+        """Draw a genus of the low clouds, or a high genus (``"cirrus"``),
+        or not, live (:meth:`march.CloudMarch.set_genus_visible`)."""
         self.volume.set_genus_visible(genus, visible)
 
     def genus_visible(self, genus: int | str) -> bool:
@@ -504,7 +440,7 @@ class PlanetClouds:
         return self.volume.genus_visible(genus)
 
     def set_visible(self, visible: bool) -> None:
-        """Show or hide both layers (a march's passes included)."""
+        """Show or hide the clouds (a march's passes included)."""
         if visible:
             self.root.show()
         else:
@@ -513,31 +449,26 @@ class PlanetClouds:
 
     def use_split_depth(self, app: Any, depth: SplitDepthCameras) -> None:
         """The game's split cameras, which a raymarched volume draws its
-        passes with (:meth:`march.CloudMarch.attach`). The cirrus stays out
-        of those passes' depth.
+        passes with (:meth:`march.CloudMarch.attach`).
 
         :param app: the ShowBase
         :param depth: the split cameras
         """
         self._split = (app, depth)
-        if self.sheet is not None:
-            self.sheet.root.hide(HIDE_FROM_CLOUD_PASS)
         self.volume.attach(app, depth)
 
     def update(
         self, camera_world: ArrayLike, camera_render: ArrayLike = (0.0, 0.0, 0.0)
     ) -> None:
-        """Per frame: both layers.
+        """Per frame.
 
         :param camera_world: camera in the world frame, metres (float64)
         :param camera_render: camera in the render frame (the origin when
             the scene is drawn camera-relative)
         """
-        for layer in self._layers():
-            layer.update(camera_world, camera_render)
+        self.volume.update(camera_world, camera_render)
 
     def remove(self) -> None:
         """Take the clouds off the scene and drop the volume's queued tiles."""
-        for layer in self._layers():
-            layer.remove()
+        self.volume.remove()
         self.root.remove_node()

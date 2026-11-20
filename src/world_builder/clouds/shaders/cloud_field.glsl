@@ -1,7 +1,6 @@
 // The cloud density field and the sun march through it, shared by the
 // fragment stage (cloud.frag) and the planet billboards' vertex stage
-// (cloud_sphere.vert: the layer parameters, sunDir, uCloudDebug); the cirrus
-// (cirrus.vert/.frag) takes its sunlight and phase helpers. Include with
+// (cloud_sphere.vert: the layer parameters, sunDir, uCloudDebug). Include with
 // #pragma include. noise.py mirrors the density on the CPU (fbm,
 // density_on_sphere), which is what billboard placement runs on, and the sun
 // march (sun_optical_depth_on_sphere), which the far deck's lighting table is

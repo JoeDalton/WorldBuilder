@@ -83,8 +83,9 @@ annular eclipse).
 - **Clouds** (`cloud_march.frag`): per sample. (The billboards, removed on
   2026-11-15, took it per vertex in `cloud_sphere.vert`.)
 - **Cloud deck** (`cloud.frag`): per fragment.
-- **Cirrus** (`cirrus.vert`): per vertex, from the main
-  camera (`camPos`; the sea's mirror draws it from its own).
+- **Cirrus** (the march's high layer): none. Its sunlight takes no eclipse
+  (the old cirrus sheet took it per vertex until its removal, cloud genera
+  Task 24).
 - **The air** (`atmoSegment`): each sample's direct sunlight, at the
   sample. The sky darkens, and so does the aerial perspective over the
   ground.

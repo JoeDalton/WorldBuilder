@@ -586,10 +586,10 @@ def test_the_march_takes_the_genera_that_hold_cloud(genera):
 def test_the_genera_may_overlap(genera):
     from world_builder.clouds.planet import check_layers
 
-    check_layers(CloudType.CUMULUS, 2200.0, None, None, genera)
+    check_layers(CloudType.CUMULUS, 2200.0, False, None, genera)
     # The stratus inside the convective clouds' slab: one band of sky
     check_layers(
-        CloudType.CUMULUS, 2200.0, None, None, replace(genera, stratus_altitude=2000.0)
+        CloudType.CUMULUS, 2200.0, False, None, replace(genera, stratus_altitude=2000.0)
     )
 
 
@@ -601,7 +601,7 @@ def test_the_genera_must_fit_the_march(genera, monkeypatch):
 
     many = replace(genera, genera=("convective",) + ("stratus",) * MAX_GENERA)
     with pytest.raises(ValueError, match="genera: the march takes"):
-        check_layers(CloudType.CUMULUS, 2200.0, None, None, many)
+        check_layers(CloudType.CUMULUS, 2200.0, False, None, many)
     # Disjoint thin slabs under the convective clouds, a band of sky each
     names = []
     for k in range(MAX_SKY_BANDS):
@@ -612,32 +612,32 @@ def test_the_genera_must_fit_the_march(genera, monkeypatch):
         )
         names.append(name)
     fits = replace(genera, genera=("convective", *names[:-1]))
-    check_layers(CloudType.CUMULUS, 2200.0, None, None, fits)  # 4 bands
+    check_layers(CloudType.CUMULUS, 2200.0, False, None, fits)  # 4 bands
     over = replace(genera, genera=("convective", *names))
     with pytest.raises(ValueError, match="bands of sky"):
-        check_layers(CloudType.CUMULUS, 2200.0, None, None, over)
+        check_layers(CloudType.CUMULUS, 2200.0, False, None, over)
 
 
 def test_the_cirrus_must_clear_the_union_of_the_genera(genera, monkeypatch):
-    from world_builder.clouds.cirrus import CirrusSpec
+    """The weather's cirrus (``cirrus=True``) is the high layer's: its slab
+    must clear the genera's union and stay in the air, even with no high
+    genus listed."""
     from world_builder.clouds.genera import GENUS_PRESETS, GenusPreset
     from world_builder.clouds.planet import check_layers
 
-    check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(), None, genera)
-    with pytest.raises(ValueError, match="above the clouds"):
-        check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(base=9000.0), None, genera)
+    check_layers(CloudType.CUMULUS, 2200.0, True, None, genera)
     # A genus topping the convective clouds (10.5 km) sets the union's top
     monkeypatch.setitem(
         GENUS_PRESETS,
         "tall",
         GenusPreset(CloudType.STRATUS, ("A", 0), slab=(500.0, 10800.0)),
     )
-    # (no high layer: its own slab is checked first, test_clouds_high.py)
     tall = replace(genera, genera=("convective", "tall"), high=())
-    with pytest.raises(ValueError, match=r"cirrus's base .* clouds' top \(11300 m\)"):
-        check_layers(CloudType.CUMULUS, 2200.0, CirrusSpec(), None, tall)
-    # The air's top still bounds the cirrus
-    with pytest.raises(ValueError, match="cirrus's top .* inside the air"):
-        check_layers(
-            CloudType.CUMULUS, 2200.0, CirrusSpec(), 11500.0, replace(genera, high=())
-        )
+    check_layers(CloudType.CUMULUS, 2200.0, False, None, tall)  # no high layer
+    with pytest.raises(
+        ValueError, match=r"high layer's base .* clouds' top \(11300 m\)"
+    ):
+        check_layers(CloudType.CUMULUS, 2200.0, True, None, tall)
+    # The air's top bounds the cirrus
+    with pytest.raises(ValueError, match="high layer's top .* inside the air"):
+        check_layers(CloudType.CUMULUS, 2200.0, True, 11500.0, replace(genera, high=()))

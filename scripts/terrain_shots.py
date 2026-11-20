@@ -72,9 +72,9 @@ cirrus_between (5 km up, between the cumulus and the cirrus, looking at the
 horizon), cirrus_above (15 km up, above both, looking down at the horizon: the
 cirrus in front of the cumulus), cirrus_dusk (the cirrus still lit after the
 cumulus has gone grey: the sun 2 degrees down), high_cb, high_overhead,
-high_grazing and high_above (the high layer toward the cumulonimbus: with
---cirrus march its cirrus behind the anvil, overhead, grazing, and from 14
-km up through it), genera_cb (from the start,
+high_grazing and high_above (the high layer toward the cumulonimbus: its
+cirrus behind the anvil, overhead, grazing, and from 14 km up through it),
+genera_cb (from the start,
 looking north 8 degrees up at the cumulonimbus 40 km away: its tower and
 anvil), genera_congestus (the same, north-west 6 degrees up: the congestus
 line), cirrus_overhead and cirrus_grazing (the same, south-south-west, 75
@@ -328,7 +328,7 @@ def _poses(demo: TerrainDemo) -> dict:
         poses["lunar_eclipse"] = poses["moon_orbit"]
         # The moon's craters at its terminator: their rims' shadows.
         poses["moon_terminator"] = (lat, lon, 1.0 * moon.radius, 0.0, -89.9, 0, 1)
-    # The cirrus (8-9 km) against the cumulus (2.2-3.2 km): under both, between,
+    # The cirrus (11-12.5 km) against the cumulus (2.2-3.2 km): under both, between,
     # above both, and at dusk (looking west, toward the set sun).
     poses["cirrus_up"] = (lat0, lon0, start.get("alt", 800.0), 0.0, 35.0, 0, 0)
     # The start looking a little up, at the cumulus above the horizon.
@@ -354,7 +354,7 @@ def _poses(demo: TerrainDemo) -> dict:
     poses["genera_congestus"] = (lat0, lon0, ground_alt, 45.0, 6.0, 0, 0)
     poses["cirrus_overhead"] = (lat0, lon0, ground_alt, 150.0, 75.0, 0, 0)
     poses["cirrus_grazing"] = (lat0, lon0, ground_alt, 150.0, 4.0, 0, 0)
-    # The high layer (--cirrus march: the weather's cirrus) toward the
+    # The high layer (the weather's cirrus) toward the
     # cumulonimbus, 40 km north: the anvil in front of it (14 degrees up),
     # overhead, at a grazing angle, and from 14 km up, over the high slab,
     # looking down at the tower through it.

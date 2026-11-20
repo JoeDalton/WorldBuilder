@@ -321,8 +321,6 @@ def test_the_steps_do_not_lengthen_as_the_light_is_spent():
         "cloud_march.glsl",
         "cloud.frag",
         "cloud_deck.vert",
-        "cirrus.vert",
-        "cirrus.frag",
     ],
 )
 def test_no_cloud_draws_air_in_front_of_itself(name):

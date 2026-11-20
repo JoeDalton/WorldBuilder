@@ -19,7 +19,7 @@ from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
 from world_builder.asteroids.spec import Annulus, Density, FieldSpec, ShapeSpec
 from world_builder.atmosphere import AtmosphereParams
-from world_builder.clouds.cirrus import CirrusSpec
+from world_builder.clouds.genera import HIGH_SLAB
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.depth import (
     FAR_CAMERA_MASK,
@@ -112,14 +112,13 @@ def test_looks_are_their_parts_arguments(look, part, own):
         ),
         ([BodyLook("a", PRESETS["desert"], ocean=OceanLook(), mass=1.0)], "has_ocean"),
         (
-            # Its base inside the clouds' slab (2.2-3.2 km): its draw order
-            # would not hold
+            # The cirrus's slab (11-12.5 km) inside the clouds' (10.8-11.8)
             [
                 BodyLook(
                     "a",
                     EARTHLIKE,
                     atmosphere=AtmosphereParams(),
-                    clouds=CloudLook(altitude=2200.0, cirrus=CirrusSpec(base=3000.0)),
+                    clouds=CloudLook(altitude=10800.0, cirrus=True),
                     mass=1.0,
                 )
             ],
@@ -131,7 +130,7 @@ def test_looks_are_their_parts_arguments(look, part, own):
                     "a",
                     EARTHLIKE,
                     atmosphere=AtmosphereParams(height=8500.0),
-                    clouds=CloudLook(cirrus=CirrusSpec()),
+                    clouds=CloudLook(cirrus=True),
                     mass=1.0,
                 )
             ],
@@ -590,9 +589,10 @@ def test_the_far_plane_reaches_the_cirrus_above_the_mountains():
     world = _world(planet)
     origin = np.array([0.0, 0.0, R + 800.0])
     _, bare = world.depth_ranges(origin)
-    planet.clouds = SimpleNamespace(sheet=SimpleNamespace(spec=CirrusSpec()))
+    planet.clouds = SimpleNamespace(high_slab=HIGH_SLAB)
     _, far = world.depth_ranges(origin)
-    expected = SplitDepthCameras.planet_ranges(R, R + 800.0, CirrusSpec().mid, 0.0)
+    mid = HIGH_SLAB[0] + 0.5 * HIGH_SLAB[1]
+    expected = SplitDepthCameras.planet_ranges(R, R + 800.0, mid, 0.0)
     assert far > bare
     assert far == pytest.approx(expected[1])
 
@@ -709,7 +709,7 @@ def test_a_whole_world(window, monkeypatch):
                 "planet",
                 EARTHLIKE,
                 atmosphere=AtmosphereParams(),
-                clouds=CloudLook(altitude=2200.0, cirrus=CirrusSpec()),
+                clouds=CloudLook(altitude=2200.0, cirrus=True),
                 ocean=OceanLook(),
                 mass=5.97e24,
             ),
@@ -762,14 +762,8 @@ def test_a_whole_world(window, monkeypatch):
         ball.remove_node()
 
         assert planet.ocean.near == 1.0
-        # The cirrus is set up around the planet's centre, as the deck is
-        sheet = planet.clouds.sheet
-        assert not sheet.root.is_stashed()
-        np.testing.assert_allclose(
-            sheet.root.get_pos(window.render),
-            planet.clouds.volume.deck.get_pos(window.render),
-            atol=1.0,
-        )
+        # The cirrus is the march's high layer
+        assert planet.clouds.volume.high_genera == ["cirrus"]
         # The sea's plane is the tangent plane at the camera's nadir (the
         # camera is wherever earlier tests left it, near render's origin)
         nadir = world.camera_world / np.linalg.norm(world.camera_world)

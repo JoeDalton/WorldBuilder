@@ -52,7 +52,7 @@ uniform float uStepGrowth;       // a step's length per metre of distance, farth
 // Layer i (its octaves) is sampled up to uLayerFar[i] metres from the camera;
 // the last one beyond.
 uniform float uLayerFar[MAX_MARCH_LAYERS];
-uniform int   uGenusMask;        // the genera drawn, a bit each (set_genus_visible)
+uniform int   uGenusMask;        // the genera drawn, a bit each, the high genera's past MAX_GENERA (set_genus_visible)
 uniform int   uLayerCount;       // a genus's detail levels (its bands, then its far one)
 uniform sampler2D uBlueNoise;    // march.blue_noise, 64 x 64, the steps' jitter
 uniform int   uFrame;            // this pixel's visits: moves its steps' jitter (march.visit_of)
@@ -229,8 +229,49 @@ vec3 alongJet(vec3 p, float stretch) {
 // ── The cirrus (march.CI_*; clouds.md, "The cirrus") ──
 // The upper wind (genera.high_wind_cube): xyz the wind (planet frame, the
 // jets' fastest 1), w its stream function (metres; its contours are the
-// streamlines).
-uniform samplerCube highWind;
+// streamlines). A cube's six faces as the layers of a 2D array, read by
+// highWindAt: a cube map's hardware filter weighs its texels in 8 bits, so
+// the stream function stepped by 1/256 of a 7 km texel (about 30 m):
+// stairs along the fibres up close.
+uniform sampler2DArray highWind;
+
+// The upper wind at direction d: its face's four texels around d blended
+// in float (weather.sample_cube, its CPU copy: the same faces as
+// sky.starfield.cube_directions, clamped at a face's edge).
+vec4 highWindAt(vec3 d) {
+    vec3 a = abs(d);
+    int face;
+    float major;
+    vec3 sAxis, tAxis;
+    if (a.x >= a.y && a.x >= a.z) {
+        major = a.x;
+        face = d.x >= 0.0 ? 0 : 1;
+        sAxis = vec3(0.0, 0.0, d.x >= 0.0 ? -1.0 : 1.0);
+        tAxis = vec3(0.0, -1.0, 0.0);
+    } else if (a.y >= a.z) {
+        major = a.y;
+        face = d.y >= 0.0 ? 2 : 3;
+        sAxis = vec3(1.0, 0.0, 0.0);
+        tAxis = vec3(0.0, 0.0, d.y >= 0.0 ? 1.0 : -1.0);
+    } else {
+        major = a.z;
+        face = d.z >= 0.0 ? 4 : 5;
+        sAxis = vec3(d.z >= 0.0 ? 1.0 : -1.0, 0.0, 0.0);
+        tAxis = vec3(0.0, -1.0, 0.0);
+    }
+    int size = textureSize(highWind, 0).x;
+    float n = float(size);
+    // Column (s) and row (t) in texels, centres at .5
+    vec2 st = (vec2(dot(d, sAxis), dot(d, tAxis)) / major + 1.0) * 0.5 * n;
+    vec2 xy = clamp(st - 0.5, vec2(0.0), vec2(n - 1.0));
+    ivec2 i = min(ivec2(floor(xy)), ivec2(size - 2));
+    vec2 f = xy - vec2(i);
+    vec4 c00 = texelFetch(highWind, ivec3(i, face), 0);
+    vec4 c10 = texelFetch(highWind, ivec3(i.x + 1, i.y, face), 0);
+    vec4 c01 = texelFetch(highWind, ivec3(i.x, i.y + 1, face), 0);
+    vec4 c11 = texelFetch(highWind, ivec3(i + 1, face), 0);
+    return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
 // What the cirrus's parts fade to where a pixel does not resolve them
 // (march.cirrus_means): x the streaks' detail, y and z the patches' at
 // coverage 0 and their slope, w the strands'.
@@ -331,7 +372,7 @@ float footprintAlong(vec3 axis, vec3 view, float pixel, float incidence) {
 // across the view at a grazing angle stays resolved: the slant stretches
 // the footprint along the view, not across it), the tufts by the slant's.
 float cirrusStreaks(vec3 q, vec3 dir, float pixel, float cover) {
-    vec4 wind = texture(highWind, q);
+    vec4 wind = highWindAt(q);
     vec3 up = normalize(q);
     vec3 flow = wind.xyz - dot(wind.xyz, up) * up;
     float speed = length(flow);
@@ -505,8 +546,8 @@ uniform float uWeatherStretch;
 // every band's and its crossing on the way up after. Kept out of the
 // sorted segments and out of their loop, the high variant costs the low
 // clouds nothing: sorted among them (two more segments, the crossing
-// inlined in the segments' loop) it cost 0.3-1.3 ms at 2560 x 1440 with
-// the crossings' own work 0 (performance.md §37, Task 23).
+// inlined in the segments' loop) it cost 0.1-0.2 ms more at 2560 x 1440,
+// the crossings' own work about nothing (performance.md §37, Task 23).
 const int MAX_SEGMENTS = 2 * MAX_SKY_BANDS;
 
 #ifdef CLOUD_HIGH
@@ -515,8 +556,11 @@ vec2 sphereInterval(vec3 c, vec3 dir, float r);
 // Where the crossing seg meets the slab's middle, the sphere of radius r
 // (march.sheet_crossing): every high genus's pattern is read there, once,
 // as a thin sheet's (jittered samples would wander a slant ray over many
-// grains or fibres, and the visits blur them);
-// where it does not meet it, the crossing's middle.
+// grains or fibres, and the visits blur them). Where it does not meet it
+// (a camera inside the slab, looking away from its middle), -1: the ray
+// crosses no sheet, and the crossing draws nothing. (It read the patterns
+// at the crossing's middle, another height for every ray: a second copy
+// of the cirrus, offset, seen from inside the slab.)
 float sheetCrossing(vec2 seg, vec3 dir, float r) {
     vec2 s = sphereInterval(camPos, dir, r);
     if (s.x < s.y) {
@@ -527,7 +571,7 @@ float sheetCrossing(vec2 seg, vec3 dir, float r) {
             return s.y;
         }
     }
-    return 0.5 * (seg.x + seg.y);
+    return -1.0;
 }
 
 // One crossing seg of the high slab by the ray from camPos along dir, composited
@@ -537,15 +581,20 @@ float sheetCrossing(vec2 seg, vec3 dir, float r) {
 // once) and every genus's pattern at the sheet point (sheetCrossing: a thin
 // sheet's, the same at every visit). The genera's optical depths over the
 // crossing's path add (march.high_optical_depth), lit as a thin slab
-// (thinSlabRadiance, the cirrus sheet's light, with the cirrus's and the
-// cirrostratus's halo by their shares) at the sheet point. No sun march, no
-// steps.
+// (thinSlabRadiance, with the cirrus's and the cirrostratus's halo by their
+// shares) at the sheet point. No sun march, no steps.
 void highCrossing(vec2 seg, vec3 dir, inout float transmittance,
                   inout vec3 light, inout float weightedDistance) {
     float len = seg.y - seg.x;
     float ts = sheetCrossing(seg, dir, planetRadius + uHighSlab.x + 0.5 * uHighSlab.y);
+    if (ts < 0.0) {
+        return;  // no sheet on this crossing
+    }
     vec3 q = camPos + dir * ts;
     vec3 cover = texture(genusCoverB, q).gba;
+    // Hidden (CloudMarch.set_genus_visible: the demo's C key), their bits
+    // past the low genera's (march.HIGH_MASK_SHIFT)
+    cover *= vec3((ivec3(uGenusMask) >> ivec3(MAX_GENERA, MAX_GENERA + 1, MAX_GENERA + 2)) & 1);
     if (cover.r + cover.g + cover.b <= 0.0) {
         return;
     }

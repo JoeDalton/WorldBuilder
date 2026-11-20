@@ -28,9 +28,7 @@ _SHADERS = Path(__file__).parent / "shaders"
 
 #: Cull bins, between opaque (20) and transparent (30), after the sky's (21,
 #: ``sky.SKY_BIN_SORT``): the deck's first, then one back-to-front bin per
-#: shell, the coarsest first. A cirrus sheet above (:mod:`cirrus`) draws in
-#: the sky's bin where it is behind them and in "transparent" where it is in
-#: front.
+#: shell, the coarsest first.
 CLOUD_BIN = "cloud_sphere"
 
 
@@ -52,8 +50,7 @@ def deck_mesh(
     radius: float, quads: int = DECK_QUADS, name: str = "cloud_deck"
 ) -> GeomNode:
     """A cube-sphere of radius *radius*, never culled (the caller makes it
-    two-sided: the camera may be above or below it). The deck's, and the
-    cirrus sheet's (:mod:`cirrus`)."""
+    two-sided: the camera may be above or below it). The deck's."""
     t = np.linspace(-1.0, 1.0, quads + 1)
     a, b = np.meshgrid(t, t)
     positions, indices = [], []

@@ -78,7 +78,6 @@ from world_builder.asteroids.field import AsteroidField
 from world_builder.asteroids.haze import ring_depth
 from world_builder.asteroids.spec import Annulus, FieldSpec, KeepOut
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
-from world_builder.clouds.cirrus import CirrusSpec
 from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.light_volume import CloudLightVolumes
@@ -152,8 +151,10 @@ class CloudLook:
 
     :ivar altitude: the low clouds' base above sea level, metres; None = the
         cloud type's
-    :ivar cirrus: high cirrus above them (:class:`CirrusSpec`); None = none.
-        Its base must clear the low clouds' slab, its top stay in the air
+    :ivar cirrus: the weather's high cirrus above them, drawn by the march's
+        high layer (:attr:`genera.GeneraSpec.cirrus_weather`); False = none.
+        Its slab (:data:`genera.HIGH_SLAB`) must clear the low clouds', its
+        top stay in the air
     :ivar genera: the low clouds by genus (stratus, cumulus to
         cumulonimbus; :class:`GeneraSpec`, a placeholder for the weather);
         None = one cloud type
@@ -161,7 +162,7 @@ class CloudLook:
 
     altitude: float | None = None
     cloud_type: CloudType = CloudType.CUMULUS
-    cirrus: CirrusSpec | None = None
+    cirrus: bool = False
     weather: WeatherSpec | None = None
     seed: int = 7
     weather_seed: int = 11
@@ -392,8 +393,8 @@ class World:
             reckoned again at once when the sun moves or the tracked nodes
             change. 1 = every frame
         :raises ValueError: two bodies (or fields) of one name, clouds
-            without air, cirrus not above the clouds or not inside the air,
-            or an ocean on a dry planet
+            without air, a high layer (the cirrus) not above the clouds or
+            not inside the air, or an ocean on a dry planet
         """
         names = [look.name for look in bodies]
         if len(set(names)) != len(names):
@@ -515,11 +516,7 @@ class World:
                 self.casters.bind(terrain.root)
             if look.clouds is not None:
                 body.clouds = self._make_clouds(look, index)
-                body.clouds.bind_inputs(
-                    functools.partial(self.shadows.bind, body=len(self.bodies))
-                )
                 body.clouds.bind_shadow_inputs(terrain.root)  # their shadow
-                body.clouds.bind_inputs(body.shadow_map.bind)  # the peaks' on them
                 output = getattr(app, "win", None)
                 if output is not None:
                     body.cloud_maps = CloudShadowMaps(
@@ -785,8 +782,8 @@ class World:
                 max(
                     body.terrain.planet.height_bounds[1],
                     0.0
-                    if body.clouds is None or body.clouds.sheet is None
-                    else body.clouds.sheet.spec.mid,
+                    if body.clouds is None or body.clouds.high_slab is None
+                    else body.clouds.high_slab[0] + 0.5 * body.clouds.high_slab[1],
                 ),
                 0.0
                 if body.look.spec.has_ocean

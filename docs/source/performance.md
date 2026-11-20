@@ -2524,6 +2524,54 @@ march` at `cirrus_up` and `cirrus_between`. After a turn of 1 degree in
 20 frames and 40 to settle: 0.00-0.17 levels, p99 1. The cirrus is read
 at the sheet point, with no jitter: nothing to shimmer.
 
+### Task 24: the cirrus sheet deleted (offscreen)
+
+The weather's cirrus is the march's now (`--cirrus`, the default; clouds.md,
+"The high layer"), the old sheet gone. The times are **offscreen**
+(`--offscreen`) at 2560 x 1440, HIGH, RTX 3070, from the user's start
+(`--start 29.7159 29.8232`), the means of 60 frames. Each run's first pose
+is dropped (`ground`). The tree before (HEAD, exported, `--cirrus sheet`:
+the old default) against after (the default), interleaved.
+
+**With the genera** (the demo's default), three times each:
+
+| Pose | Sheet (before) | March (after) | |
+|---|---|---|---|
+| `cirrus_overhead` | 6.29, 6.27, 6.26 ms | 5.93, 6.02, 5.94 ms | -0.31 ms |
+| `cirrus_grazing` | 10.64, 10.57, 10.77 ms | 10.43, 10.96, 10.45 ms | -0.19 ms (medians) |
+| `cirrus_up` | 6.67, 6.66, 6.66 ms | 6.51, 6.97, 6.53 ms | -0.13 ms (medians) |
+| `clouds_noon` | 9.47, 9.43, 9.46 ms | 9.24, 9.40, 9.28 ms | -0.15 ms |
+| `genera_cb` | 10.68, 10.61, 10.84 ms | 10.50, 10.51, 10.97 ms | -0.17 ms (medians) |
+| `genera_congestus` | 10.64, 10.58, 11.36 ms | 10.48, 10.44, 10.50 ms | -0.16 ms (medians) |
+
+The after run with 10.96 and 6.97 ms had a CPU spike (its LOD pass 3.7 ms
+against 1.7-2.4), as had the before run with 11.36.
+
+**One cloud type** (`--no-genera`: the march's high layer of the weather's
+cirrus alone, `genera.weather_cirrus`, a new path), twice each:
+
+| Pose | Sheet (before) | March (after) | |
+|---|---|---|---|
+| `cirrus_overhead` | 5.40, 5.39 ms | 5.01, 4.99 ms | -0.40 ms |
+| `cirrus_grazing` | 10.52, 10.53 ms | 10.41, 10.36 ms | -0.14 ms |
+| `cirrus_up` | 5.93, 5.95 ms | 5.74, 5.71 ms | -0.22 ms |
+| `clouds_noon` | 7.48, 7.51 ms | 7.31, 7.23 ms | -0.23 ms |
+
+(One more after run stopped on a `MemoryError` in the demo's update; run
+again, it gave the second column's numbers. Not seen before or since.)
+
+**The showcase** (`--showcase`, no weather cirrus either side: the head
+with `--cirrus none`), three times each: `genus_cirrus` 8.88, 8.80, 8.78 ms
+before, 9.18, 8.80, 8.82 after; `genus_cirrus_overhead` 8.92, 8.80, 8.74
+before, 8.95, 8.75, 8.75 after. The same (the first after run's 9.18 an
+outlier).
+
+The march's cirrus is 0.13-0.4 ms **cheaper** than the sheet everywhere,
+as Task 23 measured. The shots: the cirrus is now the march's streaks
+(mean difference 2.6-8.6 levels on the cirrus and genera poses, all in the
+sky); `clouds_noon`, which shows no cirrus, 0.41-0.45 against 0.25-0.36
+for before against itself; the showcase 0.9.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

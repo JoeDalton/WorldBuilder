@@ -17,10 +17,11 @@ read back after each step, as terrain_shots.py times them):
 * each part's cost: the median frame with it shown less with it off:
   **terrain** (the terrain's roots, the near sea with them), **refl** (the
   sea's reflection pass), **sky**, **clouds** (the low clouds and their
-  passes), **cirrus**, **models** (the test balls), **skyview** (the
-  sky-view table and its bake against the sky's march: negative where it
-  saves), **aerial** (the aerial-perspective cells and their bake against
-  the terrain's, sea's and models' march: the same), **godrays** (the
+  passes), **cirrus** (the march's, its high layer), **models** (the test
+  balls), **skyview** (the sky-view table and its bake against the sky's
+  march: negative where it saves), **aerial** (the aerial-perspective
+  cells and their bake against the terrain's, sea's and models' march: the
+  same), **godrays** (the
   clouds' and the mountains' shadows in that bake,
   ``AtmosphereSettings.god_rays``);
 * **atmo** the per-pixel atmosphere's share: the frame at the preset's
@@ -132,9 +133,12 @@ def _parts(demo: TerrainDemo) -> dict:
             lambda: demo.clouds.set_visible(False),
             lambda: demo.clouds.set_visible(True),
         )
-        if demo.clouds.sheet is not None:
-            sheet = demo.clouds.sheet.root
-            parts["cirrus"] = (sheet.hide, sheet.show)
+        if "cirrus" in demo.clouds.volume.high_genera:
+            # the march's cirrus (its high layer's channel)
+            parts["cirrus"] = (
+                lambda: demo.clouds.set_genus_visible("cirrus", False),
+                lambda: demo.clouds.set_genus_visible("cirrus", True),
+            )
     balls = [node for node, _ in demo._test_balls]
     parts["models"] = (
         lambda: [b.hide() for b in balls],

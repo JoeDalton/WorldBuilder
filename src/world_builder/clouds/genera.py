@@ -363,7 +363,7 @@ class HighOptics:
 #: The high genera's optics. The cirrus: a streak's density about 1 at a
 #: tuft, 0.3-0.6 along its fibres, so 0.1-1 optical depth straight up (the
 #: research's 0.03-3, SIRTA's typical 0.1-1): thin, white, the sky plain
-#: between; the sheet's cap; a faint 22 degree halo, only where a streak is
+#: between; a cap of 2.5; a faint 22 degree halo, only where a streak is
 #: (narrow: "only fragments of a halo"). The cirrostratus: a veil of 0.2
 #: (the research's 0.03-0.3 for the thin layers), the sun plain through it,
 #: milky toward the horizon (its cap: a grazing crossing at most about
@@ -499,10 +499,9 @@ class GeneraSpec:
         thin-layer path where a feature covers them (:func:`high_genera`)
     :ivar high_slab: their slab, (base, thickness) above sea level, metres
     :ivar cirrus_weather: the cirrus covers the weather's cirrus cover too
-        (:func:`weather.cirrus_cover_map`, the cirrus sheet's), not only its
-        features: the march draws the planet's cirrus (the demo's
-        ``--cirrus march``); False = its features alone (the default: the
-        sheet draws the weather's)
+        (:func:`weather.cirrus_cover_map`), not only its features: the march
+        draws the planet's cirrus (``PlanetClouds(cirrus=True)`` sets it, the
+        demo's ``--cirrus``); False = its features alone (the showcase)
     """
 
     weather: WeatherSpec
@@ -522,6 +521,24 @@ class GeneraSpec:
     high: tuple[str, ...] = tuple(HIGH_CHANNELS)
     high_slab: tuple[float, float] = HIGH_SLAB
     cirrus_weather: bool = False
+
+
+def weather_cirrus(weather: WeatherSpec) -> GeneraSpec:
+    """The high layer of a march without genera (one cloud type): the
+    weather's cirrus alone (:attr:`GeneraSpec.cirrus_weather`), no genus,
+    no feature. Only its high layer is read (:func:`high_genera`,
+    :func:`coverage_cube`'s cube B, :func:`high_wind_cube`).
+
+    :param weather: the weather whose cirrus cover and upper wind it follows
+    """
+    return GeneraSpec(
+        weather,
+        features=(),
+        genera=(),
+        background=False,
+        high=("cirrus",),
+        cirrus_weather=True,
+    )
 
 
 def high_genera(spec: GeneraSpec, covered: bool = False) -> list[tuple[str, int]]:
@@ -911,7 +928,7 @@ def coverage_cube(
         for name, channel in high_genera(spec, covered=True):
             out[..., channel] = genus_coverage(spec, name, size)
         if spec.cirrus_weather and "cirrus" in spec.high:
-            # The weather's cirrus cover too (the sheet's), under the features
+            # The weather's cirrus cover too, under the features
             dirs = cube_directions(size).reshape(-1, 3)
             weather = sample_cube(cirrus_cover_map(spec.weather), dirs)
             channel = HIGH_CHANNELS["cirrus"]

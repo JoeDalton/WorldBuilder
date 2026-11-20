@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The old cirrus sheet (cloud genera, Task 24): `clouds.cirrus`
+  (`CloudSheet`, `CirrusSpec`, the stamps), its atlas
+  (`clouds/cirrus_atlas.png` and `.json`), `scripts/bake_cirrus_atlas.py`,
+  `scripts/cirrus_preview.py` and `shaders/cirrus.vert` / `cirrus.frag`.
+  The march's high layer draws the weather's cirrus instead, 0.13-0.4 ms
+  cheaper (performance §37, Task 24). `PlanetClouds.sheet`,
+  `PlanetClouds.bind_inputs` (it bound the sheet alone) and its `game`
+  argument go with it.
 - The temporary `--high-placeholder` of the terrain demo and
   `terrain_shots.py` (Task 20) and the placeholder cirrus, with
   `march.thin_samples` and `THIN_TWO_SAMPLES`: every high genus is read
@@ -49,10 +57,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the fibres splay out there. The head is a wide, frayed window on the tuft
   noise, striated by the strands, at most 1.2 (`CI_HEAD_*`). It costs no
   extra fetch.
-- `--cirrus sheet|march|none` (the terrain demo, `terrain_shots.py`):
-  the weather's cirrus by the old sheet (the default), by the march's
-  high layer (`GeneraSpec.cirrus_weather`: `weather.cirrus_cover_map`
-  fills cube B's channel 1), or none; `--no-cirrus` is `--cirrus none`.
+- `--cirrus` / `--no-cirrus` (the terrain demo, `terrain_shots.py`): the
+  weather's cirrus in the march's high layer (`GeneraSpec.cirrus_weather`:
+  `weather.cirrus_cover_map` fills cube B's channel 1), on by default, off
+  by default with `--showcase`.
+- `genera.weather_cirrus`: the high layer of a march without genera, the
+  weather's cirrus alone, so a one-type march (`--no-genera`,
+  `demo_world.py`, `cloud_bench.py`) draws the cirrus too.
+- `CloudMarch.set_genus_visible` / `genus_visible` (and `PlanetClouds`')
+  take a high genus's name (`"cirrus"`): the high genera have bits of
+  `uGenusMask` past the low genera's (`march.HIGH_MASK_SHIFT`). The C key
+  shows or hides the march's cirrus; the HUD says "march cirrus on/off".
 - The high layer's cirrostratus and cirrocumulus (`clouds.md`, "The high
   layer"). The cirrostratus is a nearly uniform veil (optical depth 0.2)
   with slow swells 25 km across stretched 6 times along the upper jet,
@@ -135,6 +150,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The cirrus defaults: `PlanetClouds(cirrus=True)` (was a `CirrusSpec`)
+  draws the weather's cirrus in the march's high layer, with or without
+  genera; `CloudLook.cirrus` is a bool (default False; was a `CirrusSpec`
+  or None), and `demo_world.py` sets it. `planet.check_layers` takes
+  `cirrus` as a bool: the sheet's rule is gone, the high slab's applies
+  whenever the cirrus is drawn. `PlanetClouds.high_slab` gives the high
+  layer's slab, which `World.depth_ranges` reaches. `cloud_bench.py`'s
+  `--no-cirrus` turns off the march's cirrus.
 - The march takes the high slab's crossings out of its sorted segments:
   the one on the way down before every band, the one on the way up after
   (a ray's height is convex, the slab above every band). The high variant
@@ -185,6 +208,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The march's cirrus, two artefacts seen flying at its height:
+  - **A second, offset layer.** Two causes:
+    - A crossing of the high slab that never meets its middle (a camera
+      inside the slab, looking away from it) read the patterns at the
+      crossing's middle, another height for every ray; it now draws nothing
+      (`sheetCrossing` returns -1, `march.sheet_crossing` None).
+    - The showcase also drew the old cirrus sheet under its own cirrus.
+      `--cirrus` now defaults to none with `--showcase`.
+  - **Stairs along the fibres up close.** The upper wind's stream function
+    went through a cube map's 8-bit filter weights, steps of about 30 m. It
+    is now a 2D array of the faces, blended in float (`highWindAt`).
 - A faint contour across a thin cloud sheet seen at a grazing angle (the
   altostratus): the march counted a ray opaque at transmittance 0.04 and
   snapped its alpha from 0.96 to 1 there; the light let through now eases to

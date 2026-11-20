@@ -1,15 +1,12 @@
 """
 A planet's clouds.
 
-    planet.py  — a whole planet's clouds (PlanetClouds): the low clouds'
-                 volume and the cirrus sheet above it, as one part; not
-                 re-exported here, nor are the two layers:
-    march.py   — the volume (CloudMarch: the low clouds raymarched, a deck
-                 sphere for the sea's reflection: deck.py; what the field is
-                 built from: field_setup.py);
-    cirrus.py  — the sheet (CloudSheet: high cirrus, baked patches stamped
-                 along the upper wind, drawn behind and in front of the
-                 volume).
+    planet.py  — a whole planet's clouds (PlanetClouds), as one part; not
+                 re-exported here, nor is the volume:
+    march.py   — the volume (CloudMarch: the low clouds raymarched and the
+                 high layer's cirrus, a deck sphere for the sea's
+                 reflection: deck.py; what the field is built from:
+                 field_setup.py; the genera: genera.py).
     noise.py   — what a cloud type looks like: its density field (DensityField)
                  and the tileable 3D value-noise volume it is built from.
     cloud.py   — the cloud types (PRESETS, CloudSpec) and what they cost

@@ -23,7 +23,7 @@ sky and the clouds, so the clouds are most of the frame.
     --uniform-coverage the same coverage everywhere (no weather systems,
                        climate or terrain): comparisons that do not depend
                        on where the pose is
-    --no-cirrus        no cirrus sheet
+    --no-cirrus        no cirrus (the march's high layer: the weather's)
     --cloud-debug      PlanetClouds.set_debug bits (cloud.frag's uCloudDebug)
     --genera           the low clouds by genus (clouds.genera's placeholder
                        maps around the reference point: cumulonimbus,
@@ -142,7 +142,6 @@ from demo_terrain import (  # noqa: E402
     window_config,
 )
 from world_builder.atmosphere import AtmosphereParams, Atmospheres  # noqa: E402
-from world_builder.clouds.cirrus import CirrusSpec  # noqa: E402
 from world_builder.clouds.cloud import CloudSettings  # noqa: E402
 from world_builder.clouds.field_setup import _noise  # noqa: E402
 from world_builder.clouds.genera import GeneraSpec  # noqa: E402
@@ -333,7 +332,7 @@ class CloudBench(ShowBase):
             atmospheres=self.atmospheres,
             atmosphere=0,
             altitude=CLOUD_BASE,
-            cirrus=CirrusSpec() if cirrus else None,
+            cirrus=cirrus,
             planet=self.spec,
             weather=weather,
             settings=settings,
@@ -685,7 +684,9 @@ def main() -> None:
         default=None,
         help="the same coverage everywhere",
     )
-    parser.add_argument("--no-cirrus", action="store_true", help="no cirrus sheet")
+    parser.add_argument(
+        "--no-cirrus", action="store_true", help="no cirrus (the march's high layer)"
+    )
     parser.add_argument(
         "--cloud-debug", type=int, default=0, help="PlanetClouds.set_debug bits"
     )

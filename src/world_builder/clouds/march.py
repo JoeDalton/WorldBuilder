@@ -139,6 +139,7 @@ from world_builder.clouds.genera import (
     high_genera,
     high_jet,
     high_wind_cube,
+    weather_cirrus,
 )
 from world_builder.clouds.noise import (
     DECK_LAYER,
@@ -413,11 +414,18 @@ def band_masks(
     return masks
 
 
+#: The high genera's bits of ``uGenusMask`` (:meth:`CloudMarch.set_genus_visible`),
+#: past the low genera's: channel c of cube B (``genera.HIGH_CHANNELS``) has
+#: bit ``HIGH_MASK_SHIFT + c - 1`` (``cloud_march.glsl``'s ``highCrossing``).
+HIGH_MASK_SHIFT = MAX_GENERA
+#: Every genus drawn: the low genera's bits and the high genera's.
+ALL_GENERA_MASK = (1 << (HIGH_MASK_SHIFT + len(HIGH_CHANNELS))) - 1
+
 #: The band a high-layer crossing is tagged with (:func:`band_segments`;
 #: ``cloud_march.glsl``'s ``HIGH_BAND``). MUST match the shader.
 HIGH_BAND = -1
 #: The longest path through the high slab, in slab depths
-#: (``THIN_GRAZING_PATH``; cirrus.frag's ``GRAZING_PATH``): past it a veil
+#: (``THIN_GRAZING_PATH``): past it a veil
 #: would saturate toward the horizon into a flat plate. MUST match the shader.
 THIN_GRAZING_PATH = 4.0
 
@@ -467,7 +475,7 @@ def thin_optical_depth(
     :param density: the samples' mean density (1: a full veil)
     :param length: the crossing's length, metres
     :param extinction: optical depth per metre at density 1
-    :param cap: what it saturates toward (the sheet's ``max_optical_depth``)
+    :param cap: what it saturates toward (``genera.HIGH_OPTICS``' cap)
     """
     path = min(length, THIN_GRAZING_PATH * thickness)
     return cap * (1.0 - math.exp(-extinction * density * path / cap))
@@ -502,14 +510,17 @@ def high_optical_depth(
 
 def sheet_crossing(
     origin: ArrayLike, direction: ArrayLike, middle: float, t0: float, t1: float
-) -> float:
+) -> float | None:
     """Where a crossing (t0, t1) of the high slab meets its middle, the
     sphere of radius *middle* around the planet's centre (``highCrossing``'s
-    sheet point): the cirrostratus's and the cirrocumulus's patterns are
-    read there, once, as a thin sheet's, not at the jittered samples (a
-    slant ray's samples wander over the slab's 1.5 km across a grain's 200
-    m, and the visits would blur it). Where the crossing does not meet it
-    (a camera inside the slab, looking away), the crossing's middle."""
+    sheet point): every high genus's pattern is read there, once, as a thin
+    sheet's, not at jittered samples (a slant ray's samples would wander
+    over the slab's 1.5 km across a grain's 200 m or a fibre's 180 m, and
+    the visits would blur them). Where the crossing does not meet it (a
+    camera inside the slab, looking away from its middle), None: the ray
+    crosses no sheet, and the crossing draws nothing (the crossing's middle,
+    once read there, drew a second, offset copy of the cirrus from inside
+    the slab)."""
     c = np.asarray(origin, np.float64)
     d = np.asarray(direction, np.float64)
     b = float(c @ d)
@@ -519,7 +530,7 @@ def sheet_crossing(
         for t in (-b - h, -b + h):
             if t0 <= t <= t1:
                 return t
-    return 0.5 * (t0 + t1)
+    return None
 
 
 #: The steepest a ray may meet the high slab in the footprint's stretch
@@ -2128,12 +2139,15 @@ class CloudMarch:
         sky_occlusion: float = 0.55,
         exposure: float = 0.9,
         genera: GeneraSpec | None = None,
+        cirrus: bool = False,
     ):
-        """As :class:`planet.PlanetClouds`' arguments of the same names
-        (without the cirrus). With *genera* it marches every genus of
+        """As :class:`planet.PlanetClouds`' arguments of the same names.
+        With *genera* it marches every genus of
         :attr:`genera.GeneraSpec.genera` (:data:`genera.GENUS_PRESETS`) as
         one: the first, the primary genus (the convective clouds), on the
-        weather cube, the others on coverage cube A."""
+        weather cube, the others on coverage cube A. With *cirrus* its high
+        layer draws the weather's cirrus (:attr:`genera.GeneraSpec.cirrus_weather`;
+        without genera, :func:`genera.weather_cirrus`'s high layer alone)."""
         settings = settings or CloudSettings()
         _ensure_bin()
         self.radius = float(radius)
@@ -2146,6 +2160,8 @@ class CloudMarch:
         volume = _noise(seed)
         self._seed = seed
         self._octave_mean = float(volume.mean())
+        if genera is not None and cirrus and not genera.cirrus_weather:
+            genera = replace(genera, cirrus_weather=True)
         self._genera_spec = genera
         specs = (
             genus_specs(genera, altitude, covered=True)
@@ -2195,17 +2211,27 @@ class CloudMarch:
                 _Genus(name, preset, field, peaks, table, job, coverage=coverage,
                        recipe=recipe)
             )  # fmt: skip
-        #: The high genera drawn (genera.high_genera, those a feature covers:
-        #: none, no high layer compiled) and their coverage cube (B)
-        self._high = [] if genera is None else high_genera(genera, covered=True)
+        #: What the high layer follows: the genera, or without them the
+        #: weather's cirrus alone (with *cirrus*); None = no high layer
+        self._high_spec = (
+            genera
+            if genera is not None
+            else (weather_cirrus(weather) if cirrus else None)
+        )
+        #: The high genera drawn (genera.high_genera, those a feature covers
+        #: and the weather's cirrus: none, no high layer compiled) and their
+        #: coverage cube (B)
+        self._high = (
+            [] if self._high_spec is None else high_genera(self._high_spec, True)
+        )
         self._high_job = None
         self._wind_job = None
         if self._high:
             self._high_job = cover_jobs.get("B") or executor.submit_once(
-                _coverage_cube, genera, "B"
+                _coverage_cube, self._high_spec, "B"
             )
             # The upper wind on the GPU (highWind): the cirrus's flow
-            self._wind_job = executor.submit_once(high_wind_cube, genera)
+            self._wind_job = executor.submit_once(high_wind_cube, self._high_spec)
         first = self._genera[0]
         self.field = first.field
         self._preset = first.preset
@@ -2270,9 +2296,10 @@ class CloudMarch:
         self._steps = PTA_int.empty_array(1)
         self._split = PTA_float.empty_array(1)  # the near range's end (uSplit)
         self._frame = PTA_int.empty_array(1)
-        #: The genera drawn, a bit each (set_genus_visible)
+        #: The genera drawn, a bit each, the high genera's past the low
+        #: genera's (set_genus_visible, HIGH_MASK_SHIFT)
         self._genus_mask = PTA_int.empty_array(1)
-        self._genus_mask[0] = (1 << MAX_GENERA) - 1
+        self._genus_mask[0] = ALL_GENERA_MASK
         self._layer_count = PTA_int.empty_array(1)
         self._layer_count[0] = self._layers_used
         self._inputs: dict[str, Any] = {
@@ -2320,7 +2347,7 @@ class CloudMarch:
             # The deck's (cloud_deck.vert, cloud.frag): its own entry
             "uDeckLayer": DECK_LAYER,
             # The high layer's (cloud_march.glsl's highCrossing)
-            **self._high_inputs(genera, seed),
+            **self._high_inputs(self._high_spec, seed),
             # The shadow's genera and sky bands: the light volume's chart and
             # the maps' chord (cloud_field.glsl)
             **self._shadow_inputs(),
@@ -2344,8 +2371,8 @@ class CloudMarch:
     @staticmethod
     def _high_inputs(genera: GeneraSpec | None, seed: int = 7) -> dict[str, Any]:
         """The high layer's slab, optics and light (``uHighSlab``,
-        ``uHighPhase``, ``uHighLight``): ice, as the cirrus sheet's
-        (``CloudType.CIRRUS``'s optics)."""
+        ``uHighPhase``, ``uHighLight``): ice (``CloudType.CIRRUS``'s
+        optics)."""
         base, thickness = genera.high_slab if genera is not None else HIGH_SLAB
         o = PRESETS[CloudType.CIRRUS].optics
         forward, backward, isotropic = phase_weights(o)
@@ -2370,14 +2397,15 @@ class CloudMarch:
 
     @property
     def high_genera(self) -> list[str]:
-        """The high genera the march draws (those a feature covers)."""
+        """The high genera the march draws (those a feature covers, and the
+        cirrus when it draws the weather's)."""
         return [name for name, _ in self._high]
 
     @property
     def high_slab(self) -> tuple[float, float] | None:
         """The high layer's slab, (base, thickness) above sea level, metres,
         while it draws a genus; None = no high layer."""
-        return self._genera_spec.high_slab if self._high else None
+        return self._high_spec.high_slab if self._high else None
 
     # ── wiring ────────────────────────────────────────────────────────────
 
@@ -2789,20 +2817,27 @@ class CloudMarch:
 
     def set_genus_visible(self, genus: int | str, visible: bool) -> None:
         """Draw a genus or not, live (a look-development toggle: the
-        showcase's keys). Only the view hides it: it still shades the
-        others, and the ground.
+        showcase's keys, the demo's C key for the cirrus). Only the view
+        hides it: it still shades the others, and the ground.
 
-        :param genus: its index or its name (:attr:`genus_names`)
+        :param genus: its index or its name (:attr:`genus_names`), or a high
+            genus's name (``genera.HIGH_CHANNELS``: ``"cirrus"`` hides all
+            the cirrus, the weather's and the features')
         """
-        index = self.genus_names.index(genus) if isinstance(genus, str) else genus
-        bit = 1 << int(index)
+        bit = 1 << self._genus_bit(genus)
         mask = self._genus_mask[0]
         self._genus_mask[0] = (mask | bit) if visible else (mask & ~bit)
 
     def genus_visible(self, genus: int | str) -> bool:
         """:returns: whether a genus is drawn (:meth:`set_genus_visible`)"""
+        return bool(self._genus_mask[0] >> self._genus_bit(genus) & 1)
+
+    def _genus_bit(self, genus: int | str) -> int:
+        """A genus's bit of ``uGenusMask`` (:data:`HIGH_MASK_SHIFT`)."""
+        if isinstance(genus, str) and genus in HIGH_CHANNELS:
+            return HIGH_MASK_SHIFT + HIGH_CHANNELS[genus] - 1
         index = self.genus_names.index(genus) if isinstance(genus, str) else genus
-        return bool(self._genus_mask[0] >> int(index) & 1)
+        return int(index)
 
     def set_debug(self, flags: int) -> None:
         """Profiling switches (cloud_field.glsl's ``uCloudDebug`` bits)."""

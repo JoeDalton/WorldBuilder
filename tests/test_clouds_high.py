@@ -5,11 +5,12 @@ planet.check_layers), its genera on coverage cube B's channels 1-3
 (genera.HIGH_CHANNELS, high_genera), the thin-layer crossings sorted among
 the bands' stretches (march.band_segments' high slab: its crossings first
 and last, thin_optical_depth), the shader variant compiled only with a high
-genus covered (march.march_fragment), the thin-slab lighting cirrus.frag and
-the march share (cloud_shading.glsl's thinSlabRadiance), the cirrus's flow
-streaks (Task 23: the upper wind on the GPU, genera.high_wind_cube; the
-streaks' CPU mirror, march.cirrus_streaks; the weather's cirrus by the march,
-GeneraSpec.cirrus_weather), and a GPU smoke test.
+genus covered (march.march_fragment), the thin-slab lighting
+(cloud_shading.glsl's thinSlabRadiance), the cirrus's flow streaks (Task 23:
+the upper wind on the GPU, genera.high_wind_cube; the streaks' CPU mirror,
+march.cirrus_streaks), the weather's cirrus by the march
+(GeneraSpec.cirrus_weather; without genera genera.weather_cirrus) and what it
+follows (weather.py's upper wind and cirrus cover), and GPU smoke tests.
 """
 
 import math
@@ -43,6 +44,7 @@ from world_builder.clouds.genera import (
     upper_stream,
     upper_wind_at,
     upper_wind_field,
+    weather_cirrus,
 )
 from world_builder.clouds.march import (
     CC_CELL,
@@ -100,7 +102,18 @@ from world_builder.clouds.march import (
     thin_optical_depth,
 )
 from world_builder.clouds.planet import check_layers, layer_slabs
-from world_builder.clouds.weather import WeatherSpec
+from world_builder.clouds.weather import (
+    WeatherSpec,
+    cirrus_cover_map,
+    sample_cube,
+    stream_function,
+    stream_table,
+    stream_vortices,
+    upper_wind,
+    vortices,
+)
+from world_builder.sky.starfield import cube_directions
+from world_builder.terrain.chart import TangentFrame, dirs_from_latlon, latlon
 from world_builder.terrain.planet import PlanetSpec
 
 R = 600e3
@@ -136,7 +149,7 @@ def test_the_high_slab_is_a_band_of_its_own_above_the_union(weather, showcase):
 
 def test_the_high_slab_must_clear_the_union_and_stay_in_the_air(weather, monkeypatch):
     spec = GeneraSpec(weather)
-    check_layers(CloudType.CUMULUS, 2200.0, None, None, spec)
+    check_layers(CloudType.CUMULUS, 2200.0, False, None, spec)
     monkeypatch.setitem(
         GENUS_PRESETS,
         "tall",
@@ -144,21 +157,24 @@ def test_the_high_slab_must_clear_the_union_and_stay_in_the_air(weather, monkeyp
     )
     tall = replace(spec, genera=("convective", "tall"))
     with pytest.raises(ValueError, match=r"high layer's base \(11000 m\)"):
-        check_layers(CloudType.CUMULUS, 2200.0, None, None, tall)
+        check_layers(CloudType.CUMULUS, 2200.0, False, None, tall)
     # No high genera listed: no high layer to check
-    check_layers(CloudType.CUMULUS, 2200.0, None, None, replace(tall, high=()))
+    check_layers(CloudType.CUMULUS, 2200.0, False, None, replace(tall, high=()))
     with pytest.raises(ValueError, match="high layer's top"):
-        check_layers(CloudType.CUMULUS, 2200.0, None, 12000.0, spec)
+        check_layers(CloudType.CUMULUS, 2200.0, False, 12000.0, spec)
 
 
-def test_the_old_cirrus_sheet_may_share_the_high_slab(weather):
-    """Until Task 24 deletes it, the sheet (11-12 km) sits inside the high
-    slab; only the union of the genera bounds its base."""
-    from world_builder.clouds.cirrus import CirrusSpec
-
-    sheet = CirrusSpec()
-    assert HIGH_SLAB[0] <= sheet.base < sheet.top <= HIGH_SLAB[0] + HIGH_SLAB[1]
-    check_layers(CloudType.CUMULUS, 2200.0, sheet, None, GeneraSpec(weather))
+def test_the_weather_cirrus_has_the_high_slab_without_genera():
+    """A one-type march with the weather's cirrus (genera.weather_cirrus):
+    the high layer's slab, and its rule, without a GeneraSpec."""
+    spec = weather_cirrus(WeatherSpec(PlanetSpec(name="clouds", radius=R)))
+    assert spec.genera == () and spec.features == ()
+    assert spec.high_slab == HIGH_SLAB
+    assert high_genera(spec, covered=True) == [("cirrus", 1)]
+    check_layers(CloudType.CUMULUS, 2200.0, True, 60e3)
+    with pytest.raises(ValueError, match="high layer's top"):
+        check_layers(CloudType.CUMULUS, 2200.0, True, 12000.0)
+    check_layers(CloudType.CUMULUS, 2200.0, False, 12000.0)  # no high layer
 
 
 # ── Its genera and their coverage ────────────────────────────────────────────
@@ -292,13 +308,9 @@ def test_the_high_variant_is_compiled_only_with_a_high_genus():
     assert "HIGH_BAND" not in march
 
 
-def test_the_march_and_the_sheet_share_the_thin_slab_lighting():
+def test_the_high_layer_lights_a_thin_slab():
     shading = (SHADERS / "cloud_shading.glsl").read_text()
     assert "vec3 thinSlabRadiance(" in shading
-    cirrus = (SHADERS / "cirrus.frag").read_text()
-    assert '#pragma include "cloud_shading.glsl"' in cirrus
-    assert "thinSlabRadiance(" in cirrus
-    assert "lobePhase(" not in cirrus  # its own copy gone
     march = (SHADERS / "cloud_march.glsl").read_text()
     high = march[march.index("void highCrossing(") :]
     assert "thinSlabRadiance(" in high[: high.index("\n}\n")]
@@ -391,6 +403,64 @@ def test_the_high_layer_renders_only_when_covered(window, weather, genus):
             assert max(alphas) > 0.02
         else:
             assert max(alphas) == 0.0
+    finally:
+        camera.set_pos(pos)
+        camera.set_hpr(hpr)
+        clouds.remove()
+        depth.destroy()
+        executor.shutdown()
+
+
+def test_a_one_type_march_draws_the_weather_cirrus(window, weather):
+    """PlanetClouds(cirrus=True) without genera: the march's high layer
+    draws the weather's cirrus (where its cover is thickest, looking
+    straight up, the low clouds hidden), and the C key's toggle
+    (set_genus_visible("cirrus")) takes it away."""
+    from panda3d.core import Point3
+
+    from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.planet import PlanetClouds
+    from world_builder.clouds.weather import cirrus_cover_map
+    from world_builder.depth import SplitDepthCameras
+    from world_builder.sky.starfield import cube_directions
+    from world_builder.terrain.workers import ChunkExecutor
+
+    cover = cirrus_cover_map(weather)
+    dirs = cube_directions(cover.shape[1]).reshape(-1, 3)
+    up = dirs[int(np.argmax(cover.reshape(-1)))]
+    executor = ChunkExecutor(backend="inline", inline_budget=64)
+    clouds = PlanetClouds(
+        window.render, R, executor, altitude=2200.0,
+        settings=CloudSettings(octave_bands=2), weather=weather, cirrus=True,
+    )  # fmt: skip
+    depth = SplitDepthCameras(window, near=1.0)
+    camera = window.camera
+    pos, hpr = camera.get_pos(), camera.get_hpr()
+    try:
+        march = clouds.volume
+        assert march.high_genera == ["cirrus"]
+        clouds.use_split_depth(window, depth)
+        march._finish()
+        camera.set_pos(0.0, 0.0, 0.0)
+        camera.look_at(Point3(*up))
+        clouds.set_sun(up)
+        clouds.set_genus_visible(0, False)  # the low clouds
+        (layer,) = march._layers
+        gsg = window.win.get_gsg()
+
+        def alpha():
+            for _ in range(8):
+                depth.update(*SplitDepthCameras.planet_ranges(R, R + 13000.0))
+                clouds.update(up * (R + 600.0))
+                window.graphicsEngine.render_frame()
+            window.graphicsEngine.extract_texture_data(layer.colour, gsg)
+            image = _pixels(layer.colour)
+            assert np.all(np.isfinite(image))
+            return image[:, 3].max()
+
+        assert alpha() > 0.02
+        clouds.set_genus_visible("cirrus", False)
+        assert alpha() == 0.0
     finally:
         camera.set_pos(pos)
         camera.set_hpr(hpr)
@@ -524,10 +594,28 @@ def test_the_sheet_point_is_where_the_ray_crosses_the_slab_middle():
     assert t0 < t < t1
     assert np.linalg.norm(from_above + t * tilt) == pytest.approx(middle)
     # Inside the slab under its middle, looking down: the middle is never
-    # crossed in the segment; its middle instead
+    # crossed in the segment, so no sheet (the crossing's middle drew a
+    # second, offset copy of the cirrus from inside the slab)
     inside = UP * (R + 11200.0)
     t0, t1, _ = band_segments(inside, -UP, R, [], t_start=1.0, high=HIGH_SLAB)[0]
-    assert sheet_crossing(inside, -UP, middle, t0, t1) == pytest.approx(0.5 * (t0 + t1))
+    assert sheet_crossing(inside, -UP, middle, t0, t1) is None
+    # Above its middle, looking up: none either; looking level, the sheet
+    # where the ray comes down to the middle, far off
+    above = UP * (R + 12200.0)
+    t0, t1, _ = band_segments(above, UP, R, [], t_start=1.0, high=HIGH_SLAB)[0]
+    assert sheet_crossing(above, UP, middle, t0, t1) is None
+    level = np.array([1.0, 0.0, -0.02])
+    level /= np.linalg.norm(level)
+    for t0, t1, _ in band_segments(above, level, R, [], t_start=1.0, high=HIGH_SLAB):
+        t = sheet_crossing(above, level, middle, t0, t1)
+        if t is not None:
+            assert np.linalg.norm(above + t * level) == pytest.approx(middle)
+    # The shader returns -1 there and draws nothing
+    march = (SHADERS / "cloud_march.glsl").read_text()
+    body = march[march.index("float sheetCrossing(") :]
+    assert "return -1.0;" in body[: body.index("\n}\n")]
+    high = march[march.index("void highCrossing(") :]
+    assert "if (ts < 0.0)" in high[: high.index("\n}\n")]
 
 
 def test_the_footprint_on_the_slab_grows_toward_grazing():
@@ -695,10 +783,10 @@ def test_a_set_wind_is_uniform_at_the_focus(weather):
 
 
 def test_the_cirrus_weather_is_the_marchs_only_when_asked(weather):
-    """--cirrus march: the weather's cirrus cover (the sheet's) fills cube
-    B's channel 1 under the features, and compiles the high layer; by
-    default the cirrus has only its features' coverage (none in the demo's
-    default: the sheet draws the weather's)."""
+    """cirrus_weather (PlanetClouds' cirrus=True, the demo's default): the
+    weather's cirrus cover fills cube B's channel 1 under the features, and
+    compiles the high layer; without it the cirrus has only its features'
+    coverage (none in the demo's default)."""
     from world_builder.clouds.weather import cirrus_cover_map, sample_cube
     from world_builder.sky.starfield import cube_directions
 
@@ -852,7 +940,7 @@ def test_the_shader_takes_the_cirrus_constants():
     # Read once at the sheet point, not at jittered samples
     high = march[march.index("void highCrossing(") :]
     assert "cirrusStreaks(q, dir" in high[: high.index("\n}\n")]
-    assert "uniform samplerCube highWind;" in march
+    assert "uniform sampler2DArray highWind;" in march
 
 
 def test_the_heads_are_fibrous_not_blobs(streak_sample):
@@ -887,3 +975,183 @@ def test_the_heads_are_fibrous_not_blobs(streak_sample):
     finally:
         march.CI_FAN = saved
     assert np.abs(fanned - unfanned).mean() > 0.01
+
+
+# ── The cirrus's artefacts (Task 23, last follow-up) ─────────────────────────
+
+
+def _eight_bit(cube, dirs):
+    """A cube map's hardware filter: sample_cube with its weights rounded
+    to 1/256 of a texel (as NVIDIA's linear filter keeps them)."""
+    from world_builder.sky.starfield import directions_to_texels
+
+    size = cube.shape[1]
+    face, row, column = directions_to_texels(dirs, size)
+    y = np.clip(row - 0.5, 0.0, size - 1.0)
+    x = np.clip(column - 0.5, 0.0, size - 1.0)
+    y0 = np.minimum(np.floor(y).astype(int), size - 2)
+    x0 = np.minimum(np.floor(x).astype(int), size - 2)
+    ty = (np.round((y - y0) * 256.0) / 256.0)[:, None]
+    tx = (np.round((x - x0) * 256.0) / 256.0)[:, None]
+    top = cube[face, y0, x0] * (1 - tx) + cube[face, y0, x0 + 1] * tx
+    bottom = cube[face, y0 + 1, x0] * (1 - tx) + cube[face, y0 + 1, x0 + 1] * tx
+    return top * (1 - ty) + bottom * ty
+
+
+def test_the_stream_function_is_read_without_steps(wind_spec):
+    """Up close the cirrus's fibres stair-stepped: the stream function (the
+    across-the-wind coordinate) came through a cube map's hardware filter,
+    whose 8-bit weights step it by 1/256 of a 7 km texel. The shader blends
+    the texels in float (highWindAt, as weather.sample_cube): across the
+    wind in 2 m steps, the stream function changes by speed x 2 m each step
+    (within a tenth), where the 8-bit filter holds it, then jumps."""
+    from world_builder.clouds.weather import sample_cube
+    from world_builder.terrain.chart import TangentFrame
+
+    cube = high_wind_cube(wind_spec, 128)
+    frame = TangentFrame.at(*wind_spec.focus)
+    up = np.asarray(frame.up, np.float64)
+    wind, _ = upper_wind_field(wind_spec, up[None])
+    across = np.cross(up, wind[0] / np.linalg.norm(wind[0]))
+    metres = np.arange(0.0, 400.0, 2.0)
+    dirs = up * R + metres[:, None] * across
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    steps = np.diff(sample_cube(cube, dirs)[:, 3])
+    expected = -np.linalg.norm(wind[0]) * 2.0
+    np.testing.assert_allclose(steps, expected, rtol=0.1)
+    stepped = np.diff(_eight_bit(cube, dirs)[:, 3].astype(np.float64))
+    assert (np.abs(stepped) < 0.1 * abs(expected)).mean() > 0.3  # held, then jumps
+    assert np.abs(stepped).max() > 5.0 * abs(expected)
+
+
+def test_the_shader_blends_the_wind_in_float():
+    from world_builder.clouds.weather import build_high_wind_texture
+
+    march = (SHADERS / "cloud_march.glsl").read_text()
+    assert "uniform sampler2DArray highWind;" in march
+    assert "texture(highWind" not in march
+    body = march[march.index("vec4 highWindAt(") :]
+    body = body[: body.index("\n}\n")]
+    assert body.count("texelFetch(highWind") == 4
+    streaks = march[march.index("float cirrusStreaks(") :]
+    assert "highWindAt(q)" in streaks[: streaks.index("\n}\n")]
+    from panda3d.core import Texture
+
+    tex = build_high_wind_texture(np.zeros((6, 8, 8, 4), np.float32))
+    assert tex.get_texture_type() == Texture.TT_2d_texture_array
+    assert tex.get_z_size() == 6 and tex.get_x_size() == 8
+
+
+def test_the_cirrus_is_on_by_default_but_in_the_showcase():
+    """--cirrus / --no-cirrus: the weather's cirrus in the march, on by
+    default; the showcase's cirrus is a feature of its own, which the
+    weather's would bury (off by default there)."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+    import demo_terrain
+
+    source = Path(demo_terrain.__file__).read_text()
+    assert "self._cirrus = not showcase if cirrus is None else bool(cirrus)" in source
+    assert "sheet" not in source
+    parser = demo_terrain.argparse.ArgumentParser()
+    demo_terrain.add_world_arguments(parser)
+    assert parser.parse_args([]).cirrus is None
+    assert parser.parse_args(["--no-cirrus"]).cirrus is False
+    assert parser.parse_args(["--cirrus"]).cirrus is True
+
+
+# ── What the cirrus follows: the upper wind and the cover (weather.py) ──────
+
+
+@pytest.fixture(scope="module")
+def earth_weather():
+    from world_builder.terrain.planet import PRESETS as PLANETS
+
+    return WeatherSpec(PLANETS["earthlike"])
+
+
+def test_the_zonal_stream_function_is_the_wind(earth_weather):
+    """psi = -R * integral(u dlat): its slope along a meridian is the
+    eastward wind (the fibres run east-west, as fast as the jets are)."""
+    table = stream_table(earth_weather)
+    lat = np.linspace(-90.0, 90.0, len(table))
+    slope = -np.gradient(table, np.radians(lat)) / R
+    inner = slice(10, -10)
+    np.testing.assert_allclose(
+        slope[inner], upper_wind(earth_weather, lat)[inner], atol=0.02
+    )
+    # Westerly jets in both hemispheres at 30 degrees
+    assert upper_wind(earth_weather, np.array([30.0, -30.0])) == pytest.approx(
+        [1.0, 1.0]
+    )
+
+
+def test_zonal_fibres_run_east_west(earth_weather):
+    """Without weather systems, the stream function is constant along a
+    parallel: the fibres follow it."""
+    table = stream_table(earth_weather)
+    none = np.zeros((0, 5))
+    lat = np.full(36, 45.0)
+    lon = np.linspace(-180.0, 170.0, 36)
+    psi = stream_function(table, none, dirs_from_latlon(lat, lon))
+    np.testing.assert_allclose(psi, psi[0], rtol=1e-9)
+
+
+def test_the_fibres_turn_around_the_weather_systems(earth_weather):
+    """Each system's share is constant on circles around it (the wind turns
+    around a low), a low's a minimum in the north, and the strongest wind it
+    adds is the configured share of the jets'."""
+    rows = stream_vortices(earth_weather)
+    systems = vortices(earth_weather)
+    assert len(rows) == len(systems) > 0
+    for row, v in zip(rows, systems):
+        centre, k, amplitude = row[:3], row[3], row[4]
+        frame = TangentFrame.at(*(float(x[0]) for x in latlon(centre[None, :])))
+        ring = np.array(
+            [
+                math.cos(0.5 / math.sqrt(k)) * frame.up
+                + math.sin(0.5 / math.sqrt(k))
+                * (math.cos(a) * frame.east + math.sin(a) * frame.north)
+                for a in np.linspace(0.0, 2.0 * math.pi, 12)
+            ]
+        )
+        psi = stream_function(np.zeros(4), row[None, :], ring)
+        np.testing.assert_allclose(psi, psi[0], rtol=1e-6)
+        if not v.tropical:
+            assert (amplitude < 0.0) == (centre[2] > 0.0)
+        # Its fastest wind: the steepest slope across the rings
+        r = np.linspace(0.01, 3.0, 400) / math.sqrt(k)
+        profile = amplitude * np.exp(-((2.0 * np.sin(r / 2.0)) ** 2) * k)
+        speed = np.abs(np.gradient(profile, r * R)).max()
+        assert speed == pytest.approx(earth_weather.jet_vortex, rel=0.02)
+
+
+def test_the_cirrus_cover_follows_the_jets_and_the_cyclones(earth_weather):
+    cover = cirrus_cover_map(earth_weather)
+    assert cover.shape == (6, 128, 128)
+    assert 0.0 <= cover.min() and cover.max() <= 1.0
+    np.testing.assert_array_equal(cover, cirrus_cover_map(earth_weather))  # cached
+    dirs = cube_directions(128).reshape(-1, 3)
+    lat, _ = latlon(dirs)
+    flat = cover.reshape(-1)
+    # The wet tropics' anvils and the subtropical jet against the dry
+    # air between them
+    tropics = flat[np.abs(lat) < 5].mean()
+    between = flat[(np.abs(lat) > 18) & (np.abs(lat) < 22)].mean()
+    assert tropics > between + 0.1
+    # A shield poleward and east of the extratropical lows, against their
+    # cold sector behind
+    ahead, behind = [], []
+    for v in vortices(earth_weather):
+        if v.tropical:
+            continue
+        frame = TangentFrame.at(*(float(x[0]) for x in latlon(np.array([v.centre]))))
+        poleward = frame.north if v.centre[2] > 0 else -frame.north
+        ahead.append(frame.up + v.radius * (0.9 * frame.east + 1.0 * poleward))
+        behind.append(frame.up + v.radius * (-1.5 * frame.east - 0.9 * poleward))
+    assert len(ahead) >= 3
+    assert (
+        sample_cube(cover, np.array(ahead)).mean()
+        > sample_cube(cover, np.array(behind)).mean() + 0.2
+    )

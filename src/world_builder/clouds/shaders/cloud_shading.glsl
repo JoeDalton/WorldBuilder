@@ -1,8 +1,8 @@
 // The light a sample of a planet's cloud sends toward the camera, shared by
 // the deck (cloud.frag) and the raymarch (cloud_march.frag); and the thin
-// slab's (thinSlabRadiance), shared by the march's high layer and the cirrus
-// sheet (cirrus.frag). Include with #pragma include, after atmosphere.glsl and
-// cloud_field.glsl. See docs/source/clouds.md, "Lighting".
+// slab's (thinSlabRadiance), the march's high layer's. Include with
+// #pragma include, after atmosphere.glsl and cloud_field.glsl. See
+// docs/source/clouds.md, "Lighting".
 uniform vec3  sunColor;
 uniform vec3  skyColor;
 uniform float sunBrightness;
@@ -160,12 +160,11 @@ vec3 cloudRadiance(Field f, vec3 p, float density, vec3 V, float shading,
                            skylight, twilight, weatherAt(p));
 }
 
-// The radiance of a thin slab of ice cloud (the march's high layer, the
-// cirrus sheet's stamps: cirrus.frag), linear, before the display transform:
-// no sun march, the sunward half of the slab's own depth instead; a phase of
-// its own (strongly forward, ice); the sky's light, and the sunlight the
-// slab scatters about, as its fill; the lit air's twilight once the slab is
-// in the planet's shadow.
+// The radiance of a thin slab of ice cloud (the march's high layer), linear,
+// before the display transform: no sun march, the sunward half of the slab's
+// own depth instead; a phase of its own (strongly forward, ice); the sky's
+// light, and the sunlight the slab scatters about, as its fill; the lit air's
+// twilight once the slab is in the planet's shadow.
 //   verticalDepth  the slab's optical depth straight through it (exp2 units)
 //   up             the slab's up at the sample (unit)
 //   dir            the view ray's direction, toward the slab (unit)
@@ -175,7 +174,7 @@ vec3 cloudRadiance(Field f, vec3 p, float density, vec3 V, float shading,
 //   halo           the 22 degree halo's strength in its phase (haloRing),
 //                  0 = none (the cirrostratus's, by its share of the depth)
 //   sunlight       the sun's colour as it reaches the slab (reddened:
-//                  planetCloudLight's, the sheet's sunColor * cloudSunTint)
+//                  planetCloudLight's)
 //   skylight       the sky's (faded through twilight)
 //   twilight       the lit air's above it (sunColor * cloudTwilight)
 // The 22 degree halo of hexagonal ice (light refracted through the

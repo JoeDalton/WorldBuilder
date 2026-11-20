@@ -515,7 +515,7 @@ Each genus task covers:
 | 21 | Cs veil |
 | 22 | Cc grains with a footprint fade |
 | 23 | Ci flow streaks: the upper-wind warp plus curl, Worley tufts, 4–8 taps along the flow for tails, sheared fall streaks. A tuning preview in the style of `cirrus_preview.py`, procedural, top-down beside the WMO photo |
-| 24 | Delete `CloudSheet`, `cirrus_atlas.*`, `bake_cirrus_atlas.py`, `cirrus_preview.py` and `cirrus.frag`/`.vert`; keep `cirrus_cover_map` and the upper wind (rewired as the Ci channel's source) |
+| 24 | Delete `CloudSheet`, `cirrus_atlas.*`, `bake_cirrus_atlas.py`, `cirrus_preview.py` and `cirrus.frag`/`.vert`; keep `cirrus_cover_map` and the upper wind (rewired as the Ci channel's source) — **done**: sheet deleted; the march's high layer draws the weather's cirrus everywhere (`PlanetClouds(cirrus=True)`, one-type marches via `genera.weather_cirrus`), `--cirrus/--no-cirrus` on by default, C key = `set_genus_visible("cirrus")`; 0.13-0.4 ms cheaper than the sheet |
 
 ## Phase 7: Docs and performance
 

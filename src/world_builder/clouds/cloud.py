@@ -210,8 +210,8 @@ _OCTAVE_SCHEDULES = ((4, 3, 3, 2), (4, 4, 3, 3), (4, 4, 4, 3), (4,))
 class CloudSettings(QualitySettings):
     """What the clouds cost (:mod:`world_builder.quality`), for a planet's
     (:class:`march.CloudMarch`, a raymarch at a fraction of the view's
-    resolution which needs the split cameras, and :class:`cirrus.CloudSheet`
-    above it). A config saved with the billboards' knobs (renderer,
+    resolution which needs the split cameras, its high layer the cirrus).
+    A config saved with the billboards' knobs (renderer,
     billboard count, overlap, interior growth, half resolution, tile
     uploads, re-sorts and cache) loads with those skipped.
 
