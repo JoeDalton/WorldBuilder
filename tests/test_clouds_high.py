@@ -343,6 +343,90 @@ def window(showbase):
     return showbase
 
 
+@pytest.mark.parametrize("high", [False, True], ids=["low", "high"])
+def test_an_eclipse_darkens_the_marched_clouds(window, weather, high):
+    """A body between the clouds and the sun (shadows.glsl's
+    eclipseVisibility, through the march's cloudSunAndSky), given to the
+    passes as the world gives them (PlanetClouds.bind_maps): the low clouds
+    (the stratus deck overhead) and the high layer (a cirrus feature, the
+    low genera hidden) both darken. Before, the march took no eclipse, and
+    clouds stayed sunlit while the air around them darkened."""
+    from panda3d.core import LVecBase4f, Point3, PTA_int, PTA_LVecBase4f
+
+    from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.planet import PlanetClouds
+    from world_builder.depth import SplitDepthCameras
+    from world_builder.shadows import MAX_SHADOW_BODIES
+    from world_builder.terrain.chart import TangentFrame
+    from world_builder.terrain.workers import ChunkExecutor
+
+    over = Feature(0.0, -30e3, 25e3, "cirrus", 0.9)
+    spec = GeneraSpec(
+        weather,
+        features=(*DEFAULT_FEATURES, over) if high else DEFAULT_FEATURES,
+        background=False,
+    )
+    frame = TangentFrame.at(-2.86, 0.0)
+    here = frame.up * (R + 600.0)
+    sun = frame.up + 0.5 * frame.east
+    sun = sun / np.linalg.norm(sun)
+    # A body 30 degrees wide toward the sun, 1000 km off: every cloud in
+    # view in its umbra (positions relative to the camera, shadows.glsl)
+    bodies = PTA_LVecBase4f.empty_array(MAX_SHADOW_BODIES)
+    bodies[0] = LVecBase4f(*(sun * 1.0e6), 5.0e5)
+    casters = PTA_int.empty_array(MAX_SHADOW_BODIES)
+    count = PTA_int.empty_array(1)
+    count[0] = 1
+    camera = window.camera
+    pos, hpr = camera.get_pos(), camera.get_hpr()
+    gsg = window.win.get_gsg()
+
+    def lit(eclipse: bool) -> float:
+        executor = ChunkExecutor(backend="inline", inline_budget=64)
+        clouds = PlanetClouds(
+            window.render, R, executor, altitude=2200.0,
+            settings=CloudSettings(octave_bands=2), genera=spec,
+        )  # fmt: skip
+        depth = SplitDepthCameras(window, near=1.0)
+        try:
+            march = clouds.volume
+            if eclipse:
+                clouds.bind_maps(
+                    lambda node: node.set_shader_inputs(
+                        uShadowBodies=bodies, uShadowCasters=casters,
+                        uShadowCount=count, uShadowSelf=-1,
+                    )
+                )  # fmt: skip
+            clouds.use_split_depth(window, depth)
+            march._finish()
+            camera.set_pos(0.0, 0.0, 0.0)
+            camera.look_at(Point3(*frame.up))
+            clouds.set_sun(sun)
+            if high:
+                for genus in range(march.genera_count):
+                    march.set_genus_visible(genus, False)
+            colours = []
+            for _ in range(6):
+                depth.update(*SplitDepthCameras.planet_ranges(R, R + 13000.0))
+                clouds.update(here)
+                window.graphicsEngine.render_frame()
+                (layer,) = march._layers
+                window.graphicsEngine.extract_texture_data(layer.colour, gsg)
+                image = _pixels(layer.colour)
+                assert np.all(np.isfinite(image))
+                colours.append(image[:, :3].sum(axis=1).mean())
+            return float(np.mean(colours[-3:]))
+        finally:
+            camera.set_pos(pos)
+            camera.set_hpr(hpr)
+            clouds.remove()
+
+    sunlit, eclipsed = lit(False), lit(True)
+    assert sunlit > 0.0
+    # The sun gone, the sky's light at its floor (ECLIPSE_SKY_FLOOR 0.15)
+    assert eclipsed < 0.5 * sunlit, (sunlit, eclipsed)
+
+
 @pytest.mark.parametrize(
     "genus", [None, "cirrus", "cirrostratus", "cirrocumulus"], ids=str
 )

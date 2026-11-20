@@ -45,8 +45,8 @@ of), the far range's over the rest in the far pass's clouds' slot (after
 the sky, before the cirrus). The near range's depth pass and card run only
 while the slab reaches into it.
 
-The sea's reflection sees the deck alone (:func:`deck.deck_mesh`, the
-billboards' far field), the far layer packed for it.
+The sea's reflection sees the decks alone (:func:`deck.deck_nodes`: one a
+genus at its slab's middle, its far level; the high layer has none).
 
 Design notes: docs/source/clouds.md, "The raymarch".
 """
@@ -103,10 +103,8 @@ from world_builder.clouds.cloud import (
     scale_march,
 )
 from world_builder.clouds.deck import (
-    CLOUD_BIN,
     _ensure_bin,
-    deck_mesh,
-    deck_shader,
+    deck_nodes,
 )
 from world_builder.clouds.field_setup import (
     DECK_MAX_OPTICAL_DEPTH,
@@ -160,6 +158,7 @@ from world_builder.clouds.noise import (
     build_deck_light_texture,
     build_noise_texture,
     cell_means,
+    cell_spreads,
     clamped_anisotropy,
     curl_noise_volume,
     pack_genus_params,
@@ -1306,14 +1305,6 @@ def stats_window(f: tuple[float, float]) -> dict[tuple[int, int], float]:
     return weights
 
 
-#: What share of a step's length fades the field's finer features to their means
-#: (cloud_march.frag's uStepFade), by the march's block: the fewer the samples a
-#: frame has, the more shimmer, the more it must fade. It is the clouds' detail
-#: at a distance against their steadiness: Phase 4.1 had 0.4 everywhere, which
-#: made far clouds soft lumps at every preset.
-STEP_FADES = {(1, 1): 0.0, (2, 2): 0.1, (4, 2): 0.15, (3, 3): 0.15, (4, 4): 0.25}
-
-
 #: Past this view footprint (a pixel's share of the clouds' feature, as the
 #: march's shading measures it) a sample takes its sunlight from the light
 #: volume alone, without the sun march's two local steps (cloud_march.frag's
@@ -1331,11 +1322,6 @@ MOVING_HOLD = 8
 #: The camera's motion (cloud_resolve.frag's uStill below this) that counts as
 #: moving for :data:`MOVING_BLOCKS`.
 MOVING_STILL = 0.5
-
-
-def step_fade_of(block: tuple[int, int]) -> float:
-    """:returns: ``uStepFade`` for a march block (across, up)"""
-    return STEP_FADES[block]
 
 
 #: The old ``CloudSettings.march_resolution`` (per axis) as a block.
@@ -1598,10 +1584,9 @@ class _MarchLayer:
         self.blocks = (block, moving_block if gather and moving_block else block)
         self._still_frames = MOVING_HOLD
         # The block's inputs, written in place as it changes (no new render
-        # state a frame): uBlock (march, resolves), uStepFade, uSmooth.
+        # state a frame): uBlock (march, resolves), uSmooth.
         self._block_input = PTA_LVecBase2i.empty_array(1)
         self._resolve_block = PTA_LVecBase2i.empty_array(1)
-        self._step_fade = PTA_float.empty_array(1)
         self._smooth = PTA_float.empty_array(1)
         self._moving_weight = PTA_float.empty_array(1)
         self.far_depth = _DepthPass(
@@ -1796,7 +1781,6 @@ class _MarchLayer:
         self.block = block
         self._block_input[0] = LVecBase2i(*block)
         self._resolve_block[0] = LVecBase2i(*block) if self.gather else LVecBase2i(1, 1)
-        self._step_fade[0] = step_fade_of(block)
         self._smooth[0] = smoothing_of(block)
         self._moving_weight[0] = moving_weight_of(block if self.gather else (1, 1))
         used = [max(1, math.ceil(v / b)) for v, b in zip(self._view, block)]
@@ -1811,7 +1795,6 @@ class _MarchLayer:
         self.card.set_shader_inputs(
             uBlock=self._block_input,
             uViewSize=LVecBase2f(*view),
-            uStepFade=self._step_fade,
             uLightLocalFootprint=LIGHT_LOCAL_FOOTPRINT,
         )
         size = self._resolve_size(view)
@@ -2267,19 +2250,18 @@ class CloudMarch:
         params, self._deck_jobs = self._configure(settings)
         self._write_params(params)
 
-        # The sea's reflection: the deck alone.
+        # The sea's reflection: the decks alone, one a genus at its slab's
+        # middle (cloud.frag's uDeckGenus; the high layer has none). The
+        # others hang under the first, which follows the camera (update).
         self.root = parent.attach_new_node("cloud_march")
         self.root.stash()  # out of every camera until the set-up is done
         self.root.hide(HIDE_FROM_NEAR | HIDE_FROM_FAR | HIDE_FROM_CLOUD_PASS)
-        self.deck = self.root.attach_new_node(
-            deck_mesh(self.radius + self.field.slab[0] + 0.5 * self.field.slab[1])
-        )
-        self.deck.set_shader(deck_shader())
-        self.deck.set_two_sided(True)
         self.root.set_transparency(TransparencyAttrib.M_none)
         self.root.set_depth_test(True)
         self.root.set_depth_write(False)
-        self.root.set_bin(CLOUD_BIN, 0)
+        slabs = [genus.field.slab for genus in self._genera]
+        self.decks = deck_nodes(self.root, self.radius, slabs)
+        self.deck = self.decks[0]
         self.root.set_attrib(
             ColorBlendAttrib.make(
                 ColorBlendAttrib.M_add,
@@ -2340,6 +2322,10 @@ class CloudMarch:
             "uDetailErosion": DETAIL_EROSION,
             "uBillowMean": float(np.mean(1.0 - np.abs(2.0 * volume - 1.0))),
             "uBillowGain": billow_gain(volume),
+            # The spreads a far pixel's faded detail widens the edge by
+            # (cloud_march.glsl's edgeWidening)
+            "uNoiseSigma": float(np.std(volume)),
+            "uBillowSigma": float(np.std(1.0 - np.abs(2.0 * volume - 1.0))),
             "uBillowRawMean": float(np.mean(volume)),
             "uCurlNoise": _curl_texture(),
             "uCurlStrength": CURL_STRENGTH,
@@ -2656,7 +2642,9 @@ class CloudMarch:
             east = TangentFrame.at(*self._genera_spec.focus).east
         f1_mean, edges_mean = cell_means(_cells())
         params[MAX_GENERA, LAYER_VEC4S + 2] = pack_recipe_frame(east, f1_mean)
-        params[MAX_GENERA, LAYER_VEC4S + 1] = pack_recipe_cells(edges_mean)
+        params[MAX_GENERA, LAYER_VEC4S + 1] = pack_recipe_cells(
+            edges_mean, *cell_spreads(_cells())
+        )
         self._layers_used = stride
         self._far_values = far
         self._offset_values = offsets

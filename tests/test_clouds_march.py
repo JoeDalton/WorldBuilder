@@ -586,12 +586,15 @@ def test_the_jitters_blue_noise_has_every_rank_once_and_no_low_frequencies():
     assert power[low].sum() / power.sum() < 1e-3
 
 
-def test_the_far_detail_fades_more_the_fewer_pixels_a_frame_is_traced():
-    from world_builder.clouds.march import step_fade_of
+def test_the_view_pixel_alone_decides_the_far_detail():
+    """No fade by the step's length (uStepFade, removed): it cost far clouds
+    their lumps, and they shimmer less without it (cloud_bench --jitter)."""
+    import world_builder.clouds.march as march
 
-    assert step_fade_of((1, 1)) == 0.0
-    fades = [step_fade_of(b) for b in ((2, 2), (4, 2), (3, 3), (4, 4))]
-    assert 0.0 <= fades[0] < fades[1] <= fades[2] < fades[3] < 0.4
+    text = SHADER.read_text()
+    assert "uniform float uStepFade" not in text
+    assert "float pixel = t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y));" in text
+    assert not hasattr(march, "STEP_FADES")
 
 
 def test_the_resolve_smooths_more_the_fewer_pixels_a_frame_is_traced():

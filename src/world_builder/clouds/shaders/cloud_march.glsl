@@ -82,18 +82,13 @@ layout(location = 1) out vec4 fragDistance;
 // frame's jitter and every move), over to twice as many.
 const vec2 RESOLVED = vec2(2.0, 4.0);
 
-// A step is a sample along the ray as a pixel is across it: features finer than
-// about this share of the step's length (over RESOLVED) fade to their means as
-// the sub-pixel ones do, or they alias into the jitter (the shimmer of far
-// clouds, whatever the steps' count). The step's length by its distance alone
-// (k * max(dtMin, t * growth)), not the step taken: that one is cut at a
-// segment's end (and once lengthened as the ray lost its light, no more:
-// below), so the octaves a sample kept depended on where its ray entered the
-// cloud, which on a tower's face seen level changes with height: contours,
-// stacked horizontal bands. It costs the clouds' detail at a distance
-// (their lumps): march.STEP_FADES gives the least that keeps the shimmer down at
-// each march resolution.
-uniform float uStepFade;
+// The view pixel alone decides what a sample resolves, not the step's length
+// as well. A fade by a share of the step's length (uStepFade, by the march's
+// block, 0.1-0.25) once kept far clouds from shimmering; with the resolve's
+// history it only cost them their lumps (far clouds read as smooth blobs),
+// and without it they shimmer less against a full-resolution reference
+// (cloud_bench --jitter: error 6.15 -> 2.51, flicker 3.28 -> 2.32 at
+// `start`), for 0.1-0.2 ms (performance.md §37).
 
 // Past this view footprint (a pixel's share of the clouds' feature, as
 // shading's) a sample takes its sunlight from the light volume alone, without
@@ -104,6 +99,25 @@ uniform float uLightLocalFootprint;
 // metres resolves: 1 wholly, 0 not at all.
 float resolved(float feature, float footprint) {
     return smoothstep(RESOLVED.x, RESOLVED.y, feature / max(footprint, 1e-3));
+}
+
+// The billows' spread (the ridged noise's they stand for: march.billow_gain;
+// the value noise's, uNoiseSigma, and edgeWidening are cloud_field.glsl's).
+uniform float uBillowSigma;
+
+// The light reaching cloud at p, once a pixel: the air's (planetCloudLight:
+// its reddening, twilight, the sky's fade), then what else hides the sun
+// there, as the deck (cloud.frag) and every other receiver take it: other
+// bodies (eclipses: the sky's light dims with them, never to nothing), the
+// planet's mountains (terrainShadow) and its rings (shadows.glsl; inputs
+// from the world's Shadows and ShadowMap, defaults: none).
+void cloudSunAndSky(vec3 p, out vec3 sunlight, out vec3 skylight, out vec3 twilight) {
+    planetCloudLight(uOwnAtmosphere, p, sunlight, skylight, twilight);
+    float eclipse = eclipseVisibility(p - camPos, sunDir, uShadowSelf);
+    sunlight *= eclipse * terrainShadow(normalize(p), length(p) - planetRadius)
+              * ringVisibility(p - camPos, sunDir);
+    twilight *= eclipse;
+    skylight *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
 }
 
 // The billows' noise is turned off the field's axes: value noise has its
@@ -126,19 +140,35 @@ const float BILLOW_FINER_WEIGHT = 0.5;
 // octaves and the billows fade to their means where a view pixel (footprint
 // metres) cannot resolve them: the coverage holds (as an octave left out
 // does), the sparkle goes.
+//
+// What they no longer show widens the threshold's window instead
+// (edgeWidening): the expected density over the noise a pixel spans, not
+// the density of its mean. Thresholding the mean drew far clouds as smooth
+// sharp blobs (their outline the coarse octaves' alone); widening it leaves
+// their edges soft and frayed, as the detail averaged over a pixel would.
 float marchDensity(Field f, vec3 p, vec3 weather, float footprint) {
     float unit = NOISE_FEATURE_UNITS / f.noiseScale.x;
     vec2 kept = vec2(resolved(unit / f.octaveScales.z, footprint),
                      resolved(unit / f.octaveScales.w, footprint));
     float shift = weather.x
                + dot((1.0 - kept) * f.octaveWeights.zw, vec2(f.octaveMean));
+    // The faded octaves' spread (independent samples of one noise)
+    float octaveSpread = length((1.0 - kept) * f.octaveWeights.zw) * uNoiseSigma;
     f.octaveWeights.zw *= kept;
     float billows = resolved(unit / (f.octaveScales.x * uDetailScale), footprint);
-    float window = (uCloudDebug & 32) != 0 ? 0.0  // no billows (profiling)
-                 : (f.threshHi - f.threshLo) * uDetailErosion * billows;
+    float fullWindow = (uCloudDebug & 32) != 0 ? 0.0  // no billows (profiling)
+                     : (f.threshHi - f.threshLo) * uDetailErosion;
     // None in a cumulonimbus's anvil (cloud_field.glsl's anvilWeight): it
     // is smooth, not the tower's lumps.
-    window *= 1.0 - anvilWeight(f, slabHeight(f, heightOf(p)), weather.y);
+    fullWindow *= 1.0 - anvilWeight(f, slabHeight(f, heightOf(p)), weather.y);
+    float window = fullWindow * billows;
+    if ((uCloudDebug & 4096) == 0) {  // 4096: no widening (comparisons)
+        vec2 widened = edgeWidening(f.threshLo, f.threshHi,
+                                    length(vec2(octaveSpread,
+                                                (1.0 - billows) * fullWindow * uBillowSigma)));
+        f.threshLo = widened.x;  // the early-outs' too (cloudColumnAt)
+        f.threshHi = widened.y;
+    }
     // The field once, at the billows' highest threshold shift: the billows only
     // lower the column's value afterwards, so their pass costs no more noise.
     float raw, fill, shelf;
@@ -626,7 +656,7 @@ void highCrossing(vec2 seg, vec3 dir, inout float transmittance,
     float depth = cap * (1.0 - exp(-total / cap));
     float alpha = 1.0 - exp2(-depth);
     vec3 sunlight, skylight, twilight;
-    planetCloudLight(uOwnAtmosphere, q, sunlight, skylight, twilight);
+    cloudSunAndSky(q, sunlight, skylight, twilight);
     vec3 radiance = (uCloudDebug & 256) != 0 ? vec3(0.8)  // no lighting (profiling)
         : thinSlabRadiance(dot(uHighExtinction, density) * uHighSlab.y, up, dir,
                            cap, uHighPhase, uHighLight,
@@ -694,13 +724,13 @@ float interleavedGradient(vec2 pixel) {
 }
 
 // Genus g's density at a sample t metres along the ray at p (lf its field
-// at the sample's level, weather its genusWeatherAt there), stepLength the
-// step's length by its distance: none where its coverage is 0; far away,
+// at the sample's level, weather its genusWeatherAt there): none where its
+// coverage is 0; far away,
 // where a pixel spans more than the clouds' features, their expected
 // coverage (the deck's) as a homogeneous slab whose vertical crossing takes
 // the deck's alpha. Out: how much of its own self-shadowing the sample keeps
 // (shading: 0 its averages, cloudRadiance) and its far coverage.
-float genusDensity(int g, Field lf, vec3 p, vec4 weather, float t, float stepLength,
+float genusDensity(int g, Field lf, vec3 p, vec4 weather, float t,
                    out float shading, out float farCoverage) {
     if (((uGenusMask >> g) & 1) == 0) {
         // Hidden (CloudMarch.set_genus_visible: the showcase's toggles)
@@ -716,14 +746,19 @@ float genusDensity(int g, Field lf, vec3 p, vec4 weather, float t, float stepLen
 #endif
     float footprint = t * uPixelAngle / feature;
     float detail = 1.0 - smoothstep(0.15, 0.6, footprint);
-    shading = 1.0 - smoothstep(0.04, 0.2, footprint);
+    // Its own self-shadowing and powder kept as far as its shapes (the far
+    // table's averages only where the shapes go too): out there the sun's
+    // depth is the light volume's alone (no local steps, below), smooth
+    // enough not to alias, and it keeps a far cloud's shaded side and
+    // creases. It used to fade from a quarter of that (0.04-0.2: about
+    // 110 km at 2560 x 1440 for the cumulus).
+    shading = 1.0 - smoothstep(0.15, 0.6, footprint);
     // The light volume alone (no local sun steps) where a pixel spans this
     // much of the clouds' feature (cloud_field.glsl).
     cloudLightLocal = footprint < uLightLocalFootprint;
     float density = 0.0;
     if (detail > 0.0 && weather.r > 0.0) {
-        float pixel = max(t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y)),
-                          uStepFade * stepLength);
+        float pixel = t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y));
         // A recipe genus its recipe (cloud_field.glsl), the others the field
         // with its billows.
 #ifdef CLOUD_RECIPES
@@ -747,6 +782,8 @@ void main() {
     if (any(greaterThanEqual(vec2(pixel), uViewSize))) {
         discard;
     }
+    // A recipe genus's far edges widen as the field's (edgeWidening)
+    recipeWiden = (uCloudDebug & 4096) == 0;
     vec2 ndc = (vec2(pixel) + 0.5) / uViewSize * 2.0 - 1.0;
     vec3 nearPoint = unproject(vec3(ndc, -1.0));
     vec3 farPoint = unprojectFar(vec3(ndc, 1.0));
@@ -953,8 +990,6 @@ void main() {
             steps++;
             int level = layerAt(t);
             vec3 p = camPos + dir * t;
-            // The step's length by its distance alone (uStepFade, above).
-            float stepLength = k * max(dtMin, t * growth);
             float shading, farCoverage;
             int layer = only * DETAIL_LEVELS + level;
             if (layer != current) {
@@ -965,8 +1000,7 @@ void main() {
                 weather = genusWeatherAt(only, p);
                 weatherUntil = t + uWeatherStretch;
             }
-            float density = genusDensity(only, lf, p, weather, t, stepLength, shading,
-                                         farCoverage);
+            float density = genusDensity(only, lf, p, weather, t, shading, farCoverage);
             a += dt;
             if (density <= 0.0) {
                 ++emptySteps;
@@ -974,8 +1008,8 @@ void main() {
             }
             float alpha = 1.0 - exp2(-lf.extinction * density * dt);
             if (!lit) {
-                // The air's colouring of the light, once a pixel.
-                planetCloudLight(uOwnAtmosphere, p, sunlight, skylight, twilight);
+                // The light (the air's, eclipses, mountains, rings), once a pixel.
+                cloudSunAndSky(p, sunlight, skylight, twilight);
                 lit = true;
             }
             vec3 radiance = (uCloudDebug & 256) != 0 ? vec3(0.8)  // no lighting (profiling)
@@ -999,8 +1033,6 @@ void main() {
             steps++;
             int level = layerAt(t);
             vec3 p = camPos + dir * t;
-            // The step's length by its distance alone (uStepFade, above).
-            float stepLength = k * max(dtMin, t * growth);
             float shading, farCoverage;
             float height = heightOf(p);
             float sigma = 0.0;
@@ -1023,13 +1055,12 @@ void main() {
                     lf = getField(layer);
                     current = layer;
                 }
-                float density = genusDensity(g, lf, p, weather, t, stepLength, shading,
-                                             farCoverage);
+                float density = genusDensity(g, lf, p, weather, t, shading, farCoverage);
                 if (density <= 0.0) {
                     continue;
                 }
                 if (!lit) {
-                    planetCloudLight(uOwnAtmosphere, p, sunlight, skylight, twilight);
+                    cloudSunAndSky(p, sunlight, skylight, twilight);
                     lit = true;
                 }
                 float own = lf.extinction * density;

@@ -1126,14 +1126,23 @@ def cell_means(cells: np.ndarray) -> tuple[float, float]:
     return float(cells[..., 0].mean()), float((cells[..., 1] - cells[..., 0]).mean())
 
 
-def pack_recipe_cells(edges_mean: float) -> np.ndarray:
+def cell_spreads(cells: np.ndarray) -> tuple[float, float]:
+    """A :func:`worley_volume`'s standard deviations of ``F1`` and of
+    ``F2 - F1``: what a far pixel's faded cells widen a recipe genus's edge
+    by in the march (cloud_march.glsl's edgeWidening)."""
+    return float(cells[..., 0].std()), float((cells[..., 1] - cells[..., 0]).std())
+
+
+def pack_recipe_cells(
+    edges_mean: float, f1_sigma: float = 0.0, edges_sigma: float = 0.0
+) -> np.ndarray:
     """The deck entry's row 14 (free: the deck has no recipe): the Worley
     volume's mean ``F2 - F1`` (:func:`cell_means`), the closed cells'
-    mean.
+    mean, then the spreads of ``F1`` and ``F2 - F1`` (:func:`cell_spreads`).
 
     :returns: (4,) float32
     """
-    return np.array([edges_mean, 0.0, 0.0, 0.0], dtype=np.float32)
+    return np.array([edges_mean, f1_sigma, edges_sigma, 0.0], dtype=np.float32)
 
 
 def pack_recipe_frame(east: ArrayLike, cells_mean: float) -> np.ndarray:

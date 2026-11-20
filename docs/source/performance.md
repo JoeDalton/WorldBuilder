@@ -2572,6 +2572,47 @@ as Task 23 measured. The shots: the cirrus is now the march's streaks
 sky); `clouds_noon`, which shows no cirrus, 0.41-0.45 against 0.25-0.36
 for before against itself; the showcase 0.9.
 
+### Every genus in the reflection, eclipses on the march (offscreen)
+
+The march's light takes the eclipses, mountains and rings once a pixel
+(`cloudSunAndSky`), and the reflection draws one deck a covered genus.
+At 2560x1440, HIGH, with the user's start, two interleaved runs, in ms:
+
+| Pose | Before | After |
+|---|---|---|
+| `genera_cb` | 10.99, 11.02 | 11.07, 10.99 |
+| `genera_congestus` | 11.03, 11.00 | 11.08, 11.14 |
+| `clouds_noon` | 9.51, 9.79 | 9.71, 9.72 |
+
+Within the noise. The demo's default has two covered genera (convective and
+stratus), so two decks, drawn in the reflection's buffer only.
+
+### The step fade removed: far clouds keep their lumps (offscreen)
+
+The march no longer fades features finer than a share of the step's length
+(`uStepFade`, `march.STEP_FADES`); the view pixel alone decides. At
+2560x1440, HIGH, with the user's start, in ms:
+
+| Pose | Before (HEAD) | After |
+|---|---|---|
+| `genera_cb` | 11.00, 11.00 | 11.19, 11.25 |
+| `genera_congestus` | 10.98, 10.99 | 11.13, 11.07 |
+| `clouds_noon` | 9.74, 9.54 | 9.81, 9.72 |
+
+About +0.1-0.25 ms (the after tree also has the deck per genus and the
+eclipse terms, both within noise on their own).
+
+Steadiness (`cloud_bench --genera`, 2560x1440):
+
+| Pose, measure | Fade on | Fade off |
+|---|---|---|
+| `start`, `--jitter` err / flicker | 6.15 / 3.28 | 2.51 / 2.32 |
+| `cb_high`, `--jitter` err / flicker | 4.28 / 5.36 | 3.17 / 3.91 |
+| still spread / p99 | 0.82 / 2.9 | 0.99 / 3.6 |
+| moving 10 m a frame, spread | 7.34 | 7.83 |
+
+The clouds' own cost in the bench: +0.1-0.2 ms.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

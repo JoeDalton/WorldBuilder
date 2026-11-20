@@ -1021,9 +1021,9 @@ march's draws the same cover, in less time (performance §37, "Task
 
 The sun's reddening and the twilight come from `planetCloudLight` at the
 crossing's middle, at the high layer's own height. So it stays lit, and
-reddens, after the cumulus below has gone grey. Like the low clouds in the
-march, it takes no eclipse or mountain shadow on its sunlight (the old
-sheet took both).
+reddens, after the cumulus below has gone grey. Like the low clouds, it
+takes the eclipses, the mountains' and the rings' shadows on its sunlight
+(`cloudSunAndSky`, below).
 
 **Shadows: none.** The high layer casts no shadow, into the light volume or
 the cloud shadow maps, so it does not darken the ground or the clouds below.
@@ -1055,9 +1055,9 @@ it.
 
 #### Not yet, for the high layer
 
-- **The cirrus in the sea's reflection**: the reflection draws the deck
-  alone, so the weather's cirrus, which the old sheet drew there, is not
-  reflected.
+- **The cirrus in the sea's reflection**: the reflection draws the low and
+  middle genera's decks alone, so the weather's cirrus, which the old sheet
+  drew there, is not reflected.
 - **The cirrus's species as choices** (fibratus, uncinus, spissatus,
   castellanus, floccus): one recipe mixes the fibres and the hooked tufts;
   no spissatus (dense, greyish) or castellanus (turrets).
@@ -1078,7 +1078,8 @@ it.
   parhelia, the 46° halo).
 - **Its own toggle in the showcase** (keys 1-9 hide the march's genera, not
   the high layer).
-- **The sea's reflection** sees the deck only, without the high layer.
+- **The sea's reflection** has no high layer (the decks are the low and
+  middle genera's only).
 
 ## The raymarch
 
@@ -1086,13 +1087,37 @@ The raymarch draws the low clouds at every quality preset; the presets set
 its resolution and steps (`march_block`: one pixel in 16 traced a frame at LOW
 and MID, one in 8 at HIGH, one in 4 at ULTRA; `march_steps` 24, 40, 64, 96).
 
-**The sea's reflection** sees only the deck (`deck.deck_mesh`, the far
-field): no cloud shapes and, with genera, no stratus. It is
-good enough under the ripples, so it is left as is. If it is wanted: a cheap
-mirror march, a third march layer from the reflection camera into the
-reflection's buffer (a quarter of its resolution, about 24 steps, no history,
-no composite; the reflection's own depth as the scene's depth), active only
-while the sea is in view and `reflected` is on; about 0.3-0.6 ms (a guess).
+**The sea's reflection** sees the decks (`deck.deck_nodes`): one sphere a
+genus at its slab's middle, shaded by `cloud.frag` as that genus
+(`uDeckGenus`): genus 0 its own deck entry, every other genus its far level,
+its weather (`genusWeatherAt`), its density (a recipe genus's
+`genusRecipeDensity`) and its far table. A hidden genus (`uGenusMask`) draws
+none. They are drawn highest first, since the reflection sees them from
+below. Before, the deck was genus 0's alone, so only the cumulus family was
+reflected: no stratus, stratocumulus or nimbostratus. The high layer has no
+deck. The decks give no 3D cloud shapes; that is good enough under the
+ripples. If shapes are wanted, a cheap mirror march would add a third march
+layer from the reflection camera into the reflection's buffer, at a quarter
+of its resolution, about 24 steps, with no history and no composite, using
+the reflection's own depth as the scene's depth. It would run only while the
+sea is in view and `reflected` is on, for about 0.3-0.6 ms (a guess).
+
+**Eclipses, mountains and rings** (`cloudSunAndSky`, `cloud_march.glsl`):
+the light reaching a cloud is the air's (`planetCloudLight`: its reddening,
+twilight, the sky's fade), times what else hides the sun there, as every
+other receiver takes it (shadows.glsl):
+- other bodies (`eclipseVisibility`), which dim the sky's light too, down to
+  `ECLIPSE_SKY_FLOOR`;
+- the planet's mountains (`terrainShadow`);
+- its rings (`ringVisibility`).
+
+It is evaluated once a pixel, at the first lit sample, where the air's light
+was already taken; the high layer's crossing takes it too. The world binds
+the inputs to every pass (`World`: `Shadows.bind` and `ShadowMap.bind`
+through `PlanetClouds.bind_maps`). Before, the march took none of them, since
+the billboards' `cloud.frag` was the only cloud shader that did: in an
+eclipse the air darkened around sunlit clouds. Its cost is a few shadow-map
+taps a pixel.
 
 [`march.py`](../../src/world_builder/clouds/march.py) (`CloudMarch`) draws
 the field, its weather and its lighting, and the deck shares them. The
@@ -1158,17 +1183,24 @@ cloud). Here each pixel steps along its own ray:
   more than half a fine octave's feature (the 3rd and 4th, 285 m and 125 m
   for cumulus) or the billows', that one fades to its mean (as an octave
   left out does: the coverage holds): it would alias, a different value at
-  every jitter and every move. The same goes for features finer than the
-  **step** (`uStepFade`, a share of its length, over the same ramp: 0 at full
-  resolution, 0.1 at a half, 0.25 at a quarter, `march.STEP_FADES`: more is steadier
-  and softer): beyond a few
-  kilometres the steps grow with the distance (1 %), and an octave they cannot
-  sample aliases into the jitter however finely a pixel resolves it (the
-  shimmer of far clouds, which more steps did not remove). The step's length
-  there is its distance's alone (`k * max(dtMin, t * growth)`), not the step
-  taken, which is cut at a stretch's end: the octaves a sample kept then
-  depended on where its ray
-  entered the cloud, contours up a tower's face. The weather is read
+  every jitter and every move. The view pixel alone decides this, not the
+  step's length as well.
+  - **The step fade, removed.** Features finer than a share of the step
+    (`uStepFade`: 0.1 at a half resolution, 0.25 at a quarter) used to fade
+    too, against the shimmer of far clouds when the steps grow with the
+    distance. It cost far clouds their lumps: billows and the fine octaves
+    were gone a few tens of kilometres out, and towers and cumulus read as
+    smooth blobs.
+  - **Why it could go.** With the resolve's history, far clouds shimmer
+    *less* without it: `cloud_bench --jitter` at `start` gave error 6.15 →
+    2.51 and flicker 3.28 → 2.32 against the full-resolution reference, and
+    at `cb_high` 4.28 → 3.17 and 5.36 → 3.91. Still frames got slightly less
+    steady (spread 0.82 → 0.99).
+  - **Its cost**: 0.1-0.25 ms (performance.md §37).
+  - **What was not enough**: widening the edge by the faded detail's spread
+    (`edgeWidening`, still in) and keeping the far self-shadowing longer.
+
+  The weather is read
   once per `uWeatherStretch` of ray (a kilometre without genera), each
   genus's its own, not at every sample.
   Two departures from the plain field keep the crisp look the billboards
@@ -1315,7 +1347,7 @@ shade it per pixel only where no texel agrees, and in the sea's reflection
 (shadows.md, "The clouds' shadow on the view's ground"; performance.md §33).
 The depth passes draw the terrain's coarse mesh (terrain.md, "LOD").
 
-The sea's reflection sees the deck alone (the far field's layer is packed for it).
+The sea's reflection sees the decks (one a genus; genus 0's far layer is packed for it).
 The textures may be padded to powers of two, so the shaders address them
 in pixels.
 

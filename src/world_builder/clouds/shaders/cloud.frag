@@ -1,8 +1,8 @@
 #version 330
 
-// A planet's cloud deck (clouds.deck): the slab seen as a surface at its
-// height above the sea-level sphere, for the sea's reflection (the march draws
-// the view's clouds). The noise is sampled at planet-frame positions, a
+// A planet's cloud decks (clouds.deck.deck_nodes): a genus's slab seen as a
+// surface at its height above the sea-level sphere, for the sea's reflection
+// (the march draws the view's clouds), one deck a genus (uDeckGenus). The noise is sampled at planet-frame positions, a
 // weather field shifts the fbm by direction, and far away the deck is the
 // weather's expected coverage. (It was the billboards' fragment stage too:
 // removed with them.)
@@ -17,13 +17,21 @@ uniform float exposure;
 
 uniform int   uOwnAtmosphere;   // the planet's atmosphere (reddens sunlight), -1 none
 uniform float uPixelAngle;      // radians per pixel (the far deck's footprint)
+// Whose deck this is (deck.deck_nodes): genus 0 reads its own entry
+// (vLayer: the deck's), every other genus its far level, its weather
+// (genusWeatherAt) and its far table; the genera hidden (uGenusMask, the
+// march's) draw none.
+uniform int   uDeckGenus;
+uniform int   uGenusMask;
 
 in  vec3  worldPos;
 flat in int vLayer;
 out vec4 fragColor;
 
 void main() {
-    Field f = getField(vLayer);
+    if (((uGenusMask >> uDeckGenus) & 1) == 0) discard;
+    Field f = getField(uDeckGenus == 0 ? vLayer
+                                       : genusShadowLayer(uDeckGenus));
 
     vec3 toCamera = worldPos - camPos;
     float distance = length(toCamera);
@@ -55,22 +63,31 @@ void main() {
         // The column's weather: coverage, shift, convective depth, anvil
         // shelf. The clouds there reach the local top (a convective field's
         // grows with the depth; every other's is the slab's).
-        vec4 weather = texture(weatherMap, up);
+        vec4 weather = genusWeatherAt(uDeckGenus, up);
         float thickness = f.slabThickness * topFraction(f, weather.b);
         float cosView = max(abs(dot(V, up)), 0.04);
         chord = thickness / cosView;
         float r = planetRadius + f.slabBase;
         samplePos = up * (r + 0.5 * thickness);
         float feature = 4.0 / (f.noiseScale.x * f.octaveScales.x);  // NOISE_FEATURE
+        if ((f.recipe & RECIPE_WORLEY) != 0) {
+            feature = min(feature, f.cellSize);  // a recipe genus's cells
+        }
         float footprint = distance * uPixelAngle / feature;
         detail = 1.0 - smoothstep(0.15, 0.6, footprint);
         shading = 1.0 - smoothstep(0.04, 0.2, footprint);  // <= detail
         density = 0.0;
-        if (detail > 0.0) {
+        if (detail > 0.0 && weather.r > 0.0) {
             vec3 low = up * (r + 0.3 * thickness);
             vec3 high = up * (r + 0.7 * thickness);
-            density = 0.5 * (cloudDensityAt(f, low, weather.gba)
-                           + cloudDensityAt(f, high, weather.gba));
+            // A recipe genus's own density (genusRecipeDensity: its octaves
+            // finer than the pixel's metres fade to their means); the others
+            // the field's.
+            density = f.recipe != 0
+                ? 0.5 * (genusRecipeDensity(f, low, weather, distance * uPixelAngle)
+                       + genusRecipeDensity(f, high, weather, distance * uPixelAngle))
+                : 0.5 * (cloudDensityAt(f, low, weather.gba)
+                       + cloudDensityAt(f, high, weather.gba));
             if (f.anvil > 0.0) {
                 // An anvil's shelf, over its column's top: sampled in the
                 // middle of its band.
@@ -110,8 +127,9 @@ void main() {
               * ringVisibility(samplePos - camPos, sunDir);
     twilight *= eclipse;
     skylight *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
-    vec3 colour = cloudRadiance(f, samplePos, density, V, shading, farCoverage,
-                                sunlight, skylight, twilight);
+    vec3 colour = cloudRadianceAt(uDeckGenus, f, samplePos, density, V, shading,
+                                  farCoverage, sunlight, skylight, twilight,
+                                  genusWeatherAt(uDeckGenus, normalize(samplePos)).gba);
     // No air in front of the cloud: it keeps its own colour at any distance
     // (atmosphere.md, "Clouds at the horizon").
 

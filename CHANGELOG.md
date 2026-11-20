@@ -150,6 +150,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Far clouds keep their lumps. The march no longer fades features finer
+  than a share of the step's length (`uStepFade`, `march.STEP_FADES`, the
+  `genusDensity` step-length argument: removed); the view pixel alone
+  decides what a sample resolves. The billows and fine octaves now survive
+  tens of kilometres further, so towers and cumulus are no longer smooth
+  blobs. Far clouds also shimmer less against a full-resolution reference
+  (`cloud_bench --jitter`: error 6.15 → 2.51, flicker 3.28 → 2.32 at
+  `start`). Costs 0.1-0.25 ms.
+
+- Far clouds' edges: where a pixel no longer resolves the fine octaves, the
+  billows or a recipe genus's octaves, cells and erosion, their spread now
+  widens the threshold's window (`edgeWidening`: the expected density over
+  the noise a pixel spans) on top of the fade to their means. Thresholding
+  the mean alone drew far clouds with smooth, sharp outlines; their edges
+  are now softer and frayed. The march's view only: the bakes and the CPU
+  mirrors keep the plain fade. `uNoiseSigma`, `uBillowSigma`, and the cell
+  spreads in the deck entry's row 14 (`noise.cell_spreads`). Debug bit 4096
+  turns it off. No measurable cost.
+- Far clouds keep their own self-shadowing and powder as far as their shapes
+  (footprint 0.15-0.6 of the coarse feature), reading the light volume
+  alone out there. Before, they faded to the far table's averages from a
+  quarter of that (about 110 km at 2560x1440 for the cumulus). About
+  +0.05 ms, within the noise.
+
 - The cirrus defaults: `PlanetClouds(cirrus=True)` (was a `CirrusSpec`)
   draws the weather's cirrus in the march's high layer, with or without
   genera; `CloudLook.cirrus` is a bool (default False; was a `CirrusSpec`
@@ -208,6 +232,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The sea reflected only the cumulus family: the reflection's deck was genus
+  0's alone. Every low and middle genus now has its own deck at its slab's
+  middle (`deck.deck_nodes`; `cloud.frag` shades it as that genus:
+  `uDeckGenus`, its weather, density and far table, none when hidden),
+  drawn highest first. The high layer is still not reflected.
+- The marched clouds ignored eclipses, the mountains' shadow and the rings':
+  only the billboards' shader took them, and the march never did. The
+  march's light (`cloudSunAndSky`, once a pixel, and the high layer's
+  crossing) now multiplies them in, as every other receiver does. The world
+  binds the shadow inputs to the march's passes and decks through
+  `PlanetClouds.bind_maps`.
 - The march's cirrus, two artefacts seen flying at its height:
   - **A second, offset layer.** Two causes:
     - A crossing of the high slab that never meets its middle (a camera

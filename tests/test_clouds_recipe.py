@@ -29,6 +29,7 @@ from world_builder.clouds.noise import (
     WORLEY_CELLS,
     GenusField,
     cell_means,
+    cell_spreads,
     pack_genus_params,
     pack_layer_params,
     pack_recipe_cells,
@@ -454,8 +455,13 @@ def test_a_preset_recipe_reaches_its_genus_field(recipe_genera, showbase):
         assert tuple(rows[3, 13, :2]) == (COVERAGE_SOURCES["B"], 0.0)
         assert not rows[0, 14:].any()  # the convective clouds: no recipe
         assert rows[1, 14, 0] == RECIPE_ON  # the stratus: value noise
-        # The deck: no recipe; its row 14 the closed cells' mean F2 - F1
-        np.testing.assert_allclose(rows[10, 14], (cell_means(_cells())[1], 0, 0, 0))
+        # The deck: no recipe; its row 14 the closed cells' mean F2 - F1, then
+        # the spreads of F1 and F2 - F1 (the march's far edges' widening)
+        np.testing.assert_allclose(
+            rows[10, 14],
+            (cell_means(_cells())[1], *cell_spreads(_cells()), 0),
+            rtol=1e-6,
+        )
         np.testing.assert_allclose(rows[10, 15, :3], veil.east, atol=1e-6)
         assert rows[3, 0, 3] == pytest.approx(veil.field.threshold[0])
         march.remove()
@@ -584,6 +590,10 @@ def test_closed_cells_are_zero_on_the_walls_and_highest_at_the_points(cells):
     fbm = 0.5 * sum(genus.field.octave_weights)  # each octave its mean
     assert float(far[0]) == pytest.approx(0.2 * fbm + 0.8 * edges, abs=1e-6)
     np.testing.assert_allclose(pack_recipe_cells(0.25), (0.25, 0, 0, 0))
+    np.testing.assert_allclose(pack_recipe_cells(0.25, 0.1, 0.2), (0.25, 0.1, 0.2, 0))
+    f1_sigma, edges_sigma = cell_spreads(cells)
+    assert f1_sigma == pytest.approx(float(cells[..., 0].std()))
+    assert edges_sigma == pytest.approx(float((cells[..., 1] - cells[..., 0]).std()))
 
 
 # ── The presets: stratus and stratocumulus ───────────────────────────────────

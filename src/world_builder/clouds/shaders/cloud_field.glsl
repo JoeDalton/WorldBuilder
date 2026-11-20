@@ -594,6 +594,30 @@ float recipeEdgesMean() {
     return layerParams[MAX_GENERA * GENUS_VEC4S + LAYER_VEC4S + 1].x;
 }
 
+// The spreads of F1 and of F2 - F1 (row 14's y and z: noise.cell_spreads).
+vec2 recipeCellSpreads() {
+    return layerParams[MAX_GENERA * GENUS_VEC4S + LAYER_VEC4S + 1].yz;
+}
+
+// The value noise's spread (march: the volume's standard deviation).
+uniform float uNoiseSigma;
+
+// Whether a recipe genus's faded detail widens its threshold's window
+// (edgeWidening): the march's view sets it (cloud_march.glsl), the bakes
+// and the CPU's mirrors keep the plain fade to the means.
+bool recipeWiden = false;
+
+// A threshold window (lo, hi) widened by noise of this spread a pixel no
+// longer resolves: the expected smoothstep over it. A ramp as wide as the
+// window convolved with the noise is a ramp whose widths add in variance
+// (a uniform's W^2 / 12 plus sigma^2), about the same centre: W' =
+// sqrt(W^2 + 12 sigma^2). Where nothing faded (spread 0), the window itself.
+vec2 edgeWidening(float lo, float hi, float spread) {
+    float width = hi - lo;
+    float grow = 0.5 * (sqrt(width * width + 12.0 * spread * spread) - width);
+    return vec2(lo - grow, hi + grow);
+}
+
 // The vertical profile at slab height h (noise.recipe_profile).
 float recipeProfile(Field f, float h) {
     float profile = 1.0;
@@ -646,6 +670,17 @@ float genusRecipeDensity(Field f, vec3 p, vec4 weather, float footprint) {
         f, 3, OCTAVE_4_TURN * (coord * f.octaveScales.w) + OCTAVE_4_OFFSET,
         unit / f.octaveScales.w, footprint);
     float meanF1 = recipeFrame().w;
+    // What the faded octaves would have spread the value by (the march's
+    // view only: recipeWiden), those past the field's octaves left out
+    float spread = 0.0;
+    if (recipeWiden) {
+        vec4 kept = vec4(recipeResolved(unit / f.octaveScales.x, footprint),
+                         recipeResolved(unit / f.octaveScales.y, footprint),
+                         recipeResolved(unit / f.octaveScales.z, footprint),
+                         recipeResolved(unit / f.octaveScales.w, footprint));
+        vec4 counted = vec4(greaterThan(vec4(float(f.octaves)), vec4(0.0, 1.0, 2.0, 3.0)));
+        spread = length((1.0 - kept) * counted * f.octaveWeights) * uNoiseSigma;
+    }
     if ((f.recipe & RECIPE_WORLEY) != 0) {
         // Round blobs (1 - F1) or closed cells (F2 - F1), faded to their mean
         // where the footprint does not resolve them.
@@ -653,8 +688,15 @@ float genusRecipeDensity(Field f, vec3 p, vec4 weather, float footprint) {
         float mean = closed ? recipeEdgesMean() : 1.0 - meanF1;
         float sample = closed ? recipeCellEdges(m / f.cellSize)
                               : 1.0 - recipeCellF1(m / f.cellSize);
-        float cell = mix(mean, sample, recipeResolved(f.cellSize, footprint));
+        float cellKept = recipeResolved(f.cellSize, footprint);
+        float cell = mix(mean, sample, cellKept);
         value = mix(value, cell, f.cellFill);
+        if (recipeWiden) {
+            vec2 sigmas = recipeCellSpreads();
+            spread = length(vec2(spread * (1.0 - f.cellFill),
+                                 (1.0 - cellKept) * f.cellFill
+                                     * (closed ? sigmas.y : sigmas.x)));
+        }
     }
     float raw = value + weather.y - thresholdLift(f, h, 0.0);
     if (f.erosion != 0.0) {
@@ -663,16 +705,23 @@ float genusRecipeDensity(Field f, vec3 p, vec4 weather, float footprint) {
         // skin past it: the core, and on average the coverage, hold.
         float window = f.threshHi - f.threshLo;
         float t = (raw - f.threshLo) / window;
+        float erosionKept = recipeResolved(f.cellSize / RECIPE_EROSION_SCALE, footprint);
         float skin = clamp(1.0 - (t - 1.0) / max(f.erosionSkin, 1e-3), 0.0, 1.0)
-                   * recipeResolved(f.cellSize / RECIPE_EROSION_SCALE, footprint)
-                   * recipeErosionBase(f, h);
+                   * erosionKept * recipeErosionBase(f, h);
         if (skin > 0.0) {
             float e = recipeCellF1(m * (RECIPE_EROSION_SCALE / f.cellSize)
                                    + RECIPE_EROSION_OFFSET);
             raw -= abs(f.erosion) * window * skin * (f.erosion > 0.0 ? e - meanF1 : meanF1 - e);
         }
+        if (recipeWiden) {
+            spread = length(vec2(spread, abs(f.erosion) * window * (1.0 - erosionKept)
+                                             * recipeErosionBase(f, h)
+                                             * recipeCellSpreads().x));
+        }
     }
-    return smoothstep(f.threshLo, f.threshHi, raw) * recipeProfile(f, h);
+    vec2 edge = recipeWiden ? edgeWidening(f.threshLo, f.threshHi, spread)
+                            : vec2(f.threshLo, f.threshHi);
+    return smoothstep(edge.x, edge.y, raw) * recipeProfile(f, h);
 }
 
 // Optical depth along a straight stretch of the field: steps samples

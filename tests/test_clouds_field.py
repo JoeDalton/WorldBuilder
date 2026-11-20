@@ -368,6 +368,38 @@ def test_deck_mesh_is_a_sphere():
     assert np.min(np.linalg.norm(data - corner, axis=1)) < 1.0
 
 
+def test_every_genus_has_a_deck_in_the_reflection():
+    """The sea's reflection draws the decks (deck.deck_nodes): one a genus
+    at its slab's middle, shaded as that genus (uDeckGenus), the highest
+    drawn first (seen from below, the farthest first); the others hang
+    under the first, which follows the camera. cloud.frag reads each
+    genus's weather, density and far table, and skips a hidden genus."""
+    from panda3d.core import NodePath
+
+    from world_builder.clouds.deck import CLOUD_BIN, deck_nodes
+
+    root = NodePath("root")
+    slabs = [(600.0, 1600.0), (100.0, 700.0), (4700.0, 1300.0)]
+    decks = deck_nodes(root, R, slabs)
+    assert len(decks) == 3
+    assert decks[1].get_parent() == decks[0] and decks[2].get_parent() == decks[0]
+    for genus, (deck, (base, thickness)) in enumerate(zip(decks, slabs)):
+        vdata = deck.node().get_geom(0).get_vertex_data()
+        vertex = np.frombuffer(bytes(memoryview(vdata.get_array(0))), np.float32)[:3]
+        assert np.linalg.norm(vertex) == pytest.approx(R + base + 0.5 * thickness)
+        assert not deck.get_shader_input("uDeckGenus").get_blank()
+        assert deck.get_bin_name() == CLOUD_BIN
+    # The highest (genus 2) first, then genus 0, then the lowest
+    assert [d.get_bin_draw_order() for d in decks] == [1, 2, 0]
+    from world_builder.clouds.deck import _SHADERS
+
+    frag = (_SHADERS / "cloud.frag").read_text()
+    assert "genusWeatherAt(uDeckGenus, up)" in frag
+    assert "genusRecipeDensity(f, low" in frag
+    assert "cloudRadianceAt(uDeckGenus" in frag
+    assert "((uGenusMask >> uDeckGenus) & 1) == 0" in frag
+
+
 def test_the_second_order_sees_less_of_the_sunward_depth(deck_light):
     """The deck's second order of scattering (CloudOptics.octave_gain): the
     sunward depth times octave_attenuation (< 1), so it is at least the sun

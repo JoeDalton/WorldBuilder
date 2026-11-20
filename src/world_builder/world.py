@@ -517,6 +517,12 @@ class World:
             if look.clouds is not None:
                 body.clouds = self._make_clouds(look, index)
                 body.clouds.bind_shadow_inputs(terrain.root)  # their shadow
+                # What hides the sun from them: other bodies, the rings, the
+                # planet's mountains (the march's cloudSunAndSky, the deck's cloud.frag)
+                body.clouds.bind_maps(
+                    functools.partial(self.shadows.bind, body=len(self.bodies))
+                )
+                body.clouds.bind_maps(body.shadow_map.bind)
                 output = getattr(app, "win", None)
                 if output is not None:
                     body.cloud_maps = CloudShadowMaps(

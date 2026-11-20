@@ -17,6 +17,7 @@ from panda3d.core import (
     GeomTriangles,
     GeomVertexData,
     GeomVertexFormat,
+    NodePath,
     OmniBoundingVolume,
     Shader,
 )
@@ -77,6 +78,35 @@ def deck_mesh(
     node.set_bounds(OmniBoundingVolume())
     node.set_final(True)
     return node
+
+
+def deck_nodes(
+    parent: NodePath, radius: float, slabs: list[tuple[float, float]]
+) -> list[NodePath]:
+    """The decks of a march's genera, one a genus at its slab's middle
+    (*slabs*: (base, thickness) above sea level, genus order), shaded by
+    cloud.frag as that genus (``uDeckGenus``): the sea's reflection of every
+    genus, as the convective clouds' has always been. The first under
+    *parent*, the others under it (they follow it about); in
+    :data:`CLOUD_BIN`, the highest drawn first (the reflection sees them from
+    below: the farthest first, so each composites over the one behind).
+
+    :param radius: the planet's, metres
+    :return: the decks, genus order
+    """
+    _ensure_bin()
+    middles = [base + 0.5 * thickness for base, thickness in slabs]
+    order = sorted(range(len(slabs)), key=lambda g: -middles[g])
+    decks: list[NodePath] = []
+    for genus, middle in enumerate(middles):
+        under = parent if genus == 0 else decks[0]
+        deck = under.attach_new_node(deck_mesh(radius + middle))
+        deck.set_shader(deck_shader())
+        deck.set_two_sided(True)
+        deck.set_bin(CLOUD_BIN, order.index(genus))
+        deck.set_shader_input("uDeckGenus", genus)
+        decks.append(deck)
+    return decks
 
 
 def deck_shader() -> Shader:
