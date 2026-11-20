@@ -310,6 +310,14 @@ class PlanetSpec:
 
 PRESETS: dict[str, PlanetSpec] = {
     "earthlike": PlanetSpec(name="earthlike"),
+    # Earth's radius and sidereal day, the earthlike world's climate: the
+    # weather's scales come out Earth's (clouds.synoptic.Scales).
+    "earth": PlanetSpec(name="earth", radius=6.371e6, day_length_h=23.934),
+    # A rocky world of Jupiter's radius and spin: many narrow jets and small
+    # storms in bands (no gas giant: the same terrain, much larger).
+    "jupiter_rocky": PlanetSpec(
+        name="jupiter_rocky", radius=69.911e6, day_length_h=9.925
+    ),
     "desert": PlanetSpec(
         name="desert",
         has_ocean=False,
