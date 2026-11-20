@@ -258,8 +258,15 @@ altocumulus) and the convective continuum from fair-weather cumulus through
 congestus to cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
 `--genera` in the demo and the scripts sharing its options, on by default
 there, `--no-genera` for the plain field; opt-in in `cloud_bench.py`). Its maps are
-a **placeholder** for the weather (issue #8): features laid out around one
-point. One `CloudMarch` draws them all, as one union of genera.
+the weather's (`weather.synoptic_cube`, see [the weather](atmosphere.md)): the
+convective coverage, depth and anvil shelf from its fronts, lows, highs and
+tropical cyclones, and each recipe genus's coverage its own channel of the
+weather (`genera.genus_coverage`); the weather's cirrus, cirrostratus and
+cirrocumulus go into the high layer's cirrus cover
+(`weather.cirrus_cover_map`). `GeneraSpec.features` adds hand-placed
+features around one point over them, a showcase (the demo leaves them out
+when `--pin` asks for the weather there). One `CloudMarch` draws them all,
+as one union of genera.
 
 **The genera and their sky bands.** A genus is one field (one cloud type)
 over its own slab, with its own coverage, shift table and far table
@@ -511,24 +518,11 @@ takes 8.6-12.5 ms, above the showcase's 60 FPS: the cumulus row 12.2-12.5
 ms, the southern sheets 8.6 (St) to 10.4 ms (Sc) (performance §37, "Phase
 5 summary").
 
-The high genera have an overhead row (`SHOWCASE_HIGH`): the high layer
-(11-12.5 km) lies over the rows, so each is shot from the start's ground
-looking up at its own pitch (`SHOWCASE_HIGH_PITCH`), with the rows' clouds
-under the view's bottom edge or off its sides. The cirrostratus is a veil
-64 km wide to the west (bearing 280, 25 km), in the gap between the
-altocumulus (240) and the humilis (318). Its pose `genus_cirrostratus`
-looks 35° up at the sun, set at azimuth 280 for it, so the veil and its
-halo are seen around the sun. The cirrocumulus is a patch 12 km wide to
-the east-south-east (bearing 120, 16 km), over the low sheets and away
-from the cumulonimbus's anvil (60). Its pose `genus_cirrocumulus` looks 34°
-up at it. Ruling: the high discs never overlap each other (a test checks,
-and that every low feature's top is under each pose's view or off its
-sides). The low clouds under the cirrostratus's west edge (the humilis)
-are never in its pose's view. The cirrus's slot is Task 23's.
-
 **Not yet, for the convective clouds.** The anvil does not lean downwind with height (a shear; it is
 the genus framework's, docs/superpowers/plans/2026-11-15-cloud-genera.md).
-The plume is straight: the wind is read at the tower, not
+The weather's own cumulonimbus (its fronts', its tropical cyclones') take an
+anvil shelf where they are deepest, but are not yet stretched downwind as a
+feature's is. The plume is straight: the wind is read at the tower, not
 along the plume. Its underside is lit as the rest of the cloud: no darker base
 for deep clouds. The tower's stem, at coverage 1, has
 straight sides. From the ground, the air hazes out a cumulonimbus's lower half at

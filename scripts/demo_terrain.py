@@ -201,6 +201,7 @@ from world_builder.terrain.chart import (
 from world_builder.terrain.cubesphere import FACE_NAMES, dirs_to_face
 from world_builder.terrain.level import DEMO_LEVEL, level_for, load_level
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PRESETS
+from world_builder.terrain.preview import add_weather_arguments, pins_from_args
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.terrain.shadow_map import ShadowMap
 
@@ -474,6 +475,8 @@ class TerrainDemo(ShowBase):
         test_ship: str | Path | None = None,
         spec_hook: Callable[[PlanetSpec], PlanetSpec] | None = None,
         capture_dir: str | Path = CAPTURE_DIR,
+        weather_time: float = 0.0,
+        pins: tuple = (),
     ) -> None:
         """
         :param level_path: the planet's level file
@@ -500,6 +503,10 @@ class TerrainDemo(ShowBase):
         :param spec_hook: changes the level's planet spec before it is built
             (frame_profile.py's bench scenes); None = as loaded
         :param capture_dir: where a burst capture (B) writes its folder
+        :param weather_time: the weather's time, seconds
+            (:attr:`WeatherSpec.time_s`)
+        :param pins: local weather presets pinned at coordinates
+            (:class:`clouds.synoptic.presets.WeatherPin`)
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -536,6 +543,8 @@ class TerrainDemo(ShowBase):
         self._showcase = showcase
         self._genera = genera or showcase
         self._cirrus = not showcase if cirrus is None else bool(cirrus)
+        self._weather_time = weather_time
+        self._pins = tuple(pins)
         print("starting terrain workers ...")
         self.executor = ChunkExecutor(
             backend=backend, workers=world.terrain.workers or None
@@ -1198,6 +1207,7 @@ class TerrainDemo(ShowBase):
             altitude=CLOUD_BASE,
             cirrus=self._cirrus,
             genera=self._genera_spec(),
+            weather=self._weather_spec(),
             planet=self.terrain.spec,
             settings=self.world.clouds,
         )
@@ -1238,9 +1248,16 @@ class TerrainDemo(ShowBase):
         if getattr(self, "depth", None) is not None:
             self.clouds.use_split_depth(self, self.depth)
 
+    def _weather_spec(self) -> WeatherSpec:
+        """The planet's weather at --time, with the --pin presets."""
+        return WeatherSpec(
+            self.terrain.spec, time_s=self._weather_time, pins=self._pins
+        )
+
     def _genera_spec(self) -> GeneraSpec | None:
-        """The low clouds by genus (--genera), around the start pose: a
-        placeholder for the weather (clouds.genera)."""
+        """The low clouds by genus (--genera), from the weather, with the
+        showcase's hand-placed features round the start pose (left out when
+        a --pin asks for the weather there)."""
         if not self._genera:
             return None
         spec = self.terrain.spec
@@ -1252,13 +1269,14 @@ class TerrainDemo(ShowBase):
         if self._showcase:
             # Every genus alone: the cumulus north, the stratiform south
             return GeneraSpec(
-                WeatherSpec(spec),
+                self._weather_spec(),
                 focus=focus,
                 features=showcase_features(),
                 background=False,
             )
         # The weather's cirrus: PlanetClouds(cirrus=) sets cirrus_weather
-        return GeneraSpec(WeatherSpec(spec), focus=focus)
+        extra = {"features": ()} if self._pins else {}
+        return GeneraSpec(self._weather_spec(), focus=focus, **extra)
 
     def _toggle_genus(self, index: int) -> None:
         """Show or hide a genus of the low clouds (keys 1-9; a look toggle:
@@ -1575,7 +1593,9 @@ def main() -> None:
     )
     add_planet_arguments(parser)
     add_world_arguments(parser)
+    add_weather_arguments(parser)
     args = parser.parse_args()
+    pins = pins_from_args(parser, args)
     # No vsync: the frame rate shows what a frame costs, not the display.
     window_config("Procedural terrain demo", vsync=False)
     moon = None if args.no_moon else args.moon_distance
@@ -1595,6 +1615,8 @@ def main() -> None:
         ring=args.ring,
         test_ship=None if args.no_test_ship else args.test_ship,
         capture_dir=args.capture_dir,
+        weather_time=args.time,
+        pins=pins,
     ).run()
 
 
@@ -1730,9 +1752,9 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         "--genera",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="the low clouds by genus: cumulonimbus, congestus and stratus "
-        "around the start (clouds.genera's placeholder maps); on by default, "
-        "--no-genera for the plain field",
+        help="the low clouds by genus, from the weather, with a showcase "
+        "of cumulonimbus, congestus and stratus around the start (left out "
+        "with --pin); on by default, --no-genera for the plain field",
     )
     parser.add_argument(
         "--showcase",

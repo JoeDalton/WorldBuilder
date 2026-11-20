@@ -70,6 +70,19 @@ class WeatherPin:
     heading_deg: float | None = None
 
 
+def parse_pin(lat: str, lon: str, name: str) -> WeatherPin:
+    """A pin from the command line's ``LAT LON PRESET``.
+
+    :raises ValueError: an unknown preset (naming the known ones) or a
+        number that is not one
+    """
+    key = name.strip().lower()
+    names = [p.value for p in Preset]
+    if key not in names:
+        raise ValueError(f"unknown preset {name!r}: one of {', '.join(names)}")
+    return WeatherPin(float(lat), float(lon), Preset(key))
+
+
 #: The genus that dominates overhead at the pin ("clear": none above 0.2).
 PRESET_GENUS = {
     Preset.FAIR_HIGH: "clear",

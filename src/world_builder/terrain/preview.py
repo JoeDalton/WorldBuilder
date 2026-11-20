@@ -6,13 +6,16 @@ tall, the reference point marked), then maps centred on the planet's
 reference point at three scales: 100 km, 20 km and 1 km. The maps are biome
 colour times hillshade, with water drawn blue on planets with an ocean.
 
-With --weather, each row is instead the globe under its clouds' weather
-(clouds.weather: white where the sky is covered), then the coverage alone, to
-tune the weather systems; airless presets (no humidity) are skipped. Sheets
-are written to --out (``terrain_preview`` by default)::
+With --weather, each row is instead three maps of the planet's weather
+(clouds.weather, its seed --seed, at --time seconds, with --pin presets): the
+globe under all its cloud (white where the sky is covered), the cloud genera
+by colour, and a surface chart (isobars, fronts, the jets, the systems'
+centres), to tune the weather; airless presets (no humidity) are skipped.
+Sheets are written to --out (``terrain_preview`` by default)::
 
     python -m world_builder.terrain.preview [--seed N] [--radius M] [--out DIR]
-        [--preset NAME ...] [--size PX] [--weather]
+        [--preset NAME ...] [--size PX] [--weather] [--time S]
+        [--pin LAT LON PRESET ...]
 """
 
 from __future__ import annotations
@@ -143,24 +146,47 @@ def render_globe(planet: Planet, height: int, linear: bool = False) -> np.ndarra
     return color if linear else _to_image(color)
 
 
-def render_weather(planet: Planet, height: int, seed: int = 11) -> np.ndarray:
-    """The globe under its weather, then the coverage alone (white =
-    overcast), side by side.
+def render_weather(
+    planet: Planet, height: int, seed: int = 11, time_s: float = 0.0, pins: tuple = ()
+) -> np.ndarray:
+    """Three equirectangular maps of the weather, side by side: the globe
+    under all its cloud (white = overcast), the genera by colour (low
+    yellow, mid blue, high violet, cumulus white, cumulonimbus red), and a
+    surface chart (isobars every 4 hPa, fronts, the jets' axes; lows
+    magenta, highs cyan, tropical cyclones orange).
 
     :param planet: the planet the weather follows
-    :param height: pixels pole to pole of each globe
+    :param height: pixels pole to pole of each map
     :param seed: the weather's seed (:class:`clouds.weather.WeatherSpec`)
-    :returns: (height, 4 * height + 4, 3) uint8, north up
+    :param time_s: the weather's time, seconds
+    :param pins: local presets (:class:`clouds.synoptic.presets.WeatherPin`)
+    :returns: (height, 6 * height + 8, 3) uint8, north up
     """
-    from world_builder.clouds.weather import WeatherSpec, coverage_map, sample_cube
+    from world_builder.clouds.synoptic.chart import draw_chart, genus_colours
+    from world_builder.clouds.synoptic.state import synoptic_state
+    from world_builder.clouds.weather import (
+        SYNOPTIC_CHANNELS,
+        WeatherSpec,
+        sample_cube,
+        synoptic_cube,
+    )
 
-    spec = WeatherSpec(planet.spec, seed=seed)
-    cover = sample_cube(coverage_map(spec), _globe_dirs(height))[..., None]
+    spec = WeatherSpec(planet.spec, seed=seed, time_s=time_s, pins=tuple(pins))
+    dirs = _globe_dirs(height)
+    values = sample_cube(synoptic_cube(spec), dirs)
+    channels = {n: values[..., i] for i, n in enumerate(SYNOPTIC_CHANNELS)}
+    cloud = np.maximum.reduce(
+        [c for n, c in channels.items() if n not in ("depth", "shelf")]
+    )[..., None]
     ground = render_globe(planet, height, linear=True)
-    under = ground * (1.0 - 0.85 * cover) + 0.85 * cover
+    under = ground * (1.0 - 0.85 * cloud) + 0.85 * cloud
+    genera = genus_colours(0.6 * ground, channels)
+    state = synoptic_state(spec)
+    pale = 0.55 + 0.45 * np.clip(ground, 0.0, 1.0) ** (1.0 / 2.2)
+    chart = draw_chart(pale, dirs, state.systems, state.jets, state.scales, state.t)
     pad = np.full((height, 4, 3), 255, dtype=np.uint8)
-    alone = _to_image(np.repeat(cover, 3, axis=2) ** 2.2)
-    return np.hstack([_to_image(under), pad, alone])
+    chart_image = (np.clip(chart, 0.0, 1.0)[::-1] * 255.0 + 0.5).astype(np.uint8)
+    return np.hstack([_to_image(under), pad, _to_image(genera), pad, chart_image])
 
 
 def render_sheet(specs: list[PlanetSpec], size: int) -> np.ndarray:
@@ -184,6 +210,35 @@ def render_sheet(specs: list[PlanetSpec], size: int) -> np.ndarray:
     return np.vstack(rows[:-1])
 
 
+def add_weather_arguments(parser: argparse.ArgumentParser) -> None:
+    """``--time SECONDS`` and ``--pin LAT LON PRESET`` (repeatable): the
+    weather's time and its local presets (:mod:`clouds.synoptic.presets`)."""
+    from world_builder.clouds.synoptic.presets import Preset
+
+    parser.add_argument(
+        "--time", type=float, default=0.0, help="the weather's time, seconds"
+    )
+    parser.add_argument(
+        "--pin",
+        nargs=3,
+        action="append",
+        default=[],
+        metavar=("LAT", "LON", "PRESET"),
+        help="a local weather preset pinned there: "
+        + ", ".join(p.value for p in Preset),
+    )
+
+
+def pins_from_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> tuple:
+    """:returns: the ``--pin`` presets (argparse's error on a bad one)"""
+    from world_builder.clouds.synoptic.presets import parse_pin
+
+    try:
+        return tuple(parse_pin(*pin) for pin in args.pin)
+    except ValueError as error:
+        parser.error(f"--pin: {error}")
+
+
 def main() -> None:
     """Command-line entry point (see the module docstring)."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -195,7 +250,9 @@ def main() -> None:
     parser.add_argument(
         "--weather", action="store_true", help="the clouds' weather map instead"
     )
+    add_weather_arguments(parser)
     args = parser.parse_args()
+    pins = pins_from_args(parser, args)
     args.out.mkdir(parents=True, exist_ok=True)
     specs = []
     for name in args.preset:
@@ -209,11 +266,13 @@ def main() -> None:
             if spec.climate.humidity_mean <= 0.0:
                 continue  # airless: no weather
             start = time.perf_counter()
-            rows.append(render_weather(Planet(spec), args.size))
+            rows.append(
+                render_weather(Planet(spec), args.size, args.seed, args.time, pins)
+            )
             print(f"  {spec.name:<10} {time.perf_counter() - start:.1f} s")
         path = args.out / f"weather_seed{args.seed}.png"
         write_png(path, np.vstack(rows))
-        print(f"wrote {path}  (columns: globe under the weather, coverage)")
+        print(f"wrote {path}  (columns: globe under the weather, genera, chart)")
         return
     print(f"rendering {len(specs)} presets at {args.size} px ...")
     sheet = render_sheet(specs, args.size)

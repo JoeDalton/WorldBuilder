@@ -86,6 +86,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   latitude, land, cold sea, outside the storm track, dry air, pins too
   close); pins on the same low share it. Stable air under a warm front's
   shield and in its warm sector calms the fair-weather cumulus.
+- Synoptic weather, part 5: `python -m world_builder.terrain.preview
+  --weather` draws three maps per planet: the globe under all its cloud,
+  the genera by colour, and a surface chart (isobars every 4 hPa, cold,
+  warm and occluded fronts with their symbols, the jets' axes, the
+  systems' centres: `clouds.synoptic.chart`). It and
+  `scripts/demo_terrain.py` take `--time SECONDS` and `--pin LAT LON
+  PRESET` (repeatable; a bad preset name lists the good ones); the
+  demo's showcase features are left out when a pin asks for the weather
+  there. The weather docs (atmosphere.md, clouds.md) describe the
+  synoptic model.
 
 ### Changed
 
