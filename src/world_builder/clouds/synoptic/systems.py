@@ -487,41 +487,53 @@ def spacing_radius(obj: SynopticObject, t: float) -> float:
     return obj.radius * (0.5 + 0.5 * intensity(obj, t))
 
 
-def _too_close(
-    centre: np.ndarray,
-    radius: float,
-    sign: int,
-    kept_dirs,
-    kept_radii,
-    kept_signs,
-    planet_radius,
-    kept_strict=None,
-) -> bool:
-    """Same-sign systems keep 0.75 (r_a + r_b) apart; a low may sit beside
-    a high (the gradient between them is the wind), but not on its core:
-    0.75 min(r_a, r_b). A pinned system (*kept_strict*) keeps every other
-    at the full 0.75 (r_a + r_b): what its pin asks for is what is seen."""
-    if not kept_dirs:
-        return False
-    dirs = np.array(kept_dirs)
-    radii = np.array(kept_radii)
-    signs = np.array(kept_signs)
-    gc = planet_radius * np.arccos(np.clip(dirs @ centre, -1.0, 1.0))
-    strict = (
-        np.zeros(len(signs), bool) if kept_strict is None else np.array(kept_strict)
-    )
-    need = np.where(
-        (signs == sign) | strict,
-        0.75 * (radii + radius),
-        0.75 * np.minimum(radii, radius),
-    )
-    return bool(np.any(gc < need))
+class _Kept:
+    """The systems kept so far, in arrays grown as needed (the spacing check
+    runs once per candidate: thousands on a large planet)."""
+
+    def __init__(self, capacity: int = 64):
+        self.n = 0
+        self.dirs = np.empty((capacity, 3))
+        self.radii = np.empty(capacity)
+        self.signs = np.empty(capacity, dtype=np.int8)
+        self.strict = np.empty(capacity, dtype=bool)
+
+    def add(self, centre, radius: float, sign: int, strict: bool) -> None:
+        if self.n == len(self.radii):
+            grow = 2 * len(self.radii)
+            self.dirs = np.resize(self.dirs, (grow, 3))
+            self.radii = np.resize(self.radii, grow)
+            self.signs = np.resize(self.signs, grow)
+            self.strict = np.resize(self.strict, grow)
+        self.dirs[self.n] = centre
+        self.radii[self.n] = radius
+        self.signs[self.n] = sign
+        self.strict[self.n] = strict
+        self.n += 1
+
+    def crowds(self, centre, radius: float, sign: int, planet_radius: float) -> bool:
+        """Same-sign systems keep 0.75 (r_a + r_b) apart; a low may sit
+        beside a high (the gradient between them is the wind), but not on
+        its core: 0.75 min(r_a, r_b). A pinned system (strict) keeps every
+        other at the full 0.75 (r_a + r_b): what its pin asks for is what
+        is seen."""
+        n = self.n
+        if n == 0:
+            return False
+        radii = self.radii[:n]
+        gc = planet_radius * np.arccos(np.clip(self.dirs[:n] @ centre, -1.0, 1.0))
+        need = np.where(
+            (self.signs[:n] == sign) | self.strict[:n],
+            0.75 * (radii + radius),
+            0.75 * np.minimum(radii, radius),
+        )
+        return bool(np.any(gc < need))
 
 
 def population(spec, scales: Scales, jets, planet, t: float, pinned=()) -> list:
     """The weather systems alive at *t*: the pinned ones first, then the
     seeded ones in order of birth, each dropped if it crowds one kept
-    already (:func:`_too_close`).
+    already (:meth:`_Kept.crowds`).
 
     :param spec: the :class:`weather.WeatherSpec` (its seed and planet)
     :param jets: :func:`jets.jet_waves`
@@ -536,7 +548,7 @@ def population(spec, scales: Scales, jets, planet, t: float, pinned=()) -> list:
         + _tropical(spec, scales, planet, t)
     )
     seeded.sort(key=lambda o: (o.birth, o.seed))
-    kept, dirs, radii, signs, strict = [], [], [], [], []
+    kept, room_taken = [], _Kept()
     for i, obj in enumerate(list(pinned) + seeded):
         is_pinned = i < len(pinned)
         if not active(obj, t):
@@ -546,13 +558,8 @@ def population(spec, scales: Scales, jets, planet, t: float, pinned=()) -> list:
         sign = PRESSURE_SIGN[obj.kind]
         room = spacing_radius(obj, t)
         # Pinned systems are always kept (:mod:`presets` checked them).
-        if not is_pinned and _too_close(
-            centre, room, sign, dirs, radii, signs, scales.radius, strict
-        ):
+        if not is_pinned and room_taken.crowds(centre, room, sign, scales.radius):
             continue
         kept.append(obj)
-        dirs.append(centre)
-        radii.append(room)
-        signs.append(sign)
-        strict.append(is_pinned)
+        room_taken.add(centre, room, sign, is_pinned)
     return kept

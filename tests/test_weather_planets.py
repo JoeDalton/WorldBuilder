@@ -44,3 +44,14 @@ def test_jupiter_bake_bounded():
     coverage_map(WeatherSpec(PRESETS["jupiter_rocky"]))
     jupiter = time.perf_counter() - start
     assert jupiter < 4.0 * kerbin, (kerbin, jupiter)
+
+
+@pytest.mark.parametrize("name", ["earth", "jupiter_rocky"])
+def test_the_demo_level_keeps_the_presets_radius(name):
+    """The demo level's 600 km radius must not override these presets'."""
+    from world_builder.terrain.level import DEMO_LEVEL, level_for, load_level
+
+    spec, pose = load_level(level_for(DEMO_LEVEL, name), name)
+    assert spec.radius == PRESETS[name].radius
+    assert spec.day_length_h == PRESETS[name].day_length_h
+    assert pose is not None

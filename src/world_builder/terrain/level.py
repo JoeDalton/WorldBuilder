@@ -81,8 +81,14 @@ DEMO_LEVEL = LEVELS_PATH / "demo.yaml"
 #: The tiny test planet's own level (no stamps: the demo level's are placed
 #: for a 600 km planet, and its radius would override the preset's).
 TINY_LEVEL = LEVELS_PATH / "tiny.yaml"
-#: Presets with a level of their own, taken in place of the demo level.
-PRESET_LEVELS = {"tiny": TINY_LEVEL}
+#: Presets with a level of their own, taken in place of the demo level (its
+#: stamps are placed for a 600 km planet, and its radius would override the
+#: preset's).
+PRESET_LEVELS = {
+    "tiny": TINY_LEVEL,
+    "earth": LEVELS_PATH / "earth.yaml",
+    "jupiter_rocky": LEVELS_PATH / "jupiter_rocky.yaml",
+}
 
 
 def level_for(path: Path | str, preset: str | None) -> Path:

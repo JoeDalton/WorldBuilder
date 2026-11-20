@@ -96,6 +96,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   demo's showcase features are left out when a pin asks for the weather
   there. The weather docs (atmosphere.md, clouds.md) describe the
   synoptic model.
+- Planet presets `earth` (6371 km, a 23.934 h day: Earth's weather scales)
+  and `jupiter_rocky` (69 911 km, a 9.925 h day: many narrow jets and small
+  storms; too heavy for the demo yet), each with a level of its own
+  (`terrain/levels/earth.yaml`, `jupiter_rocky.yaml`: the demo level's
+  600 km radius no longer overrides theirs).
+
+### Fixed
+
+- The weather's population spacing check kept its systems in arrays
+  rebuilt for every candidate: 2 s of a 9 s bake on a planet of thousands
+  of systems.
 
 ### Changed
 
