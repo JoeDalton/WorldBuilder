@@ -93,6 +93,8 @@ Controls (AZERTY):
     F6              cycle every part's preset at once
     C               show / hide the march's cirrus
     1-9             show / hide each genus of the low clouds (--showcase)
+    - / +           trace a smaller / larger share of the pixels a frame in
+                    the clouds' march (1/16, 1/9, 1/8, 1/4, all; the HUD shows it)
     F7              cycle the shadows' preset (the clouds' shadow on the
                     ground: off at low, more samples above)
     F8              cycle the models' preset (the test balls' and ship's
@@ -138,8 +140,10 @@ import argparse
 import functools
 import math
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from direct.gui.OnscreenText import OnscreenText
@@ -166,6 +170,7 @@ from world_builder.asteroids.spec import Annulus, Clumping, Density, FieldSpec
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.genera import GeneraSpec, showcase_features
 from world_builder.clouds.light_volume import CloudLightVolumes
+from world_builder.clouds.march import BLOCKS
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
@@ -190,6 +195,9 @@ from world_builder.terrain.level import DEMO_LEVEL, level_for, load_level
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.terrain.shadow_map import ShadowMap
+
+if TYPE_CHECKING:
+    from world_builder.terrain.planet import PlanetSpec
 
 INITIAL_FAR_M = 600000.0  # the lens the sea's reflection camera copies
 SPEED = 300.0  # metres/second at low altitude
@@ -452,6 +460,7 @@ class TerrainDemo(ShowBase):
         start: tuple[float, float] | None = None,
         ring: bool = False,
         test_ship: str | Path | None = None,
+        spec_hook: Callable[[PlanetSpec], PlanetSpec] | None = None,
     ) -> None:
         """
         :param level_path: the planet's level file
@@ -475,6 +484,8 @@ class TerrainDemo(ShowBase):
         :param start: (lat, lon) in degrees to start over instead of the
             level's start (:func:`start_pose`)
         :param ring: draw the planet's ring (:func:`ring_spec`)
+        :param spec_hook: changes the level's planet spec before it is built
+            (frame_profile.py's bench scenes); None = as loaded
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -494,6 +505,8 @@ class TerrainDemo(ShowBase):
         spec, self.start_pose = load_level(
             level_for(level_path, preset), preset=preset, seed=seed, radius=radius
         )
+        if spec_hook is not None:
+            spec = spec_hook(spec)
         self.start_pose = start_pose(spec, self.start_pose, start)
 
         from world_builder.terrain.terrain import Terrain
@@ -667,6 +680,10 @@ class TerrainDemo(ShowBase):
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
             ("c", self._toggle_cirrus, []),
+            ("-", self._step_march_block, [-1]),
+            ("=", self._step_march_block, [1]),
+            ("+", self._step_march_block, [1]),
+            ("shift-=", self._step_march_block, [1]),
             *((str(k + 1), self._toggle_genus, [k]) for k in range(9)),
             ("m", self._toggle_model_shader, []),
             ("escape", self._quit, []),
@@ -1081,6 +1098,10 @@ class TerrainDemo(ShowBase):
             if cs is not None
             else "clouds off"
         )
+        if cs is not None:
+            across, up = self.world.clouds.march_block
+            traced = "all" if across * up == 1 else f"1/{across * up}"
+            clouds += f"   traced {traced} ({across}x{up}, -/+)"
         if self.clouds is not None and "cirrus" in self.clouds.volume.high_genera:
             shown = self.clouds.genus_visible("cirrus")
             clouds += f"   march cirrus {'on' if shown else 'off'} (C)"
@@ -1237,6 +1258,23 @@ class TerrainDemo(ShowBase):
             return
         visible = self.clouds.genus_visible("cirrus")
         self.clouds.set_genus_visible("cirrus", not visible)
+
+    def _step_march_block(self, step: int) -> None:
+        """Trace a smaller (-1) or larger (+1) fraction of the view's pixels
+        a frame in the clouds' march (CloudSettings.march_block, one of
+        clouds.march.BLOCKS by the share it traces). The march rebuilds its
+        passes on the spot; the clouds' preset reads "custom" after."""
+        if self.clouds is None:
+            return
+        blocks = sorted(BLOCKS, key=lambda b: -b[0] * b[1])  # least traced first
+        current = tuple(self.world.clouds.march_block)
+        index = min(max(blocks.index(current) + step, 0), len(blocks) - 1)
+        if blocks[index] == current:
+            return
+        self._set_world(self.world.with_value("clouds", "march_block", blocks[index]))
+        across, up = blocks[index]
+        share = "all" if across * up == 1 else f"1/{across * up}"
+        print(f"clouds: the march traces {share} of the pixels ({across}x{up})")
 
     def _cycle_quality(self, section: str) -> None:
         """One part (a WorldSettings section) to its next preset."""

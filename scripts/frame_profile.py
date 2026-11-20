@@ -5,7 +5,7 @@ docs/source/frame_profile.md)::
 
     python scripts/frame_profile.py [--pose NAME ...] [--size "W H"]
         [--quality LEVEL] [--genera] [--ring] [--frames N] [--offscreen]
-        [--at LAT LON ALT HEADING PITCH ...]
+        [--at LAT LON ALT HEADING PITCH ...] [--scene bench-sea|bench-dry]
 
 At each pose (terrain_shots.py's), settled, GPU-synced frames (a one-pixel
 read back after each step, as terrain_shots.py times them):
@@ -27,6 +27,10 @@ read back after each step, as terrain_shots.py times them):
 * **atmo** the per-pixel atmosphere's share: the frame at the preset's
   samples less at 2 (``AtmosphereSettings.steps``), scaled to all of them
   (``* steps / (steps - 2)``): a linear estimate of the whole march.
+
+With --scene, a bench scene (BENCH_SCENES): the level's planet simple (no
+vegetation, mountains 600 m), with its reflective sea or without, at the
+ground, 1.5 km and 10 km up over the start.
 
 A part's cost includes its CPU's when the frame is CPU-bound. Every number
 is a median of --frames frames; two runs differ by 0.3-0.5 ms. Frames faster
@@ -56,6 +60,24 @@ from demo_terrain import (  # noqa: E402
 )
 from terrain_shots import SUNS, AimedSun, _aim_sun, _poses, _settle  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
+
+#: The bench scenes (--scene): the demo's planet, simple: no vegetation, its
+#: mountains 600 m (not 4.8 km), with its reflective sea (bench-sea) or none
+#: (bench-dry). Their poses: the ground, 1.5 km and 10 km up at the start,
+#: the default clouds in view.
+BENCH_SCENES = {"bench-sea": True, "bench-dry": False}
+BENCH_POSES = ("ground", "bench_1500", "bench_10000")
+
+
+def bench_spec(ocean: bool):
+    """:returns: the bench scenes' spec hook (TerrainDemo's spec_hook)"""
+
+    def hook(spec):
+        elevation = replace(spec.elevation, mountain_height=600.0)
+        return replace(spec, has_vegetation=False, has_ocean=ocean, elevation=elevation)
+
+    return hook
+
 
 #: The poses profiled by default.
 POSES = (
@@ -165,6 +187,12 @@ def main() -> None:
         metavar=("LAT", "LON", "ALT", "HEADING", "PITCH"),
         help='more poses, "at1", "at2"...: the demo\'s printed camera line',
     )
+    parser.add_argument(
+        "--scene",
+        choices=sorted(BENCH_SCENES),
+        default=None,
+        help="a bench scene (BENCH_SCENES) and its poses instead of the level's",
+    )
     add_world_arguments(parser)
     parser.set_defaults(frame_cap=0)  # timings: never capped (--frame-cap N)
     args = parser.parse_args()
@@ -181,6 +209,7 @@ def main() -> None:
         preset=args.planet,
         seed=args.seed,
         start=args.start,
+        spec_hook=bench_spec(BENCH_SCENES[args.scene]) if args.scene else None,
     )
     demo.setFrameRateMeter(False)
     print(describe_window(demo))
@@ -190,11 +219,16 @@ def main() -> None:
     extra = [f"at{i + 1}" for i in range(len(args.at))]
     for name, at in zip(extra, args.at):
         poses[name] = (*at, 0, 0)
+    if args.scene:
+        lat, lon = poses["ground"][:2]
+        for alt in (1500.0, 10000.0):
+            poses[f"bench_{alt:.0f}"] = (lat, lon, alt, 0.0, 3.0, 0, 0)
     atmo = settings.atmosphere
     columns = ["frame", "p95", "step", "terrain", "refl", "sky", "clouds", "cirrus"]
     columns += ["models", "skyview", "aerial", "godrays", "atmo"]
     print(f"{'pose':<12} " + " ".join(f"{c:>7}" for c in columns))
-    for name in (args.pose or list(POSES)) + extra:
+    default = list(BENCH_POSES if args.scene else POSES)
+    for name in (args.pose or default) + extra:
         lat, lon, alt, heading, pitch, view, body = poses[name]
         demo.set_debug_view(view)
         demo._place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])

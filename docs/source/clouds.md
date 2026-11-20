@@ -208,6 +208,33 @@ signature when broken:
   not faded: a tower's side sees the open sky around it, and without that
   blue its dusk side browned too (the anvil's underside 0.48 with it).
   `--cloud-debug 2048`: without (the old look).
+- **Under a deep column the sky's light is grey.** Light diffused through
+  cloud is neutral, so the sky term keeps its brightness but loses its blue
+  as the column above deepens (`straight = exp2(-depth up)`). Kept blue, the
+  floor was all a thick sheet's underside had, and stratus and nimbostratus
+  bases came out navy.
+- **A cumulonimbus's tower sees open sky.** In columns past 0.6 convective
+  depth, half the sky comes as under open sky: the column up crosses the
+  anvil, but the tower's sides see the sky around it. Without this, towers
+  were grey under their own anvils. The cumulus (congestus at 0.5) are
+  unchanged.
+- **The sheets scale their sunward depth as the cumulus do**
+  (`shadow_strength`: stratus 0.35, nimbostratus 0.4, against the cumulus's
+  0.3, their stand-in for multiple scattering). At 1 they self-shadowed
+  three times harder, with grey tops at noon.
+  - The nimbostratus has more fill (`multiple_scattering` 0.35): its faces
+    are kilometres of cloud from the sun.
+  - The altostratus, thin ice, keeps 1.
+  - Measured at noon (display levels):
+
+    | Genus | Top: before → after | Underside: before → after |
+    |---|---|---|
+    | Stratus | 200 → 226 | 87 (navy) → 132 (grey) |
+    | Stratocumulus | 168 → 202 | 132 → 170 |
+    | Nimbostratus | 190 → 211 | 69 → 74 (dark grey) |
+
+    The nimbostratus's face seen from outside went 67 → 99, and the
+    cumulonimbus's sides 157 → 169.
 - The **powder** term takes the *local* density over a fixed reference length.
   Fed the sunward depth it inverts (the lit surface darkens most); fed a
   length the renderer chooses (the billboards' quad chord, while they lived;

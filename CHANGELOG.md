@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The terrain demo's `-` and `+` keys trace a smaller or larger share of the
+  view's pixels a frame in the clouds' march (`CloudSettings.march_block`:
+  1/16, 1/9, 1/8, 1/4 or all), live: the march rebuilds its passes, as a
+  preset change does. The HUD's clouds line shows the share.
+- `frame_profile.py --scene bench-sea|bench-dry`: a simple bench scene (the
+  level's planet without vegetation, its mountains 600 m, with its reflective
+  sea or without), profiled at the ground, 1.5 km and 10 km up. Results in
+  performance.md §37. `TerrainDemo(spec_hook=)` changes the level's planet
+  spec before it is built.
+
 - The high layer's cirrus as procedural flow streaks (`clouds.md`, "The
   cirrus"), replacing the placeholder: detached streaks along the upper
   wind in patches, fibres in tapering bundles with fine strands, tufts
@@ -149,6 +159,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   far side).
 
 ### Changed
+
+- Cloud colours: the stratiform genera and the cumulonimbus were far too
+  dark outside.
+  - The sheets now scale their sunward depth as the cumulus do: stratus
+    preset `shadow_strength` 0.35 (was 1), nimbostratus 0.4 with
+    `multiple_scattering` 0.35 (was 0.05). The altostratus keeps a physical 1.
+  - The sky's light under a deep column turns neutral grey (it was the blue
+    floor that made thick sheets' bases navy).
+  - A cumulonimbus's tower takes half its sky as open sky under its anvil.
+  - At noon (display levels): stratus top 200 → 226, underside 87 → 132;
+    nimbostratus top 190 → 211, face from outside 67 → 99; cumulonimbus sides
+    157 → 169. The cumulus are unchanged.
 
 - Far clouds keep their lumps. The march no longer fades features finer
   than a share of the step's length (`uStepFade`, `march.STEP_FADES`, the

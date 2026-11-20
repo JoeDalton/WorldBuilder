@@ -689,7 +689,10 @@ def test_the_nimbostratus_and_altostratus_take_their_own_optics():
     ns, as_ = _preset("nimbostratus")[0].optics, _preset("altostratus")[0].optics
     assert GENUS_PRESETS["stratus"].optics is None
     assert _preset("stratus")[0].optics == base
-    assert ns.multiple_scattering < base.multiple_scattering
+    # Darker inside than the stratus (its sunward depth scaled less), its
+    # broad faces lit by more fill (they are kilometres from the sun)
+    assert ns.shadow_strength > base.shadow_strength
+    assert ns.multiple_scattering > base.multiple_scattering
     assert ns.forward_gain < base.forward_gain
     assert ns.sun_step_length > base.sun_step_length
     assert as_.multiple_scattering > base.multiple_scattering

@@ -2613,6 +2613,69 @@ Steadiness (`cloud_bench --genera`, 2560x1440):
 
 The clouds' own cost in the bench: +0.1-0.2 ms.
 
+### Bench scenes: where a simple scene's frame goes (offscreen)
+
+`frame_profile.py --scene bench-sea|bench-dry --genera --start 29.7159
+29.8232`: the demo's planet with no vegetation, mountains 600 m, with or
+without its reflective sea; 2560x1440, HIGH, one run, ms (a part's cost is
+the frame with it less without; negative ones save: the atmosphere's tables).
+
+| Scene, pose | frame | step (CPU) | terrain | refl | sky | clouds | cirrus | godrays |
+|---|---|---|---|---|---|---|---|---|
+| sea, ground | 9.02 | 3.88 | 3.89 | 0.91 | 0.39 | 2.76 | -0.08 | 0.20 |
+| sea, 1.5 km | 8.53 | 3.39 | 2.25 | 0.47 | 0.26 | 3.82 | 0.14 | 0.17 |
+| sea, 10 km | 7.50 | 2.71 | 1.28 | 0.39 | 0.37 | 3.84 | 0.20 | 0.19 |
+| dry, ground | 8.38 | 3.64 | 3.75 | -0.04 | 0.14 | 2.72 | 0.05 | 0.01 |
+| dry, 1.5 km | 8.06 | 3.21 | 2.25 | 0.16 | 0.26 | 4.09 | 0.25 | 0.20 |
+| dry, 10 km | 7.10 | 2.65 | 1.27 | -0.02 | 0.16 | 3.60 | 0.07 | 0.04 |
+
+The target is 6.25 ms (160 FPS). The clouds and the terrain are most of it.
+
+**The clouds** (`cloud_bench --genera --passes`, pose `start`): 3.4 ms in
+all.
+- The march is 3.0 ms, the resolve 0.5, the bakes (light volume, shadow
+  maps) about 0.35; the depth passes and composites are within noise.
+- Without billows (bit 32), without self-shadowing (bit 1) or without any
+  lighting (bit 256), it saves at most 0.2 ms. The cost is the density's
+  sampling, step after step.
+- Step budget against block (`--steps-sweep`, `start`, clouds ms):
+
+  | block | 24 | 40 | 64 | 96 |
+  |---|---|---|---|---|
+  | 4x4 | 2.95 | 3.63 | 3.47 | 3.95 |
+  | 3x3 | 2.63 | 3.19 | 3.97 | 4.93 |
+  | 4x2 (HIGH) | 2.76 | 3.58 | 4.32 | 5.32 |
+  | 2x2 | 4.48 | 5.60 | 7.05 | 9.03 |
+
+**The terrain**: 3.9 ms at the ground with no vegetation; MID terrain gives
+3.2. **The reflection**: 0.9 ms at the ground; MID ocean (reflection 0.35 of
+the view, not 0.75) gives 0.7.
+
+**The CPU** (the `step` column): 2.7-3.9 ms. It does not bound the frame
+yet, but it would once the GPU's part fell under it.
+
+**Findings (not acted on: the user's call).**
+- **The main culprits** are the clouds' march (about 3 ms, all in sampling
+  the density) and the terrain (3.9 ms at the ground with no vegetation, a
+  lot for a simple scene: its shader and its chunk count are the next things
+  to profile).
+- **The low-hanging fruits**, by gain against look risk:
+
+  | Change | Gain | Look risk |
+  |---|---|---|
+  | march block 3x3 and 40 steps (HIGH: 4x2, 64) | about 1.1 ms | more shimmer, softer far detail |
+  | march block 4x4, 64 steps | about 0.85 ms | more shimmer in motion |
+  | march steps 64 -> 40 at 4x2 | about 0.75 ms | slight banding or noise in far clouds |
+  | terrain at MID | about 0.7 ms at the ground | less terrain detail |
+  | the sea's reflection at 0.35 of the view (MID's) | about 0.2 ms | a blurrier reflection |
+
+  The first cloud change and MID terrain together would take the 10 km
+  views to about 5.3-5.7 ms. The ground would still be about 7 ms, over
+  the target.
+- **Trying them**: the demo's `-` and `+` keys step the march's block
+  (1/16, 1/9, 1/8, 1/4 of the pixels, or all) live, and the HUD shows the
+  share. F1-F5 step a part's preset.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

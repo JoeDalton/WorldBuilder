@@ -968,3 +968,24 @@ def test_a_genus_can_be_hidden_live(showbase, executor):
         assert march._genus_mask[0] == everything
     finally:
         clouds.remove()
+
+
+def test_the_sky_under_deep_cloud_is_grey_and_a_towers_sides_see_open_sky():
+    """cloudRadianceFrom (cloud_shading.glsl): the sky's light reaching a
+    sample under a deep column loses its blue (light diffused through cloud
+    is neutral; kept blue, thick sheets' bases came out navy), and a
+    cumulonimbus's tower (convective depth past 0.6) takes half its sky as
+    under open sky (its sides see the sky around it, under its anvil); the
+    sheets' optics scale their sunward depth as the cumulus's do."""
+    from world_builder.clouds.cloud import PRESETS, CloudType
+
+    text = (SHADER.parent / "cloud_shading.glsl").read_text()
+    body = text[text.index("vec3 cloudRadianceFrom(") :]
+    body = body[: body.index("\n}\n")]
+    assert "straight = mix(1.0, exp2(-cloudSkyDepth), cloudSkyHeld);" in body
+    grey = "vec3(dot(skylight, vec3(0.2126, 0.7152, 0.0722)))"
+    assert f"skylight = mix({grey}, skylight, straight);" in body
+    assert "smoothstep(0.6, 0.9, weather.y)" in body
+    stratus = PRESETS[CloudType.STRATUS].optics.shadow_strength
+    convective = PRESETS[CloudType.CONVECTIVE].optics.shadow_strength
+    assert stratus < 0.5 and abs(stratus - convective) < 0.1

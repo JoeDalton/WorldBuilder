@@ -221,8 +221,9 @@ GENUS_PRESETS = {
     # 0.6-5 km, its base diffuse (soft over its lowest 12 %, wispy erosion
     # of 500 m cells over its lowest 15 %: ragged where it thins), the
     # threshold rising a little toward the top (shoulders, not a brick, where
-    # the coverage fades). Denser than the stratus and lit darker: little sky
-    # fill, a weak forward lobe; its sun steps longer (4.4 km of it).
+    # the coverage fades). Denser than the stratus and lit darker: its
+    # sunward depth scaled less than the stratus's (0.4 to 0.35), a weak
+    # forward lobe; its sun steps longer (4.4 km of it).
     "nimbostratus": GenusPreset(
         CloudType.STRATUS,
         ("A", 2),
@@ -247,7 +248,8 @@ GENUS_PRESETS = {
         optics=dict(
             sun_steps=3,
             sun_step_length=250.0,
-            multiple_scattering=0.05,
+            shadow_strength=0.4,
+            multiple_scattering=0.35,
             forward_gain=1.6,
             backward_gain=1.1,
         ),
@@ -283,6 +285,9 @@ GENUS_PRESETS = {
             density=0.0015,
         ),
         optics=dict(
+            # Thin ice: single scattering, its sunward depth physical (the
+            # stratus's 0.35 let three quarters of the sun through a full sheet)
+            shadow_strength=1.0,
             multiple_scattering=0.2,
             forward_gain=3.0,
             forward_anisotropy=delta_eddington(MIE_ASYMMETRY_ICE, applicability=0.5),

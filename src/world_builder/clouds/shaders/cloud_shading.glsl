@@ -114,13 +114,30 @@ vec3 cloudRadianceFrom(int genus, float sunDepth, Field f, vec3 p,
     // same floor and the open sky, in place of the ramp; and the diffused
     // light's share left by that column (DIFFUSE_FADE).
     float fade = 1.0;
+    // The share of the sky's light that comes straight, not through the
+    // column above (1 under open sky): light diffused through cloud is
+    // neutral, so what reaches a sample under a deep column is the sky's
+    // brightness without its blue. Kept blue, it was all a thick sheet's
+    // underside had: stratus and nimbostratus bases came out navy.
+    float straight = 1.0;
     if (cloudSkyHeld > 0.0 && shading > 0.0) {
         float diffuse = (uCloudDebug & 2048) == 0 ? diffused(cloudSkyDepth) : 1.0;
         fade = mix(1.0, diffuse, cloudSkyHeld);
         skyReach = mix(skyReach, mix(skyOcclusion, 1.0, exp2(-cloudSkyDepth)),
                        cloudSkyHeld);
+        straight = mix(1.0, exp2(-cloudSkyDepth), cloudSkyHeld);
+        // A cumulonimbus's tower (convective depth past 0.6) under its
+        // anvil: the column up crosses the anvil, but the tower's sides see
+        // the open sky around it (a sheet's do not), so half its sky comes
+        // as under open sky. Without, the towers were grey under their own
+        // anvils. The cumulus below 0.6 (congestus 0.5) keep the column's.
+        float open = f.anvil > 0.0 ? 0.5 * smoothstep(0.6, 0.9, weather.y) : 0.0;
+        fade = mix(fade, 1.0, open);
+        skyReach = mix(skyReach, 1.0, open);
+        straight = mix(straight, 1.0, open);
     }
     cloudSkyHeld = 0.0;
+    skylight = mix(vec3(dot(skylight, vec3(0.2126, 0.7152, 0.0722))), skylight, straight);
     // Multiple-scattering fill: sky-coloured and NOT phase-weighted, or dusk
     // shadows turn orange and sunward shadow outshines side-lit cloud.
     float fill = f.multipleScattering * sunBrightness * (1.0 - sunVisibility) * fade;

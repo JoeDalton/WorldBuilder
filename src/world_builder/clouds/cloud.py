@@ -126,9 +126,14 @@ PRESETS = {
             offset=field_offset(1),
         ),
         # Optically thickest: phase washed out, no silver lining to speak of.
+        # Its sunward depth scaled as the cumulus's is (CONVECTIVE's 0.3,
+        # their stand-in for multiple scattering): at 1 (physical, single
+        # scattering) the sheets self-shadowed three times the cumulus's,
+        # grey tops at noon and navy undersides.
         optics=CloudOptics(
             sun_steps=3,
             sun_step_length=90.0,
+            shadow_strength=0.35,
             multiple_scattering=0.10,
             powder_length=150.0,
             max_optical_depth=1.8,
