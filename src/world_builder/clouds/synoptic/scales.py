@@ -41,6 +41,8 @@ STORM_BAND_HALF_DEG = 12.5
 TC_SPEED = 20.0
 #: Jet and steering speeds, m/s (tunable).
 JET_SPEED = 25.0
+#: The subtropical jet's speed, m/s: the fastest (tunable).
+SUBTROPICAL_JET_SPEED = 30.0
 STEERING_SHARE = 0.6
 
 
@@ -59,6 +61,7 @@ _EARTH_RO_T = _thermal_rossby(EARTH_STRATIFICATION, _omega(EARTH_DAY_H), EARTH_R
 class Scales:
     """A planet's weather scales.
 
+    :ivar radius: the planet's radius, metres
     :ivar omega: rotation rate, rad/s
     :ivar f45: Coriolis parameter at 45 degrees, 1/s
     :ivar beta45: its meridional gradient at 45 degrees, 1/(m s)
@@ -80,6 +83,7 @@ class Scales:
     :ivar steering: the lows' speed along the jet, m/s
     """
 
+    radius: float
     omega: float
     f45: float
     beta45: float
@@ -132,6 +136,7 @@ class Scales:
         f20 = 2.0 * omega * math.sin(math.radians(20.0))
         tc = min(max(TC_SPEED / f20, 0.1 * cyclone), 0.5 * cyclone)
         return Scales(
+            radius=radius,
             omega=omega,
             f45=f45,
             beta45=beta45,

@@ -82,6 +82,9 @@ class WeatherSpec:
 
     :ivar planet: the planet whose climate and terrain the weather follows
     :ivar seed: placement of the weather systems and the mesoscale texture
+    :ivar time_s: the time the weather is evaluated at, seconds: the
+        systems move and live on closed-form tracks (:mod:`synoptic`), so
+        any time is as cheap as any other
     :ivar zonal: (|latitude| degrees, coverage) control points of the zonal
         mean: wet tropics, dry subtropics, storm tracks, polar caps
     :ivar season: degrees north the zonal pattern is moved (the equatorial
@@ -121,6 +124,7 @@ class WeatherSpec:
 
     planet: PlanetSpec
     seed: int = 11
+    time_s: float = 0.0
     zonal: tuple = (
         (0.0, 0.72),
         (8.0, 0.66),

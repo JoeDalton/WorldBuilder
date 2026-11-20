@@ -43,6 +43,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eddy-driven jet and the tropical cyclones' band and size, calibrated on
   Earth. A literature review with every equation of the model:
   `docs/literature/synoptic-weather-review.tex`.
+- Synoptic weather, part 2: the weather as a closed-form function of time,
+  `WeatherSpec.time_s` (no simulation, no state). `clouds.synoptic.jets`:
+  each jet a meandering axis of three Rossby waves (long waves near still,
+  short ones moving east), its troughs and ridges, and the upper wind's
+  stream function along it. `clouds.synoptic.systems`: lows (Norwegian or
+  Shapiro-Keyser), migratory, blocking and subtropical highs (on the
+  eastern flanks of the ocean basins), cut-off lows and tropical cyclones
+  (born over warm sea, recurving, dying at landfall), each on a
+  closed-form track with a life cycle; a train of lows per storm band,
+  born downstream of their jet's troughs and riding its wave.
+  `clouds.synoptic.fields`: sea-level pressure (a zonal climatology plus a
+  kernel per system, Holland's profile for tropical cyclones) and the wind
+  (geostrophic, gradient wind in a tropical cyclone, friction at the
+  surface, the trades near the equator), culled by cube-face tiles.
 
 - The terrain demo's `B` key: a burst capture of the next 12 frames into
   `--capture-dir` (default `captures/`, git-ignored), a folder each. Per

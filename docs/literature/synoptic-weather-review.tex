@@ -455,14 +455,18 @@ with the dispersion relation \cite{rossby1939}
 \end{equation}
 Here $\varpi_m t$ is reduced modulo $2\pi$ in float64 before evaluation. The amplitudes are
 \begin{equation}
-  A_m = A_{\mathrm{tot}}\,\frac{w_m}{\sum w},\quad w_m\sim\mathcal{U}(0.5,1),\qquad
+  A_m = A_{\mathrm{tot}}\,\frac{w_m}{\sum w},\quad
+  w=\big(\mathcal{U}(0.3,0.7),\,1,\,\mathcal{U}(0.3,0.7)\big),\qquad
   A_{\mathrm{tot}}=\min(8^\circ,\,0.25\,L_\beta^\circ),
 \end{equation}
+halved for the subtropical jet. The storm-track wave ($m=2$, $k_2\approx k^*$) dominates: the
+lows ride it (\S\ref{sec:eq-objects}).
 and the phases $\theta_m\sim\mathcal{U}(0,2\pi)$ are seeded, or refitted by pins
 (\S\ref{sec:eq-pins}).
 
 Troughs are the minima of $h\,\phi_j$ in $\lambda$ (equatorward excursions), and ridges are the
-maxima. Both are found on a 512-point grid in $\lambda$, refined by a parabolic fit.
+maxima. Both are found on a grid of $\max(512,16\max_m k_m)$ points in $\lambda$, refined by a
+parabolic fit; the one a system is born at is the deepest within its sector (65 points).
 
 The upper wind has a Gaussian jet profile across the meandering axis, with half-width
 $w_j=0.25\,L_\beta$$^\dagger$:
@@ -472,8 +476,10 @@ $w_j=0.25\,L_\beta$$^\dagger$:
 \end{equation}
 Its stream function, with contours along the axis, is
 \begin{equation}
-  \psi_j = -U_j\,w_j\,\frac{\sqrt{\pi}}{2}\,\operatorname{erf}\!\left(\frac{y}{w_j}\right).
+  \psi_j = -\frac{U_j}{U_{\max}}\,w_j\,\frac{\sqrt{\pi}}{2}\,\operatorname{erf}\!\left(\frac{y}{w_j}\right),
 \end{equation}
+in metres (the fastest jet's speed is 1, as \texttt{cirrus.py} expects), with
+$U_j=25$ and $30$\,m\,s$^{-1}$ for the subtropical jet.
 The total is
 $\psi=\sum_j\psi_j+\sum_i a_i\exp(-|\mathbf{d}-\mathbf{c}_i|^2\kappa_i)$, where the system
 bumps keep the sign rules of today's \texttt{stream\_vortices}, and the wind is
@@ -489,67 +495,102 @@ An object has birth time $t_b$, lifetime $T$ and peak strength $P$. Then
   \Sigma(s)=P\;S(0,s_p,s)\,\big(1-S(s_p,1,s)\big),\quad s_p=0.6,
 \end{equation}
 where $s_p=0.6$ means peak intensity comes after the occlusion starts \cite{schultz2011}.
-The lifetimes are
+The mean lifetime of a low and the speed it rides at are
 \begin{equation}
-\begin{gathered}
-  T_{\mathrm{LOW}}=2.5\,\frac{\lambda_E}{c_s}\,\xi_T,\quad
-  T_{\mathrm{TC}}=1.5\,T_{\mathrm{LOW}}\,\xi_T,\quad
-  T_{\mathrm{HIGH}}=1.5\,T_{\mathrm{LOW}}\,\xi_T,\\
-  T_{\mathrm{block}}=3\,T_{\mathrm{HIGH}},\qquad \xi_T\sim\mathcal{U}(0.8,1.2).
-\end{gathered}
+  \bar T_{\mathrm{LOW}}=2.5\,\frac{\lambda_E}{c_s},\qquad
+  c_2=\frac{\varpi_2\,a\cos\phi_{0,j}}{k_2}\ \text{(its jet's storm-track wave)},
 \end{equation}
-For Earth this gives $T_{\mathrm{LOW}}\approx 5.8$ days.
+which gives $\bar T_{\mathrm{LOW}}\approx 5.8$ days and $c_2\approx 20$\,m\,s$^{-1}$ on Earth.
+Lows ride the wave so that they stay downstream of the trough they formed at
+\cite{uccellini1987}.
 
 \paragraph{Tracks.}
-Let $\tau=t-t_b$.
-\begin{itemize}
-\item LOW and CUTOFF:
+Every track is closed-form in $\tau=t-t_b$, held within the life:
 \begin{equation}
-  \lambda(t)=\lambda_0+\frac{\gamma\,c_s\,\tau}{a\cos\phi_0},\qquad
-  \phi(t)=\phi_0+h\,\frac{v_p\,\tau}{a},\qquad v_p=0.1\,c_s,
+  \phi(\tau)=\phi_0+\dot\phi\,\tau,\qquad
+  \lambda(\tau)=\lambda_0+\dot\lambda\,\tau+\tfrac12\ddot\lambda\,\tau^2.
 \end{equation}
-with $\gamma=1$ for a LOW and $\gamma=0.2$ for a CUTOFF. For migratory HIGHs
-$\gamma=0.5$, $v_p=0$; for blocking HIGHs $\gamma=0.2$. Subtropical HIGHs are static,
-centred at $(h\,\phi_H,\lambda_{\mathrm{basin}})$.
-\item TROPICAL. Recurvature is a closed-form parabola in the local (east, poleward) frame at
-genesis $(\phi_0,\lambda_0)$:
-\begin{equation}
-  x(\tau)=-u_w\tau+\tfrac12\,\alpha_r\tau^2,\quad
-  y(\tau)=v_w\tau,\qquad
-  \alpha_r=\frac{u_w}{0.4\,T_{\mathrm{TC}}},
-\end{equation}
-with $u_w=5$ and $v_w=2.5$\,m\,s$^{-1}$$^\dagger$. The storm moves west until $\tau=0.4\,T$,
-then east (recurvature). It is mapped to the sphere by the exponential map at the genesis
-point. Once $|\phi|>\phi_H$, or once it is over land for more than $0.1\,T$, it decays: its
-strength is multiplied by $1-S(0,0.15\,T,\tau-\tau_{\mathrm{exit}})$.
-\end{itemize}
+\begin{center}
+\begin{tabular}{lp{5.6cm}p{3.6cm}}
+\toprule
+system & $\dot\lambda$ (east) & $\dot\phi$ (poleward, $\times h$) \\
+\midrule
+LOW & $c_2/(a\cos\phi_0)$ & $0.5\,r/(aT)$\\
+migratory HIGH & $c_2/(a\cos\phi_0)$ (with the wave) & 0\\
+blocking HIGH & $0.2\,c_2/(a\cos\phi_0)$ & 0\\
+CUTOFF & $0.2\,c_2/(a\cos\phi_0)$ & 0\\
+subtropical HIGH & 0 (permanent) & 0\\
+TROPICAL & $-u_w/(a\cos\phi_0)$, $\ddot\lambda=u_w/(0.4\,T\,a\cos\phi_0)$ & $v_w/a$\\
+\bottomrule
+\end{tabular}
+\end{center}
+with $u_w=5$ and $v_w=2.5$\,m\,s$^{-1}$$^\dagger$. A tropical cyclone moves west until
+$\tau=0.4\,T$, then recurves east: a parabola in latitude and longitude. If its track
+reaches land or leaves the Hadley cell at $\tau_{\mathrm{exit}}$ (sampled at 33 points), it
+decays: its life is shortened to $T'=\min\big(T,\max(\tau_{\mathrm{exit}}+0.25\,T,\ 0.3\,T)\big)$.
+Extratropical transition is deferred.
 
 \paragraph{Population (stateless renewal).}
-Each hemisphere's storm track is divided into $n_s$ sectors of width $2\pi/n_s$, with
-$n_s=\max(1,\operatorname{round}k^*)$. Sector $q$ has seeded slots $n\in\mathbb{Z}$:
+Each storm band (one per eddy-driven jet $j$, \S\ref{sec:eq-scales}) is cut into sectors
+that ride the storm-track wave east:
 \begin{equation}
-  t_{b}(q,n)=(n+\eta_{qn})\,\Delta t,\qquad \Delta t=T_{\mathrm{LOW}},\quad
-  \eta_{qn}\sim\mathcal{U}(0,1),\quad \text{spawn if } \zeta_{qn}<0.85,
+  n_s=\max\!\Big(1,\operatorname{round}\Big(k^*\frac{\cos\phi_{0,j}}{\cos45^\circ}\Big)\Big),\qquad
+  \lambda_q(t)=-180^\circ+\big(q+\tfrac12\big)\frac{360^\circ}{n_s}
+  +\frac{180}{\pi}\Big(\frac{\varpi_2}{k_2}\,t \bmod 2\pi\Big).
 \end{equation}
-where $(\eta,\zeta)$ come from a hash of $(\mathrm{seed},q,n)$. Only the slots
-$n\in\{\lfloor t/\Delta t\rfloor-2,\dots,\lfloor t/\Delta t\rfloor\}$ can be active, so the
-active set at $t$ is computed with no state. A slot's LOW is born on the downstream side of
-the trough nearest the sector centre:
+A sector hosts one low at a time, the next born soon after the last dies:
 \begin{equation}
-  \lambda_0=\lambda_{\mathrm{trough}}(t_b)+0.25\,\frac{\lambda_E}{a\cos\phi_0},\qquad
-  \phi_0 = \phi_j(\lambda_0,t_b)+h\,0.3\,L_\beta^\circ\ \text{(poleward side of the jet)}.
+  t_b(q,n)=(n+\eta_q)\,\Delta t,\quad \Delta t=\bar T_{\mathrm{LOW}},\quad
+  T=\Delta t\;\mathcal{U}(0.9,1),\quad \eta_q\sim\mathcal{U}(0,1)\ \text{per sector},
 \end{equation}
-The expected number of active LOWs per hemisphere is
-$n_s\times0.85\times\bar T/\Delta t\approx0.85\,k^*$. HIGHs, TCs and CUTOFFs use the same
-scheme with their own counts and slots. TC genesis points are drawn in the TC band, weighted
-by the genesis proxy of \S\ref{sec:eq-rules}, over sea only.
+with every slot spawning. The random draws come from a hash of $(\mathrm{seed},j,q,n)$, and
+only the slots $n\in\{\lfloor t/\Delta t\rfloor-3,\dots,\lfloor t/\Delta t\rfloor\}$ are
+looked at, so the active set at any $t$ costs the same and needs no state. A low is born on the
+downstream side of the deepest trough in its sector, on the jet's poleward side, and stays in
+its storm band $[\phi_{lo},\phi_{hi}]$ after its drift:
+\begin{equation}
+  \lambda_0=\lambda_{\mathrm{trough}}(t_b)+\frac{0.25\,\lambda_E}{a\cos\phi_{\mathrm{axis}}},\qquad
+  |\phi_0| = \min\!\big(|\phi_j(\lambda_0,t_b)|+0.3\,r^\circ,\ \phi_{hi}-0.5\,r^\circ\big),
+\end{equation}
+with $r^\circ$ the radius in degrees, $r=r_c\,\mathcal{U}(0.75,1.3)$, strength
+$25\,\mathcal{U}(0.7,1.3)$\,hPa, and the Shapiro--Keyser variant with probability 0.3.
+
+The other kinds use the same scheme, with independent birth phases $\eta_{qn}$:
+
+\begin{center}
+\small
+\begin{tabular}{lcccp{4.2cm}}
+\toprule
+system & sectors & chance & life & birth place\\
+\midrule
+migratory HIGH & $n_s/2$ & 0.7 & $1.5\,\bar T\,\mathcal{U}(0.8,1.2)$ & ridge, $|\phi_j|-0.6\,r^\circ$\\
+blocking HIGH (10\,\%) & --- & --- & $\times3$ & ridge, $|\phi_j|+0.5\,r^\circ$\\
+CUTOFF & $n_s/4$ & 0.3 & $1.5\,\bar T\,\mathcal{U}(0.8,1.2)$ & trough, $|\phi_j|-0.5\,r^\circ$, $r=0.6\,r_c$\\
+TROPICAL & $\max(2,\operatorname{round}\frac{k^*}{2})$ & 0.5 & $1.5\,\bar T\,\mathcal{U}(0.8,1.2)$ & best GP of 12 draws\\
+subtropical HIGH & $\max(1,\operatorname{round}\frac{k^*}{3})$ & 1 & permanent & $h\phi_H$, eastern basin flank\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Highs get $r=r_c\,\mathcal{U}(0.9,1.3)$ (subtropical: $1.5\,r_c$). A subtropical high's
+longitude maximises $\mathrm{sea}(\lambda)\times\text{(land share within }\min(60^\circ,r^\circ)
+\text{ east)}$, the eastern flank of an ocean basin \cite{klein1993}; the highs are at least
+$0.6\cdot360^\circ/n$ apart, and evenly spaced on a dry planet. A tropical cyclone forms
+only where the genesis proxy of \S\ref{sec:eq-rules} is positive (warm sea), so there are
+none on a planet without ocean.
 
 \paragraph{Spacing.}
-Objects are processed in birth order, with pinned ones first. An object is dropped if
+Objects are processed with pinned ones first, then in birth order. Each one needs room
+$\varrho=r\,(0.5+0.5\,\Sigma')$ (a filling low takes less room than a deep one). An object is
+dropped if, for an object $k$ already kept,
 \begin{equation}
-  \operatorname{gc}(\mathbf{c}_i(t),\mathbf{c}_k(t))<0.75\,(r_i+r_k)
+  \operatorname{gc}(\mathbf{c}_i,\mathbf{c}_k)<
+  \begin{cases}
+    0.75\,(\varrho_i+\varrho_k) & \text{same pressure sign},\\
+    0.75\,\min(\varrho_i,\varrho_k) & \text{opposite signs (a low may flank a high)},
+  \end{cases}
 \end{equation}
-for an object $k$ already kept, where $\operatorname{gc}$ is the great-circle distance.
+where $\operatorname{gc}$ is the great-circle distance.
 
 %--------------------------------------------------------------------
 \subsection{Pressure}
@@ -576,7 +617,9 @@ A tropical cyclone uses the Holland profile \cite{holland1980}:
 \end{equation}
 with $P_{TC}=60$\,hPa$^\dagger$. The total is
 $p=p_{\mathrm{clim}}+\sum_i\Delta p_i$. Each kernel is evaluated only within $4r_i$ of its
-centre (spatial culling).
+centre, found through cube-face tiles of about 64 directions (spatial culling), and tapered by
+$1-S(3r_i,4r_i,\rho)$ so that the cut is smooth. A tropical cyclone's $R_m=0.1\,r_{TC}$, and
+$B$ is drawn from its own seed.
 
 %--------------------------------------------------------------------
 \subsection{Wind}
