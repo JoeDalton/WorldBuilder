@@ -831,14 +831,24 @@ wetness smoothstep and $\mathbf{v}_s$ the surface wind of \S\ref{sec:eq-wind}:
   F_{\mathrm{clim}}&=\big(d_f+(1-d_f)W(H)\big)\big(1-D_{\mathrm{des}}\,S_{\mathrm{hot}}\,S_{\mathrm{dry}}\big),\\
   c_{\mathrm{oro}}&=O\tanh\!\left(\frac{e(\mathbf{q})-e(\mathbf{q}-\Delta\,\hat{\mathbf{v}}_s)}
      {\Delta\,s_0}\right)W(H),\\
-  c_{\mathrm{conv}}&=\operatorname{clamp}\Big(Z(\phi)F_{\mathrm{clim}}+c_{\mathrm{oro}}+M\,m
-     +A\,\operatorname{fbm}(\mathbf{q}_{\mathrm{warped}})+\textstyle\sum c_{\mathrm{conv},i},\,0,1\Big)
-     \cdot E\cdot(1-\text{clearings}).
+  c_{\mathrm{conv}}&=\operatorname{clamp}\Big(C\big(Z(\phi)F_{\mathrm{clim}}+c_{\mathrm{oro}}+M\,m
+     +A\,\operatorname{fbm}(\mathbf{q}_{\mathrm{warped}})+b\big)+\textstyle\sum c_{\mathrm{conv},i},\,0,1\Big)
+     \cdot E\cdot(1-\text{clearings}),\\
+  C(x)&=\operatorname{smoothstep}(x_e-w,\,x_e+w,\,x),\qquad x_e=0.30,\ w=0.10.
 \end{align}
 The background fair-weather cover follows the belts:
 \begin{equation}
-  Z(\phi)=0.15+0.5\,G(\phi;\phi_{\mathrm{ITCZ}},\phi_H/3)+0.35\,G(|\phi|;\phi_{st},12^\circ).
+  Z(\phi)=0.10+0.55\,G(\phi;\phi_{\mathrm{ITCZ}},\phi_H/3)+0.45\,G(|\phi|;\phi_{st},12^\circ).
 \end{equation}
+The contrast $C$ makes the background clear or cloudy rather than a thin cover everywhere:
+point cloud amounts are U-shaped, mostly clear or overcast, at small viewing areas
+\cite{usaf_cloudfree}. Its bias $b$ (\texttt{WeatherSpec.cloud\_amount}, 0) and half-width $w$
+(\texttt{cloud\_contrast}) are the user's knobs. The constants were tuned on the Earth-scale
+planet (\texttt{scripts/weather\_report.py}, 5 seeds by 5 days): the drawn low cloud's mean is
+0.41--0.43, under ISCCP's total cloud amount of 0.675 \cite{rossow1999}, which counts the high
+and middle clouds not drawn here; 37--39\,\% of the planet is clear, 32--35\,\% overcast, and
+70--73\,\% of the subtropics (20--35$^\circ$, the Hadley cells' descending branch) clear. Before,
+the floor of 0.15 and no contrast left 0.1--0.5 of cover over 69\,\% of the planet.
 The mesoscale texture's coordinates are wound by each system, most at its centre, so it curls
 into spiral arms round the lows: a rotation of $\mathbf{q}$ about the centre $\mathbf{c}$ by
 \begin{equation}
@@ -857,9 +867,10 @@ stencilled edges:
 (convective and stratiform) and the cirrus sheet. The convective family reads the convective
 coverage, depth and shelf; the stratiform sheet reads $\max(c_{St},c_{Sc})$; the cirrus sheet's
 cover is its background (anvils over the wet tropics $0.45\,G(\phi;\phi_{\mathrm{ITCZ}},\phi_H/2)$,
-streaks along the meandering jets $0.3\,G(y;0,w_j)$, a floor of 0.08, scaled by
-$0.4+0.6\,W(H)$) combined with $\max(c_{Ci},c_{Cs},c_{Cc})$ by the soft maximum, plus its
-mesoscale texture. The other layers are computed for the eight-genus renderer.
+streaks along the meandering jets $0.3\,G(y;0,w_j)$, a floor of 0.02, scaled by
+$0.4+0.6\,W(H)$) combined with $\max(c_{Ci},c_{Cc})$ by the soft maximum, plus its
+mesoscale texture and \texttt{cirrus\_amount}, through the same contrast at
+$x_e=0.35$: patches and streaks, not a veil. The other layers are computed for the eight-genus renderer.
 
 \paragraph{Coverage to fbm shift (unchanged).} For each genus table,
 \begin{equation}

@@ -20,13 +20,20 @@ docs/literature/synoptic-weather-review.tex, has their sources):
 * the warm-front cloud sequence, cirrus to nimbostratus toward the front;
 * the circulation: cyclonic around the lows (counter-clockwise in the north,
   clockwise in the south), anticyclonic around the highs (each system's own
-  wind, the background's subtracted).
+  wind, the background's subtracted);
+* the drawn low cloud (the cumulus and the stratus genus, its nimbostratus
+  in it; :func:`drawn_cover`): a mean of 0.35-0.55 (ISCCP's total cloud
+  amount, 0.675, takes the high and middle clouds this does not draw), at
+  least 30 % of the planet clear (< 0.1) and 20 % overcast (> 0.7), as
+  point cloud amounts are U-shaped, and at least half the subtropics
+  (20-35 degrees, the Hadley cells' descending branch) clear.
 
 How a band is judged: the planet's scales (the jets, the Hadley edge) in
 every sample; a count (lows, cyclones) by its median, and in at least 80 %
 of the samples; a share of all the samples' systems (diameters 90 %,
 eastern highs 60 %, cyclones' latitude and sea 100 %, circulation 90 %,
-warm-front order 70 %).
+warm-front order 70 %); the cover's shares by their median, and in at
+least 80 % of the samples.
 """
 
 from __future__ import annotations
@@ -72,6 +79,28 @@ class Tally:
     tc_now: list = field(default_factory=list)  # the same, where it is now
     sense_ok: list = field(default_factory=list)  # bool per system
     front_ok: list = field(default_factory=list)  # bool per mature low
+    cover_mean: list = field(default_factory=list)  # per sample
+    cover_clear: list = field(default_factory=list)
+    cover_overcast: list = field(default_factory=list)
+    subtropics_clear: list = field(default_factory=list)
+
+
+#: Directions the cover is sampled at: uniform over the sphere.
+_COVER_DIRS = np.random.default_rng(1).normal(size=(40000, 3))
+_COVER_DIRS /= np.linalg.norm(_COVER_DIRS, axis=1, keepdims=True)
+
+
+def drawn_cover(weather: WeatherSpec) -> np.ndarray:
+    """The low cloud the march draws from *weather* at :data:`_COVER_DIRS`:
+    the union of the cumulus and the stratus genus (the weather's stratus,
+    stratocumulus and nimbostratus: genera.WEATHER_GENERA), on a coarse
+    cube (64 a face: the shares, not the shapes)."""
+    at = sample_cube(synoptic_cube(weather, 64), _COVER_DIRS)
+    channel = SYNOPTIC_CHANNELS.index
+    stratus = np.maximum.reduce(
+        [at[:, channel(n)] for n in ("stratus", "stratocumulus", "nimbostratus")]
+    )
+    return 1.0 - (1.0 - at[:, channel("convective")]) * (1.0 - stratus)
 
 
 def _basin_east(lat: float, lon: float, sample) -> bool | None:
@@ -186,6 +215,13 @@ def survey(planet_name: str, seeds: int, times: int, day_step: float) -> Tally:
                     tally.tc_now.append(5.0 <= abs(lat) <= 25.0 and elevation < 0.0)
                 if o.kind in (Kind.LOW, Kind.HIGH, Kind.TROPICAL):
                     tally.sense_ok.append(_sense(o, t, scales))
+            cover = drawn_cover(weather)
+            lat_dirs = np.degrees(np.arcsin(np.clip(_COVER_DIRS[:, 2], -1.0, 1.0)))
+            sub = (np.abs(lat_dirs) > 20.0) & (np.abs(lat_dirs) < 35.0)
+            tally.cover_mean.append(float(cover.mean()))
+            tally.cover_clear.append(float((cover < 0.1).mean()))
+            tally.cover_overcast.append(float((cover > 0.7).mean()))
+            tally.subtropics_clear.append(float((cover[sub] < 0.1).mean()))
             if k == 0:
                 # The warm fronts' sequence, from the weather's own maps (one
                 # bake a seed: ~4 s each)
@@ -203,7 +239,8 @@ def _spread(values) -> str:
     v = np.asarray(values, dtype=np.float64)
     if v.size == 0:
         return "none"
-    return f"{v.min():7.1f} {np.median(v):7.1f} {v.max():7.1f}"
+    digits = 2 if np.abs(v).max() <= 1.0 else 1
+    return " ".join(f"{x:7.{digits}f}" for x in (v.min(), np.median(v), v.max()))
 
 
 def _share(flags) -> float:
@@ -248,6 +285,10 @@ def report(tally: Tally) -> bool:
     share("cyclones form at 5-25 deg, at sea", tally.tc_ok, 1.0)
     share("circulation sense", tally.sense_ok, 0.9)
     share("warm-front Ci-Cs-As-Ns order", tally.front_ok, 0.7)
+    count("drawn low cloud, mean", tally.cover_mean, 0.35, 0.55)
+    count("area clear (< 0.1)", tally.cover_clear, 0.30, 1.0)
+    count("area overcast (> 0.7)", tally.cover_overcast, 0.20, 1.0)
+    count("subtropics (20-35 deg) clear", tally.subtropics_clear, 0.50, 1.0)
 
     print(f"\n{'quantity':34s} {'min / median / max':>24s}   band")
     for name, spread, band, ok in rows:

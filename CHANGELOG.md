@@ -34,6 +34,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Clear skies (synoptic weather, clear-sky step): the fair-weather
+  background goes through a contrast (`weather.contrast`, a smooth step at
+  `CLOUD_EDGE` 0.30), so the sky is clear or cloudy, not a thin cover
+  everywhere, and `synoptic.rules.zonal_cover` drops its 0.15 floor to 0.10
+  (ITCZ 0.55, storm tracks 0.45): the subtropics are clear. Tunables:
+  `WeatherSpec.cloud_amount` (bias), `cloud_contrast` (the step's
+  half-width, 0.10), `cirrus_amount`. The cirrus cover takes the same
+  contrast, its floor 0.02 (was 0.08): patches, not a veil. On Earth the
+  drawn low cloud's mean is 0.41-0.43, 37-39 % of the planet clear (13 %
+  before), 32-35 % overcast, 70-73 % of the subtropics clear;
+  `scripts/weather_report.py` checks these bands too (ISCCP's total 0.675
+  counts the high and middle clouds not drawn). Widening the highs'
+  subsidence was tried and changed nothing measurable: left as it was.
 - Synoptic weather, part 8: `scripts/weather_report.py`, the Earth-scale
   planet's weather against observed climatology over 5 weather seeds and 5
   days (the jets' and the Hadley cell's latitudes, the lows' count and size,

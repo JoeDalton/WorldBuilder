@@ -346,6 +346,9 @@ def _sample(genera, direction):
 
 
 def test_the_features_are_where_they_are_placed(genera):
+    # The features alone: the weather's own cover there (overcast at the
+    # fixture's focus since the background's contrast) would hide their shapes
+    genera = replace(genera, background=False)
     for feature in genera.features:
         convective, depth, stratiform, shelf = _sample(genera, _at(genera, feature))
         if feature.genus == "cumulonimbus":

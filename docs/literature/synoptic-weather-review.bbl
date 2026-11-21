@@ -1,9 +1,16 @@
-\begin{thebibliography}{45}
+\begin{thebibliography}{47}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
   \providecommand{\doi}[1]{doi: #1}\else
   \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[usa()]{usaf_cloudfree}
+Cloud amount distributions (u-shaped at small viewing areas).
+\newblock Technical Report ADA170440, Defense Technical Information Center.
+\newblock URL \url{https://apps.dtic.mil/sti/pdfs/ADA170440.pdf}.
+\newblock Accessed 2026-11-21; a small area's cloud amount is mostly clear or
+  overcast, nearing a normal distribution as the area grows.
 
 \bibitem[Bauer(2019)]{bauer2019}
 Fabian Bauer.
@@ -217,6 +224,13 @@ C.-G. Rossby, H.~C. Willett, J.~Holmboe, J.~Namias, L.~Page, and R.~Allen.
 \newblock \emph{Journal of Marine Research}, 2\penalty0 (1):\penalty0 38--55,
   1939.
 \newblock \doi{10.1357/002224039806649023}.
+
+\bibitem[Rossow and Schiffer(1999)]{rossow1999}
+William~B. Rossow and Robert~A. Schiffer.
+\newblock Advances in understanding clouds from {ISCCP}.
+\newblock \emph{Bulletin of the American Meteorological Society}, 80\penalty0
+  (11):\penalty0 2261--2287, 1999.
+\newblock \doi{10.1175/1520-0477(1999)080<2261:AIUCFI>2.0.CO;2}.
 
 \bibitem[Schneider(2022)]{schneider2022}
 Andrew Schneider.

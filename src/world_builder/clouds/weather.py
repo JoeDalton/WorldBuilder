@@ -131,6 +131,15 @@ class WeatherSpec:
     :ivar cirrus_shield: the share of the systems' own cirrus (the warm
         fronts' shields, the tropical cyclones' outflow) the cirrus keep
     :ivar cirrus_meso: amplitude of the cirrus cover's mesoscale texture
+    :ivar cloud_amount: the fair-weather background's bias before its
+        contrast (:func:`contrast`, :data:`CLOUD_EDGE`): positive cloudier,
+        negative clearer (+-0.1 moves the planet's cloud cover about +-10
+        points); the systems' clouds are theirs
+    :ivar cloud_contrast: the half-width of the background's threshold
+        (:func:`contrast`): small, clear skies and cloud decks with sharp
+        edges; large, a softer, more uniform cover
+    :ivar cirrus_amount: the cirrus background's bias, as
+        :attr:`cloud_amount` (:data:`CIRRUS_EDGE`)
     """
 
     planet: PlanetSpec
@@ -153,6 +162,9 @@ class WeatherSpec:
     cirrus_zonal: tuple | None = None
     cirrus_shield: float = 1.0
     cirrus_meso: float = 0.3
+    cloud_amount: float = 0.0
+    cloud_contrast: float = 0.10
+    cirrus_amount: float = 0.0
 
 
 # ── Cube maps ──────────────────────────────────────────────────────────────────
@@ -431,6 +443,29 @@ def _background_zonal(spec: WeatherSpec, lat: np.ndarray) -> np.ndarray:
     return zonal_cover(lat, synoptic_state(spec).scales, itcz=spec.season)
 
 
+#: The fair-weather background's threshold (:func:`contrast`): where its
+#: humidity, latitude, sea and mesoscale texture sum past it the sky is
+#: cloudy, under it clear. Tuned on the Earth-scale planet to observed cloud
+#: fractions (scripts/weather_report.py: a U-shaped distribution, clear
+#: subtropics).
+CLOUD_EDGE = 0.30
+#: The cirrus background's (:func:`_cirrus_compose`), and its floor.
+CIRRUS_EDGE = 0.35
+CIRRUS_FLOOR = 0.02
+
+
+def contrast(value: np.ndarray, edge: float, width: float) -> np.ndarray:
+    """A cover from a background *value*: ``smoothstep(edge - width, edge +
+    width)``, so the sky is clear or cloudy over most of the planet, not a
+    thin cover everywhere (the mesoscale texture draws the boundaries).
+    *width* 0: a hard step."""
+    value = np.asarray(value, dtype=np.float64)
+    if width <= 0.0:
+        return (value >= edge).astype(np.float64)
+    t = np.clip((value - (edge - width)) / (2.0 * width), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
 def genus_fields(
     spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate
 ) -> GenusFields:
@@ -456,7 +491,8 @@ def genus_fields(
         3,
         spec.seed * 1000 + _SEED_MESO,
     )
-    base = np.clip(base + spec.meso_strength * meso, 0.0, 1.0)
+    base = base + spec.meso_strength * meso + spec.cloud_amount
+    base = contrast(base, CLOUD_EDGE, spec.cloud_contrast)
     cluster = thunderstorm_boost(spec, state.scales, dirs)
     unstable = np.maximum(instability(humidity, temperature), cluster)
     tropics = 0.5 + 0.5 * np.exp(-(((lat - spec.season) / 6.0) ** 2))
@@ -641,7 +677,7 @@ def _cirrus_zonal(spec: WeatherSpec, dirs: np.ndarray, lat: np.ndarray) -> np.nd
     for jet in state.jets:
         y = across_axis(jet, lat, lon, state.t)
         streaks = np.maximum(streaks, np.exp(-((y / jet.width) ** 2)))
-    return 0.08 + 0.45 * tropics + 0.3 * streaks
+    return CIRRUS_FLOOR + 0.45 * tropics + 0.3 * streaks
 
 
 #: The weather's genera the cirrus cover takes (:func:`cirrus_cover_map`);
@@ -673,7 +709,11 @@ def _cirrus_compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate
         3,
         spec.seed * 1000 + _SEED_CIRRUS,
     )
-    return np.clip(cover + spec.cirrus_meso * meso, 0.0, 1.0)
+    return contrast(
+        cover + spec.cirrus_meso * meso + spec.cirrus_amount,
+        CIRRUS_EDGE,
+        spec.cloud_contrast,
+    )
 
 
 @functools.cache

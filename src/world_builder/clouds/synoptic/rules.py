@@ -262,7 +262,11 @@ def _high(canvas, idx, x, y, obj, t, sea, temperature, elevation):
     altocumulus round its edge."""
     power = intensity(obj, t)
     rho = np.hypot(x, y)
-    canvas.clearing(_SUBSIDENCE, idx, 1.0 - 0.9 * power * _gauss(rho, 0.0, 0.6))
+    canvas.clearing(
+        _SUBSIDENCE,
+        idx,
+        1.0 - SUBSIDENCE_CLEARING * power * _gauss(rho, 0.0, SUBSIDENCE_WIDTH),
+    )
     stable = (
         power * (1.0 - S(14.0, 26.0, temperature)) * sea * (0.5 + 0.5 * S(-0.2, 0.6, x))
     )
@@ -355,14 +359,26 @@ def apply_systems(
 # ── The background ────────────────────────────────────────────────────────────
 
 
+#: The fair-weather background by latitude (:func:`zonal_cover`): a floor,
+#: the equatorial band's peak, the storm tracks' peak; the subtropics in
+#: between the floor (the Hadley cells' descending branch: clear).
+ZONAL_FLOOR = 0.10
+ZONAL_ITCZ = 0.55
+ZONAL_TRACK = 0.45
+#: A high's subsidence: how much of the cloud under it it clears, and the
+#: clearing core's width, its radii (:func:`_high`).
+SUBSIDENCE_CLEARING = 0.9
+SUBSIDENCE_WIDTH = 0.6
+
+
 def zonal_cover(lat: np.ndarray, scales: Scales, itcz: float = 0.0) -> np.ndarray:
     """Fair-weather cover by latitude: the wet equatorial band, the storm
     tracks, a floor between."""
     track = 0.5 * (scales.storm_track[0] + scales.storm_track[1])
     return (
-        0.15
-        + 0.5 * _gauss(lat, itcz, scales.hadley_edge / 3.0)
-        + 0.35 * _gauss(np.abs(lat), track, 12.0)
+        ZONAL_FLOOR
+        + ZONAL_ITCZ * _gauss(lat, itcz, scales.hadley_edge / 3.0)
+        + ZONAL_TRACK * _gauss(np.abs(lat), track, 12.0)
     )
 
 
