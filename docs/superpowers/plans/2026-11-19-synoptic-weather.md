@@ -365,37 +365,7 @@ def test_belts_ordered():
 - [ ] **Step 4: Stop.** Report: screenshots, FPS and the list of fixes. Flag any `march.py` or shader
   need (for example a local high-resolution weather window at Jupiter's ~215 km per texel).
 
-### Task 7: Earth credibility check, then in-game showcase
-
-**Files:**
-- Create: `scripts/weather_report.py`. It prints and checks bands for `PRESETS["earth"]` over 5 seeds
-  and 5 times.
-
-**Checks:**
-
-| Quantity | Band |
-|---|---|
-| Subtropical jet latitude | 25–35° |
-| Eddy-driven jet latitude | 40–60° |
-| Hadley edge | 27–33° |
-| Active extratropical lows per hemisphere | 5–10 |
-| Low diameter | 1 000–2 000 km |
-| Subtropical highs | ≥ 60 % centred on the eastern half of their ocean basin |
-| TCs | 0–5 per hemisphere, 5–25° latitude, all over sea |
-
-It also samples the warm-front genus order and the CCW/CW sense. Exit code 1 on failure.
-
-- [ ] **Step 1:** Run `PYTHONPATH=src python scripts/weather_report.py`. Expected: all bands pass.
-  If not, tune within the literature ranges and re-run. Record each tuning change.
-- [ ] **Step 2:** Produce the in-game shots: Kerbin-like, Earth and rocky Jupiter, each at an orbit,
-  a flight and a ground pose. On Kerbin use `--start 29.7159 29.8232` with a pin there.
-- [ ] **Step 3: Stop.** Hand the user the report output and the shots, plus the exact commands so
-  they can fly around themselves.
-
-Rocky Jupiter is dropped from Task 7's shots (it runs out of memory in game; the user's ruling,
-2026-11-20): Kerbin-like and Earth only.
-
-### Task 8: Draw the weather's other genera (after Task 7)
+### Task 7: Draw the weather's other genera
 
 Since the rebase on #59 the march draws a genus per coverage map. The weather fills only the
 convective field, the stratus (`genera.WEATHER_GENERA`: its stratus and stratocumulus) and the
@@ -426,3 +396,33 @@ cirrostratus and cirrocumulus are computed but not drawn: those genera show thei
 - [ ] **Step 4:** Shots of a pinned `warm_front_approach` and `overcast_drizzle` (ground and flight)
   on Earth and Kerbin-like, before and after. Full test suite.
 - [ ] **Step 5: Stop.** Report the shots, the FPS and the test output.
+
+### Task 8: Earth credibility check, then in-game showcase
+
+**Files:**
+- Create: `scripts/weather_report.py`. It prints and checks bands for `PRESETS["earth"]` over 5 seeds
+  and 5 times.
+
+**Checks:**
+
+| Quantity | Band |
+|---|---|
+| Subtropical jet latitude | 25–35° |
+| Eddy-driven jet latitude | 40–60° |
+| Hadley edge | 27–33° |
+| Active extratropical lows per hemisphere | 5–10 |
+| Low diameter | 1 000–2 000 km |
+| Subtropical highs | ≥ 60 % centred on the eastern half of their ocean basin |
+| TCs | 0–5 per hemisphere, 5–25° latitude, all over sea |
+
+It also samples the warm-front genus order and the CCW/CW sense. Exit code 1 on failure.
+
+- [ ] **Step 1:** Run `PYTHONPATH=src python scripts/weather_report.py`. Expected: all bands pass.
+  If not, tune within the literature ranges and re-run. Record each tuning change.
+- [ ] **Step 2:** Produce the in-game shots: Kerbin-like, Earth and rocky Jupiter, each at an orbit,
+  a flight and a ground pose. On Kerbin use `--start 29.7159 29.8232` with a pin there.
+- [ ] **Step 3: Stop.** Hand the user the report output and the shots, plus the exact commands so
+  they can fly around themselves.
+
+Rocky Jupiter is dropped from Task 8's shots (it runs out of memory in game; the user's ruling,
+2026-11-20): Kerbin-like and Earth only.

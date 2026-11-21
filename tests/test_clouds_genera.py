@@ -457,7 +457,9 @@ def test_the_weather_cube_and_coverage_cube_a(genera, convective):
     covers = coverage_cube(genera, "A", 64)
     assert covers.shape == (6, 64, 64, 4)
     assert np.array_equal(covers[..., 0], planes[..., 2])
-    assert not covers[..., 1:].any()
+    # The stratocumulus none (no feature); 2 and 3 the weather's frontal
+    # shield and its share (genera.FAMILY_SHARES)
+    assert not covers[..., 1].any() and covers[..., 2].any()
     assert not coverage_cube(genera, "B", 64).any()
     with pytest.raises(ValueError):
         genus_cube(genera, "stratus", tuple(map(tuple, tables)), 64)
@@ -507,7 +509,11 @@ def test_the_raymarch_marches_both_genera_and_casts_one_summed_shadow(
     A and its shift table), one shadow of both (one caster, its layer genus
     0's far level, the sky bands, the union's shade the product of the
     genera's); every genus has all the detail levels asked for (the
-    default's stratocumulus, no feature of its own, is not marched)."""
+    default's stratocumulus, no feature of its own, is not marched). The
+    weather's frontal shield left out: the two genera's mechanics."""
+    genera = replace(
+        genera, genera=tuple(g for g in genera.genera if g != "frontal_shield")
+    )
     from world_builder.clouds.cloud import CloudSettings
     from world_builder.clouds.march import CloudMarch
     from world_builder.clouds.planet import PlanetClouds
@@ -595,18 +601,25 @@ def test_the_march_takes_the_genera_that_hold_cloud(genera):
     assert [s[0] for s in genus_specs(genera, covered=True)] == [
         "convective",
         "stratus",
+        "frontal_shield",
     ]
     # The default's genera with no feature (normal scenes pay nothing)
     for name in ("stratocumulus", "nimbostratus", "altostratus", "altocumulus"):
         assert name in genera.genera and not has_coverage(genera, name)
     showcase = replace(genera, features=showcase_features(), background=False)
-    assert [s[0] for s in genus_specs(showcase, covered=True)] == list(genera.genera)
+    # The showcase's every genus but the weather's frontal shield (its ends
+    # are the showcase's altostratus and nimbostratus)
+    assert [s[0] for s in genus_specs(showcase, covered=True)] == [
+        g for g in genera.genera if g != "frontal_shield"
+    ]
     # No feature: the weather's own stratus and stratocumulus still make a
-    # stratus sheet (genera.WEATHER_GENERA); without the weather, nothing
+    # stratus sheet, its altostratus and nimbostratus the frontal shield
+    # (genera.WEATHER_GENERA); without the weather, nothing
     alone = replace(genera, features=())
     assert [s[0] for s in genus_specs(alone, covered=True)] == [
         "convective",
         "stratus",
+        "frontal_shield",
     ]
     bare = replace(alone, background=False)
     assert [s[0] for s in genus_specs(bare, covered=True)] == ["convective"]

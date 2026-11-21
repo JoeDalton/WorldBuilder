@@ -871,7 +871,8 @@ def test_a_set_wind_is_uniform_at_the_focus(weather):
 def test_the_cirrus_weather_is_the_marchs_only_when_asked(weather):
     """cirrus_weather (PlanetClouds' cirrus=True, the demo's default): the
     weather's cirrus cover fills cube B's channel 1 under the features, and
-    compiles the high layer; without it the cirrus has only its features'
+    compiles the high layer, and the weather's cirrostratus its channel 2
+    (genera.WEATHER_GENERA); without it the cirrus has only its features'
     coverage (none in the demo's default)."""
     from world_builder.clouds.weather import cirrus_cover_map, sample_cube
     from world_builder.sky.starfield import cube_directions
@@ -880,12 +881,15 @@ def test_the_cirrus_weather_is_the_marchs_only_when_asked(weather):
     assert high_genera(plain, covered=True) == []
     assert not coverage_cube(plain, "B", 32)[..., 1].any()
     march = replace(plain, cirrus_weather=True)
-    assert high_genera(march, covered=True) == [("cirrus", 1)]
+    assert high_genera(march, covered=True) == [("cirrus", 1), ("cirrostratus", 2)]
     cube = coverage_cube(march, "B", 32)
     dirs = cube_directions(32).reshape(-1, 3)
     expected = sample_cube(cirrus_cover_map(weather), dirs).reshape(6, 32, 32)
     np.testing.assert_allclose(cube[..., 1], expected, atol=1e-6)
-    assert not cube[..., [0, 2, 3]].any()
+    np.testing.assert_array_equal(
+        cube[..., 2], genus_coverage(march, "cirrostratus", 32)
+    )
+    assert cube[..., 2].any() and not cube[..., [0, 3]].any()
     # A feature over it: the larger of the two
     spec = replace(march, features=(*DEFAULT_FEATURES, HIGH))
     np.testing.assert_allclose(

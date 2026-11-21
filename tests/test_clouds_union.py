@@ -182,7 +182,9 @@ def test_cube_a_holds_the_stratus_coverage_in_its_channel(genera_spec):
     planes = genus_planes(genera_spec)
     assert cube.shape == planes.shape[:-1] + (4,) and cube.dtype == np.float32
     np.testing.assert_array_equal(cube[..., 0], planes[..., 2])
-    assert not cube[..., 1:].any()  # no other genus in A yet
+    # The stratocumulus's: its features' alone (none); channels 2 and 3
+    # the weather's frontal shield's (genera.WEATHER_GENERA)
+    assert not cube[..., 1].any()
 
 
 def test_a_genus_coverage_turns_into_its_shift_through_its_table():

@@ -644,6 +644,12 @@ def _cirrus_zonal(spec: WeatherSpec, dirs: np.ndarray, lat: np.ndarray) -> np.nd
     return 0.08 + 0.45 * tropics + 0.3 * streaks
 
 
+#: The weather's genera the cirrus cover takes (:func:`cirrus_cover_map`);
+#: its cirrostratus is the high layer's genus of its own
+#: (:data:`genera.WEATHER_GENERA`).
+CIRRUS_SHEET_GENERA = ("cirrus", "cirrocumulus")
+
+
 def _cirrus_compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate):
     radius = spec.planet.radius
     scale = _feature_scale(spec)
@@ -653,12 +659,10 @@ def _cirrus_compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate
     # cumulus: jet cirrus streams over deserts too.
     _, _, humidity, _ = climate(dirs)
     cover = cover * (0.4 + 0.6 * _wetness(humidity))
-    # The systems' own: the warm fronts' shields, the tropical cyclones'
-    # outflow.
+    # The systems' own: the jets' streaks ahead of the warm fronts, the
+    # tropical cyclones' outflow (their cirrostratus is a genus of its own).
     cube = synoptic_cube(spec)
-    pick = [
-        SYNOPTIC_CHANNELS.index(g) for g in ("cirrus", "cirrostratus", "cirrocumulus")
-    ]
+    pick = [SYNOPTIC_CHANNELS.index(g) for g in CIRRUS_SHEET_GENERA]
     own = spec.cirrus_shield * sample_cube(cube[..., pick], dirs).max(axis=-1)
     cover = 1.0 - (1.0 - np.clip(cover, 0.0, 1.0)) * (1.0 - np.clip(own, 0.0, 1.0))
     state = synoptic_state(spec)

@@ -15,6 +15,7 @@ import pytest
 
 from world_builder.clouds.genera import (
     CONVECTIVE_SPECIES,
+    FAMILY_SHARES,
     GENUS_DEPTHS,
     HIGH_CHANNELS,
     SHOWCASE_ROW,
@@ -46,8 +47,10 @@ def test_the_showcase_has_every_genus_of_the_march_once():
          "cirrus", "cirrostratus", "cirrocumulus"]
     )  # fmt: skip
     # Every genus of the march but the convective one (its species) is there
+    # (the weather's frontal shield aside: a family, its ends the showcase's
+    # altostratus and nimbostratus)
     for name in GeneraSpec.__dataclass_fields__["genera"].default[1:]:
-        assert name in names, name
+        assert name in names or name in FAMILY_SHARES, name
 
 
 def _slots(row) -> list[Feature]:

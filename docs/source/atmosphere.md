@@ -537,8 +537,10 @@ weather, from the same systems as the cumulus:
   the share of the layer that holds cirrus:
   - anvils over the wet tropics and streaks along the meandering jets
     (or `WeatherSpec.cirrus_zonal`);
-  - the systems' own cirrus (`synoptic_cube`'s Ci, Cs, Cc): the warm
-    fronts' shields, the tropical cyclones' outflow;
+  - the systems' own cirrus (`synoptic_cube`'s Ci and Cc,
+    `weather.CIRRUS_SHEET_GENERA`): the jets' streaks ahead of the warm
+    fronts, the tropical cyclones' outflow. Their cirrostratus is a genus
+    of its own in the high layer (`genera.WEATHER_GENERA`);
   - mesoscale texture;
   - humidity, which counts for less than for the cumulus.
 - **The upper wind** the streaks follow, by its stream function
