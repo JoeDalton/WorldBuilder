@@ -35,6 +35,27 @@ float powder(Field f, float density) {
     return 1.0 - exp2(-f.fieldExtinction * density * f.powderLength * 2.0);
 }
 
+// The share of the sky's light a cloud at p keeps (noise.sky_light_fade):
+// the day's fall as the sun lowers, smoothstep(-0.3, 0.1) of its cosine,
+// times the sunlit share of the air column above p. With the sun below the
+// horizon, the air is sunlit only above the planet's shadow, from radius
+// ground / sin(sun's zenith angle), so that share is exp(-(that - |p|) / H),
+// H the air's Rayleigh scale height. On a 600 km planet, with the sun 8
+// degrees down, a cloud 5 km up keeps ~90 % (the shadow 0.9 km above it);
+// on Earth ~0.1 % (60 km): the curve alone kept 35 % there, and Earth's
+// night clouds glowed against a black sky.
+float cloudSkyFade(int atmo, vec3 p, vec3 sunDir) {
+    float r = length(p);
+    float mu = dot(p / r, sunDir);
+    float fade = smoothstep(-0.3, 0.1, mu);
+    if (mu < 0.0) {
+        vec4 shape = uAtmoShape[atmo];  // x: the ground's radius, z: H
+        float lit = shape.x / sqrt(max(1.0 - mu * mu, 1e-6));
+        fade *= exp(-max(lit - r, 0.0) / shape.z);
+    }
+    return fade;
+}
+
 // The sunlight, skylight and twilight on a cloud at p (planet frame) through
 // the planet's air atmo (-1: none), per fragment: the billboards work the
 // same out per vertex (cloud_sphere.vert).
@@ -49,10 +70,10 @@ void planetCloudLight(int atmo, vec3 p, out vec3 sunlight, out vec3 skylight,
         vec3 tint = cloudSunTint(atmo, p, sunDir);
         sunlight *= tint;
         twilight = sunColor * cloudTwilight(atmo, p, sunDir, tint);
-        // The sky's light fades through twilight as the air's own fill
-        // does (atmosphere.glsl), so clouds in the planet's shadow stay as
-        // bright as the air around them.
-        skylight *= smoothstep(-0.3, 0.1, dot(normalize(p), sunDir));
+        // The sky's light fades through twilight with the sunlit share of
+        // the air above (cloudSkyFade): long on a small planet, whose shadow
+        // rises slowly, short on Earth's.
+        skylight *= cloudSkyFade(atmo, p, sunDir);
     }
 }
 

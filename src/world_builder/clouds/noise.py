@@ -1327,6 +1327,23 @@ def recipe_profile(genus: GenusField, h: ArrayLike) -> np.ndarray:
     return out
 
 
+def sky_light_fade(
+    radius: ArrayLike, mu: ArrayLike, ground: float, scale_height: float
+) -> np.ndarray:
+    """The share of the sky's light a cloud keeps (cloud_shading.glsl's
+    ``cloudSkyFade``) at *radius* from the planet's centre, the sun's
+    cosine *mu* there: ``smoothstep(-0.3, 0.1, mu)``, times, with the sun
+    below the horizon, the sunlit share of the air above it,
+    ``exp(-(ground / sqrt(1 - mu^2) - radius) / scale_height)`` (the air is
+    sunlit above the planet's shadow; *scale_height* the Rayleigh one)."""
+    r = np.asarray(radius, dtype=np.float64)
+    mu = np.asarray(mu, dtype=np.float64)
+    fade = _smoothstep(-0.3, 0.1, mu)
+    lit = ground / np.sqrt(np.maximum(1.0 - mu * mu, 1e-6))
+    shadow = np.exp(-np.maximum(lit - r, 0.0) / scale_height)
+    return fade * np.where(mu < 0.0, shadow, 1.0)
+
+
 def family_range(share: ArrayLike) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """A family genus's cloud at its thick end's share *share* (0 to 1;
     cloud_field.glsl's ``genusRecipeDensity``): the slab heights it spans,

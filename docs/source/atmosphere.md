@@ -454,8 +454,8 @@ blue sky alone: grey-blue from orbit, turning orange about 200 km closer.
 A cloud stays sunlit after sunset below it: at 2.7 km over a 600 km planet,
 until the sun is 5.4° below its horizon. The air alone dimmed its light only
 to about 15 % of red by then, and the planet's shadow then cut it to black,
-which drew a hard line across the clouds, close up and from orbit. Two terms
-in `cloud_field.glsl` (per sample in the march, per pixel on the deck) spread it:
+which drew a hard line across the clouds, close up and from orbit. Three terms
+(per sample in the march, per pixel on the deck) spread it:
 
 - **The grazing edge** (`grazingLight`): sunlight whose path dips below the
   cloud's own altitude crosses the haze, the terrain and the cloud deck
@@ -472,6 +472,18 @@ in `cloud_field.glsl` (per sample in the march, per pixel on the deck) spread it
   light from the sky: not phase-weighted, not self-shadowed, and reaching
   undersides as the sky's light does. It carries the clouds from lit to dark
   over about 4° past the line (about 40 km on this planet).
+
+- **The sky's light** (`cloudSkyFade`, `noise.sky_light_fade` on the CPU)
+  fades with the sun's height (`smoothstep(-0.3, 0.1)` of its cosine) and,
+  once the sun is below the horizon, with the sunlit share of the air above
+  the cloud: the air is sunlit only above the planet's shadow, at radius
+  `ground / sin(sun's zenith angle)`, so the share is
+  `exp(-(that - cloud's radius) / H)`, H the Rayleigh scale height (8 km).
+  The planet's size sets how long it lasts: with the sun 8° down, a cloud 5
+  km up keeps ~90 % of the curve on the 600 km planet (the shadow 0.9 km
+  over it) and ~0.1 % on Earth (60 km). The curve alone, tuned on the small
+  planet, kept 35 % on Earth there: its night clouds glowed grey against a
+  black sky and sea.
 
 Another body's eclipse multiplies both, and the clouds' sky light dims with
 it (`eclipseVisibility`, see [Shadows](shadows.md)).

@@ -134,6 +134,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Clouds glowed grey on the Earth-scale planet's night side, against a
+  black sky and sea: their sky light faded on a curve of the sun's height
+  alone (`smoothstep(-0.3, 0.1)`), tuned on the 600 km planet, where the
+  air above a cloud stays sunlit for many degrees after sunset. It now also
+  takes the sunlit share of the air above the cloud, from the planet's
+  shadow height and the air's scale height (`cloudSkyFade`,
+  `noise.sky_light_fade`): with the sun 8° down, ~0.1 % on Earth (35 %
+  before), ~90 % of the curve on the 600 km planet, whose twilight is
+  unchanged. A render of every commit since #59 showed no regression: the
+  Earth preset, new on this branch, had never been seen at night.
 - Stratiform sheets stayed grey-white at sunset beside orange cumulus: the
   march's samples land 100-300 m into a sheet, under the tens of metres a
   low sun lights at its top, so their sun depth left it in shadow. A recipe
