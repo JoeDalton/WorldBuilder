@@ -2676,6 +2676,27 @@ yet, but it would once the GPU's part fell under it.
   (1/16, 1/9, 1/8, 1/4 of the pixels, or all) live, and the HUD shows the
   share. F1-F5 step a part's preset.
 
+### The 1x1 march in motion (offscreen, 2026-11-21)
+
+The user's bursts flying past a cumulonimbus: at 1x1 grain over the whole
+cloud (the second difference in time, 1.84 levels inside the clouds against
+4x4's 0.29), at 4x4 blinking edges (4.20 levels, 3.4 % of the edge pixels
+past 12, against 1x1's 1.73). At 1x1 the resolve took a quarter of each
+pixel's raw sample a frame in motion, with no smooth mean. `motion_shots.py
+--start 29.7159 29.8232 --at 29.7159 29.8232 432 0 8 --boost --frames 40
+--every 20 --flicker`, the block forced:
+
+| 1x1: smoothing, moving weight | err cloud | grain | speck % |
+|---|---|---|---|
+| 0, 1/4 (before) | 3.02 | 4.97 | 6.50 |
+| 0.75, 1/8 | 1.74 | 1.89 | 0.87 |
+| 1, 1/8 | 1.63 | 1.56 | 0.63 |
+| 1, 1/16 (kept) | 1.43 | 1.24 | 0.53 |
+| *4x2 (HIGH), for reference* | *1.23* | *0.92* | *0.11* |
+
+The 4x4 edges are next (the history moved by the pixel's own distance, half
+the sky's at an edge).
+
 ### The light volume's read jitter removed (offscreen, 2026-11-21)
 
 The jitter of §28 (`LIGHT_JITTER`, a texel and a slice either way per pixel

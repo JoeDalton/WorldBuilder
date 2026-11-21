@@ -287,6 +287,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pose, within noise). The exact fix, a chart sheared
   along the sun, is in BACKLOG.md.
 
+- The clouds traced at every pixel (march block 1x1) were grainy all over
+  in motion: the resolve took a quarter of each pixel's raw sample a frame,
+  without the smooth mean the larger blocks take. At 1x1 it now takes the
+  smooth mean in motion (`march.SMOOTHING`, 1) and a sixteenth of the frame
+  at least (`march.MOVING_WEIGHTS`). Flying toward the cumulonimbus
+  (`motion_shots.py`, `genera_cb`): grain 4.97 → 1.24, specks 6.5 % →
+  0.53 %, error against the converged view 3.02 → 1.43 (HIGH's 4x2: 0.92,
+  0.11 %, 1.23). Nothing changes at rest.
+
 - The sea reflected only the cumulus family: the reflection's deck was genus
   0's alone. Every low and middle genus now has its own deck at its slab's
   middle (`deck.deck_nodes`; `cloud.frag` shades it as that genus:

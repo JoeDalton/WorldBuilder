@@ -600,16 +600,19 @@ def test_the_view_pixel_alone_decides_the_far_detail():
 def test_the_resolve_smooths_more_the_fewer_pixels_a_frame_is_traced():
     from world_builder.clouds.march import smoothing_of
 
-    assert smoothing_of((1, 1)) == 0.0
     smooth = [smoothing_of(b) for b in ((2, 2), (4, 2), (3, 3), (4, 4))]
     assert 0.0 < smooth[0] < smooth[1] <= smooth[2] < smooth[3] == 1.0
+    # All of the pixels a frame: the smooth mean in full (in motion or with
+    # the history lost), or each pixel's own noisy sample showed as grain.
+    assert smoothing_of((1, 1)) == 1.0
 
 
 def test_in_motion_the_history_spans_about_a_cycle_of_the_block():
     # ~33 frames of history lagged the view of a cloud whose look changes fast
     # as the camera flies, and the clamp cut the lag into grain: in motion
     # each frame takes at least a cycle's share (each pixel's own sample
-    # once), a quarter at most (a 1 x 1 march's samples alone are raw noise).
+    # once), a quarter at most; a sixteenth at 1 x 1 (its samples alone are
+    # raw noise: grain over the whole cloud in motion at a quarter).
     from world_builder.clouds.march import (
         BLOCKS,
         MIN_WEIGHT,
@@ -617,7 +620,10 @@ def test_in_motion_the_history_spans_about_a_cycle_of_the_block():
         pixels_of,
     )
 
+    assert moving_weight_of((1, 1)) == pytest.approx(1.0 / 16.0)
     for block in BLOCKS:
+        if block == (1, 1):
+            continue
         cycle = min(1.0 / pixels_of(block), 0.25)
         assert moving_weight_of(block) == pytest.approx(cycle)
         assert MIN_WEIGHT < moving_weight_of(block) <= 0.25
