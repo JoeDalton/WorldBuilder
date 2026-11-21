@@ -1213,6 +1213,11 @@ class TerrainDemo(ShowBase):
         )
         self.clouds.bind_shadow_inputs(self.terrain.root)  # their shadow on it
         self.clouds.bind_shadow_inputs(self.home.models.inputs)  # on the models
+        # What hides the sun from them: the moon (eclipses), the rings, the
+        # planet's mountains (the march's cloudSunAndSky, the deck's
+        # cloud.frag), as World binds them; without it their nodes keep the
+        # defaults (no casters) and the clouds stayed lit through an eclipse.
+        self.clouds.bind_maps(functools.partial(self.shadows.bind, body=0))
         # Their shadow marched once per texel of two maps (Shadows, part E).
         self.cloud_maps = CloudShadowMaps(
             self.win, self.clouds, self.world.shadows.cloud_map_size

@@ -112,6 +112,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The terrain demo's clouds stayed sunlit through an eclipse (since the
+  cloud genera, #59): the demo no longer bound the world's `Shadows` (the
+  moon, the rings, the mountains) to the clouds' nodes, which kept their
+  defaults (no casters). It binds them again (`PlanetClouds.bind_maps`, as
+  `World` does), so `terrain_shots.py`'s eclipse poses show it too.
 - The weather's population spacing check kept its systems in arrays
   rebuilt for every candidate: 2 s of a 9 s bake on a planet of thousands
   of systems.
