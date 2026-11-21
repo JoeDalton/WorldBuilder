@@ -29,11 +29,11 @@ uniform sampler2D uGroundShadow;
 uniform int   uGroundShadowOn;
 uniform int   uGroundShadowScale;
 
-// The share of the sun the planet's clouds leave here: their shadow, marched
-// through the deck's field toward the sun (both families' with genera), or
+// The share of the sun the planet's clouds leave here: their shadow, the
+// genera's summed depth toward the sun (their shadow maps', or marched), or
 // its mean where the pixel's footprint (metres) spans several clouds
-// (cloud_field.glsl's planetCloudShadow; uCloudShadowLayer and Other, -1
-// none: CloudVolume.bind_shadow_inputs). Clouds only come with air: the
+// (cloud_field.glsl's planetCloudShadow; uCloudShadowLayer -1 none:
+// CloudMarch.bind_shadow_inputs). Clouds only come with air: the
 // planet frame is the air's. Read from the ground shadow pass where it holds
 // this pixel (the main view's), per pixel elsewhere (the sea's reflection).
 // A texel of the ground shadow agrees with this pixel when their distances
@@ -79,7 +79,7 @@ bool groundShadowAt(float dist, out float shade) {
 // relPos: the point from the camera (render frame); mirror: the sea's
 // reflection pass (no ground shadow pass there).
 float cloudShade(vec3 L, float footprint, vec3 relPos, bool mirror) {
-    if ((uCloudShadowLayer < 0 && uCloudShadowOther < 0) || uCloudShadowSteps <= 0
+    if (uCloudShadowLayer < 0 || uCloudShadowSteps <= 0
             || uOwnAtmosphere < 0) {
         return 1.0;
     }

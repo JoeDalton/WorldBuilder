@@ -4,10 +4,9 @@ sky and the clouds, so the clouds are most of the frame.
 
     python scripts/cloud_bench.py [--out DIR] [--pose NAME ...]
         [--size "1600 900"] [--offscreen] [--frames N] [--timeout SECONDS]
-        [--quality low|mid|high|ultra] [--renderer billboards|march]
-        [--half-res | --no-half-res]
+        [--quality low|mid|high|ultra]
         [--uniform-coverage C] [--no-cirrus] [--cloud-debug BITS]
-        [--move M] [--genera] [--interior-growth | --no-interior-growth]
+        [--move M] [--genera]
         [--march-block BLOCK] [--stability N] [--interactive]
         [--passes] [--steps-sweep] [--jitter]
 
@@ -18,22 +17,17 @@ sky and the clouds, so the clouds are most of the frame.
     --frames           frames timed per pose, clouds on and off (default 60)
     --timeout          seconds to wait for a pose's clouds to load (default 60)
     --quality          the clouds' preset (CloudSettings), default high
-    --renderer         billboards (the default) or march (the raymarch)
-    --half-res         the clouds at half resolution (CloudSettings
-                       .half_resolution), over the preset's choice
     --march-block      the raymarch's block, BXxBY (1x1, 2x2, 4x2, 3x3, 4x4:
                        CloudSettings.march_block; --march-resolution 1, 0.5
                        or 0.25 is 1x1, 2x2 or 4x4), over the preset's
     --uniform-coverage the same coverage everywhere (no weather systems,
                        climate or terrain): comparisons that do not depend
                        on where the pose is
-    --no-cirrus        no cirrus sheet
+    --no-cirrus        no cirrus (the march's high layer: the weather's)
     --cloud-debug      PlanetClouds.set_debug bits (cloud.frag's uCloudDebug)
     --genera           the low clouds by genus (clouds.genera's placeholder
                        maps around the reference point: cumulonimbus,
                        congestus, stratus) and their poses (below)
-    --interior-growth  larger billboards inside clouds
-                       (CloudSettings.interior_growth), over the preset's
     --move             fly the camera (and the probe) along the view at M
                        metres a frame while timing: reprojection under motion
     --turn             yaw the view T degrees a frame while timing: the
@@ -92,13 +86,13 @@ With --stability N, over the clouds' pixels (those that change when the
 clouds are hidden), from N frames read back after the timing:
 
 * **spread**: each pixel's brightness range over the frames, 8-bit steps:
-  its mean and 99th percentile (the billboards' still frames: 0). Moving,
-  the view changes too: compare renderers at the same --move;
+  its mean and 99th percentile. Moving, the view changes too: compare
+  runs at the same --move;
 * **grid**: how much one pixel of each march block (block x block pixels,
   CloudSettings.march_block) stands out from the others: each frame's
   brightness less its 3 x 3 mean, its RMS by the pixel's place in its block;
   the largest less the smallest, 8-bit steps, averaged over the frames (0:
-  no pattern; the billboards measure it at the march's block too).
+  no pattern).
 
 With --jitter, over the clouds' pixels (--quality picks the preset; run it per
 level): **still** (spread mean / p99, grid: as above), then **moving**, the
@@ -119,7 +113,6 @@ Interactive (``--interactive``): the probe flies, the camera follows it.
     +/-           the camera nearer/farther (free: slower/faster)
     tab           free camera: the keys fly the camera, the probe stays
     p             the next pose (model_in_cloud puts the probe at a cloud)
-    m             billboards <-> raymarch
     escape        quit
 """
 
@@ -149,16 +142,18 @@ from demo_terrain import (  # noqa: E402
     window_config,
 )
 from world_builder.atmosphere import AtmosphereParams, Atmospheres  # noqa: E402
-from world_builder.clouds.cirrus import CirrusSpec  # noqa: E402
 from world_builder.clouds.cloud import CloudSettings  # noqa: E402
+from world_builder.clouds.field_setup import _noise  # noqa: E402
 from world_builder.clouds.genera import GeneraSpec  # noqa: E402
-from world_builder.clouds.half_res import HalfResClouds  # noqa: E402
 from world_builder.clouds.march import block_of  # noqa: E402
 from world_builder.clouds.noise import density_on_sphere  # noqa: E402
 from world_builder.clouds.planet import PlanetClouds  # noqa: E402
-from world_builder.clouds.sphere import _noise  # noqa: E402
 from world_builder.clouds.weather import WeatherSpec  # noqa: E402
-from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras  # noqa: E402
+from world_builder.depth import (  # noqa: E402
+    HIDE_FROM_CLOUD_PASS,
+    HIDE_FROM_NEAR,
+    SplitDepthCameras,
+)
 from world_builder.quality import QualityLevel  # noqa: E402
 from world_builder.settings import WorldSettings  # noqa: E402
 from world_builder.sky import Sky, Starfield  # noqa: E402
@@ -337,21 +332,16 @@ class CloudBench(ShowBase):
             atmospheres=self.atmospheres,
             atmosphere=0,
             altitude=CLOUD_BASE,
-            cirrus=CirrusSpec() if cirrus else None,
+            cirrus=cirrus,
             planet=self.spec,
             weather=weather,
             settings=settings,
-            channel="clouds",
             genera=spec,
         )
         self.clouds.set_debug(cloud_debug)
         self.depth = SplitDepthCameras(self, near=1.0)
-        HalfResClouds.exclude(self.sky.node)  # hides no cloud
+        self.sky.node.hide(HIDE_FROM_CLOUD_PASS)  # hides no cloud
         self.clouds.use_split_depth(self, self.depth)
-        self.half_res = None
-        if settings.half_resolution and settings.renderer == "billboards":
-            self.half_res = HalfResClouds(self, self.depth)
-            self.clouds.use_half_res(self.half_res)
         self._clock = ClockObject.get_global_clock()
         # A game's model: opaque, black, writing depth like any.
         self.probe = self.loader.load_model("models/smiley")
@@ -466,16 +456,11 @@ class CloudBench(ShowBase):
             [(self.radius, distance, 0.0, 0.0)]
         )
         self.depth.update(split, far)
-        if self.half_res is not None:
-            self.half_res.update()
         self.atmospheres.update(self.cam_world)
         self.sky.set_sun(self.sun)
         self.sky.update((0.0, 0.0, 0.0), far)
         fov = math.radians(self.camLens.get_fov()[1])
-        scale = self.half_res.pixel_scale if self.half_res is not None else 1.0
-        self.clouds.set_pixel_angle(
-            fov / max(self.win.get_y_size(), 1), volume_scale=scale
-        )
+        self.clouds.set_pixel_angle(fov / max(self.win.get_y_size(), 1))
         self.clouds.set_sun(self.sun)
         self.clouds.set_sky_light(CLOUD_SKY_LIGHT)
         self.clouds.update(self.cam_world)
@@ -554,7 +539,6 @@ class Flight:
         for key, method in (
             ("tab", self.toggle_free),
             ("p", self.next_pose),
-            ("m", self.toggle_renderer),
             ("+", lambda: self.zoom(0.8)),
             ("=", lambda: self.zoom(0.8)),
             ("-", lambda: self.zoom(1.25)),
@@ -581,11 +565,6 @@ class Flight:
             self.speed = min(max(self.speed / factor, 5.0), 5000.0)
         else:
             self.distance = min(max(self.distance * factor, 2 * PROBE_RADIUS), 20e3)
-
-    def toggle_renderer(self) -> None:
-        clouds = self.bench.clouds
-        renderer = "march" if clouds.settings.renderer == "billboards" else "billboards"
-        clouds.set_settings(replace(clouds.settings, renderer=renderer))
 
     def next_pose(self) -> None:
         bench = self.bench
@@ -665,7 +644,7 @@ class Flight:
             inside = f"  density at the probe {density:.2f}"
         altitude = 0.0 if probe is None else float(np.linalg.norm(probe)) - bench.radius
         self.hud.setText(
-            f"{bench.clouds.settings.renderer} (m)   "
+            "raymarch   "
             f"{'free camera' if self.free else 'following'} (tab)\n"
             f"probe {altitude:.0f} m up{inside}\n"
             f"camera {self.distance:.0f} m back, speed {self.speed:.0f} m/s (+/-)\n"
@@ -700,24 +679,14 @@ def main() -> None:
         help="the clouds' preset",
     )
     parser.add_argument(
-        "--renderer",
-        default="march",
-        choices=["billboards", "march"],
-        help="the low clouds' renderer",
-    )
-    parser.add_argument(
-        "--half-res",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="half-resolution clouds, over the preset's choice",
-    )
-    parser.add_argument(
         "--uniform-coverage",
         type=float,
         default=None,
         help="the same coverage everywhere",
     )
-    parser.add_argument("--no-cirrus", action="store_true", help="no cirrus sheet")
+    parser.add_argument(
+        "--no-cirrus", action="store_true", help="no cirrus (the march's high layer)"
+    )
     parser.add_argument(
         "--cloud-debug", type=int, default=0, help="PlanetClouds.set_debug bits"
     )
@@ -729,12 +698,6 @@ def main() -> None:
     )
     parser.add_argument(
         "--genera", action="store_true", help="the low clouds by genus, their poses"
-    )
-    parser.add_argument(
-        "--interior-growth",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="larger billboards inside clouds, over the preset's choice",
     )
     parser.add_argument(
         "--march-block",
@@ -771,11 +734,6 @@ def main() -> None:
 
     window_config("Cloud bench", args.size, args.offscreen, vsync=False)
     settings = CloudSettings.preset(QualityLevel(args.quality))
-    settings = replace(settings, renderer=args.renderer)
-    if args.interior_growth is not None:
-        settings = replace(settings, interior_growth=args.interior_growth)
-    if args.half_res is not None:
-        settings = replace(settings, half_resolution=args.half_res)
     if args.march_block is not None:
         settings = replace(settings, march_block=args.march_block)
     bench = CloudBench(
@@ -790,8 +748,7 @@ def main() -> None:
     coverage = args.uniform_coverage
     print(
         f"{describe_window(bench)}, {gsg.get_driver_vendor()} {renderer}, "
-        f"clouds {args.quality} {args.renderer}"
-        f"{' half-res' if bench.half_res is not None else ''}"
+        f"clouds {args.quality} march"
         f"{'' if coverage is None else f', coverage {coverage}'}"
     )
     if "llvmpipe" in renderer:
@@ -809,10 +766,6 @@ def main() -> None:
             bench.run()
             return
         if args.passes or args.steps_sweep or args.jitter:
-            if args.renderer != "march":
-                parser.error(
-                    "--passes, --steps-sweep and --jitter need --renderer march"
-                )
             if args.passes:
                 bench_passes(bench, args)
             if args.steps_sweep:
@@ -831,7 +784,6 @@ def bench_poses(bench: CloudBench, args: argparse.Namespace) -> None:
     block = bench.settings.march_block
     steps = (args.cloud_debug & 16) != 0
     header = f"{'pose':<14} {'frame':>9} {'p95':>9} {'no clouds':>10} {'clouds':>9}"
-    header += f" {'billboards':>11}"
     if args.stability:
         header += f" {'spread':>7} {'p99':>6} {'grid':>6}"
     if steps:
@@ -864,7 +816,6 @@ def bench_poses(bench: CloudBench, args: argparse.Namespace) -> None:
         lit = bench.read_frame()
         bench.move, bench.turn = 0.0, 0.0
         bench.cam_world, bench.probe_world = start[0].copy(), start[1]
-        billboards = bench.clouds.stats["billboards"]
         bench.clouds.set_visible(False)
         bench.taskMgr.step()
         without, _ = bench.time_frames(args.frames)
@@ -873,7 +824,7 @@ def bench_poses(bench: CloudBench, args: argparse.Namespace) -> None:
         bench.clouds.set_visible(True)
         line = (
             f"{name:<14} {with_clouds:>7.2f}ms {p95:>7.2f}ms {without:>8.2f}ms "
-            f"{with_clouds - without:>7.2f}ms {billboards / 1e3:>9.0f}k"
+            f"{with_clouds - without:>7.2f}ms"
         )
         mask = cloud_mask(frames[0] if frames else lit, bare)
         if args.stability:

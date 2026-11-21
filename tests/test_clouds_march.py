@@ -2,7 +2,7 @@
 Unit tests for the raymarched clouds (world_builder.clouds.march): the
 NumPy mirror of the shader's geometry (the slab's segments, the steps and
 their compositing), the constants the shader shares with Python, and the
-renderer choice in PlanetClouds. The shader itself needs a window (see
+march as PlanetClouds' volume. The shader itself needs a window (see
 scripts/cloud_bench.py).
 """
 
@@ -10,12 +10,12 @@ import math
 import re
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
+from world_builder.clouds.field_setup import _noise
 from world_builder.clouds.march import (
     BLOCKS,
     MIN_STEP_FEATURE,
@@ -31,6 +31,7 @@ from world_builder.clouds.march import (
     march_steps,
     march_transmittance,
     min_step,
+    opaque_residual,
     slab_segments,
     sphere_interval,
     step_scale,
@@ -38,7 +39,7 @@ from world_builder.clouds.march import (
     visit_of,
 )
 from world_builder.clouds.noise import (
-    MAX_LAYERS,
+    DETAIL_LEVELS,
     NOISE_FEATURE,
     density_on_sphere,
     fbm_sigma,
@@ -46,7 +47,6 @@ from world_builder.clouds.noise import (
     with_threshold,
 )
 from world_builder.clouds.planet import PlanetClouds
-from world_builder.clouds.sphere import CloudVolume, _noise
 from world_builder.clouds.weather import coverage_to_shift, shift_table
 from world_builder.quality import QualityLevel
 from world_builder.terrain.planet import PRESETS as PLANETS
@@ -55,7 +55,7 @@ from world_builder.terrain.workers import ChunkExecutor
 R = 600e3
 SLAB = (2200.0, 1000.0)
 SHADER = (
-    Path(__file__).parent.parent / "src/world_builder/clouds/shaders/cloud_march.frag"
+    Path(__file__).parent.parent / "src/world_builder/clouds/shaders/cloud_march.glsl"
 )
 UP = np.array([0.0, 0.0, 1.0])
 
@@ -257,6 +257,41 @@ def test_the_shader_shares_the_opaque_cutoff():
     assert "transmittance > OPAQUE" in text
 
 
+def test_the_opaque_cutoff_leaves_no_step_in_a_thin_sheets_alpha():
+    # A thin sheet seen at a grazing angle crosses the cutoff gradually
+    # across the view: snapped from 1 - OPAQUE to 1 there, its alpha drew a
+    # contour across the altostratus (clouds.md, "The recipe genera"). The
+    # residual eases to 0 over [OPAQUE, 2 OPAQUE], value and slope matching.
+    assert opaque_residual(OPAQUE) == 0.0
+    assert opaque_residual(OPAQUE / 2) == 0.0
+    for t in (2 * OPAQUE, 0.1, 0.5, 1.0):
+        assert opaque_residual(t) == pytest.approx(t)
+    eps = 1e-6
+    slope = (opaque_residual(2 * OPAQUE + eps) - opaque_residual(2 * OPAQUE - eps)) / (
+        2 * eps
+    )
+    assert slope == pytest.approx(1.0, abs=1e-3)
+    # A sheet thickening across the view: its alpha has no jump at the cutoff
+    t = np.linspace(0.02, 0.12, 2001)
+    alpha = 1.0 - np.array([opaque_residual(v) for v in t])
+    assert np.all(np.diff(alpha) <= 1e-12)  # monotonic in the light let through
+    assert np.max(np.abs(np.diff(alpha))) < 2e-4  # no step (the snap was 0.04)
+
+
+def test_the_shader_eases_the_opaque_cutoff():
+    text = SHADER.read_text()
+    assert "opaqueResidual(transmittance)" in text
+    assert "transmittance <= OPAQUE ? 1.0" not in text
+
+
+def test_a_ray_reports_the_eased_residual():
+    segments = np.array([[0.0, 3000.0]])
+    # Optical depth (log2) 4.32: transmittance ~ 0.05, inside the ease
+    left, _ = march_ray(segments, 50.0, STEP_GROWTH, 4096, lambda t: 4.32 / 3000.0)
+    assert 0.0 < left < 0.05
+    assert left == pytest.approx(opaque_residual(2.0**-4.32), rel=0.05)
+
+
 def test_the_steps_do_not_lengthen_as_the_light_is_spent():
     # A step's length from the light already spent made the steps' grid
     # depend on what the samples found: the visits' jitter no longer averaged
@@ -283,12 +318,9 @@ def test_the_steps_do_not_lengthen_as_the_light_is_spent():
 @pytest.mark.parametrize(
     "name",
     [
-        "cloud_march.frag",
+        "cloud_march.glsl",
         "cloud.frag",
-        "cloud_sphere.vert",
         "cloud_deck.vert",
-        "cirrus.vert",
-        "cirrus.frag",
     ],
 )
 def test_no_cloud_draws_air_in_front_of_itself(name):
@@ -379,24 +411,23 @@ def test_the_march_converges_on_the_fine_integral(field):
 
 def test_the_shader_shares_the_layer_count_and_the_feature_size():
     text = SHADER.read_text()
-    assert int(re.search(r"MAX_MARCH_LAYERS = (\d+);", text).group(1)) == MAX_LAYERS
+    assert "const int MAX_MARCH_LAYERS = DETAIL_LEVELS;" in text
+    field = (SHADER.parent / "cloud_field.glsl").read_text()
+    levels = int(re.search(r"DETAIL_LEVELS = (\d+);", field).group(1))
+    assert levels == DETAIL_LEVELS
     units = float(re.search(r"NOISE_FEATURE_UNITS = ([\d.]+);", text).group(1))
     assert units == NOISE_FEATURE
     fewest = float(re.search(r"SEGMENT_SAMPLES = ([\d.]+);", text).group(1))
     assert fewest == SEGMENT_SAMPLES
 
 
-# ── Settings and the renderer choice ─────────────────────────────────────────
+# ── Settings and the volume ──────────────────────────────────────────────────
 
 
 def test_the_presets_trade_steps_and_resolution():
     levels = [CloudSettings.preset(level) for level in QualityLevel]
     steps = [s.march_steps for s in levels]
     assert steps == sorted(steps)
-    assert all(s.renderer == "march" for s in levels)
-    assert CloudSettings().renderer == "march"
-    with pytest.raises(ValueError):
-        CloudSettings(renderer="splats")
 
 
 @pytest.fixture
@@ -406,19 +437,19 @@ def executor():
     made.shutdown()
 
 
-def _clouds(showbase, executor, renderer):
+def _clouds(showbase, executor):
     return PlanetClouds(
         showbase.render,
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2, renderer=renderer),
+        settings=CloudSettings(octave_bands=2),
         planet=PLANETS["forest"],
     )
 
 
-def test_the_settings_pick_the_renderer(showbase, executor):
-    clouds = _clouds(showbase, executor, "march")
+def test_the_volume_is_a_march(showbase, executor):
+    clouds = _clouds(showbase, executor)
     try:
         assert isinstance(clouds.volume, CloudMarch)
         assert clouds.volume.root.get_parent() == clouds.root
@@ -426,33 +457,39 @@ def test_the_settings_pick_the_renderer(showbase, executor):
         clouds.remove()
 
 
-def test_a_change_of_renderer_rebuilds_the_volume_with_its_state(showbase, executor):
-    clouds = _clouds(showbase, executor, "billboards")
+def test_the_clouds_state_reaches_the_march(showbase, executor):
+    clouds = _clouds(showbase, executor)
     try:
         clouds.set_sun((0.0, 2.0, 0.0))
         clouds.set_sky_light(0.2)
         clouds.set_debug(1)
-        old = clouds.volume
-        clouds.set_settings(replace(clouds.settings, renderer="march"))
-        assert isinstance(clouds.volume, CloudMarch)
-        assert old.root.is_empty()  # removed
         assert tuple(clouds.volume._sun[0]) == pytest.approx((0.0, 1.0, 0.0))
         assert clouds.volume._inputs["skyStrength"] == 0.2
         assert clouds.volume._inputs["uCloudDebug"] == 1
-        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
-        assert isinstance(clouds.volume, CloudVolume)
     finally:
         clouds.remove()
 
 
 def test_the_march_packs_a_layer_per_shell_and_the_far_one(showbase, executor):
-    clouds = _clouds(showbase, executor, "march")
+    clouds = _clouds(showbase, executor)
     try:
         march = clouds.volume
         assert march._layers_used == 3
-        assert march._inputs["uDeckLayer"] == 2
+        # The deck's own entry, after the genera's
+        from world_builder.clouds.noise import DECK_LAYER, MAX_GENERA
+
+        assert march._inputs["uDeckLayer"] == DECK_LAYER
         far = [march._layer_far[i] for i in range(2)]
         assert 0.0 < far[0] < far[1]
+        # A level's octaves and offset: the far level's are the deck's
+        levels = [march._level_octaves[0][i] for i in range(3)]
+        assert all(2 <= o <= 4 for o in levels)
+        deck = MAX_GENERA * 16  # its rows' start (GENUS_VEC4S each)
+        assert march._layer_params[deck + 9][2] == levels[2]
+        offset = march._level_offsets[0][2]
+        assert march._layer_params[deck][3] == pytest.approx(
+            march._layer_params[0][3] + offset
+        )
         # The steps are live
         clouds.set_settings(replace(clouds.settings, march_steps=17))
         assert march._steps[0] == 17
@@ -464,15 +501,16 @@ def test_the_march_packs_a_layer_per_shell_and_the_far_one(showbase, executor):
 def test_the_march_casts_a_shadow_and_reads_the_maps_for_its_own_light(
     showbase, executor
 ):
-    """A raymarched volume is a shadow caster as the billboards' is (its far
-    layer's field, the layer bound once the set-up is done) and takes the
-    shadow maps' inputs on its passes' nodes, kept across a change of
-    renderer; the shader's maps path is compiled in for the march alone."""
-    clouds = _clouds(showbase, executor, "march")
+    """A raymarched volume is a shadow caster (its far layer's field, the
+    layer bound once the set-up is done) and takes the shadow maps' inputs
+    on its passes' nodes; the shader's maps path is compiled in for the
+    march alone."""
+    clouds = _clouds(showbase, executor)
     try:
         march = clouds.volume
-        assert clouds.shadow_caster(0) is march.shadow_caster(0)
-        assert clouds.shadow_families == march.families == 1
+        assert clouds.shadow_caster() is march.shadow_caster()
+        assert march.genera_count == 1
+        assert march.shadow_caster().sky_bands == [march.field.slab]
         assert march.shadow_field.slab == march.field.slab
         node = showbase.render.attach_new_node("receiver")
         clouds.bind_shadow_inputs(node)
@@ -486,49 +524,47 @@ def test_the_march_casts_a_shadow_and_reads_the_maps_for_its_own_light(
         bound = []
         clouds.bind_maps(lambda n: bound.append(n))
         assert bound == march._nodes
-        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
-        assert clouds.shadow_caster(0) is clouds.volume
-        assert not isinstance(clouds.volume, CloudMarch)
     finally:
         clouds.remove()
     shaders = Path(__file__).parents[1] / "src/world_builder/clouds/shaders"
-    assert "#define CLOUD_MAP_LIGHTING" in (shaders / "cloud_march.frag").read_text()
+    assert "#define CLOUD_MAP_LIGHTING" in (shaders / "cloud_march.glsl").read_text()
     for name in ("cloud.frag", "cloud_deck.frag"):
         path = shaders / name
         if path.exists():
             assert "CLOUD_MAP_LIGHTING" not in path.read_text()
 
 
-def test_two_families_slabs_make_up_to_four_sorted_stretches():
-    """The genera's stratus under the convective clouds: a ray from the ground
-    crosses the stratus then the convective slab; from above, the convective
-    one then the stratus, then (the planet not in the way) nothing; a ray
-    skimming under both leaves and re-enters each."""
-    from world_builder.clouds.march import family_segments
+def test_two_sky_bands_make_up_to_four_sorted_stretches():
+    """The genera's stratus under the convective clouds, two bands of sky: a
+    ray from the ground crosses the stratus's band then the convective one;
+    from above, the convective one then the stratus's, then (the planet not
+    in the way) nothing; a ray skimming under both leaves and re-enters
+    each."""
+    from world_builder.clouds.march import band_segments
 
     radius = 600e3
     slabs = [(2200.0, 10500.0), (900.0, 1000.0)]  # convective, stratus
     up = np.array([0.0, 0.0, 1.0])
-    below = family_segments(up * (radius + 100.0), up, radius, slabs)
-    assert [f for _, _, f in below] == [1, 0]
+    below = band_segments(up * (radius + 100.0), up, radius, slabs)
+    assert [b for _, _, b in below] == [0, 1]  # the bands lowest first
     assert below[0][0] == pytest.approx(800.0) and below[0][1] == pytest.approx(1800.0)
     assert below[1][0] == pytest.approx(2100.0)
     assert below[1][1] == pytest.approx(12600.0)
-    above = family_segments(up * (radius + 20e3), -up, radius, slabs)
-    assert [f for _, _, f in above] == [0, 1]
+    above = band_segments(up * (radius + 20e3), -up, radius, slabs)
+    assert [b for _, _, b in above] == [1, 0]
     assert above[0][1] <= above[1][0]
     # A ray passing under the base of both (its closest approach 500 m up):
-    # each slab twice, four stretches in order along it, the stratus's
+    # each band twice, four stretches in order along it, the stratus's
     # outside the convective ones' (it is lower)
     side = np.array([1.0, 0.0, 0.0])
-    skimming = family_segments(
+    skimming = band_segments(
         np.array([-200e3, 0.0, radius + 500.0]), side, radius, slabs
     )
-    assert [f for _, _, f in skimming] == [0, 1, 1, 0]
+    assert [b for _, _, b in skimming] == [1, 0, 0, 1]
     starts = [t0 for t0, _, _ in skimming]
     assert starts == sorted(starts)
     # The planet cuts the far side, and the view's range the near
-    clipped = family_segments(
+    clipped = band_segments(
         up * (radius + 20e3), -up, radius, slabs, t_start=9e3, t_end=15e3
     )
     assert all(9e3 <= t0 < t1 <= 15e3 for t0, t1, _ in clipped)
@@ -550,27 +586,34 @@ def test_the_jitters_blue_noise_has_every_rank_once_and_no_low_frequencies():
     assert power[low].sum() / power.sum() < 1e-3
 
 
-def test_the_far_detail_fades_more_the_fewer_pixels_a_frame_is_traced():
-    from world_builder.clouds.march import step_fade_of
+def test_the_view_pixel_alone_decides_the_far_detail():
+    """No fade by the step's length (uStepFade, removed): it cost far clouds
+    their lumps, and they shimmer less without it (cloud_bench --jitter)."""
+    import world_builder.clouds.march as march
 
-    assert step_fade_of((1, 1)) == 0.0
-    fades = [step_fade_of(b) for b in ((2, 2), (4, 2), (3, 3), (4, 4))]
-    assert 0.0 <= fades[0] < fades[1] <= fades[2] < fades[3] < 0.4
+    text = SHADER.read_text()
+    assert "uniform float uStepFade" not in text
+    assert "float pixel = t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y));" in text
+    assert not hasattr(march, "STEP_FADES")
 
 
 def test_the_resolve_smooths_more_the_fewer_pixels_a_frame_is_traced():
     from world_builder.clouds.march import smoothing_of
 
-    assert smoothing_of((1, 1)) == 0.0
-    smooth = [smoothing_of(b) for b in ((2, 2), (4, 2), (3, 3), (4, 4))]
-    assert 0.0 < smooth[0] < smooth[1] <= smooth[2] < smooth[3] == 1.0
+    smooth = [smoothing_of(b) for b in ((4, 2), (3, 3), (4, 4))]
+    assert 0.0 < smooth[0] <= smooth[1] < smooth[2] == 1.0
+    # All or a quarter of the pixels a frame: the smooth mean in full (in
+    # motion or with the history lost), or each pixel's own noisy sample
+    # showed as grain.
+    assert smoothing_of((1, 1)) == smoothing_of((2, 2)) == 1.0
 
 
 def test_in_motion_the_history_spans_about_a_cycle_of_the_block():
     # ~33 frames of history lagged the view of a cloud whose look changes fast
     # as the camera flies, and the clamp cut the lag into grain: in motion
     # each frame takes at least a cycle's share (each pixel's own sample
-    # once), a quarter at most (a 1 x 1 march's samples alone are raw noise).
+    # once), a sixteenth at 1 x 1 and 2 x 2 (their samples alone are raw
+    # noise: grain over the whole cloud in motion at a quarter).
     from world_builder.clouds.march import (
         BLOCKS,
         MIN_WEIGHT,
@@ -578,7 +621,11 @@ def test_in_motion_the_history_spans_about_a_cycle_of_the_block():
         pixels_of,
     )
 
+    assert moving_weight_of((1, 1)) == pytest.approx(1.0 / 16.0)
+    assert moving_weight_of((2, 2)) == pytest.approx(1.0 / 16.0)
     for block in BLOCKS:
+        if block in ((1, 1), (2, 2)):
+            continue
         cycle = min(1.0 / pixels_of(block), 0.25)
         assert moving_weight_of(block) == pytest.approx(cycle)
         assert MIN_WEIGHT < moving_weight_of(block) <= 0.25
@@ -719,7 +766,7 @@ def test_one_march_covers_both_depth_ranges(window, executor):
         SplitDepthCameras,
     )
 
-    clouds = _clouds(window, executor, "march")
+    clouds = _clouds(window, executor)
     depth = SplitDepthCameras(window, near=1.0)
     try:
         clouds.use_split_depth(window, depth)
@@ -791,7 +838,7 @@ def test_the_march_traces_more_pixels_while_moving_when_asked(window, executor):
     from world_builder.clouds.march import MOVING_BLOCKS, MOVING_HOLD
     from world_builder.depth import SplitDepthCameras
 
-    clouds = _clouds(window, executor, "march")
+    clouds = _clouds(window, executor)
     depth = SplitDepthCameras(window, near=1.0)
     try:
         clouds.use_split_depth(window, depth)
@@ -831,7 +878,7 @@ def test_the_march_ends_at_either_range_and_the_cards_split_the_pixels():
 
 
 def test_the_view_ray_takes_its_own_extinction(showbase, executor):
-    clouds = _clouds(showbase, executor, "march")
+    clouds = _clouds(showbase, executor)
     try:
         march = clouds.volume
         # layerParams row 5: (view extinction, the field's own, ...)
@@ -841,32 +888,17 @@ def test_the_view_ray_takes_its_own_extinction(showbase, executor):
         clouds.remove()
 
 
-def test_a_forgotten_half_res_pass_is_not_given_the_next_volume(showbase, executor):
-    clouds = _clouds(showbase, executor, "billboards")
-    try:
-        half_res = MagicMock()
-        clouds.use_half_res(half_res)
-        half_res.add.assert_called_once_with(clouds.volume.root)
-        clouds.use_half_res(None)
-        half_res.remove.assert_called_once()
-        clouds.set_settings(replace(clouds.settings, renderer="march"))
-        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
-        assert half_res.add.call_count == 1
-    finally:
-        clouds.remove()
-
-
 def test_the_ground_reads_the_clouds_shadow_from_a_pass(window, executor):
     """The clouds' shadow on the view's ground from the march's pass at the
     depth passes' resolution (performance.md §33): its readers bind one
     texture, on while the passes draw; its card takes the clouds' inputs and
-    the binders given, again on a rebuild; per pixel again with billboards."""
+    the binders given, again on a rebuild."""
     from panda3d.core import NodePath
 
     from world_builder.clouds.march import depth_size
     from world_builder.depth import SplitDepthCameras
 
-    clouds = _clouds(window, executor, "march")
+    clouds = _clouds(window, executor)
     depth = SplitDepthCameras(window, near=1.0)
     ground = NodePath("ground")
     bound = []
@@ -900,9 +932,6 @@ def test_the_ground_reads_the_clouds_shadow_from_a_pass(window, executor):
         clouds.set_settings(replace(clouds.settings, march_block=(2, 2)))
         (layer,) = march._layers
         assert layer.ground.texture == texture and bound[-1] == layer.ground.card
-        clouds.set_settings(replace(clouds.settings, renderer="billboards"))
-        # The defaults' (off): not the march's texture any more
-        assert ground.get_shader_input("uGroundShadow").get_texture() != texture
     finally:
         clouds.remove()
         depth.destroy()
@@ -928,3 +957,74 @@ def test_the_ground_takes_the_pass_where_its_distance_agrees():
     # The same shadow as the ground's per pixel, at the scene the march stops at
     assert "planetCloudShadow(planet, normalize(sunDir), uCloudShadowSteps," in shadow
     assert "fragColor = vec4(1.0, -1.0, 0.0, 1.0);  // the sky" in shadow
+
+
+def test_a_genus_can_be_hidden_live(showbase, executor):
+    """set_genus_visible flips the genus's bit of uGenusMask (the showcase's
+    toggles), by index or name, and nothing else."""
+    clouds = _clouds(showbase, executor)
+    try:
+        march = clouds.volume
+        assert clouds.genus_names == ["clouds"]
+        everything = march._genus_mask[0]
+        assert clouds.genus_visible(0)
+        clouds.set_genus_visible("clouds", False)
+        assert not clouds.genus_visible(0)
+        assert march._genus_mask[0] == everything & ~1
+        assert march._inputs["uGenusMask"] is march._genus_mask
+        clouds.set_genus_visible(0, True)
+        assert march._genus_mask[0] == everything
+    finally:
+        clouds.remove()
+
+
+def test_the_sky_under_deep_cloud_is_grey_and_a_towers_sides_see_open_sky():
+    """cloudRadianceFrom (cloud_shading.glsl): the sky's light reaching a
+    sample under a deep column loses its blue (light diffused through cloud
+    is neutral; kept blue, thick sheets' bases came out navy), and a
+    cumulonimbus's tower (convective depth past 0.6) takes half its sky as
+    under open sky (its sides see the sky around it, under its anvil); the
+    sheets' optics scale their sunward depth as the cumulus's do."""
+    from world_builder.clouds.cloud import PRESETS, CloudType
+
+    text = (SHADER.parent / "cloud_shading.glsl").read_text()
+    body = text[text.index("vec3 cloudRadianceFrom(") :]
+    body = body[: body.index("\n}\n")]
+    assert "straight = mix(1.0, exp2(-cloudSkyDepth), cloudSkyHeld);" in body
+    grey = "vec3(dot(skylight, vec3(0.2126, 0.7152, 0.0722)))"
+    assert f"skylight = mix({grey}, skylight, straight);" in body
+    assert "smoothstep(0.6, 0.9, weather.y)" in body
+    stratus = PRESETS[CloudType.STRATUS].optics.shadow_strength
+    convective = PRESETS[CloudType.CONVECTIVE].optics.shadow_strength
+    assert stratus < 0.5 and abs(stratus - convective) < 0.1
+
+
+def test_the_light_volumes_window_is_read_straight_above_its_near_end():
+    """cloudLightSunDepth (cloud_field.glsl): the window's far read is at the
+    near read's place in the chart (only its height the window's end's), so
+    the two reads' interpolation errors cancel in their difference; read on
+    the sun ray, a texel or two aside, they drew streaks along the sun. With
+    that, the volume is read without a jitter (it only turned the streaks
+    into shimmer)."""
+    field = (SHADER.parent / "cloud_field.glsl").read_text()
+    body = field[field.index("float cloudLightSunDepth(") :]
+    body = body[: body.index("\n}\n")]
+    assert "normalize(nearAt) * length(nearAt + dir * window)" in body
+    assert "cloudLightAt(atlas, chart, farAt, keepFar)" in body
+    march = (SHADER.parent / "cloud_march.glsl").read_text()
+    for text in (field, march):
+        assert "cloudLightJitter" not in text
+        assert "LIGHT_JITTER" not in text
+
+
+def test_the_light_volume_is_read_with_a_cubic_across_its_slices():
+    """cloudLightAt (cloud_field.glsl): a cubic B-spline over four slices,
+    kept inside the point's sky band. The window's two reads differ only by
+    their slice; read linearly, the kinks at every slice drew bands along
+    the heights on an anvil's underside."""
+    field = (SHADER.parent / "cloud_field.glsl").read_text()
+    body = field[field.index("vec2 cloudLightAt(") :]
+    body = body[: body.index("\n}\n")]
+    assert "for (int i = 0; i < 4; i++)" in body
+    assert "clamp(k + float(i - 1), first, first + per - 1.0)" in body
+    assert "mix(lower, upper" not in body

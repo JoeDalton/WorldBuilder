@@ -217,8 +217,7 @@ then the default) is measured, not built. What is left:
     in `cloud.frag`: the local shadow map is a square around the camera, and
     the reflection views the deck from below). Alternatives: a cube-face seam
     of the weather map, the reflection camera's culling margin. To confirm:
-    the same pose with `--shadows-quality low`, then with
-    `--cloud-renderer billboards`. Fix idea: the deck takes the global
+    the same pose with `--shadows-quality low`. Fix idea: the deck takes the global
     terrain shadow only.
   - *Fine diagonal hatching* at the bottom: the ripples undersampled by the
     half-resolution reflection buffer (`reflection_scale`, 0.5 at HIGH); the
@@ -229,6 +228,86 @@ then the default) is measured, not built. What is left:
 - `noise.sun_depth_from_map`'s local part ignores the convective depth and
   the shelf (the cumulus-only test covers it); optional and never done: the
   billboards' `cloudFarDepth` from the maps.
+
+- **Light volume: a chart sheared along the sun** (2026-11-21, from the
+  shimmer hunt on branch 49). *What is there now.* A march sample's light
+  from the volume (`cloudLightSunDepth`, cloud_field.glsl) is the difference
+  of two depth-to-top reads: `near`, where the local sun steps end, and
+  `far`, a window farther toward the sun. The far read is taken **straight
+  above** the near one (`farAt = normalize(nearAt) * length(nearAt + dir *
+  window)`): only its height is the window end's, not its place. That
+  window's depth is a parallel ray's, a texel or two beside the true one, so
+  a tower's face is a little flatter than the exact sun march
+  (`--cloud-debug 64`) gives it: some of the billows' self-shadowing is
+  lost.
+
+  *Why it is not read on the ray.* On the ray, the two reads land at
+  different places in the chart and blend different texels, whose own sun
+  rays crossed the clouds above differently (an anvil's billows, a
+  tower's top). Their interpolation errors cancel only when both reads sit
+  at the same fraction of a texel; otherwise the difference carries them, as
+  streaks along the sun on an anvil's underside and a tower's face
+  (`terrain_shots.py --pose genera_cb --start 29.7159 29.8232`, crop of the
+  anvil about x 1750-2230, y 480-780 at 2560x1440). Tested, none removed
+  them: the volume at 128, 256 or 512 texels, a 5-texel binomial smoothing
+  in the bake, a cubic B-spline read between texels, 32-bit floats. A read
+  jitter (a texel and a slice either way, per pixel and visit) hid them but
+  made the clouds shimmer at rest and in motion; it was removed with this
+  change.
+
+  *The exact fix.* Make every point of one sun ray fall on the same texel,
+  so the near and far reads share their texel weights and differ only by
+  their slice: the errors from the clouds above then cancel exactly, and
+  the window's depth is the true ray's.
+  1. **Chart (reader side).** `lightChartCoords(chart, p, t, s)`: the slice
+     coordinate `s` stays `lightSliceAt(|p| - base)`. The tile coordinate `t`
+     becomes the chart's coordinate of the ray's foot `q`: from `p`, go
+     *away* from the sun (`q = p - lambda * sun`, `lambda >= 0`) down to the
+     reference sphere `|q| = base` (the lowest band's base, `chart[0].w`;
+     or the point's own band's base, step 4). That is a ray-sphere
+     intersection (the nearer root), a few ALU per read.
+  2. **Inverse (bake side).** `lightVoxelAt(chart, pixel, slice)`: `q` from
+     `t` as today (the radial warp on the base sphere), then `p = q + lambda
+     * sun` with `|p| = base + lightSliceHeight(slice)` (the quadratic's
+     positive root). `light_volume.voxel_positions` on the CPU does the same,
+     so `light_depth_union` and the GPU/CPU bake tests keep agreeing.
+  3. **The chart's sun.** The shear must use the *bake's* sun, not the live
+     `sunDir`: the volume is rebaked only past `utils.SUN_TOLERANCE`, and a
+     reader shearing by the live sun would drift off its texels. `chart[3]`
+     is full (thickness, slices, columns, bands), so add a fifth vec4
+     (`cloudLightChart[5]`, the sun's direction) and pass it through every
+     reader and the bake: cloud_field.glsl (`cloudLightAt`,
+     `cloudLightSunDepth`, the sky read), god_rays.glsl (it reads `.r` at a
+     point), `cloud_light_bake.frag`, and the chart's packing and binding in
+     `light_volume.py` (`light_chart`, the `want` key) and `march.py`.
+  4. **Low suns.** The shear's horizontal offset is `h / tan(elevation)`:
+     for a 10 km convective band at 5 degrees, about 115 km, more than the
+     reach, so the top slices would cover ground far from the camera. Cap
+     it: shear relative to each band's own base (halves it or better), and
+     below an elevation threshold (to be measured, about 10-15 degrees) fade
+     the shear out to the current straight-above read. Below the horizon the
+     sun's light is gone anyway.
+  5. **What stays.** The smoothing's tent across slices now runs along the
+     sun ray (neighbouring slices share `t`): consistent, keep it. So does
+     the cubic B-spline across slices in `cloudLightAt` (the two reads still
+     differ by their slice; linear, its kinks band an anvil's underside).
+     The `g` channel (the depth straight up, read at the sample alone for
+     the sky's reach) needs no change. Then `cloudLightSunDepth` reads `far` back on
+     the ray (`p + dir * (reach + window)`).
+  6. **Tests.** A round trip (`lightChartCoords(lightVoxelAt(...))` gives the
+     texel back) on the CPU mirror, two points of one sun ray give the same
+     `t`, the existing GPU/CPU bake comparisons
+     (tests/test_cloud_light_volume.py), and the source test
+     `test_the_light_volumes_window_is_read_straight_above_its_near_end`
+     (tests/test_clouds_march.py) rewritten for the ray read.
+  7. **Check.** The anvil and tower-face crops above, and the anvil seen
+     from below where the slice bands showed (`--at 23.08764 29.27759 3139
+     -62.9 22.3`, no `--start`), with no streaks or bands; the
+     face's self-shadow against `--cloud-debug 64` (the exact march), closer
+     than today's; a low sun (`--sun 270 4`, the stratus-under-towers pose
+     in the item above); the burst capture (`B` in the demo) at rest on the
+     stratus and in motion on the cumulonimbus, with no new shimmer. Cost:
+     a ray-sphere intersection per read, nothing in the bake.
 
 ### Speed (Phase 4.2: measured, partly built)
 

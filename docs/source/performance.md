@@ -15,6 +15,16 @@ CPU timings on this machine are noisy (frequency scaling): treat them as
 ±30 %. Since the move to the cube-sphere (600 km planet by default), the
 figures in §3–5 and §10 are re-measured; §1, §2 and §6–9 still hold as written.
 
+**The billboard cloud renderer was removed on 2026-11-15**: the low clouds
+are always raymarched now ([clouds](clouds.md#the-raymarch)). The sections
+that measure the billboards are kept as history and no longer describe the
+code: §13's cloud rows, "Cheaper clouds, and the weather", §15's cloud tiles,
+§19's "The clouds' re-sort in C", "The clouds' tiles built in C" and
+"Half-resolution clouds", and §21-22 (the genera by billboards); §20 and
+§23 compare the raymarch against them. Knobs they name (`count_scale`,
+overlaps, `shells`, `interior_growth`, `half_resolution`, tile uploads,
+re-sorts and cache) no longer exist (`shells` is now `octave_bands`).
+
 ## Summary
 
 | # | Concern | Where | Impact today | Status |
@@ -2106,6 +2116,612 @@ forest_low instead of about 200 000. That layer is part V3's to replace.
 The ray-marched canopy trial was then removed (it was off by default: no change to these numbers). With the
 instanced trees, the vegetation on against off (default `--ab`): forest_edge +4.23, forest_low +2.50,
 mixed_mid +0.79, high +0.01, desert +0.53, forest_dusk +2.38 ms.
+
+## 37. Cloud genera baseline (2026-11-15)
+
+**Windowed and offscreen rows are not comparable.** The rows up to Task 17
+were timed in a window (`terrain_shots.py` without `--offscreen`); from Task
+18 on the desktop throttled windowed runs to 1 s frames, so they were timed
+offscreen (`--offscreen`), which measures about 1.5 ms less for the same
+tree. Each table below says which it is; compare a row only with rows of the
+same kind. [The phase 5 summary](#phase-5-summary-offscreen) is the current
+state.
+
+**Windowed.** Before the genera work
+(docs/superpowers/plans/2026-11-15-cloud-genera.md), from the user's start
+(`terrain_shots.py --start 29.7159 29.8232`), HIGH, 2560 x 1440, RTX 3070,
+the raymarch, the mean of 60 frames once settled (terrain_shots prints no
+percentile):
+
+| Pose | Frame | FPS |
+|---|---|---|
+| `genera_cb` (the cumulonimbus 40 km north) | 12.57 ms | 80 |
+| `genera_congestus` (north-west) | 12.74 ms | 78 |
+| `cirrus_overhead` (75 degrees up) | 8.21 ms | 122 |
+| `cirrus_grazing` (4 degrees up) | 12.50 ms | 80 |
+
+At these poses the frame is already about twice the 160 FPS target (6.25 ms)
+before any genus is added: the later phases are measured against these rows
+(no regression) as well as against the target.
+
+After the congestus and anvil changes and the billboards' removal (phases 1
+and 2), the same poses (windowed):
+
+| Pose | Frame | Against the baseline |
+|---|---|---|
+| `genera_cb` | 13.77 ms | +1.20 ms |
+| `genera_congestus` | 14.01 ms | +1.27 ms |
+| `cirrus_overhead` | 8.07 ms | -0.14 ms |
+| `cirrus_grazing` | 13.51 ms | +1.01 ms |
+
+The removal costs nothing (the march was already the renderer). The extra
+millisecond where the low clouds are in view is more cloud to march (the
+congestus features at coverage 0.65, not 0.45, and a cell octave twice as
+strong gather larger masses) and the anvil's and its shelf's low-frequency
+octaves, two more noise fetches where the anvil weight or the shelf is
+non-zero, with no early-out there (clouds.md, "The anvil is smooth").
+
+**Phase 3 (union march).** One march of all the genera over the sky bands,
+one light volume and one map pair (clouds.md, "Genera"). Windowed, 2560 x
+1440, HIGH, the medians of interleaved runs of the tree before and after (run to run
+±0.8 ms):
+
+| Pose | Before | Union march |
+|---|---|---|
+| `genera_cb` | 13.10 ms | 12.84 ms |
+| `genera_congestus` | 13.03 ms | 12.24 ms |
+
+`cloud_bench.py --genera` between the towers: the clouds cost 0.71 ms, within
+the 0.58-0.84 ms the tree before measured. Every genus keeping all its
+`octave_bands` (the two marches had halved them) costs about +0.35 ms, which
+the band of one genus's own sample loop (no genus loop) and the skipped
+genera at zero coverage take back.
+
+The showcase (`demo_genera.py`, phase 4), the same settings (windowed), from 1 km over
+the start: `genus_congestus` 9.39 ms, `genus_cumulonimbus` 9.72 ms,
+`genus_stratus` (from the ground, the terrain in view) 12.42 ms: above the
+showcase's 60 FPS.
+
+**Phase 5, Task 16 (the stratus on the recipe, the stratocumulus).** The
+demo now compiles the march's recipe variant (`cloud_march_recipes.frag`:
+its stratus is a recipe genus). Windowed, interleaved runs of the tree
+before and after, 2560 x 1440, HIGH, the means of 60 frames (each run's first pose
+dropped: 0.5-1.3 ms slow after idle):
+
+| Pose | Before | After | |
+|---|---|---|---|
+| `genera_cb` | 12.36 ms | 12.43 ms | +0.07 ms |
+| `genera_congestus` | 12.69 ms | 12.67 ms | -0.02 ms |
+
+Task 15 predicted +0.2 ms for the variant; it is within the noise (±0.15
+ms) here, where the stratus deck is out of view. The stratocumulus, a genus
+of the default's with no feature of its own, first cost +0.65 ms
+(`genera_cb` 13.0 ms): it shares the stratus's sky band, and a band of two
+genera takes the generic genus loop, not the band's own (Phase 3's ruling);
+the same with its slab made the stratus's (13.1 ms), so the band's
+thickness was not it, and skipping a recipe genus's bake steps where its
+coverage is 0 changed nothing (the bakes were not it). The march now takes
+only the genera holding cloud somewhere (clouds.md, "An empty genus is not
+marched"). Each genus added to a shared band costs about this much where
+the band is in view: Tasks 17-18 (Ns, As, Ac) should keep their slabs
+apart where they can.
+
+The showcase's southern sheets from under them (`terrain_shots.py
+--showcase`, 2560 x 1440, windowed): `genus_stratus` 8.93 ms, `genus_stratocumulus`
+10.74 ms (St and Sc share a band there: the genus loop).
+
+**Phase 5, Task 17 (nimbostratus, altostratus).** The default's genera now
+list both, with no feature: the demo marches the convective clouds and the
+stratus alone, its shaders, uniforms and sky bands as before (the bands
+change only where a slab bridges two groups). Windowed, 2560 x 1440, HIGH, the means
+of 60 frames, three interleaved runs each: `genera_cb` 12.07, 12.00, 11.99
+ms, `genera_congestus` 12.24, 12.22, 12.28 ms (Task 16, another session:
+12.43 and 12.67); the 1600 x 900 shots of `genera_cb`, `genera_congestus`
+and `clouds_noon` are at the noise floor against before the task (mean
+difference 0.48, 0.28, 0.04 levels; p99 6, 4, 1).
+
+The showcase (`terrain_shots.py --showcase`), 2560 x 1440, windowed:
+
+| Pose | Task 16 | Task 17 | |
+|---|---|---|---|
+| `genus_nimbostratus` | | 10.91, 10.98 ms | |
+| `genus_altostratus` | | 10.65, 10.70 ms | |
+| `genus_stratus` | 8.93 ms | 9.55 ms | +0.6 ms |
+| `genus_stratocumulus` | 10.74 ms | 11.72 ms | +1.0 ms |
+
+The low sheets' band now holds the nimbostratus too (three genera in the
+genus loop), and the convective band the nimbostratus and the altostratus.
+Merged into one 9.9 km band (`march.sky_bands` before the bridge split:
+clouds.md, "The nimbostratus") the cumulus poses cost +1.1-1.2 ms at 1600 x
+900 and the low sheets lost their light-volume slices; split, the cumulus
+poses are +1.0 ms there. All well under 16.6 ms.
+
+**Phase 5, Task 18 (altocumulus; the opaque cutoff eased).** The default's
+genera list the altocumulus with no feature (cube B's channel 0, unused
+elsewhere): the demo does not march it. The eased cutoff
+(`march.opaque_residual`) is a few instructions a pixel, after the march.
+**Offscreen** (`--offscreen`: the desktop throttled windowed runs to 1 s
+frames this session, so these are not comparable with the windowed rows
+above), 2560 x 1440, HIGH, the means of 60 frames, three interleaved runs
+of the tree before and after:
+
+| Pose | Before | After | |
+|---|---|---|---|
+| `genera_cb` | 10.53, 10.48, 10.55 ms | 10.58, 10.51, 10.53 ms | +0.02 ms |
+| `genera_congestus` | 10.46, 10.49, 10.50 ms | 10.51, 10.53, 10.49 ms | +0.03 ms |
+
+Within the noise (±0.05 ms between runs). The 1600 x 900 shots of
+`genera_cb`, `genera_congestus` and `clouds_noon` against before: mean
+difference 0.40, 0.26, 0.04 levels, p99 5, 3, 1 (before against itself:
+0.47, 0.34, 0.05).
+
+The showcase, offscreen, 2560 x 1440, one run each:
+
+| Pose | Before | After | |
+|---|---|---|---|
+| `genus_altocumulus` | | 10.00 ms | |
+| `genus_altostratus` | 9.74 ms | 10.10 ms | +0.36 ms |
+| `genus_nimbostratus` | 9.75 ms | 9.93 ms | +0.18 ms |
+| `genus_stratus` | 8.51 ms | 8.63 ms | +0.12 ms |
+| `genus_stratocumulus` | 10.25 ms | 10.46 ms | +0.21 ms |
+| `genus_humilis` | 12.20 ms | 12.55 ms | +0.35 ms |
+| `genus_mediocris` | 12.05 ms | 12.44 ms | +0.39 ms |
+| `genus_congestus` | 11.92 ms | 12.31 ms | +0.39 ms |
+| `genus_cumulonimbus` | 12.11 ms | 12.51 ms | +0.40 ms |
+
+The altocumulus sits inside the convective band (with the nimbostratus
+and the altostratus): one more genus in its genus loop, +0.35-0.4 ms where
+that band is in view (Task 16's estimate was 0.6 ms a genus). All well
+under 16.6 ms.
+
+### Phase 5 summary (offscreen)
+
+The end of phase 5 (Task 19: the recipe genera St, Sc, Ns, As and Ac, the
+showcase's two rows). **Offscreen** (`--offscreen`), 2560 x 1440, HIGH, RTX
+3070, from the user's start (`--start 29.7159 29.8232`), the means of 60
+frames once settled, in one session: the demo's poses and the showcase's
+(`--showcase`) run twice, interleaved, each run's first pose dropped (a
+throwaway `ground`). The two runs differ by 0.06 ms at most.
+
+| Pose | Run 1 | Run 2 | FPS |
+|---|---|---|---|
+| `genera_cb` | 10.50 ms | 10.52 ms | 95 |
+| `genera_congestus` | 10.48 ms | 10.52 ms | 95 |
+| `clouds_noon` | 9.39 ms | 9.41 ms | 106 |
+| `genus_humilis` (showcase) | 12.45 ms | 12.46 ms | 80 |
+| `genus_mediocris` | 12.42 ms | 12.44 ms | 80 |
+| `genus_congestus` | 12.22 ms | 12.27 ms | 82 |
+| `genus_cumulonimbus` | 12.41 ms | 12.46 ms | 80 |
+| `genus_stratus` | 8.58 ms | 8.60 ms | 116 |
+| `genus_stratocumulus` | 10.39 ms | 10.43 ms | 96 |
+| `genus_nimbostratus` | 9.93 ms | 9.93 ms | 101 |
+| `genus_altostratus` | 10.04 ms | 10.09 ms | 99 |
+| `genus_altocumulus` | 10.02 ms | 10.07 ms | 99 |
+
+- **The showcase** (>60 FPS, 16.6 ms): met at every pose, 12.5 ms at
+  worst (the cumulus row: the convective band's genus loop holds Ns, As
+  and Ac too), about 14 ms windowed.
+- **demo_terrain** (>160 FPS, 6.25 ms): not met. 10.5 ms offscreen at the
+  towers, about 12 ms windowed: back at the pre-project baseline (12.57
+  ms, 80 FPS, windowed) after phases 1-2's +1.2 ms, and about 1.7 times
+  the target. The gap predates the genera: the march alone took about 4.5
+  ms at a tower pose before them (§35), the rest of the frame is the
+  terrain's, the sky's and the passes' (§32).
+- **No regression in phase 5.** Task 18's offscreen rows (`genera_cb`
+  10.53 ms, `genera_congestus` 10.51 ms) and these agree within 0.03 ms.
+  Against Task 15's tree (Task 16's "Before", windowed: 12.36 and 12.69
+  ms; less the ~1.5 ms offscreen offset, about 10.9 and 11.2 ms) phase 5
+  is 0.4-0.7 ms faster at these poses: the default's empty genera are not
+  marched, and the demo's bands are as before. The offset is an estimate
+  from one session (Task 18), so read that as "no regression", not as a
+  gain.
+- **The showcase against Task 18's offscreen row:** within 0.1 ms at every
+  pose.
+
+### Task 20: the high layer's thin-layer path (offscreen)
+
+This adds the high layer's band (11-12.5 km) and its crossings, with one or
+two samples, no sun march and a placeholder veil (clouds.md, "The high
+layer"). These are **offscreen** (`--offscreen`) times at 2560 x 1440,
+HIGH, RTX 3070, from the user's start (`--start 29.7159 29.8232`), the
+means of 60 frames. Each run's first pose is dropped (`ground`).
+
+**No high genus covered (the demo):** the march compiles the same shader
+as before (`CLOUD_HIGH` off). The tree before (HEAD, exported) and after
+ran interleaved, twice each:
+
+| Pose | Before | After | |
+|---|---|---|---|
+| `cirrus_overhead` | 6.36, 6.35 ms | 6.30, 6.26 ms | -0.08 ms |
+| `cirrus_grazing` | 10.73, 10.68 ms | 10.67, 10.67 ms | -0.04 ms |
+| `genera_cb` | 10.75, 10.73 ms | 10.60, 10.65 ms | -0.12 ms |
+| `genera_congestus` | 10.94, 10.63 ms | 10.59, 10.63 ms | -0.18 ms |
+| `clouds_noon` | 9.46, 9.47 ms | 9.48, 9.49 ms | +0.02 ms |
+
+The "after" times are within the noise or below it. A first, earlier pair
+of runs of the tree before gave 6.30-6.31, 10.63-10.85, 10.55-10.56,
+10.53-10.54 and 9.37-9.41 ms: the session drifts by about 0.2 ms. The shots
+against before: mean difference 0.67-0.85 levels for the cirrus and genera
+poses, 0.27-0.36 for `clouds_noon`, p99 1-8, against 0.39-0.54 before
+against itself. The excess is the march's jitter on the cumulus. The sky,
+where the cirrus sheet draws (its light now through `thinSlabRadiance`),
+does not differ.
+
+**The placeholder in view** (`--high-placeholder`, a cirrus feature 150 km
+across over the cumulonimbus), against the same poses without it. Both ran
+`--no-cirrus`, interleaved, twice each:
+
+| Pose | Without | With | |
+|---|---|---|---|
+| `high_cb` | 8.30, 8.33 ms | 8.59, 8.59 ms | +0.28 ms |
+| `high_overhead` | 5.98, 5.96 ms | 6.27, 6.24 ms | +0.29 ms |
+| `high_grazing` | 10.98, 11.04 ms | 11.21, 11.23 ms | +0.21 ms |
+| `high_above` | 6.62, 6.68 ms | 6.89, 6.91 ms | +0.25 ms |
+| `genera_cb` | 10.27, 10.38 ms | 10.63, 10.64 ms | +0.31 ms |
+
+The high path costs 0.2-0.3 ms where it covers the view. The cirrus sheet
+costs about as much (`cirrus_overhead` 6.30 ms with it, 5.97 ms without).
+This covers the coverage fetch, one or two noise reads, the crossing's light
+(`planetCloudLight`: the air's sunlight twice) and its share of
+`CLOUD_HIGH`'s code. The genera's recipes (Tasks 21-23) will add their own
+noise.
+
+### Tasks 21-22: the cirrostratus and the cirrocumulus (offscreen)
+
+These add the cirrostratus's veil and the cirrocumulus's grains to the high
+layer (clouds.md, "The high layer"). The times are **offscreen**
+(`--offscreen`) at 2560 x 1440, HIGH, RTX 3070, from the user's start
+(`--start 29.7159 29.8232`), the means of 60 frames. Each run's first pose
+is dropped (`ground`). This session drifted by up to 1 ms between runs, more
+than Task 20's.
+
+**The normal scenes** compile the plain variant, as before (no high genus
+covered). The tree before (Task 20's, copied) and after ran interleaved,
+twice each:
+
+| Pose | Before | After | |
+|---|---|---|---|
+| `genera_cb` | 11.56, 11.50 ms | 11.20, 11.24 ms | -0.31 ms |
+| `genera_congestus` | 11.27, 11.58 ms | 11.30, 11.38 ms | -0.09 ms |
+| `clouds_noon` | 11.13, 10.21 ms | 10.06, 11.30 ms | +0.01 ms |
+| `cirrus_overhead` | 6.98, 6.88 ms | 6.76, 7.10 ms | 0.00 ms |
+| `cirrus_grazing` | 11.96, 12.76 ms | 11.39, 12.08 ms | -0.63 ms |
+
+All of these are within the session's noise. The shots against before give
+a mean difference of 0.04-0.36 levels (p99 1-6), against 0.05-0.41 (p99
+1-5) for before against itself. Against Task 20's own shots the figures are
+the same.
+
+**The placeholder cirrus** (`--high-placeholder --no-cirrus`) goes through
+the reworked crossing (the coverage at the sheet point, the optics per
+channel). Before against after, interleaved, twice each:
+
+| Pose | Before | After |
+|---|---|---|
+| `high_overhead` | 6.78, 6.71 ms | 6.76, 6.76 ms |
+| `high_grazing` | 12.36, 12.55 ms | 12.58, 12.37 ms |
+
+It costs the same.
+
+**The new genera in view** (`--showcase --no-cirrus`): the showcase with
+its high features against the same tree with them left out (the plain
+variant). It ran four times without and three times with, interleaved.
+"No pattern" is a build whose cirrostratus is its coverage alone and
+whose cirrocumulus is its grains' mean. That isolates the patterns'
+noise from the crossing's cost.
+
+| Pose | Without | With | No pattern |
+|---|---|---|---|
+| `genus_cirrostratus` | 9.83-10.17 ms (9.96) | 10.85-11.18 ms (10.97) | 10.68-11.50 ms (10.74 median) |
+| `genus_cirrocumulus` | 9.90-10.43 ms (10.17) | 10.82-11.18 ms (10.97) | 10.34-10.65 ms (10.50) |
+
+- **The cirrostratus** costs about 1.0 ms where its veil fills the whole
+  view. Of that, its swells, fibres and halo are 0.1-0.2 ms. The rest is the
+  high path itself: the crossing, the variant, and the light at every pixel
+  of the view. That is more than the placeholder's 0.2-0.3 ms at
+  `high_overhead`, where low clouds share the view.
+- **The cirrocumulus** (a patch over a third of the view) costs about 0.8
+  ms. Its grains are about 0.45 ms: the Worley volume's RG32F trilinear
+  fetch, the slow noise and the ripple's `sin`.
+
+A smaller Worley texture (F1 alone, R16F) would cut the grains' fetch. It
+was not tried.
+
+### Task 23: the cirrus's flow streaks (offscreen)
+
+The times are **offscreen** (`--offscreen`) at 2560 x 1440, HIGH, RTX 3070,
+from the user's start (`--start 29.7159 29.8232`), the medians of 60
+frames. Each run's first pose is dropped (`ground`). This session was
+quiet: repeated runs agree within 0.05-0.1 ms.
+
+**Step 0: where the thin path's time went.** Tasks 21-22 measured about
+1 ms for a cirrostratus filling the view, its patterns 0.1-0.2 ms. Timed in
+one process, the poses settled once and debug bits toggled round-robin
+(temporary bits: no high segments at all; `highCrossing` returning at once;
+returning after the coverage fetch; everything but the composite; the
+existing 256, no lighting), every variant cost the same as the full
+crossing within 0.15 ms at `genus_cirrostratus`. The crossing's own work
+(the bookkeeping, the coverage fetch, `planetCloudLight`,
+`thinSlabRadiance`, the composite and the resolve's full path) is about
+nothing. What costs is the variant itself: `CLOUD_HIGH` grew the sorted
+segments from 8 to 10 and inlined `highCrossing` in the segments' loop,
+which slowed the low clouds' march everywhere. The high slab's crossings
+now stay out of the sorted segments, composited before and after their
+loop (clouds.md, "The high layer": a ray's height is convex). Interleaved,
+the tree before (Task 22's shader) against after, and the same poses with
+the showcase's high features left out (the plain variant):
+
+| Pose | Before | After | No high feature |
+|---|---|---|---|
+| `genus_cirrostratus` | 9.83, 9.95 ms | 9.78, 9.72 ms | 9.43 ms |
+| `genus_cirrocumulus` | 9.79, 9.93 ms | 9.72, 9.70 ms | 9.49 ms |
+
+The high path now costs about 0.3 ms over the plain variant (0.4-0.5 ms
+before). Most of Tasks 21-22's "1 ms" was that session's drift.
+
+**The normal scenes, sheet mode** (`--cirrus sheet`, the default; the
+plain variant, whose code the task did not change). The tree before
+(Task 22's shader) and after, interleaved, twice each:
+
+| Pose | Before | After |
+|---|---|---|
+| `genera_cb` | 10.53, 10.57 ms | 10.59, 10.53 ms |
+| `genera_congestus` | 10.53, 10.55 ms | 10.59, 10.53 ms |
+| `clouds_noon` | 9.47, 9.48 ms | 9.43, 9.50 ms |
+| `cirrus_overhead` | 6.35, 6.34 ms | 6.38, 6.35 ms |
+| `cirrus_grazing` | 10.71, 10.66 ms | 10.70, 10.63 ms |
+
+No regression.
+
+**The weather's cirrus by the march** (`--cirrus march`) against the sheet
+(`--cirrus sheet`) and neither (`--cirrus none`), interleaved, twice each
+(one run's `genera_congestus` in sheet mode, 11.32 ms, an outlier):
+
+| Pose | Sheet | March | None |
+|---|---|---|---|
+| `genera_cb` | 10.59, 10.59 ms | 10.43, 10.49 ms | |
+| `genera_congestus` | 10.55 ms | 10.42, 10.46 ms | |
+| `clouds_noon` | 9.63, 9.42 ms | 9.34, 9.29 ms | |
+| `cirrus_overhead` | 6.39, 6.34 ms | 6.02, 6.03 ms | 5.81 ms |
+| `cirrus_grazing` | 10.70, 10.64 ms | 10.53, 10.51 ms | |
+| `cirrus_up` | 6.71, 6.71 ms | 6.57, 6.59 ms | 6.35 ms |
+
+The march's cirrus costs about 0.2 ms over none, 0.1-0.35 ms **less** than
+the sheet (which costs 0.35-0.55 ms): the target (no more than about 0.5
+ms over the sheet) is met with room. Its streaks are sparse at the demo's
+cover (about 0.2), and the tails' taps are skipped where the tufts are not
+resolved.
+
+**The showcase's cirrus** (`--showcase --no-cirrus`), against the same
+poses with the high features left out:
+
+| Pose | With | No high feature |
+|---|---|---|
+| `genus_cirrus` (the field filling the view) | 8.69, 8.72, 8.78 ms | 8.41 ms |
+| `genus_cirrus_overhead` | 8.71 ms | |
+| `genus_cirrus_grazing` | 8.30 ms | |
+
+About 0.3-0.35 ms where the field fills the view: the variant's 0.25-0.3
+ms plus the streaks' noise (up to 12 fetches a crossing: the wind, two
+curl reads, the patches, fibres, bundles, strands and six tufts).
+
+**The heads reworked** (fibrous, fanned: clouds.md, "The cirrus"), Task
+23's tree against after, interleaved (a session drifting by ±0.4 ms):
+`genus_cirrus` 8.69, 8.74, 9.41 ms before, 8.72, 9.09, 8.74 after;
+`genus_cirrus_overhead` 8.69, 8.83, 8.67 before, 8.73, 8.75, 8.69 after;
+`--cirrus march` `cirrus_overhead` 6.02, 5.94 before, 5.90, 5.92 after
+(5.76, 5.84 with `--cirrus none`). The cost is unchanged: there is no new
+fetch. A fan driven by the strands' noise (70 m) cost +0.4 ms at
+`genus_cirrus_overhead` (9.77, 9.73 against 9.21, 9.37), its taps scattered
+in the texture cache; the fibres' noise (180 m) costs nothing. The
+stability is unchanged (mean 0.02-0.05 levels still, 0.03-0.16 after a
+turn, p99 1).
+
+**Stability.** Still, two frames 0.5 s apart (1600 x 900, the sky's
+pixels): mean difference 0.00-0.05 levels, p99 0-1, at `genus_cirrus`,
+`genus_cirrus_overhead`, `genus_cirrus_grazing`, and with `--cirrus
+march` at `cirrus_up` and `cirrus_between`. After a turn of 1 degree in
+20 frames and 40 to settle: 0.00-0.17 levels, p99 1. The cirrus is read
+at the sheet point, with no jitter: nothing to shimmer.
+
+### Task 24: the cirrus sheet deleted (offscreen)
+
+The weather's cirrus is the march's now (`--cirrus`, the default; clouds.md,
+"The high layer"), the old sheet gone. The times are **offscreen**
+(`--offscreen`) at 2560 x 1440, HIGH, RTX 3070, from the user's start
+(`--start 29.7159 29.8232`), the means of 60 frames. Each run's first pose
+is dropped (`ground`). The tree before (HEAD, exported, `--cirrus sheet`:
+the old default) against after (the default), interleaved.
+
+**With the genera** (the demo's default), three times each:
+
+| Pose | Sheet (before) | March (after) | |
+|---|---|---|---|
+| `cirrus_overhead` | 6.29, 6.27, 6.26 ms | 5.93, 6.02, 5.94 ms | -0.31 ms |
+| `cirrus_grazing` | 10.64, 10.57, 10.77 ms | 10.43, 10.96, 10.45 ms | -0.19 ms (medians) |
+| `cirrus_up` | 6.67, 6.66, 6.66 ms | 6.51, 6.97, 6.53 ms | -0.13 ms (medians) |
+| `clouds_noon` | 9.47, 9.43, 9.46 ms | 9.24, 9.40, 9.28 ms | -0.15 ms |
+| `genera_cb` | 10.68, 10.61, 10.84 ms | 10.50, 10.51, 10.97 ms | -0.17 ms (medians) |
+| `genera_congestus` | 10.64, 10.58, 11.36 ms | 10.48, 10.44, 10.50 ms | -0.16 ms (medians) |
+
+The after run with 10.96 and 6.97 ms had a CPU spike (its LOD pass 3.7 ms
+against 1.7-2.4), as had the before run with 11.36.
+
+**One cloud type** (`--no-genera`: the march's high layer of the weather's
+cirrus alone, `genera.weather_cirrus`, a new path), twice each:
+
+| Pose | Sheet (before) | March (after) | |
+|---|---|---|---|
+| `cirrus_overhead` | 5.40, 5.39 ms | 5.01, 4.99 ms | -0.40 ms |
+| `cirrus_grazing` | 10.52, 10.53 ms | 10.41, 10.36 ms | -0.14 ms |
+| `cirrus_up` | 5.93, 5.95 ms | 5.74, 5.71 ms | -0.22 ms |
+| `clouds_noon` | 7.48, 7.51 ms | 7.31, 7.23 ms | -0.23 ms |
+
+(One more after run stopped on a `MemoryError` in the demo's update; run
+again, it gave the second column's numbers. Not seen before or since.)
+
+**The showcase** (`--showcase`, no weather cirrus either side: the head
+with `--cirrus none`), three times each: `genus_cirrus` 8.88, 8.80, 8.78 ms
+before, 9.18, 8.80, 8.82 after; `genus_cirrus_overhead` 8.92, 8.80, 8.74
+before, 8.95, 8.75, 8.75 after. The same (the first after run's 9.18 an
+outlier).
+
+The march's cirrus is 0.13-0.4 ms **cheaper** than the sheet everywhere,
+as Task 23 measured. The shots: the cirrus is now the march's streaks
+(mean difference 2.6-8.6 levels on the cirrus and genera poses, all in the
+sky); `clouds_noon`, which shows no cirrus, 0.41-0.45 against 0.25-0.36
+for before against itself; the showcase 0.9.
+
+### Every genus in the reflection, eclipses on the march (offscreen)
+
+The march's light takes the eclipses, mountains and rings once a pixel
+(`cloudSunAndSky`), and the reflection draws one deck a covered genus.
+At 2560x1440, HIGH, with the user's start, two interleaved runs, in ms:
+
+| Pose | Before | After |
+|---|---|---|
+| `genera_cb` | 10.99, 11.02 | 11.07, 10.99 |
+| `genera_congestus` | 11.03, 11.00 | 11.08, 11.14 |
+| `clouds_noon` | 9.51, 9.79 | 9.71, 9.72 |
+
+Within the noise. The demo's default has two covered genera (convective and
+stratus), so two decks, drawn in the reflection's buffer only.
+
+### The step fade removed: far clouds keep their lumps (offscreen)
+
+The march no longer fades features finer than a share of the step's length
+(`uStepFade`, `march.STEP_FADES`); the view pixel alone decides. At
+2560x1440, HIGH, with the user's start, in ms:
+
+| Pose | Before (HEAD) | After |
+|---|---|---|
+| `genera_cb` | 11.00, 11.00 | 11.19, 11.25 |
+| `genera_congestus` | 10.98, 10.99 | 11.13, 11.07 |
+| `clouds_noon` | 9.74, 9.54 | 9.81, 9.72 |
+
+About +0.1-0.25 ms (the after tree also has the deck per genus and the
+eclipse terms, both within noise on their own).
+
+Steadiness (`cloud_bench --genera`, 2560x1440):
+
+| Pose, measure | Fade on | Fade off |
+|---|---|---|
+| `start`, `--jitter` err / flicker | 6.15 / 3.28 | 2.51 / 2.32 |
+| `cb_high`, `--jitter` err / flicker | 4.28 / 5.36 | 3.17 / 3.91 |
+| still spread / p99 | 0.82 / 2.9 | 0.99 / 3.6 |
+| moving 10 m a frame, spread | 7.34 | 7.83 |
+
+The clouds' own cost in the bench: +0.1-0.2 ms.
+
+### Bench scenes: where a simple scene's frame goes (offscreen)
+
+`frame_profile.py --scene bench-sea|bench-dry --genera --start 29.7159
+29.8232`: the demo's planet with no vegetation, mountains 600 m, with or
+without its reflective sea; 2560x1440, HIGH, one run, ms (a part's cost is
+the frame with it less without; negative ones save: the atmosphere's tables).
+
+| Scene, pose | frame | step (CPU) | terrain | refl | sky | clouds | cirrus | godrays |
+|---|---|---|---|---|---|---|---|---|
+| sea, ground | 9.02 | 3.88 | 3.89 | 0.91 | 0.39 | 2.76 | -0.08 | 0.20 |
+| sea, 1.5 km | 8.53 | 3.39 | 2.25 | 0.47 | 0.26 | 3.82 | 0.14 | 0.17 |
+| sea, 10 km | 7.50 | 2.71 | 1.28 | 0.39 | 0.37 | 3.84 | 0.20 | 0.19 |
+| dry, ground | 8.38 | 3.64 | 3.75 | -0.04 | 0.14 | 2.72 | 0.05 | 0.01 |
+| dry, 1.5 km | 8.06 | 3.21 | 2.25 | 0.16 | 0.26 | 4.09 | 0.25 | 0.20 |
+| dry, 10 km | 7.10 | 2.65 | 1.27 | -0.02 | 0.16 | 3.60 | 0.07 | 0.04 |
+
+The target is 6.25 ms (160 FPS). The clouds and the terrain are most of it.
+
+**The clouds** (`cloud_bench --genera --passes`, pose `start`): 3.4 ms in
+all.
+- The march is 3.0 ms, the resolve 0.5, the bakes (light volume, shadow
+  maps) about 0.35; the depth passes and composites are within noise.
+- Without billows (bit 32), without self-shadowing (bit 1) or without any
+  lighting (bit 256), it saves at most 0.2 ms. The cost is the density's
+  sampling, step after step.
+- Step budget against block (`--steps-sweep`, `start`, clouds ms):
+
+  | block | 24 | 40 | 64 | 96 |
+  |---|---|---|---|---|
+  | 4x4 | 2.95 | 3.63 | 3.47 | 3.95 |
+  | 3x3 | 2.63 | 3.19 | 3.97 | 4.93 |
+  | 4x2 (HIGH) | 2.76 | 3.58 | 4.32 | 5.32 |
+  | 2x2 | 4.48 | 5.60 | 7.05 | 9.03 |
+
+**The terrain**: 3.9 ms at the ground with no vegetation; MID terrain gives
+3.2. **The reflection**: 0.9 ms at the ground; MID ocean (reflection 0.35 of
+the view, not 0.75) gives 0.7.
+
+**The CPU** (the `step` column): 2.7-3.9 ms. It does not bound the frame
+yet, but it would once the GPU's part fell under it.
+
+**Findings (not acted on: the user's call).**
+- **The main culprits** are the clouds' march (about 3 ms, all in sampling
+  the density) and the terrain (3.9 ms at the ground with no vegetation, a
+  lot for a simple scene: its shader and its chunk count are the next things
+  to profile).
+- **The low-hanging fruits**, by gain against look risk:
+
+  | Change | Gain | Look risk |
+  |---|---|---|
+  | march block 3x3 and 40 steps (HIGH: 4x2, 64) | about 1.1 ms | more shimmer, softer far detail |
+  | march block 4x4, 64 steps | about 0.85 ms | more shimmer in motion |
+  | march steps 64 -> 40 at 4x2 | about 0.75 ms | slight banding or noise in far clouds |
+  | terrain at MID | about 0.7 ms at the ground | less terrain detail |
+  | the sea's reflection at 0.35 of the view (MID's) | about 0.2 ms | a blurrier reflection |
+
+  The first cloud change and MID terrain together would take the 10 km
+  views to about 5.3-5.7 ms. The ground would still be about 7 ms, over
+  the target.
+- **Trying them**: the demo's `-` and `+` keys step the march's block
+  (1/16, 1/9, 1/8, 1/4 of the pixels, or all) live, and the HUD shows the
+  share. F1-F5 step a part's preset.
+
+### The 1x1 march in motion (offscreen, 2026-11-21)
+
+The user's bursts flying past a cumulonimbus: at 1x1 grain over the whole
+cloud (the second difference in time above the horizon, 5.60 levels inside
+the clouds, 3.70 at their edges), at 4x4 none (0.30 inside and at the
+edges). At 1x1 the resolve took a quarter of each pixel's raw sample a
+frame in motion, with no smooth mean. `motion_shots.py
+--start 29.7159 29.8232 --at 29.7159 29.8232 432 0 8 --boost --frames 40
+--every 20 --flicker`, the block forced:
+
+| 1x1: smoothing, moving weight | err cloud | grain | speck % |
+|---|---|---|---|
+| 0, 1/4 (before) | 3.02 | 4.97 | 6.50 |
+| 0.75, 1/8 | 1.74 | 1.89 | 0.87 |
+| 1, 1/8 | 1.63 | 1.56 | 0.63 |
+| 1, 1/16 (kept) | 1.43 | 1.24 | 0.53 |
+| *4x2 (HIGH), for reference* | *1.23* | *0.92* | *0.11* |
+| 2x2 (ULTRA): 0.5, 1/4 (before) | 1.52 | 1.33 | 0.44 |
+| 2x2: 1, 1/16 (kept) | 1.36 | 0.88 | 0.43 |
+
+The 4x4 edges the user saw blinking in the showcase (`demo_genera.py`, the
+same settings as `demo_terrain.py`) did not show in its burst: at the
+clouds' edges 0.30 levels, as inside; what flickered there was the
+coastline below (the terrain in motion) and, faintly, the clouds' outline
+and their reflection on the sea. A first count (4.20 at the edges) had taken
+the beaches for cloud. Not pursued: the user found it fine since.
+
+### The light volume's read jitter removed (offscreen, 2026-11-21)
+
+The jitter of §28 (`LIGHT_JITTER`, a texel and a slice either way per pixel
+and visit) is gone. At the user's stratus pose (4x2 block, at rest), with
+the jitter off alone, the stratus's frame-to-frame change went 0.22 → 0.09
+levels and its isolated dark pixels 2.3 % → 0.7 %; the cumulus's change
+0.45 → 0.26 (its remaining dots are rays grazing lumpy edges). What it hid
+was not the texels' grid: streaks along the sun on the cumulonimbus's anvil
+and tower faces, from the light window's two reads (shadows.md, "Readers").
+They stayed at 128, 256 and 512 texels, with a 5-texel binomial smoothing in
+the bake, with a cubic read and with 32-bit floats; they went with the far
+read taken straight above the near one. That costs nothing (one
+`normalize`); a tower's face is a little flatter (BACKLOG.md, the sheared
+chart). The reads then differing only by their slice, the linear
+interpolation's kinks at each slice drew bands on an anvil's underside
+(`--at 23.08764 29.27759 3139 -62.9 22.3`, no `--start`): the slices are now
+read with a cubic B-spline, four reads instead of two. At 2560x1440 HIGH,
+frame / clouds: `genera_cb` 9.19 / 4.53 → 9.20 / 4.63 ms, the anvil pose
+8.49 / 5.54 → 8.33 / 5.37 ms (noise).
 
 ## Not covered
 

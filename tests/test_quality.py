@@ -42,10 +42,7 @@ COST_FIELDS = {
     "sky": ["star_fraction", "glow_size"],
     "models": ["shading"],
     "clouds": [
-        "count_scale",
         "march_scale",
-        "overlap_near",
-        "overlap_far",
         "reflected",
     ],
     "ocean": [
@@ -172,13 +169,13 @@ def test_the_constructor_is_strict():
     with pytest.raises(ValueError):
         CloudSettings(reflected=1)  # not a bool
     assert isinstance(AtmosphereSettings(steps=6).steps, int)
-    assert CloudSettings(count_scale=1).count_scale == 1.0  # an int for a float
+    assert CloudSettings(march_scale=1).march_scale == 1.0  # an int for a float
 
 
 def test_changes_name_how_each_applies():
     base = CloudSettings()
-    new = replace(base, count_scale=0.5, march_scale=0.5)
-    assert base.changes(new) == {"count_scale": "rebuild", "march_scale": "live"}
+    new = replace(base, octave_bands=2, march_scale=0.5)
+    assert base.changes(new) == {"octave_bands": "rebuild", "march_scale": "live"}
     assert base.changes(base) == {}
 
 
@@ -337,9 +334,8 @@ def test_apply_finds_each_objects_section_by_its_type():
 
 def test_every_world_builder_object_declares_its_settings():
     from world_builder.atmosphere import Atmospheres
-    from world_builder.clouds.cirrus import CloudSheet
+    from world_builder.clouds.march import CloudMarch
     from world_builder.clouds.planet import PlanetClouds
-    from world_builder.clouds.sphere import CloudVolume
     from world_builder.ocean import Sea
     from world_builder.sky import Sky
     from world_builder.terrain.terrain import Terrain
@@ -350,27 +346,10 @@ def test_every_world_builder_object_declares_its_settings():
         (Atmospheres, "atmosphere"),
         (Sky, "sky"),
         (PlanetClouds, "clouds"),
-        (CloudVolume, "clouds"),
-        (CloudSheet, "clouds"),
+        (CloudMarch, "clouds"),
         (Sea, "ocean"),
     ):
         assert world.settings_for(kind) == getattr(world, section)
-
-
-def test_a_preset_keeps_the_choices_that_are_not_quality():
-    # The renderer is a choice, not a level of quality: cycling the clouds'
-    # presets (or the world's) must not switch the raymarch back to billboards.
-    march = WorldSettings.preset("high").with_value("clouds", "renderer", "march")
-    for level in QualityLevel:
-        assert march.with_section_level("clouds", level).clouds.renderer == "march"
-        assert march.with_level(level).clouds.renderer == "march"
-        assert march.with_level(level).section_level("clouds") is level
-    # And it does not make the section custom
-    assert march.section_level("clouds") is QualityLevel.HIGH
-    assert not march.is_custom()
-    # A config file still remembers it
-    data = march.to_dict()
-    assert WorldSettings.from_dict(data).clouds.renderer == "march"
 
 
 def test_a_section_without_levels_is_kept_by_every_preset():
@@ -438,3 +417,40 @@ def test_a_settings_class_resolves_its_type_hints_once(monkeypatch):
         for name in SECTIONS:
             world.section_level(name)
     assert len(calls) == len(set(calls))
+
+
+def test_old_billboard_settings_keys_are_ignored():
+    """A config saved while the clouds had billboards (their renderer, count,
+    interior growth and half resolution) still loads: those keys are
+    skipped, every other cloud knob is the preset's."""
+    import dataclasses
+
+    from world_builder.settings import WorldSettings
+
+    old = {"renderer", "count_scale", "interior_growth", "half_resolution"}
+    data = {
+        "version": 1,
+        "preset": "high",
+        "overrides": {
+            "clouds": {
+                "renderer": "billboards",
+                "count_scale": 0.5,
+                "interior_growth": True,
+                "half_resolution": True,
+            }
+        },
+    }
+    loaded = WorldSettings.from_dict(data).clouds
+    preset = WorldSettings.preset("high").clouds
+    for f in dataclasses.fields(preset):
+        if f.name not in old:
+            assert getattr(loaded, f.name) == getattr(preset, f.name), f.name
+
+
+def test_old_shells_key_loads_as_octave_bands():
+    """The march's distance bands were the billboards' "shells": a saved
+    ``shells`` loads as ``octave_bands``."""
+    from world_builder.settings import WorldSettings
+
+    data = {"version": 1, "preset": "high", "overrides": {"clouds": {"shells": 2}}}
+    assert WorldSettings.from_dict(data).clouds.octave_bands == 2

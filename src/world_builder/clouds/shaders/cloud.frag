@@ -1,56 +1,47 @@
 #version 330
 
-// A planet's clouds (clouds.sphere): the slab is a height above the sea-level
-// sphere, the noise is sampled at planet-frame positions, a weather field
-// shifts the fbm by direction, and the atmospheres haze them. uDeck == 1 draws
-// the far-field deck surface instead of a billboard.
+// A planet's cloud decks (clouds.deck.deck_nodes): a genus's slab seen as a
+// surface at its height above the sea-level sphere, for the sea's reflection
+// (the march draws the view's clouds), one deck a genus (uDeckGenus). The noise is sampled at planet-frame positions, a
+// weather field shifts the fbm by direction, and far away the deck is the
+// weather's expected coverage. (It was the billboards' fragment stage too:
+// removed with them.)
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "cloud_field.glsl"
 #pragma include "cloud_shading.glsl"
-// Cloud colour pass. Each billboard is a SAMPLE OF A VOLUME, not a sprite: its
-// outline and colour are functions of world position alone, while the sprite only
-// supplies how much volume sits behind each pixel (a thickness profile). Types mix
-// by superposition in the blender, so a fragment only evaluates its own field.
-//
-// Premultiplied "over", back to front: with alpha = 1 - exp2(-opticalDepth), N
-// overlapping billboards leave transmittance exp2(-sum of depths), i.e. the
-// billboards along a view ray ARE the steps of a raymarch. See docs/source/clouds.md.
-uniform sampler2D p3d_Texture0;  // puff atlas: alpha = per-quad THICKNESS profile
+// Premultiplied "over". See docs/source/clouds.md.
 uniform vec3  camPos;
 
 uniform float exposure;
 
-uniform int   uDeck;            // 1: the deck surface, not a billboard
 uniform int   uOwnAtmosphere;   // the planet's atmosphere (reddens sunlight), -1 none
 uniform float uPixelAngle;      // radians per pixel (the far deck's footprint)
+// Whose deck this is (deck.deck_nodes): genus 0 reads its own entry
+// (vLayer: the deck's), every other genus its far level, its weather
+// (genusWeatherAt) and its far table; the genera hidden (uGenusMask, the
+// march's) draw none.
+uniform int   uDeckGenus;
+uniform int   uGenusMask;
 
-in  vec2  vUv;
 in  vec3  worldPos;
-in  float vRadius;
-in  float vFade;
 flat in int vLayer;
-in vec3 vSunTint;
-in float vSkyTint;
-in vec3 vTwilight;
 out vec4 fragColor;
 
 void main() {
-    Field f = getField(vLayer);
+    if (((uGenusMask >> uDeckGenus) & 1) == 0) discard;
+    Field f = getField(uDeckGenus == 0 ? vLayer
+                                       : genusShadowLayer(uDeckGenus));
 
     vec3 toCamera = worldPos - camPos;
     float distance = length(toCamera);
     vec3 V = -toCamera / distance;
 
-    // LOD shell crossfade: adjacent shells' weights sum to 1. Applied to OPTICAL
-    // DEPTH (exact for any depth, unlike alpha) and AFTER the cap (or two shells
-    // could each reach it), below. Known before the field is: a fragment
-    // weighing nothing (another shell's range) costs nothing.
+    // The layer's distance fade (its shellFade), on optical depth, after the cap.
     float shellWeight = smoothstep(f.shellFade.x, f.shellFade.y, distance)
                       * (1.0 - smoothstep(f.shellFade.z, f.shellFade.w, distance));
-    if (shellWeight <= 0.0 || vFade <= 0.0) discard;
+    if (shellWeight <= 0.0) discard;
 
-    float puff;
     float chord;
     vec3 samplePos;
     float density;
@@ -64,31 +55,39 @@ void main() {
     // averages (the deck's light table).
     float shading = 1.0;
     float farCoverage = 0.0;
-    if (uDeck == 1) {
+    {
         // The slab seen as a surface. The sight line crosses thickness / |cos|
         // of it (capped near grazing); the density is the mean of two samples
         // through the slab's depth.
-        puff = 1.0;
         vec3 up = normalize(worldPos);
         // The column's weather: coverage, shift, convective depth, anvil
         // shelf. The clouds there reach the local top (a convective field's
         // grows with the depth; every other's is the slab's).
-        vec4 weather = texture(weatherMap, up);
+        vec4 weather = genusWeatherAt(uDeckGenus, up);
         float thickness = f.slabThickness * topFraction(f, weather.b);
         float cosView = max(abs(dot(V, up)), 0.04);
         chord = thickness / cosView;
         float r = planetRadius + f.slabBase;
         samplePos = up * (r + 0.5 * thickness);
         float feature = 4.0 / (f.noiseScale.x * f.octaveScales.x);  // NOISE_FEATURE
+        if ((f.recipe & RECIPE_WORLEY) != 0) {
+            feature = min(feature, f.cellSize);  // a recipe genus's cells
+        }
         float footprint = distance * uPixelAngle / feature;
         detail = 1.0 - smoothstep(0.15, 0.6, footprint);
         shading = 1.0 - smoothstep(0.04, 0.2, footprint);  // <= detail
         density = 0.0;
-        if (detail > 0.0) {
+        if (detail > 0.0 && weather.r > 0.0) {
             vec3 low = up * (r + 0.3 * thickness);
             vec3 high = up * (r + 0.7 * thickness);
-            density = 0.5 * (cloudDensityAt(f, low, weather.gba)
-                           + cloudDensityAt(f, high, weather.gba));
+            // A recipe genus's own density (genusRecipeDensity: its octaves
+            // finer than the pixel's metres fade to their means); the others
+            // the field's.
+            density = f.recipe != 0
+                ? 0.5 * (genusRecipeDensity(f, low, weather, distance * uPixelAngle)
+                       + genusRecipeDensity(f, high, weather, distance * uPixelAngle))
+                : 0.5 * (cloudDensityAt(f, low, weather.gba)
+                       + cloudDensityAt(f, high, weather.gba));
             if (f.anvil > 0.0) {
                 // An anvil's shelf, over its column's top: sampled in the
                 // middle of its band.
@@ -103,28 +102,15 @@ void main() {
             farCoverage = weather.r;
         }
         if (density <= 0.0 && farCoverage * (1.0 - detail) < 0.003) discard;
-    } else {
-        puff = texture(p3d_Texture0, vUv).a;
-        if (puff < 0.01) discard;                // the sprite's own soft edge
-        chord = 2.0 * vRadius * puff;
-        // Sampled ON the quad plane (not mid-chord, which would make overlapping
-        // quads disagree).
-        samplePos = worldPos;
-        density = cloudDensity(f, samplePos);
-        if (density <= 0.0) discard;             // THE crisp silhouette
     }
 
-    // Capped so every billboard stays a thin veil, never a hard-edged opaque quad.
     float opticalDepth = min(f.extinction * density * chord, f.maxOpticalDepth);
 
     opticalDepth *= shellWeight;
 
     float alpha = 1.0 - exp2(-opticalDepth);
-    if (uDeck == 1) {
-        // Each cloudy column is close to opaque; the far deck is their share.
-        alpha = mix(0.92 * farCoverage * shellWeight, alpha, detail);
-    }
-    alpha *= vFade;
+    // Each cloudy column is close to opaque; the far deck is their share.
+    alpha = mix(0.92 * farCoverage * shellWeight, alpha, detail);
     if (alpha <= 0.0) discard;
 
     // Lighting last, after every discard.
@@ -133,22 +119,17 @@ void main() {
         return;
     }
     vec3 sunlight, skylight, twilight;
-    if (uDeck == 0) {
-        sunlight = sunColor * vSunTint;  // per vertex (cloud_sphere.vert)
-        skylight = skyColor * vSkyTint;
-        twilight = sunColor * vTwilight;
-    } else {
-        planetCloudLight(uOwnAtmosphere, samplePos, sunlight, skylight, twilight);
-        // Other bodies eclipsing the sun (as cloud_sphere.vert).
-        float eclipse = eclipseVisibility(samplePos - camPos, sunDir, uShadowSelf);
-        sunlight *= eclipse
-                  * terrainShadow(normalize(samplePos), length(samplePos) - planetRadius)
-                  * ringVisibility(samplePos - camPos, sunDir);
-        twilight *= eclipse;
-        skylight *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
-    }
-    vec3 colour = cloudRadiance(f, samplePos, density, V, shading, farCoverage,
-                                sunlight, skylight, twilight);
+    planetCloudLight(uOwnAtmosphere, samplePos, sunlight, skylight, twilight);
+    // Other bodies eclipsing the sun.
+    float eclipse = eclipseVisibility(samplePos - camPos, sunDir, uShadowSelf);
+    sunlight *= eclipse
+              * terrainShadow(normalize(samplePos), length(samplePos) - planetRadius)
+              * ringVisibility(samplePos - camPos, sunDir);
+    twilight *= eclipse;
+    skylight *= mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse);
+    vec3 colour = cloudRadianceAt(uDeckGenus, f, samplePos, density, V, shading,
+                                  farCoverage, sunlight, skylight, twilight,
+                                  genusWeatherAt(uDeckGenus, normalize(samplePos)).gba);
     // No air in front of the cloud: it keeps its own colour at any distance
     // (atmosphere.md, "Clouds at the horizon").
 

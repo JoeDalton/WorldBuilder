@@ -12,6 +12,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from world_builder.clouds.field_setup import _noise
 from world_builder.clouds.light_volume import (
     COLUMNS,
     REACH_MAX,
@@ -20,13 +21,15 @@ from world_builder.clouds.light_volume import (
     SLICES,
     STEP_SCALE,
     CloudLightVolumes,
+    GenusShade,
     light_chart,
     light_depth_on_sphere,
+    light_depth_union,
     light_reach,
+    slice_heights,
     smooth_volume,
     voxel_positions,
 )
-from world_builder.clouds.sphere import _noise
 from world_builder.clouds.weather import sample_cube
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PRESETS as PLANETS
@@ -76,15 +79,34 @@ def test_the_chart_is_finer_near_its_centre():
     assert far * (R + 2000.0) == pytest.approx(reach * (1 - 1 / tile) ** 2, rel=1e-3)
 
 
-def _read_atlas(atlas, tile):
+def test_each_sky_band_has_its_share_of_the_slices():
+    """Two bands (a stratus deck under a convective band): SLICES through
+    each at its own spacing, none in the gap; one band: through the slab."""
+    bands = [(900.0, 500.0), (2200.0, 8300.0)]
+    heights = slice_heights(bands, 9600.0)
+    assert heights.shape == (2 * SLICES,)
+    low, high = heights[:SLICES], heights[SLICES:]
+    np.testing.assert_allclose(low, (np.arange(SLICES) + 0.5) / SLICES * 500.0)
+    np.testing.assert_allclose(
+        high, 1300.0 + (np.arange(SLICES) + 0.5) / SLICES * 8300.0
+    )
+    assert np.all(np.diff(heights) > 0.0)
+    np.testing.assert_allclose(
+        slice_heights(None, 1000.0), (np.arange(SLICES) + 0.5) / SLICES * 1000.0
+    )
+    chart = light_chart(np.array([0.0, 0.0, 1.0]), R + 900.0, 9600.0, 1e5, 8, 2)
+    assert chart[3] == (9600.0, 2 * SLICES, COLUMNS, 2.0)
+
+
+def _read_atlas(atlas, tile, slices=SLICES):
     texture = atlas.texture
     dtype = np.float32 if texture.get_component_width() == 4 else np.float16
     ram = np.frombuffer(texture.get_ram_image(), dtype)
-    height, width = SLICES // COLUMNS * tile, COLUMNS * tile
+    height, width = slices // COLUMNS * tile, COLUMNS * tile
     texels = ram.reshape(height, width, -1).astype(np.float64)
     # (slice, row, column, channel): tile k at column k % COLUMNS, row k // COLUMNS
-    slices = texels.reshape(SLICES // COLUMNS, tile, COLUMNS, tile, -1)
-    return slices.transpose(0, 2, 1, 3, 4).reshape(SLICES, tile, tile, -1)
+    texels = texels.reshape(slices // COLUMNS, tile, COLUMNS, tile, -1)
+    return texels.transpose(0, 2, 1, 3, 4).reshape(slices, tile, tile, -1)
 
 
 def test_the_bake_is_the_cpus_march_from_each_voxel(window):
@@ -93,28 +115,29 @@ def test_the_bake_is_the_cpus_march_from_each_voxel(window):
     nothing baked again with all still, again on a turned sun or a camera
     moved past the recentring share."""
     from world_builder.clouds.cloud import CloudSettings
-    from world_builder.clouds.sphere import CloudVolume
+    from world_builder.clouds.march import CloudMarch
     from world_builder.terrain.workers import ChunkExecutor
 
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    clouds = CloudVolume(
+    clouds = CloudMarch(
         window.render,
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2),
+        settings=CloudSettings(octave_bands=2),
         planet=PLANETS["forest"],
     )
     tile, steps = 64, 16
     volumes = CloudLightVolumes(
         window.win, clouds, tile=tile, per_frame=8, steps=steps, to_ram=True
     )
+    caster = clouds.shadow_caster()
     try:
         clouds.update(TangentFrame.at(20.0, 40.0).up * (R + 1000.0))
-        assert clouds.weather is not None
+        assert caster.weather is not None
         places = [(lat, lon) for lat in range(-60, 61, 20) for lon in range(0, 360, 30)]
         cover = [
-            sample_cube(clouds.weather[..., 0], TangentFrame.at(*place).up[None])[0]
+            sample_cube(caster.weather[..., 0], TangentFrame.at(*place).up[None])[0]
             for place in places
         ]
         frame = TangentFrame.at(*places[int(np.argmax(cover))])
@@ -123,14 +146,14 @@ def test_the_bake_is_the_cpus_march_from_each_voxel(window):
         sun = 0.8 * frame.up + 0.6 * frame.east
         sun /= np.linalg.norm(sun)
         clouds.set_sun(sun)
-        volume = volumes.volumes[0]
+        volume = volumes.volume
         frames = SLICES // 8 + 1  # the slices, then their smoothing
         for _ in range(frames):
             volumes.update(camera, sun)
-            assert volumes._on[0][0] == 0  # nothing whole yet
+            assert volumes._on[0] == 0  # nothing whole yet
             window.graphicsEngine.render_frame()
         volumes.update(camera, sun)
-        assert volumes._on[0][0] == 1 and volume.front is not None
+        assert volumes._on[0] == 1 and volume.front is not None
         got = _read_atlas(volume.raw, tile)
         # The front: the raw bake smoothed (the CPU's tent, to half floats)
         front = _read_atlas(volume.front, tile)
@@ -140,7 +163,7 @@ def test_the_bake_is_the_cpus_march_from_each_voxel(window):
 
         chart = [tuple(volume.front.chart[k]) for k in range(4)]
         points = voxel_positions(chart, tile).reshape(-1, 3)
-        field, optics = clouds._deck_field, clouds._deck_optics
+        field, optics = caster._deck_field, caster._deck_optics
         optics = replace(optics, sun_step_length=optics.sun_step_length * STEP_SCALE)
 
         def march(dirs):
@@ -152,7 +175,7 @@ def test_the_bake_is_the_cpus_march_from_each_voxel(window):
                 dirs,
                 R,
                 steps,
-                shift_at=lambda p: sample_cube(clouds.weather[..., 1], p),
+                shift_at=lambda p: sample_cube(caster.weather[..., 1], p),
             ).reshape(SLICES, tile, tile)
 
         direct = march(sun)
@@ -193,13 +216,17 @@ def test_the_bake_is_the_cpus_march_from_each_voxel(window):
         executor.shutdown()
 
 
-@pytest.mark.parametrize("family", [0, 1])
-def test_the_genera_bake_is_the_cpus_march_for_each_family(window, family):
-    """With genera each family has its own volume from its own field and
-    weather: towers (the convective depth and the anvil's spread taken at
-    every step) and the stratus deck, against the CPU twin."""
+def test_the_genera_bake_is_one_volume_of_their_summed_depth(window):
+    """With genera one volume holds both: SLICES through the stratus's band
+    and SLICES through the convective one's, each voxel the genera's summed
+    depth (the towers' convective depth and anvil spread taken at every step,
+    the stratus deck under them) against the CPU twin, over both feature
+    sites at once. The stratus is a recipe genus (its twin the recipe's
+    density, light_volume.GenusShade's recipe); the stratocumulus has no
+    feature here."""
     from world_builder.clouds.cloud import CloudSettings
-    from world_builder.clouds.genera import GeneraSpec
+    from world_builder.clouds.field_setup import _cells
+    from world_builder.clouds.genera import GeneraSpec, genus_weather_at
     from world_builder.clouds.planet import PlanetClouds
     from world_builder.clouds.weather import WeatherSpec
     from world_builder.terrain.planet import PlanetSpec
@@ -212,7 +239,7 @@ def test_the_genera_bake_is_the_cpus_march_for_each_family(window, family):
         window.render,
         R,
         executor,
-        settings=CloudSettings(shells=2, renderer="march"),
+        settings=CloudSettings(octave_bands=2),
         genera=genera,
     )
     tile, steps = 64, 24
@@ -220,8 +247,9 @@ def test_the_genera_bake_is_the_cpus_march_for_each_family(window, family):
         window.win, clouds, tile=tile, per_frame=8, steps=steps, to_ram=True
     )
     try:
-        # Over the family's own clouds (genera.DEFAULT_FEATURES)
-        frame = TangentFrame.at(-2.86 if family else 0.0, 0.0)
+        # Between the convective clouds around the focus and the stratus deck
+        # 30 km south of it (genera.DEFAULT_FEATURES): both in the volume
+        frame = TangentFrame.at(-1.4, 0.0)
         camera = frame.up * (R + 1000.0)
         for _ in range(400):
             clouds.update(camera)
@@ -230,46 +258,78 @@ def test_the_genera_bake_is_the_cpus_march_for_each_family(window, family):
         sun = 0.6 * frame.up + 0.8 * frame.east
         sun /= np.linalg.norm(sun)
         clouds.set_sun(sun)
-        volume = volumes.volumes[family]
-        for _ in range(SLICES // 8 + 1):  # the slices, then their smoothing
+        caster = clouds.shadow_caster()
+        bands = caster.sky_bands
+        assert len(bands) == 2
+        slices = 2 * SLICES
+        volume = volumes.volume
+        assert volume.slices == slices
+        for _ in range(slices // 8 + 1):  # the slices, then their smoothing
             volumes.update(camera, sun)
             window.graphicsEngine.render_frame()
         volumes.update(camera, sun)
-        assert volume.front is not None
-        got = _read_atlas(volume.raw, tile)
-        caster = clouds.shadow_caster(family)
-        weather = caster.weather
+        assert volume.front is not None and volumes._on[0] == 1
+        got = _read_atlas(volume.raw, tile, slices)
+        # Smoothed inside each band, not across the gap between them
+        front = _read_atlas(volume.front, tile, slices)
+        assert np.allclose(front, smooth_volume(got, SLICES), rtol=2e-3, atol=2e-3)
+        assert not np.allclose(front, smooth_volume(got), rtol=2e-3, atol=2e-3)
+        march = clouds.volume
 
-        def channel(k):
-            if weather.shape[-1] <= k:
-                return None
-            return lambda p: sample_cube(weather[..., k], p)
+        def shade(genus):
+            weather = genus.weather
+            source = genus.coverage_source
 
+            def channel(k):
+                if source is not None:  # the shader's genusWeatherAt
+                    cube, index, table = source
+                    if k != 1:
+                        return None
+                    return lambda p: genus_weather_at(cube, index, table, p)[1]
+                if weather.shape[-1] <= k:
+                    return None
+                return lambda p: sample_cube(weather[..., k], p)
+
+            optics = genus._deck_optics
+            optics = replace(
+                optics, sun_step_length=optics.sun_step_length * STEP_SCALE
+            )
+            recipe = None
+            if genus.recipe is not None:
+                # A recipe genus: its recipe at its far level (the bake's)
+                recipe = replace(
+                    genus.recipe, field=genus._deck_field, optics=genus._deck_optics
+                )
+            return GenusShade(
+                genus.shadow_field, optics, channel(1), channel(2), channel(3),
+                recipe=recipe, cells=_cells(), octaves=genus._deck_octaves,
+            )  # fmt: skip
+
+        shades = [shade(march.genus_caster(g)) for g in range(march.genera_count)]
         chart = [tuple(volume.front.chart[k]) for k in range(4)]
         # Every fourth slice: the twin's cost
-        points = voxel_positions(chart, tile)[::4].reshape(-1, 3)
-        optics = caster._deck_optics
-        optics = replace(optics, sun_step_length=optics.sun_step_length * STEP_SCALE)
+        points = voxel_positions(chart, tile, bands)[::4].reshape(-1, 3)
         for k, dirs in (
             (0, sun),
             (1, points / np.linalg.norm(points, axis=-1, keepdims=True)),
         ):
-            expected = light_depth_on_sphere(
-                _noise(7),
-                caster.shadow_field,
-                optics,
-                points,
-                dirs,
-                R,
-                steps,
-                shift_at=channel(1),
-                depth_at=channel(2),
-                spread_at=channel(3),
-            ).reshape(SLICES // 4, tile, tile)
-            assert expected.max() > 0.5  # cloud in it
+            expected = light_depth_union(
+                _noise(7), shades, points, dirs, R, steps
+            ).reshape(slices // 4, tile, tile)
+            # Cloud in both bands: the stratus's slices, the towers'
+            assert expected[: SLICES // 4].max() > 0.5
+            assert expected[SLICES // 4 :].max() > 0.5
             error = np.abs(np.exp2(-got[::4, ..., k]) - np.exp2(-expected))
             assert np.median(error) < 5e-3
             assert np.percentile(error, 99) < 0.08
+        # The stratus under the towers: its voxels toward the sun take the
+        # convective clouds' depth too (the sum, not the stratus's alone)
+        stratus_alone = light_depth_union(
+            _noise(7), shades[1:], points, sun, R, steps
+        ).reshape(slices // 4, tile, tile)
+        summed = light_depth_union(_noise(7), shades, points, sun, R, steps)
+        summed = summed.reshape(slices // 4, tile, tile)
+        assert (summed[: SLICES // 4] - stratus_alone[: SLICES // 4]).max() > 0.5
     finally:
         volumes.destroy()
         clouds.remove()

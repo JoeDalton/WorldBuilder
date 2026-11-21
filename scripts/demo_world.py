@@ -69,7 +69,6 @@ from demo_terrain import (  # noqa: E402
     window_config,
 )
 from world_builder.atmosphere import AtmosphereParams  # noqa: E402
-from world_builder.clouds.cirrus import CirrusSpec  # noqa: E402
 from world_builder.depth import SplitDepthCameras  # noqa: E402
 from world_builder.settings import WorldSettings  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL, level_for, load_level  # noqa: E402
@@ -88,16 +87,14 @@ from world_builder.world import (  # noqa: E402
 
 
 def planet_look(spec, clouds: bool) -> BodyLook:
-    """The demo's planet: air, cumulus at CLOUD_BASE, cirrus above them,
-    the 20 m swell."""
+    """The demo's planet: air, cumulus at CLOUD_BASE, the march's cirrus
+    above them, the 20 m swell."""
     return BodyLook(
         "planet",
         spec,
         atmosphere=AtmosphereParams(),
         clouds=(
-            CloudLook(
-                altitude=CLOUD_BASE, cirrus=CirrusSpec(), sky_strength=CLOUD_SKY_LIGHT
-            )
+            CloudLook(altitude=CLOUD_BASE, cirrus=True, sky_strength=CLOUD_SKY_LIGHT)
             if clouds
             else None
         ),

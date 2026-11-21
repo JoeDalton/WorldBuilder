@@ -48,8 +48,9 @@ world.destroy()
 space_ambient=...)` is the sky, the sun and the Panda3D lights alone, for a
 space level. Its light everywhere is the bare sun and `space_ambient` (the
 sky light away from any body), `loading` is always False, and `depth_ranges`
-gives a fixed split (`SPACE_SPLIT_M`, 2 km) and far plane (`SPACE_FAR_M`,
-1,000 km). An asteroid field (`world_builder.asteroids`) can share its worker
+gives a fixed split (`SPACE_SPLIT_M`, 2 km) and a far plane of at least
+`SPACE_FAR_M` (1,000 km), farther where a field's rocks are drawn farther
+(see below). An asteroid field (`world_builder.asteroids`) can share its worker
 pool (`executor=world.executor`).
 
 ## Looks
@@ -68,10 +69,11 @@ parts.
     Without one, the terrain still draws its sea, as flat water only.
   - `ambient` and `exposure`: the terrain's sky light and tonemap.
 - **`CloudLook`**: `PlanetClouds`' arguments: altitude, cloud type,
-  `cirrus` (a `CirrusSpec` for high cirrus above the low clouds, or None),
-  weather, seeds, shading. Its `exposure` (0.9) feeds the sky's tonemap, as
-  the sky's and the terrain's do; keep them equal, or hazed clouds stop
-  matching the sky behind them. The cirrus must clear the low clouds' slab
+  `cirrus` (True: the weather's high cirrus above the low clouds, drawn by
+  the march's high layer; default False), weather, seeds, shading,
+  `genera`. Its `exposure` (0.9) feeds the sky's tonemap, as the sky's and
+  the terrain's do; keep them equal, or hazed clouds stop matching the sky
+  behind them. The cirrus's slab (11-12.5 km) must clear the low clouds'
   and stay inside the air, or the world refuses it.
 - **`OceanLook`**: `Sea`'s arguments: water colour, wind, swell, foam,
   `near_band` (the altitudes over which the near look fades into the far
@@ -151,9 +153,8 @@ In order, it updates:
 Build the world before `SplitDepthCameras`. The sea's reflection camera
 copies the app's lens once when it is built, and the split cameras then
 shorten that lens to the near range every frame. Then hand the split
-cameras to the world, `world.use_split_depth(depth)`: half-resolution
-clouds (`CloudSettings.half_resolution`) mirror them, and stay at full
-resolution without them.
+cameras to the world, `world.use_split_depth(depth)`: the clouds' raymarch
+draws its passes with them.
 
 Load `transform-cache false` in the game's PRC (before ShowBase opens its
 window). The world moves around the camera, so every drawn node's net
@@ -170,7 +171,9 @@ band (see `world_builder.depth`).
 ## Other members
 
 - **`depth_ranges(origin_world)`**: split and far distances over every body
-  (`SplitDepthCameras.system_ranges`).
+  (`SplitDepthCameras.system_ranges`), the far reaching every asteroid
+  field's rocks too (`AsteroidField.reach`: a shorter far plane cut the
+  biggest while they were still a few pixels wide).
 - **`gravity_field(g_constant=1.0)`**: the bodies' gravity as point masses
   (`BodyLook.mass`, keyword only); `acceleration(points)` is the raw vector
   for N points at once (numpy, or native: 4-9x faster), `-g` is "up". The

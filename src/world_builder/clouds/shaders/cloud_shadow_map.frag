@@ -1,14 +1,18 @@
 #version 330
-// The cloud shadow map's bake (clouds.shadow_map): per texel, the clouds'
-// optical depth toward the sun along the ray that enters the slab's base
-// there (cloud_field.glsl's cloudShadowDepth from that point), the march
-// once per texel instead of once per pixel of ground. A texel holds the
-// total (r) and the depth a quarter, a half and three quarters of the way
-// along the chord (g, b, a: cloudShadowLevelsIn), for the clouds' own
-// lighting (cloudMapSunDepth); the ground reads r. Each texel is a node
-// of an azimuthal equidistant chart on the base's sphere (uMapChart: its
-// centre's up and the base's radius, east and the spacing, north and the
+// The cloud shadow map's bake (clouds.shadow_map): per texel, the genera's
+// summed optical depth toward the sun along the ray that enters the sky
+// bands' base there (cloud_field.glsl's skyShadowLevels from that point: each
+// band's chord cut at its clouds' own top, every genus in it marched by its
+// own field and weather), the march once per texel instead of once per pixel
+// of ground. A texel holds the total (r) and the depth a quarter, a half and
+// three quarters of the way along the bands' summed chord (g, b, a), for the
+// clouds' own lighting (cloudMapLevelsAt); the ground reads r. Each texel is
+// a node of an azimuthal equidistant chart on the base's sphere (uMapChart:
+// its centre's up and the base's radius, east and the spacing, north and the
 // nodes per side).
+// The recipe genera's density in the summed depths (cloud_field.glsl's
+// skyShadowLevels); elsewhere they are left to these bakes.
+#define CLOUD_RECIPE_SHADOWS
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "cloud_field.glsl"
 
@@ -25,8 +29,9 @@ void main() {
     vec2 toward = distance > 0.0 ? xy / distance : vec2(0.0);
     vec3 dir = cos(angle) * uMapChart[0].xyz
              + sin(angle) * (toward.x * uMapChart[1].xyz + toward.y * uMapChart[2].xyz);
-    Field f = getField(uCloudShadowLayer);
     // On the base's sphere: the march starts there (enter 0).
-    vec3 start = dir * (planetRadius + f.slabBase);
-    fragColor = cloudShadowLevelsIn(f, weatherMap, start, sunDir, uMapSteps);
+    vec3 start = dir * uMapChart[0].w;
+    vec3 levels;
+    float total = skyShadowLevels(start, sunDir, uMapSteps, 1.0, true, true, levels);
+    fragColor = vec4(total, levels);
 }

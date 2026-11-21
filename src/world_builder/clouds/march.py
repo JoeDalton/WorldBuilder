@@ -45,8 +45,8 @@ of), the far range's over the rest in the far pass's clouds' slot (after
 the sky, before the cirrus). The near range's depth pass and card run only
 while the slab reaches into it.
 
-The sea's reflection sees the deck alone (:func:`sphere.deck_mesh`, the
-billboards' far field), the far layer packed for it.
+The sea's reflection sees the decks alone (:func:`deck.deck_nodes`: one a
+genus at its slab's middle, its far level; the high layer has none).
 
 Design notes: docs/source/clouds.md, "The raymarch".
 """
@@ -91,56 +91,101 @@ from panda3d.core import (
     Texture,
     TransparencyAttrib,
     Vec3,
+    Vec4,
     WindowProperties,
 )
 
 from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.clouds.cloud import (
+    PRESETS,
     CloudSettings,
     CloudType,
-    load_cloud_atlas,
     scale_march,
 )
-from world_builder.clouds.genera import CONVECTIVE, STRATIFORM, GeneraSpec
-from world_builder.clouds.half_res import composite_card, pass_camera, pass_states
-from world_builder.clouds.noise import (
-    DECK_LIGHT_COS_MIN,
-    LAYER_VEC4S,
-    MAX_LAYERS,
-    NOISE_FEATURE,
-    NOISE_SIZE,
-    DensityField,
-    build_curl_texture,
-    build_deck_light_texture,
-    build_noise_texture,
-    curl_noise_volume,
-    pack_layer_params,
+from world_builder.clouds.deck import (
+    _ensure_bin,
+    deck_nodes,
 )
-from world_builder.clouds.shadow_defaults import (
-    _no_deck_light,
-    _no_weather,
-    cloud_shadow_defaults,
-)
-from world_builder.clouds.sphere import (
-    CLOUD_BIN,
+from world_builder.clouds.field_setup import (
     DECK_MAX_OPTICAL_DEPTH,
-    CloudVolume,
-    ShellSpec,
+    OctaveBand,
+    _cells,
+    _coverage_cube,
     _deck_light,
     _depth_tables,
-    _ensure_bin,
     _genus_weather,
     _noise,
     _peaks,
-    _shaders,
+    _recipe_deck_light,
     _weather,
-    deck_mesh,
+    genus_field,
+    octave_bands,
     octave_offset,
     planet_field,
     planet_weather,
-    shell_bands,
+    recipe_peaks,
+    sun_visibility,
 )
-from world_builder.clouds.weather import WeatherSpec, build_weather_texture, shift_table
+from world_builder.clouds.genera import (
+    CONVECTIVE,
+    GENUS_PRESETS,
+    HIGH_CHANNELS,
+    HIGH_OPTICS,
+    HIGH_SLAB,
+    GeneraSpec,
+    genus_specs,
+    high_genera,
+    high_jet,
+    high_wind_cube,
+    weather_cirrus,
+)
+from world_builder.clouds.noise import (
+    DECK_LAYER,
+    DECK_LIGHT_COS_MIN,
+    DETAIL_LEVELS,
+    GENUS_VEC4S,
+    LAYER_VEC4S,
+    MAX_GENERA,
+    NOISE_FEATURE,
+    NOISE_SIZE,
+    WORLEY_CELLS,
+    DensityField,
+    GenusField,
+    _smoothstep,
+    build_cells_texture,
+    build_curl_texture,
+    build_deck_light_array,
+    build_deck_light_texture,
+    build_noise_texture,
+    cell_means,
+    cell_spreads,
+    clamped_anisotropy,
+    curl_noise_volume,
+    pack_genus_params,
+    pack_layer_params,
+    pack_recipe_cells,
+    pack_recipe_frame,
+    phase_weights,
+    recipe_resolved,
+    sample_cells,
+    sample_volume,
+)
+from world_builder.clouds.passes import composite_card, pass_camera, pass_states
+from world_builder.clouds.shadow_defaults import (
+    _no_coverage,
+    _no_deck_light_array,
+    _no_shift,
+    cloud_shadow_defaults,
+)
+from world_builder.clouds.weather import (
+    WeatherSpec,
+    build_coverage_texture,
+    build_high_wind_texture,
+    build_shift_texture,
+    build_weather_texture,
+    coverage_to_shift,
+    shift_table,
+)
 from world_builder.depth import (
     CLOUD_FAR_BIT,
     CLOUD_NEAR_BIT,
@@ -153,6 +198,7 @@ from world_builder.depth import (
     SplitDepthCameras,
 )
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
+from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.cubesphere import grid_for
 from world_builder.terrain.planet import PlanetSpec
 
@@ -173,6 +219,24 @@ SEGMENT_SAMPLES = 8
 #: The march stops at this transmittance and counts the cloud opaque
 #: (cloud_march.frag's OPAQUE).
 OPAQUE = 0.04
+
+
+def opaque_residual(transmittance: float) -> float:
+    """The light a ray lets through once composited (cloud_march.glsl's
+    ``opaqueResidual``): its transmittance, eased to 0 over [:data:`OPAQUE`,
+    2 :data:`OPAQUE`] (value and slope continuous), 0 below. Snapped from
+    OPAQUE to 0, a thin sheet seen at a grazing angle, whose rays cross the
+    cutoff gradually across the view, took a step of 0.04 in alpha there: a
+    contour across the altostratus (clouds.md, "The recipe genera").
+    """
+    if transmittance <= OPAQUE:
+        return 0.0
+    if transmittance >= 2.0 * OPAQUE:
+        return float(transmittance)
+    x = transmittance - OPAQUE
+    return float(3.0 * x - x * x / OPAQUE)
+
+
 #: The view ray's extinction over the field's (the sun march keeps the
 #: field's own). The billboards' look: each of their quads carries its
 #: sample's density over a whole chord, which keeps a cloud's edge crisp;
@@ -268,27 +332,628 @@ def slab_segments(
     return segments
 
 
-def family_segments(
+#: The most sky bands the march takes a ray through (each up to two
+#: stretches: cloud_march.frag's eight segments). MUST match the shader.
+MAX_SKY_BANDS = 4
+
+
+def _merged(slabs: list[tuple[float, float]]) -> list[list[float]]:
+    """Slabs merged where they overlap or touch: [base, top] each, lowest
+    first."""
+    out: list[list[float]] = []
+    for base, thickness in sorted(slabs):
+        top = base + thickness
+        if out and base <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], top)
+        else:
+            out.append([base, top])
+    return out
+
+
+def sky_bands(slabs: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """The genera's slabs merged into the bands of sky the march takes a ray
+    through (overlapping or touching slabs are one band; a gap between two
+    costs no steps), lowest first.
+
+    A slab that bridges a gap (the nimbostratus's 0.6-5 km, between the low
+    sheets' band and the convective clouds') does not merge the slabs on
+    either side: its band is split at the gap's middle, each part taking
+    the genera on its side and the bridge. A band's thickest slab is never
+    a bridge (the convective clouds' 2.2-10.5 km holding mid-level sheets
+    stays one band). Merged, the low sheets took a
+    9.9 km band's shares, its light volume's slices (310 m, not 31) and its
+    bakes' steps: their shading turned grainy and their ground shadow
+    patchy (clouds.md, "The nimbostratus").
+
+    :param slabs: each genus's (base, thickness) above sea level, metres
+    :returns: each band's (base, thickness)
+    :raises ValueError: for more than :data:`MAX_SKY_BANDS` bands
+    """
+    bands: list[tuple[float, float]] = []
+    for base, top in _merged(slabs):
+        inside = [s for s in slabs if s[0] >= base - 1e-6 and s[0] + s[1] <= top + 1e-6]
+        # The bridges: the slabs without which the band falls apart, but
+        # its thickest (a convective slab holding mid-level sheets: cut, a
+        # tower would take two bands' steps, a seam up its face)
+        thickest = max(inside, key=lambda s: s[1])
+        bridges = [
+            s
+            for k, s in enumerate(inside)
+            if s is not thickest and len(_merged(inside[:k] + inside[k + 1 :])) > 1
+        ]
+        cores = _merged([s for s in inside if s not in bridges]) if bridges else []
+        cuts = [0.5 * (a[1] + b[0]) for a, b in zip(cores, cores[1:])]
+        edges = [base, *cuts, top]
+        bands += [(float(lo), float(hi - lo)) for lo, hi in zip(edges, edges[1:])]
+    if len(bands) > MAX_SKY_BANDS:
+        raise ValueError(f"{len(bands)} bands of sky; the march takes {MAX_SKY_BANDS}")
+    return bands
+
+
+def band_masks(
+    slabs: list[tuple[float, float]], bands: list[tuple[float, float]]
+) -> list[int]:
+    """Which genera each sky band holds, as bit masks (bit *g*: genus *g*;
+    cloud_field.glsl's ``uSkyBands`` z): those whose slab reaches into it
+    (a bridge, :func:`sky_bands`, both of its bands).
+
+    :param slabs: each genus's (base, thickness) above sea level, metres
+    :param bands: :func:`sky_bands` of *slabs*
+    """
+    masks = []
+    for base, thickness in bands:
+        top = base + thickness
+        masks.append(
+            sum(
+                1 << g
+                for g, (b, t) in enumerate(slabs)
+                if b < top - 1e-6 and b + t > base + 1e-6
+            )
+        )
+    return masks
+
+
+#: The high genera's bits of ``uGenusMask`` (:meth:`CloudMarch.set_genus_visible`),
+#: past the low genera's: channel c of cube B (``genera.HIGH_CHANNELS``) has
+#: bit ``HIGH_MASK_SHIFT + c - 1`` (``cloud_march.glsl``'s ``highCrossing``).
+HIGH_MASK_SHIFT = MAX_GENERA
+#: Every genus drawn: the low genera's bits and the high genera's.
+ALL_GENERA_MASK = (1 << (HIGH_MASK_SHIFT + len(HIGH_CHANNELS))) - 1
+
+#: The band a high-layer crossing is tagged with (:func:`band_segments`;
+#: ``cloud_march.glsl``'s ``HIGH_BAND``). MUST match the shader.
+HIGH_BAND = -1
+#: The longest path through the high slab, in slab depths
+#: (``THIN_GRAZING_PATH``): past it a veil
+#: would saturate toward the horizon into a flat plate. MUST match the shader.
+THIN_GRAZING_PATH = 4.0
+
+
+def band_segments(
     origin: ArrayLike,
     direction: ArrayLike,
     radius: float,
     slabs: list[tuple[float, float]],
     t_start: float = 0.0,
     t_end: float = math.inf,
+    high: tuple[float, float] | None = None,
 ) -> list[tuple[float, float, int]]:
-    """The stretches of a ray in several families' slabs (the genera's
-    convective clouds, then the stratus under them), sorted along the ray (the
-    shader's four segments): the slabs do not overlap.
+    """The stretches of a ray in the genera's bands of sky (:func:`sky_bands`
+    of *slabs*), and in the high layer's slab, sorted along the ray (the
+    order the march composites them in). The high slab's crossings are
+    :func:`slab_segments`' of it: above every band, its first (on the way
+    down) is always before every band's stretch and its second (on the way
+    up) after every one, so the shader takes them before and after its
+    sorted segments, not among them.
 
-    :param slabs: each family's (base, thickness) above sea level, metres
-    :returns: (t0, t1, family) of each non-empty stretch
+    :param slabs: each genus's (base, thickness) above sea level, metres
+    :param high: the high layer's slab (``genera.HIGH_SLAB``), above every
+        band; None = none
+    :returns: (t0, t1, band) of each non-empty stretch, the band its index in
+        :func:`sky_bands`, or :data:`HIGH_BAND` for the high slab's
     """
     out = []
-    for family, slab in enumerate(slabs):
+    tagged = list(enumerate(sky_bands(slabs)))
+    if high is not None:
+        tagged.append((HIGH_BAND, high))
+    for band, slab in tagged:
         for t0, t1 in slab_segments(origin, direction, radius, slab, t_start, t_end):
             if t1 > t0:
-                out.append((float(t0), float(t1), family))
+                out.append((float(t0), float(t1), band))
     return sorted(out)
+
+
+def thin_optical_depth(
+    density: float, length: float, thickness: float, extinction: float, cap: float
+) -> float:
+    """A high-layer crossing's optical depth (exp2 units), as the cirrus
+    sheet's: its mean density times the path, at most
+    :data:`THIN_GRAZING_PATH` slab depths, saturating softly toward *cap*
+    (``highCrossing``).
+
+    :param density: the samples' mean density (1: a full veil)
+    :param length: the crossing's length, metres
+    :param extinction: optical depth per metre at density 1
+    :param cap: what it saturates toward (``genera.HIGH_OPTICS``' cap)
+    """
+    path = min(length, THIN_GRAZING_PATH * thickness)
+    return cap * (1.0 - math.exp(-extinction * density * path / cap))
+
+
+def high_optical_depth(
+    density: ArrayLike,
+    length: float,
+    thickness: float,
+    extinction: ArrayLike,
+    cap: ArrayLike,
+) -> float:
+    """A high-layer crossing's optical depth with every genus in it
+    (``highCrossing``): the channels' depths before the cap add, and the
+    cap is theirs weighted by their shares (one genus alone:
+    :func:`thin_optical_depth`).
+
+    :param density: (3,) each channel's mean density (cirrus,
+        cirrostratus, cirrocumulus)
+    :param extinction: (3,) each one's optical depth per metre at density 1
+        (``genera.HIGH_OPTICS``' depth over the slab's thickness)
+    :param cap: (3,) what each one's saturates toward
+    """
+    path = min(length, THIN_GRAZING_PATH * thickness)
+    parts = np.asarray(extinction, np.float64) * np.asarray(density, np.float64) * path
+    total = float(parts.sum())
+    if total <= 0.0:
+        return 0.0
+    mixed = float(parts @ np.asarray(cap, np.float64)) / total
+    return mixed * (1.0 - math.exp(-total / mixed))
+
+
+def sheet_crossing(
+    origin: ArrayLike, direction: ArrayLike, middle: float, t0: float, t1: float
+) -> float | None:
+    """Where a crossing (t0, t1) of the high slab meets its middle, the
+    sphere of radius *middle* around the planet's centre (``highCrossing``'s
+    sheet point): every high genus's pattern is read there, once, as a thin
+    sheet's, not at jittered samples (a slant ray's samples would wander
+    over the slab's 1.5 km across a grain's 200 m or a fibre's 180 m, and
+    the visits would blur them). Where the crossing does not meet it (a
+    camera inside the slab, looking away from its middle), None: the ray
+    crosses no sheet, and the crossing draws nothing (the crossing's middle,
+    once read there, drew a second, offset copy of the cirrus from inside
+    the slab)."""
+    c = np.asarray(origin, np.float64)
+    d = np.asarray(direction, np.float64)
+    b = float(c @ d)
+    q = float(np.linalg.norm(c - d * b))
+    if q < middle:
+        h = math.sqrt((middle - q) * (middle + q))
+        for t in (-b - h, -b + h):
+            if t0 <= t <= t1:
+                return t
+    return None
+
+
+#: The steepest a ray may meet the high slab in the footprint's stretch
+#: (:func:`slab_footprint`): the cosine of its angle to the vertical. MUST
+#: match the shader.
+HIGH_MIN_INCIDENCE = 0.05
+
+
+def slab_footprint(pixel: float, incidence: float) -> float:
+    """A view pixel's footprint on the high layer's sheet, metres: its own
+    stretched along the view by the slant, ``pixel / cos`` (the cosine of
+    the ray's angle to the vertical, at least :data:`HIGH_MIN_INCIDENCE`).
+    The cirrocumulus's grains and the cirrostratus's fibres fade by it: at a
+    grazing angle a pixel spans many grains along the view though few
+    across it (Task 20's view-pixel footprint alone aliased there)."""
+    return pixel / max(abs(incidence), HIGH_MIN_INCIDENCE)
+
+
+#: The cirrostratus's veil (``highSheets``; clouds.md, "The high layer"):
+#: features this many metres across the jet and CS_STRETCH times longer
+#: along it (the research's 50-200 km, stretched 5-10 times), faint fibres
+#: CS_FIBRE metres across, CS_FIBRE_STRETCH times longer. MUST match the
+#: shader.
+CS_FEATURE = 25000.0
+CS_STRETCH = 6.0
+CS_FIBRE = 1500.0
+CS_FIBRE_STRETCH = 12.0
+#: The cirrocumulus's grains: Worley cells this many metres across (the
+#: research's 100-300 m: under 1 degree from 11 km below, the WMO's), each
+#: grain ``smoothstep(CC_GRAIN, 1 - F1)`` (round flakes, sky between), the
+#: grains' fill moved by a sine ripple across the jet's crests, CC_RIPPLE
+#: metres apart (the research's 0.5-1 km: undulatus). MUST match the shader.
+CC_CELL = 200.0
+CC_GRAIN = (0.5, 0.75)
+CC_RIPPLE = 600.0
+
+
+def cirrocumulus_grain_value(cells: np.ndarray, at: ArrayLike) -> np.ndarray:
+    """The cirrocumulus's grains at *at* (metres, planet frame), resolved:
+    ``smoothstep(CC_GRAIN, 1 - F1)`` of the Worley cells CC_CELL metres
+    across (``highSheets``)."""
+    f1 = sample_cells(cells, np.asarray(at, np.float64) / CC_CELL)
+    return _smoothstep(*CC_GRAIN, 1.0 - f1)
+
+
+@functools.cache
+def cirrocumulus_grain_mean() -> float:
+    """The grains' mean (``uHighShape.x``): what they fade to where a pixel
+    does not resolve them, so a far patch keeps its optical depth. Over a
+    lattice of points through the Worley volume's tile, offset off its
+    texels."""
+    cells = _cells()
+    n = 48
+    grid = (np.arange(n) + 0.37) * (WORLEY_CELLS / n)
+    at = np.stack(np.meshgrid(grid, grid, grid, indexing="ij"), -1).reshape(-1, 3)
+    return float(cirrocumulus_grain_value(cells, at * CC_CELL).mean())
+
+
+def cirrocumulus_grains(
+    cells: np.ndarray, at: ArrayLike, footprint: ArrayLike
+) -> np.ndarray:
+    """The cirrocumulus's grains as the shader takes them: faded to their
+    mean (:func:`cirrocumulus_grain_mean`) where a footprint does not
+    resolve a cell (``resolved``: 2 footprints a cell none, 4 whole).
+
+    :param footprint: metres (:func:`slab_footprint`)
+    """
+    grain = cirrocumulus_grain_value(cells, at)
+    mean = cirrocumulus_grain_mean()
+    return mean + (grain - mean) * recipe_resolved(CC_CELL, footprint)
+
+
+#: The cirrus (``cirrusStreaks``; clouds.md, "The cirrus"): its noise in the
+#: upper wind's frame, (width across the wind, length along it), metres: the
+#: fibres (14-33 times longer than wide: the research's 8-20, and more), the
+#: bundles they come in, their strands (the fibrous texture), the tufts (the
+#: heads), the patches. MUST match the shader.
+CI_FIBRE = (180.0, 6000.0)
+CI_CLUMP = (1200.0, 4500.0)
+CI_SHEEN = (70.0, 900.0)
+CI_TUFT = (400.0, 650.0)
+CI_PATCH = (9000.0, 30000.0)
+#: Each one's smoothstep window on its noise (the patches' moved down by
+#: CI_PATCH_COVER x the coverage: more coverage, more patches).
+CI_FIBRE_WINDOW = (0.45, 0.80)
+CI_CLUMP_WINDOW = (0.45, 0.70)
+CI_STRAND_WINDOW = (0.48, 0.68)
+CI_TUFT_WINDOW = (0.66, 0.90)
+CI_PATCH_WINDOW = (0.70, 0.85)
+CI_PATCH_COVER = 0.55
+#: The strands' least share of the fibrous texture, the tails' and the
+#: fibres' gains against a head's 1, and the most a streak's density.
+CI_STRAND_FLOOR = 0.15
+CI_TAIL_GAIN = 1.6
+CI_FIBRE_GAIN = 1.0
+CI_MAX_DENSITY = 1.3
+#: The heads (uncinus, floccus; the WMO's are fibrous themselves, the
+#: fibres splaying out at them, :data:`CI_FAN`): a wide
+#: window on the tuft noise (a soft, fraying edge), moved by CI_HEAD_FRAY x
+#: the fibre noise about its mean (the outline frays along the fibres),
+#: CI_HEAD_FLOOR of it between the strands (striated), at most CI_HEAD_GAIN
+#: (translucent). Task 23's heads, a solid smoothstep(0.66, 0.90) at 1, read
+#: as blobs and smeared chevrons. MUST match the shader.
+CI_HEAD_WINDOW = (0.60, 1.00)
+CI_HEAD_FRAY = 0.25
+CI_HEAD_FLOOR = 0.2
+CI_HEAD_GAIN = 1.2
+#: The taps' fan toward the head (:func:`cirrus_tufts`): at most this many
+#: metres across the wind at tap 0, a fibre's share by its noise. MUST
+#: match the shader.
+CI_FAN = 500.0
+#: The tails: CI_TAPS taps CI_TAIL_STEP metres apart downwind (the heads
+#: there), CI_HOOK x k^2 metres across the wind at tap k (the fall streak's
+#: shear: a hook), weighted (1 - k / CI_TAPS)^CI_TAIL_FADE.
+CI_TAPS = 6
+CI_TAIL_STEP = 380.0
+CI_HOOK = 35.0
+CI_TAIL_FADE = 1.3
+#: The stream function's axis in the noise (off its lattice). MUST match.
+CI_PSI_AXIS = (0.5257, 0.6180, 0.5848)
+#: Each noise's offset, in tiles of the noise volume. MUST match.
+CI_OFFSETS = {
+    "patch": (0.13, 0.71, 0.37),
+    "fibre": (0.47, 0.19, 0.83),
+    "clump": (0.23, 0.89, 0.61),
+    "sheen": (0.91, 0.37, 0.53),
+    "tuft": (0.67, 0.43, 0.09),
+}
+
+
+def cirrus_flow(
+    q: ArrayLike,
+    psi: ArrayLike,
+    across: ArrayLike,
+    speed: ArrayLike,
+    delta: ArrayLike,
+    size: tuple[float, float],
+    offset: tuple[float, float, float],
+) -> np.ndarray:
+    """The noise coordinates (``sample_volume``'s) of the point q + delta of
+    the upper wind's flow (``cirrusFlow``): its features ``size`` (width
+    across the wind, length along it), metres. The stream function *psi* at
+    q is the across coordinate (constant along a streamline), the position
+    the along one; ``grad psi = -speed * across``.
+
+    :param q: (..., 3) metres, planet frame; *across*, *delta* likewise
+    """
+    q = np.asarray(q, np.float64)
+    delta = np.asarray(delta, np.float64)
+    width, length = size
+    stream = np.asarray(psi, np.float64) - np.asarray(speed) * np.sum(
+        np.asarray(across, np.float64) * delta, axis=-1
+    )
+    axis = np.asarray(CI_PSI_AXIS)
+    return (
+        (q + delta) / length + axis * (stream / width)[..., None]
+    ) * NOISE_FEATURE + np.asarray(offset) * NOISE_SIZE
+
+
+def _ci_noise(volume, q, psi, across, speed, delta, size, name, window):
+    coords = cirrus_flow(q, psi, across, speed, delta, size, CI_OFFSETS[name])
+    return _smoothstep(*window, sample_volume(volume, coords))
+
+
+def _ci_strands(volume, q, psi, across, speed, warp, strands):
+    """The strands' value: given (their mean where a pixel does not resolve
+    them), or their noise's."""
+    if strands is None:
+        return _ci_noise(volume, q, psi, across, speed, warp, CI_SHEEN, "sheen",
+                         CI_STRAND_WINDOW)  # fmt: skip
+    return np.asarray(strands, np.float64)
+
+
+def _ci_fibrous(volume, q, psi, across, speed, warp, strands):
+    strands = _ci_strands(volume, q, psi, across, speed, warp, strands)
+    return CI_STRAND_FLOOR + (1.0 - CI_STRAND_FLOOR) * strands
+
+
+def _ci_raw(volume, q, psi, across, speed, delta, size, name):
+    coords = cirrus_flow(q, psi, across, speed, delta, size, CI_OFFSETS[name])
+    return sample_volume(volume, coords)
+
+
+def cirrus_tufts(
+    volume: np.ndarray,
+    q: ArrayLike,
+    psi: ArrayLike,
+    along: ArrayLike,
+    across: ArrayLike,
+    speed: ArrayLike = 1.0,
+    strands: ArrayLike | None = None,
+    warp: ArrayLike = 0.0,
+) -> np.ndarray:
+    """The cirrus's heads and tails, resolved (``cirrusStreaks``). The taps
+    along the hooked line fan out toward the head: each fibre shifts them
+    across the wind by its share of :data:`CI_FAN` (the fibre noise about
+    its mean, signed), most at the head (tap 0), none at the tail's end, so
+    the fibres splay out at the head and run together downstream (the
+    fibres' noise, not the strands': 180 m, not 70 m, keeps neighbouring
+    pixels' taps together in the texture cache). The head: a wide window
+    (:data:`CI_HEAD_WINDOW`) on the tuft
+    noise at tap 0, its outline frayed along the fibres
+    (:data:`CI_HEAD_FRAY`), striated by the strands, at most
+    :data:`CI_HEAD_GAIN` (translucent: no blob). The tail: the tufts at the
+    other taps averaged (a line integral), textured by the strands.
+
+    :param strands: the strands' value in place of their window on their
+        noise (their mean where a pixel does not resolve them); None =
+        resolved
+    """
+    q = np.asarray(q, np.float64)
+    along = np.asarray(along, np.float64)
+    across = np.asarray(across, np.float64)
+    warp = np.broadcast_to(np.asarray(warp, np.float64), q.shape)
+    args = (volume, q, psi, across, speed)
+    mean = float(np.mean(volume))
+    strands = _ci_strands(*args, warp, strands)
+    fibre = _ci_raw(*args, warp, CI_FIBRE, "fibre")
+    fan = CI_FAN * 2.0 * (fibre - mean)
+    head = tail = weights = 0.0
+    for k in range(CI_TAPS):
+        spread = fan * (1.0 - k / CI_TAPS)
+        delta = (
+            warp
+            + CI_TAIL_STEP * k * along
+            + (CI_HOOK * k * k + spread)[..., None] * across
+        )
+        n = _ci_raw(*args, delta, CI_TUFT, "tuft")
+        if k == 0:
+            frayed = n + CI_HEAD_FRAY * (fibre - mean)
+            head = (
+                CI_HEAD_GAIN
+                * _smoothstep(*CI_HEAD_WINDOW, frayed)
+                * (CI_HEAD_FLOOR + (1.0 - CI_HEAD_FLOOR) * strands)
+            )
+        else:
+            w = (1.0 - k / CI_TAPS) ** CI_TAIL_FADE
+            tail = tail + w * _smoothstep(*CI_TUFT_WINDOW, n)
+            weights += w
+    fibrous = CI_STRAND_FLOOR + (1.0 - CI_STRAND_FLOOR) * strands
+    return head + CI_TAIL_GAIN * tail / weights * fibrous
+
+
+def cirrus_detail(
+    volume: np.ndarray,
+    q: ArrayLike,
+    psi: ArrayLike,
+    along: ArrayLike,
+    across: ArrayLike,
+    speed: ArrayLike = 1.0,
+    strands: ArrayLike | None = None,
+    tufts: ArrayLike | None = None,
+    warp: ArrayLike = 0.0,
+) -> np.ndarray:
+    """The cirrus's streaks (``cirrusStreaks``' detail, its domain warp
+    *warp* given: the curl noise's on the GPU): the tufts
+    (:func:`cirrus_tufts`) and the fibres in their bundles, textured by the
+    strands; at most :data:`CI_MAX_DENSITY`.
+
+    :param strands: the strands' value (None: resolved)
+    :param tufts: the tufts' value (their mean where a pixel does not
+        resolve them); None = resolved
+    """
+    q = np.asarray(q, np.float64)
+    warp = np.broadcast_to(np.asarray(warp, np.float64), q.shape)
+    args = (volume, q, psi, across, speed)
+    fibre = _ci_noise(*args, warp, CI_FIBRE, "fibre", CI_FIBRE_WINDOW)
+    fibre = fibre * _ci_noise(*args, warp, CI_CLUMP, "clump", CI_CLUMP_WINDOW)
+    if tufts is None:
+        tufts = cirrus_tufts(volume, q, psi, along, across, speed, strands, warp)
+    fibrous = _ci_fibrous(volume, q, psi, across, speed, warp, strands)
+    return np.minimum(tufts + CI_FIBRE_GAIN * fibre * fibrous, CI_MAX_DENSITY)
+
+
+def cirrus_patches(
+    volume: np.ndarray,
+    q: ArrayLike,
+    psi: ArrayLike,
+    across: ArrayLike,
+    cover: ArrayLike,
+    speed: ArrayLike = 1.0,
+    warp: ArrayLike = 0.0,
+) -> np.ndarray:
+    """The patches the cirrus's streaks come in (``cirrusStreaks``): their
+    share of the sheet about the coverage (the weather's cirrus cover is
+    that share, :func:`weather.cirrus_cover_map`)."""
+    q = np.asarray(q, np.float64)
+    warp = np.broadcast_to(np.asarray(warp, np.float64), q.shape)
+    coords = cirrus_flow(q, psi, across, speed, warp, CI_PATCH, CI_OFFSETS["patch"])
+    return _smoothstep(
+        *CI_PATCH_WINDOW,
+        sample_volume(volume, coords) + CI_PATCH_COVER * np.asarray(cover),
+    )
+
+
+def _cirrus_sample(seed: int, n: int = 40000, rng_seed: int = 5):
+    """Points of a flat stretch of the sheet with the wind along x (speed
+    1): (volume, q, psi, along, across)."""
+    rng = np.random.default_rng(rng_seed)
+    volume = _noise(seed)
+    xy = rng.uniform(0.0, 400e3, (n, 2))
+    q = np.stack([xy[:, 0], xy[:, 1], np.full(n, 6.1e6)], -1)
+    along = np.broadcast_to([1.0, 0.0, 0.0], q.shape)
+    across = np.broadcast_to([0.0, 1.0, 0.0], q.shape)  # up x along
+    psi = 2e5 - xy[:, 1]  # grad psi = -across
+    return volume, q, psi, along, across
+
+
+@functools.cache
+def cirrus_means(seed: int = 7) -> tuple[float, float, float, float, float]:
+    """The cirrus's means, what its parts fade to where a pixel does not
+    resolve them (``uHighCirrus``, ``uHighShape.w``), over a stretch of the
+    sheet: the streaks' detail (:func:`cirrus_detail`), the patches' at
+    coverage 0 and their slope with coverage (a line fitted over coverage
+    0-1: :func:`cirrus_patch_mean`), the strands', the tufts'
+    (:func:`cirrus_tufts`).
+
+    :param seed: the noise volume's (the march's)
+    """
+    volume, q, psi, along, across = _cirrus_sample(seed)
+    strands = _ci_noise(volume, q, psi, across, 1.0, np.zeros_like(q), CI_SHEEN,
+                        "sheen", CI_STRAND_WINDOW)  # fmt: skip
+    tufts = cirrus_tufts(volume, q, psi, along, across)
+    detail = cirrus_detail(volume, q, psi, along, across, tufts=tufts)
+    covers = np.linspace(0.0, 1.0, 6)
+    patches = [cirrus_patches(volume, q, psi, across, c).mean() for c in covers]
+    slope, intercept = np.polyfit(covers, patches, 1)
+    return (
+        float(detail.mean()),
+        float(intercept),
+        float(slope),
+        float(strands.mean()),
+        float(tufts.mean()),
+    )
+
+
+def cirrus_patch_mean(cover: ArrayLike, seed: int = 7) -> np.ndarray:
+    """The patches' mean at *cover* as the shader takes it (the line of
+    :func:`cirrus_means`, clamped to [0, 1])."""
+    _, intercept, slope, _, _ = cirrus_means(seed)
+    return np.clip(intercept + slope * np.asarray(cover, np.float64), 0.0, 1.0)
+
+
+#: The cirrus's density fades in over this much coverage (``CI_COVER_EDGE``):
+#: the coverage thins its patches, it does not scale its density. MUST
+#: match the shader.
+CI_COVER_EDGE = 0.1
+
+
+def footprint_along(
+    axis: ArrayLike, view: ArrayLike, pixel: ArrayLike, incidence: ArrayLike
+) -> np.ndarray:
+    """A view pixel's footprint on the high sheet along its unit direction
+    *axis* (``footprintAlong``): *pixel* metres across the view, stretched
+    by the slant (:func:`slab_footprint`) along the view's own direction on
+    the sheet, *view* (unit). Across the view a grazing pixel stays small:
+    the cirrus's fibres running across it stay resolved."""
+    a = np.sum(np.asarray(axis, np.float64) * np.asarray(view, np.float64), axis=-1)
+    inc = np.maximum(np.abs(np.asarray(incidence, np.float64)), HIGH_MIN_INCIDENCE)
+    return np.asarray(pixel) * np.sqrt(
+        a * a / (inc * inc) + np.maximum(1.0 - a * a, 0.0)
+    )
+
+
+def cirrus_streaks(
+    volume: np.ndarray,
+    q: ArrayLike,
+    psi: ArrayLike,
+    along: ArrayLike,
+    across: ArrayLike,
+    footprint: ArrayLike,
+    cover: ArrayLike,
+    seed: int = 7,
+    footprints: tuple[ArrayLike, ArrayLike] | None = None,
+) -> np.ndarray:
+    """The cirrus's density as the shader takes it (``cirrusStreaks``, no
+    domain warp, speed 1): faded in by the coverage, the patches times the
+    streaks, each part faded to its mean (:func:`cirrus_means`) where a
+    footprint does not resolve it (``resolved``: 2 footprints to its size
+    none of it, 4 all).
+
+    :param footprint: the slant's (metres: :func:`slab_footprint`), the
+        tufts'
+    :param footprints: (across the wind, along it) (:func:`footprint_along`),
+        the patches', the fibres' and the strands'; None = *footprint* both
+    """
+    detail_mean, _, _, strand_mean, tuft_mean = cirrus_means(seed)
+    footprint = np.asarray(footprint, np.float64)
+    across_fp, along_fp = footprints if footprints is not None else (footprint,) * 2
+    patches = cirrus_patches(volume, q, psi, across, cover)
+    mean = cirrus_patch_mean(cover, seed)
+    patches = mean + (patches - mean) * (
+        recipe_resolved(CI_PATCH[0], across_fp) * recipe_resolved(CI_PATCH[1], along_fp)
+    )
+    zero = np.zeros_like(np.asarray(q, np.float64))
+    strands = _ci_noise(volume, q, psi, across, 1.0, zero, CI_SHEEN, "sheen",
+                        CI_STRAND_WINDOW)  # fmt: skip
+    strand_seen = recipe_resolved(CI_SHEEN[0], across_fp) * recipe_resolved(
+        CI_SHEEN[1], along_fp
+    )
+    strands = strand_mean + (strands - strand_mean) * strand_seen
+    tufts = cirrus_tufts(volume, q, psi, along, across, strands=strands)
+    tufts = tuft_mean + (tufts - tuft_mean) * recipe_resolved(CI_TUFT[0], footprint)
+    detail = cirrus_detail(volume, q, psi, along, across, strands=strands, tufts=tufts)
+    seen = recipe_resolved(CI_FIBRE[0], across_fp) * recipe_resolved(
+        CI_FIBRE[1], along_fp
+    )
+    detail = detail_mean + (detail - detail_mean) * seen
+    edge = _smoothstep(0.0, CI_COVER_EDGE, np.asarray(cover, np.float64))
+    return edge * patches * detail
+
+
+def march_fragment(recipes: bool, high: bool) -> str:
+    """The march's fragment shader: ``cloud_march.glsl`` with the recipe
+    genera's density (``CLOUD_RECIPES``) and the high layer's crossings
+    (``CLOUD_HIGH``) compiled in only where the march has them: a branch
+    never taken still costs the convective clouds (0.15-0.2 ms for the
+    recipes')."""
+    return (
+        "cloud_march"
+        + ("_recipes" if recipes else "")
+        + ("_high" if high else "")
+        + ".frag"
+    )
 
 
 def steps_over(segment: ArrayLike, min_step: float, growth: float) -> float:
@@ -402,8 +1067,8 @@ def march_ray(
     contours away: bands on a tower's face), stopping at :data:`OPAQUE`.
 
     :param extinction_at: the optical depth per metre at a distance along the ray
-    :returns: the transmittance left (0 once the cloud is counted opaque), and
-        the samples taken
+    :returns: the transmittance left as composited (:func:`opaque_residual`:
+        0 once the cloud is counted opaque), and the samples taken
     """
     scales = step_scales(segments, min_step, growth, budget, split)
     cap = _step_cap(budget, split)
@@ -420,7 +1085,7 @@ def march_ray(
             alpha = 1.0 - 2.0 ** (-extinction_at(a + dt * jitter) * dt)
             transmittance *= 1.0 - alpha
             a += dt
-    return (0.0 if transmittance <= OPAQUE else transmittance), samples
+    return opaque_residual(transmittance), samples
 
 
 def min_step(field: DensityField) -> float:
@@ -557,6 +1222,12 @@ def blue_noise(size: int = BLUE_NOISE_SIZE, sigma: float = 1.9) -> np.ndarray:
 
 
 @functools.cache
+def _cells_texture() -> Texture:
+    """The recipe genera's Worley cells (``cloudCells``)."""
+    return build_cells_texture(_cells())
+
+
+@functools.cache
 def _curl_texture() -> Texture:
     return build_curl_texture(curl_noise_volume())
 
@@ -579,8 +1250,13 @@ def _blue_noise_texture() -> Texture:
 
 #: How far a pixel on fresh samples takes their smooth mean instead of their
 #: bilinear mix (cloud_resolve.frag's uSmooth), by the march's block: all of it
-#: at a sixteenth of the pixels a frame, half at a quarter, none at all of them.
-SMOOTHING = {(1, 1): 0.0, (2, 2): 0.5, (4, 2): 0.75, (3, 3): 0.75, (4, 4): 1.0}
+#: at a sixteenth of the pixels a frame, and at a quarter and all of them too,
+#: which take it only in motion or with their history lost: with none (half
+#: at a quarter), each pixel's own sample showed its noise as it was, grain
+#: over the whole cloud in motion (motion_shots.py toward the cumulonimbus
+#: at ``genera_cb``, with the moving weight below: grain 4.97 to 1.24 at 1x1,
+#: 1.33 to 0.88 at 2x2; 4x2's 0.92).
+SMOOTHING = {(1, 1): 1.0, (2, 2): 1.0, (4, 2): 0.75, (3, 3): 0.75, (4, 4): 1.0}
 
 
 def smoothing_of(block: tuple[int, int]) -> float:
@@ -591,16 +1267,19 @@ def smoothing_of(block: tuple[int, int]) -> float:
 #: This frame's least share in a pixel while the camera moves
 #: (cloud_resolve.frag's uMovingWeight, by its uStill), by the block the
 #: resolve gathers: about one cycle of the block's pixels (each pixel's own
-#: sample once), a quarter at most (a 1 x 1 march's samples alone would be raw
-#: noise). With :data:`MIN_WEIGHT` alone, ~33 frames of history lagged the
-#: view of a cloud whose look changes fast as the camera flies (a lumpy
-#: anvil's base seen at a grazing angle from inside the slab), and the clamp
-#: cut the lag wherever its box of noisy samples happened to be narrow: grain
-#: on the cloud's shaded side in motion (performance.md §30; Unreal's clouds
-#: refresh each pixel once a cycle for flying through them, their docs).
+#: sample once), and a sixteenth where that would be more (all the pixels or
+#: a quarter: their samples alone are raw noise; at a quarter, grain over the
+#: whole cloud in motion; the error against the converged view 3.02 to 1.43
+#: at 1x1, 1.52 to 1.36 at 2x2 at a sixteenth, the lag no worse). With
+#: :data:`MIN_WEIGHT` alone, ~33 frames of history lagged the view of a cloud
+#: whose look changes fast as the camera flies (a lumpy anvil's base seen at
+#: a grazing angle from inside the slab), and the clamp cut the lag wherever
+#: its box of noisy samples happened to be narrow: grain on the cloud's
+#: shaded side in motion (performance.md §30; Unreal's clouds refresh each
+#: pixel once a cycle for flying through them, their docs).
 MOVING_WEIGHTS = {
-    (1, 1): 0.25,
-    (2, 2): 0.25,
+    (1, 1): 0.0625,  # not a cycle (1): see above
+    (2, 2): 0.0625,  # not a cycle (1/4): see above
     (4, 2): 0.125,
     (3, 3): 1.0 / 9.0,
     (4, 4): 0.0625,
@@ -634,14 +1313,6 @@ def stats_window(f: tuple[float, float]) -> dict[tuple[int, int], float]:
     return weights
 
 
-#: What share of a step's length fades the field's finer features to their means
-#: (cloud_march.frag's uStepFade), by the march's block: the fewer the samples a
-#: frame has, the more shimmer, the more it must fade. It is the clouds' detail
-#: at a distance against their steadiness: Phase 4.1 had 0.4 everywhere, which
-#: made far clouds soft lumps at every preset.
-STEP_FADES = {(1, 1): 0.0, (2, 2): 0.1, (4, 2): 0.15, (3, 3): 0.15, (4, 4): 0.25}
-
-
 #: Past this view footprint (a pixel's share of the clouds' feature, as the
 #: march's shading measures it) a sample takes its sunlight from the light
 #: volume alone, without the sun march's two local steps (cloud_march.frag's
@@ -659,11 +1330,6 @@ MOVING_HOLD = 8
 #: The camera's motion (cloud_resolve.frag's uStill below this) that counts as
 #: moving for :data:`MOVING_BLOCKS`.
 MOVING_STILL = 0.5
-
-
-def step_fade_of(block: tuple[int, int]) -> float:
-    """:returns: ``uStepFade`` for a march block (across, up)"""
-    return STEP_FADES[block]
 
 
 #: The old ``CloudSettings.march_resolution`` (per axis) as a block.
@@ -915,6 +1581,8 @@ class _MarchLayer:
         gather: bool = True,
         moving_block: tuple[int, int] | None = None,
         ground: Texture | None = None,
+        recipes: bool = False,
+        high: bool = False,
     ) -> None:
         self.lens = near_lens
         self.far_lens = far_lens
@@ -924,10 +1592,9 @@ class _MarchLayer:
         self.blocks = (block, moving_block if gather and moving_block else block)
         self._still_frames = MOVING_HOLD
         # The block's inputs, written in place as it changes (no new render
-        # state a frame): uBlock (march, resolves), uStepFade, uSmooth.
+        # state a frame): uBlock (march, resolves), uSmooth.
         self._block_input = PTA_LVecBase2i.empty_array(1)
         self._resolve_block = PTA_LVecBase2i.empty_array(1)
-        self._step_fade = PTA_float.empty_array(1)
         self._smooth = PTA_float.empty_array(1)
         self._moving_weight = PTA_float.empty_array(1)
         self.far_depth = _DepthPass(
@@ -989,8 +1656,11 @@ class _MarchLayer:
             GraphicsOutput.RTP_aux_hrgba_0, (0.0, 0.0, 0.0, 0.0)
         )
         self.buffer.set_clear_active(GraphicsOutput.RTP_aux_hrgba_0, True)
+        # The recipe genera's and the high layer's variants only for a march
+        # that has them (cloud_march.glsl's CLOUD_RECIPES, CLOUD_HIGH).
+        fragment = march_fragment(recipes, high)
         self.card = _fullscreen(
-            self.buffer, name, _shader("cloud_march.vert", "cloud_march.frag")
+            self.buffer, name, _shader("cloud_march.vert", fragment)
         )
         #: The march's region: the corner of its buffer this frame's block fills
         self.march_region = self.buffer.get_display_region(
@@ -1119,7 +1789,6 @@ class _MarchLayer:
         self.block = block
         self._block_input[0] = LVecBase2i(*block)
         self._resolve_block[0] = LVecBase2i(*block) if self.gather else LVecBase2i(1, 1)
-        self._step_fade[0] = step_fade_of(block)
         self._smooth[0] = smoothing_of(block)
         self._moving_weight[0] = moving_weight_of(block if self.gather else (1, 1))
         used = [max(1, math.ceil(v / b)) for v, b in zip(self._view, block)]
@@ -1134,7 +1803,6 @@ class _MarchLayer:
         self.card.set_shader_inputs(
             uBlock=self._block_input,
             uViewSize=LVecBase2f(*view),
-            uStepFade=self._step_fade,
             uLightLocalFootprint=LIGHT_LOCAL_FOOTPRINT,
         )
         size = self._resolve_size(view)
@@ -1294,10 +1962,12 @@ class _MarchLayer:
 
 
 @dataclass
-class _Family:
-    """One family of the march's clouds: a density field and its weather. A
-    planet has one; with genera, two (the convective clouds, then the stratus
-    under them), whose slabs do not overlap."""
+class _Genus:
+    """One genus of the march's clouds: a density field over its own slab
+    (which may overlap another genus's) and its weather. A planet has one;
+    with genera, one per name of :attr:`genera.GeneraSpec.genera`, the first
+    (the primary genus) reading the weather cube, the others a channel of
+    coverage cube A (``coverage``: the channel; ``weather_job`` the cube's)."""
 
     name: str | None
     preset: Any
@@ -1309,12 +1979,19 @@ class _Family:
     deck_job: Any = None
     deck_field: DensityField | None = None
     deck_optics: Any = None
+    coverage: tuple = ("weather", 0)
+    cover: np.ndarray | None = None
+    #: A recipe genus's resolved :class:`noise.GenusField` (its optics the
+    #: preset's until _configure); None for the others
+    recipe: GenusField | None = None
+    #: The far level's octaves (its shadow's field's: _configure)
+    deck_octaves: int = 4
 
 
-class _FamilyCaster:
-    """A family's shadow, as :class:`sphere.CloudVolume`'s (what
-    :class:`shadow_map.CloudShadowMaps` and :class:`planet.PlanetClouds` ask
-    of a caster)."""
+class _GenusCaster:
+    """A genus's part of the clouds' shadow (one genus of the march: its
+    weather, its deck field and optics), as the CPU marches it
+    (:func:`field_setup.genus_sun_depth`; :class:`_UnionCaster` sums them)."""
 
     def __init__(self, march: CloudMarch, index: int) -> None:
         self._march, self._index = march, index
@@ -1322,12 +1999,12 @@ class _FamilyCaster:
         self._shades: dict[tuple, float] = {}
 
     @property
-    def _family(self) -> _Family:
-        return self._march._families[self._index]
+    def _genus(self) -> _Genus:
+        return self._march._genera[self._index]
 
     @property
     def weather(self):
-        return self._family.weather
+        return self._genus.weather
 
     @property
     def position(self):
@@ -1346,25 +2023,70 @@ class _FamilyCaster:
         return self._march._octave_mean
 
     @property
+    def coverage_source(self) -> tuple | None:
+        """(coverage cube, channel, shift table) of a genus that reads one
+        (:func:`field_setup.genus_sun_depth`); None for the primary genus."""
+        genus = self._genus
+        if genus.cover is None:
+            return None
+        return genus.cover, genus.coverage[1], np.asarray(genus.table)
+
+    @property
+    def recipe(self) -> GenusField | None:
+        """A recipe genus's field (:func:`field_setup.genus_sun_depth` skips
+        it), None for the others."""
+        return self._genus.recipe
+
+    @property
     def _deck_field(self):
-        return self._family.deck_field
+        return self._genus.deck_field
 
     @property
     def _deck_optics(self):
-        return self._family.deck_optics
+        return self._genus.deck_optics
 
     @property
-    def shadow_layer(self) -> int:
-        return int(self._march._shadow_layers[self._index][0])
+    def _deck_octaves(self) -> int:
+        return self._genus.deck_octaves
 
     @property
     def shadow_field(self) -> DensityField:
-        return self._family.deck_field
+        return self._genus.deck_field
+
+    #: Its shade alone (the union's is the product of the genera's).
+    sun_visibility = sun_visibility
+
+
+class _UnionCaster(_GenusCaster):
+    """The clouds' shadow, all their genera's together (what
+    :class:`shadow_map.CloudShadowMaps`, :class:`light_volume.CloudLightVolumes`
+    and :class:`planet.PlanetClouds` ask of a caster): one shadow layer, the
+    sky bands its resources span, and ``exp2(-sum of the genera's depths)``
+    on the CPU. Its weather, field and optics are the first genus's."""
+
+    def __init__(self, march: CloudMarch) -> None:
+        super().__init__(march, 0)
+
+    @property
+    def shadow_genera(self) -> list[_GenusCaster]:
+        """The genera it sums (:func:`field_setup.sun_visibility`)."""
+        return self._march._genus_casters
+
+    @property
+    def shadow_layer(self) -> int:
+        return int(self._march._shadow_layer[0])
+
+    @property
+    def sky_bands(self) -> list[tuple[float, float]]:
+        """The sky bands (:func:`sky_bands`) the light volume and the maps
+        span: their (base, thickness) above sea level, lowest first."""
+        return self._march.sky_bands
 
     def bind_shadow_inputs(self, node: NodePath) -> None:
-        self._march.bind_shadow_inputs(node, family=self._index)
+        self._march.bind_shadow_inputs(node)
 
-    sun_visibility = CloudVolume.sun_visibility
+    #: The genera's together.
+    sun_visibility = sun_visibility
 
 
 class CloudMarch:
@@ -1407,54 +2129,101 @@ class CloudMarch:
         sky_strength: float = 0.35,
         sky_occlusion: float = 0.55,
         exposure: float = 0.9,
-        near_fade_radii: float = 2.5,
-        channel: str | None = None,
-        game: Any = None,
         genera: GeneraSpec | None = None,
-        family: str | None = None,
+        cirrus: bool = False,
     ):
-        """As :class:`sphere.CloudVolume`'s (*near_fade_radii* and
-        *channel* are unused: nothing fades near the camera, nothing is
-        generated per tile). With *genera* it marches both families, the
-        convective clouds and the stratus under them (*family* is unused)."""
+        """As :class:`planet.PlanetClouds`' arguments of the same names.
+        With *genera* it marches every genus of
+        :attr:`genera.GeneraSpec.genera` (:data:`genera.GENUS_PRESETS`) as
+        one: the first, the primary genus (the convective clouds), on the
+        weather cube, the others on coverage cube A. With *cirrus* its high
+        layer draws the weather's cirrus (:attr:`genera.GeneraSpec.cirrus_weather`;
+        without genera, :func:`genera.weather_cirrus`'s high layer alone)."""
         settings = settings or CloudSettings()
         _ensure_bin()
         self.radius = float(radius)
         self.position = np.asarray(position, dtype=np.float64)
         self.executor = executor
         self.grid = grid_for(self.radius)
-        self.stats = {"tiles": 0, "billboards": 0, "pending": 1, "gen_ms": 0.0}
+        self.stats = {"pending": 1}
         self._atmospheres = atmospheres
 
         volume = _noise(seed)
         self._seed = seed
         self._octave_mean = float(volume.mean())
-        self._genera = genera
-        if genera is not None:
-            specs = [
-                (CONVECTIVE, CloudType.CONVECTIVE, altitude),
-                (STRATIFORM, CloudType.STRATUS, genera.stratus_altitude),
-            ]
-        else:
-            specs = [(None, cloud_type, altitude)]
+        if genera is not None and cirrus and not genera.cirrus_weather:
+            genera = replace(genera, cirrus_weather=True)
+        self._genera_spec = genera
+        specs = (
+            genus_specs(genera, altitude, covered=True)
+            if genera is not None
+            else [(None, cloud_type, altitude, None, ("weather", 0))]
+        )
+        if genera is None:
             weather = planet_weather(weather, planet, self.radius, weather_seed)
-        self._families: list[_Family] = []
-        for name, kind, base in specs:
-            preset, field, peaks = planet_field(kind, base, seed, self.radius)
+        if len(specs) > MAX_GENERA:
+            raise ValueError(f"{len(specs)} genera; the march takes {MAX_GENERA}")
+        self._genera: list[_Genus] = []
+        cover_jobs: dict[str, Any] = {}
+        for index, (name, kind, base, thickness, coverage) in enumerate(specs):
+            if (coverage[0] == "weather") != (index == 0):
+                raise ValueError(
+                    f"genus {name!r}: the first genus, and it alone, reads the weather"
+                )
+            if genera is None:
+                preset, field, peaks = planet_field(
+                    kind, base, seed, self.radius, thickness
+                )
+                recipe = None
+            else:
+                east = tuple(float(v) for v in TangentFrame.at(*genera.focus).east)
+                preset, field, peaks, recipe = genus_field(
+                    name, base, thickness, seed, self.radius, east
+                )
             table = tuple(float(v) for v in shift_table(peaks, field.threshold[0]))
-            if genera is not None:
-                # The family's maps; a convective field's shift by depth too.
+            if genera is None:
+                job = executor.submit_once(_weather, weather, table)
+            elif index == 0:
+                # The primary genus's weather cube: its shift by depth too.
                 tables = table
                 if field.min_top < 1.0:
                     tables = tuple(
                         tuple(float(v) for v in row)
                         for row in _depth_tables(seed, field, self.radius)
                     )
-                job = executor.submit_once(_genus_weather, genera, name, tables)
+                job = executor.submit_once(_genus_weather, genera, CONVECTIVE, tables)
             else:
-                job = executor.submit_once(_weather, weather, table)
-            self._families.append(_Family(name, preset, field, peaks, table, job))
-        first = self._families[0]
+                if coverage[0] not in cover_jobs:
+                    cover_jobs[coverage[0]] = executor.submit_once(
+                        _coverage_cube, genera, coverage[0]
+                    )
+                job = cover_jobs[coverage[0]]
+            self._genera.append(
+                _Genus(name, preset, field, peaks, table, job, coverage=coverage,
+                       recipe=recipe)
+            )  # fmt: skip
+        #: What the high layer follows: the genera, or without them the
+        #: weather's cirrus alone (with *cirrus*); None = no high layer
+        self._high_spec = (
+            genera
+            if genera is not None
+            else (weather_cirrus(weather) if cirrus else None)
+        )
+        #: The high genera drawn (genera.high_genera, those a feature covers
+        #: and the weather's cirrus: none, no high layer compiled) and their
+        #: coverage cube (B)
+        self._high = (
+            [] if self._high_spec is None else high_genera(self._high_spec, True)
+        )
+        self._high_job = None
+        self._wind_job = None
+        if self._high:
+            self._high_job = cover_jobs.get("B") or executor.submit_once(
+                _coverage_cube, self._high_spec, "B"
+            )
+            # The upper wind on the GPU (highWind): the cirrus's flow
+            self._wind_job = executor.submit_once(high_wind_cube, self._high_spec)
+        first = self._genera[0]
         self.field = first.field
         self._preset = first.preset
         self._peaks = first.peaks
@@ -1462,34 +2231,45 @@ class CloudMarch:
         self._weather_job = first.weather_job
         self.weather: np.ndarray | None = None
         self._settings = settings
-        #: Each family's shadow's layer (uCloudShadowLayer), -1 until ready
-        self._shadow_layers = [PTA_int.empty_array(1) for _ in self._families]
-        for layer in self._shadow_layers:
-            layer[0] = -1
-        #: (node, its first family, its second or None) the shadow is bound to
-        self._shadow_nodes: list[tuple[NodePath, int, int | None]] = []
+        #: The shadow's layer (uCloudShadowLayer: genus 0's far level; genus
+        #: g's is g * DETAIL_LEVELS past it), -1 until ready
+        self._shadow_layer = PTA_int.empty_array(1)
+        self._shadow_layer[0] = -1
+        #: The sky bands (uSkyBands): (base, top, genus mask, 0)
+        slabs = [tuple(f.field.slab) for f in self._genera]
+        self.sky_bands = sky_bands(slabs)
+        self._sky_bands = PTA_LVecBase4f.empty_array(MAX_SKY_BANDS)
+        for k, ((base, thickness), mask) in enumerate(
+            zip(self.sky_bands, band_masks(slabs, self.sky_bands))
+        ):
+            self._sky_bands[k] = LVecBase4f(base, base + thickness, mask, 0.0)
+        #: The nodes the shadow is bound to
+        self._shadow_nodes: list[NodePath] = []
         self._map_binders: list[Any] = []
-        self._casters = [_FamilyCaster(self, i) for i in range(len(self._families))]
-        self._family_textures: list[tuple[Any, Any]] = []
-        self._layer_far = PTA_float.empty_array(MAX_LAYERS)
-        self._layer_params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
+        self._genus_casters = [_GenusCaster(self, i) for i in range(len(self._genera))]
+        self._union = _UnionCaster(self)
+        self._textures: dict[str, Any] = {}
+        self._layer_far = PTA_float.empty_array(DETAIL_LEVELS)
+        self._layer_params = PTA_LVecBase4f.empty_array((MAX_GENERA + 1) * GENUS_VEC4S)
+        self._level_offsets = PTA_LVecBase4f.empty_array(
+            MAX_GENERA * DETAIL_LEVELS // 4
+        )
+        self._level_octaves = PTA_LVecBase4f.empty_array(DETAIL_LEVELS // 4)
         params, self._deck_jobs = self._configure(settings)
         self._write_params(params)
 
-        # The sea's reflection: the deck alone.
+        # The sea's reflection: the decks alone, one a genus at its slab's
+        # middle (cloud.frag's uDeckGenus; the high layer has none). The
+        # others hang under the first, which follows the camera (update).
         self.root = parent.attach_new_node("cloud_march")
         self.root.stash()  # out of every camera until the set-up is done
         self.root.hide(HIDE_FROM_NEAR | HIDE_FROM_FAR | HIDE_FROM_CLOUD_PASS)
-        self.deck = self.root.attach_new_node(
-            deck_mesh(self.radius + self.field.slab[0] + 0.5 * self.field.slab[1])
-        )
-        self.deck.set_shader(_shaders()[1])
-        self.deck.set_two_sided(True)
-        self.deck.set_texture(load_cloud_atlas(game)[0])
         self.root.set_transparency(TransparencyAttrib.M_none)
         self.root.set_depth_test(True)
         self.root.set_depth_write(False)
-        self.root.set_bin(CLOUD_BIN, 0)
+        slabs = [genus.field.slab for genus in self._genera]
+        self.decks = deck_nodes(self.root, self.radius, slabs)
+        self.deck = self.decks[0]
         self.root.set_attrib(
             ColorBlendAttrib.make(
                 ColorBlendAttrib.M_add,
@@ -1506,11 +2286,18 @@ class CloudMarch:
         self._steps = PTA_int.empty_array(1)
         self._split = PTA_float.empty_array(1)  # the near range's end (uSplit)
         self._frame = PTA_int.empty_array(1)
+        #: The genera drawn, a bit each, the high genera's past the low
+        #: genera's (set_genus_visible, HIGH_MASK_SHIFT)
+        self._genus_mask = PTA_int.empty_array(1)
+        self._genus_mask[0] = ALL_GENERA_MASK
         self._layer_count = PTA_int.empty_array(1)
         self._layer_count[0] = self._layers_used
         self._inputs: dict[str, Any] = {
             "layerParams": self._layer_params,
+            "genusLevelOffset": self._level_offsets,
+            "detailOctaves": self._level_octaves,
             "cloudNoise": build_noise_texture(volume),
+            "cloudCells": _cells_texture(),
             "noiseSize": float(NOISE_SIZE),
             "noiseOffset": Vec3(0, 0, 0),
             "deckLightCosMin": DECK_LIGHT_COS_MIN,
@@ -1531,11 +2318,11 @@ class CloudMarch:
             "uCloudDebug": 0,
             "uMarchSteps": self._steps,
             "uSplit": self._split,
-            "uMinStep": min(min_step(f.field) for f in self._families),
+            "uMinStep": min(min_step(f.field) for f in self._genera),
             "uStepGrowth": STEP_GROWTH,
             "uLayerFar": self._layer_far,
             "uLayerCount": self._layer_count,
-            "uFamilies": len(self._families),
+            "uGenusMask": self._genus_mask,
             "uWeatherStretch": WEATHER_STRETCH_GENERA
             if genera is not None
             else WEATHER_STRETCH,
@@ -1543,13 +2330,21 @@ class CloudMarch:
             "uDetailErosion": DETAIL_EROSION,
             "uBillowMean": float(np.mean(1.0 - np.abs(2.0 * volume - 1.0))),
             "uBillowGain": billow_gain(volume),
+            # The spreads a far pixel's faded detail widens the edge by
+            # (cloud_march.glsl's edgeWidening)
+            "uNoiseSigma": float(np.std(volume)),
+            "uBillowSigma": float(np.std(1.0 - np.abs(2.0 * volume - 1.0))),
             "uBillowRawMean": float(np.mean(volume)),
             "uCurlNoise": _curl_texture(),
             "uCurlStrength": CURL_STRENGTH,
             "uCurlFrequency": CURL_FREQUENCY,
-            # The deck's (cloud_deck.vert, cloud.frag)
-            "uDeck": 1,
-            "uDeckLayer": self._layers_used - 1,
+            # The deck's (cloud_deck.vert, cloud.frag): its own entry
+            "uDeckLayer": DECK_LAYER,
+            # The high layer's (cloud_march.glsl's highCrossing)
+            **self._high_inputs(self._high_spec, seed),
+            # The shadow's genera and sky bands: the light volume's chart and
+            # the maps' chord (cloud_field.glsl)
+            **self._shadow_inputs(),
         }
         self._nodes: list[NodePath] = []
         self._bind(self.root)
@@ -1566,6 +2361,45 @@ class CloudMarch:
         self._pixel_angle = 0.001
         self._sky_light: float | None = None
         self._apply_live(settings)
+
+    @staticmethod
+    def _high_inputs(genera: GeneraSpec | None, seed: int = 7) -> dict[str, Any]:
+        """The high layer's slab, optics and light (``uHighSlab``,
+        ``uHighPhase``, ``uHighLight``): ice (``CloudType.CIRRUS``'s
+        optics)."""
+        base, thickness = genera.high_slab if genera is not None else HIGH_SLAB
+        o = PRESETS[CloudType.CIRRUS].optics
+        forward, backward, isotropic = phase_weights(o)
+        order = sorted(HIGH_CHANNELS, key=HIGH_CHANNELS.get)
+        optics = [HIGH_OPTICS[name] for name in order]
+        jet = high_jet(genera) if genera is not None else np.array([1.0, 0.0, 0.0])
+        return {
+            "uHighSlab": Vec4(base, thickness, 0.0, 0.0),
+            "uHighExtinction": Vec3(*(h.depth / thickness for h in optics)),
+            "uHighCap": Vec3(*(h.cap for h in optics)),
+            "uHighShape": Vec4(
+                cirrocumulus_grain_mean(),
+                HIGH_OPTICS["cirrostratus"].halo,
+                HIGH_OPTICS["cirrus"].halo,
+                cirrus_means(seed)[4],
+            ),
+            "uHighCirrus": Vec4(*cirrus_means(seed)[:4]),
+            "uHighJet": Vec3(*(float(v) for v in jet)),
+            "uHighPhase": Vec4(forward, backward, isotropic, clamped_anisotropy(o)),
+            "uHighLight": Vec4(o.multiple_scattering, o.shadow_strength, 0.0, 0.0),
+        }
+
+    @property
+    def high_genera(self) -> list[str]:
+        """The high genera the march draws (those a feature covers, and the
+        cirrus when it draws the weather's)."""
+        return [name for name, _ in self._high]
+
+    @property
+    def high_slab(self) -> tuple[float, float] | None:
+        """The high layer's slab, (base, thickness) above sea level, metres,
+        while it draws a genus; None = no high layer."""
+        return self._high_spec.high_slab if self._high else None
 
     # ── wiring ────────────────────────────────────────────────────────────
 
@@ -1667,6 +2501,8 @@ class CloudMarch:
                 else None
             ),
             ground=self._ground_texture,
+            recipes=any(genus.recipe is not None for genus in self._genera),
+            high=bool(self._high),
         )
         self._bind(layer.card)
         self._bind(layer.ground.card)
@@ -1700,16 +2536,12 @@ class CloudMarch:
         self._settings = settings
         params, deck_jobs = self._configure(settings)
         self._write_params(params)
-        self._set_inputs(uDeckLayer=self._layers_used - 1)
+        self._set_inputs(uDeckLayer=DECK_LAYER)
         if old.shell_octaves[-1:] != settings.shell_octaves[-1:]:
-            names = ("deckLight", "otherDeckLight")
-            for index, job in enumerate(deck_jobs):
-                light = build_deck_light_texture(job.result())
-                self._set_inputs(**{names[index]: light})
-                if self.weather is not None:
-                    self._textures[names[index]] = light
-                    weather = self._family_textures[index][0]
-                    self._family_textures[index] = (weather, light)
+            lights = self._deck_textures([job.result() for job in deck_jobs])
+            self._set_inputs(**lights)
+            if self.weather is not None:
+                self._textures.update(lights)
         self._update_shadow_nodes()
         if (
             old.march_block != settings.march_block
@@ -1728,56 +2560,78 @@ class CloudMarch:
             self.root.hide(REFLECTION_CAMERA_MASK)
 
     def _configure(self, settings: CloudSettings) -> tuple[np.ndarray, list[Any]]:
-        """Pack the march's layers: for each family, one per billboard
-        shell's distance band (its octaves), then its far one, which the
-        reflection's deck shares (the first family's). The families share the
-        bands' distances; with two, the layers (at most :data:`MAX_LAYERS`
-        between them) are fewer bands each.
+        """Pack the march's parameters: an entry per genus (its field at
+        its full octaves), each detail level's octaves and, per genus, the
+        threshold offset that keeps its coverage with them (the octave bands
+        by distance, then the far level, which the shadows are marched in),
+        and the deck's own entry (the first genus's far level, its optical
+        depth capped). The genera share the levels' distances, each its
+        own ``DETAIL_LEVELS`` slots.
 
-        :returns: the packed layer parameters, and each family's far layer's
-            light table being made in the pool (futures)
+        :returns: the packed parameters, and each genus's far level's light
+            table being made in the pool (futures)
         """
         seed = self._seed
-        families = len(self._families)
-        shells = max(min(settings.shells, MAX_LAYERS // families - 1), 1)
+        shells = max(min(settings.octave_bands, DETAIL_LEVELS - 1), 1)
         schedule = settings.shell_octaves
-        _, bands = shell_bands(self.grid, shells)
-        params = np.zeros((MAX_LAYERS, LAYER_VEC4S, 4), dtype=np.float32)
-        far = np.zeros(MAX_LAYERS, dtype=np.float32)
+        _, bands = octave_bands(self.grid, shells)
+        params = np.zeros((MAX_GENERA + 1, GENUS_VEC4S, 4), dtype=np.float32)
+        offsets = np.zeros(MAX_GENERA * DETAIL_LEVELS, dtype=np.float32)
+        octave_counts = np.zeros(DETAIL_LEVELS, dtype=np.float32)
+        far = np.zeros(DETAIL_LEVELS, dtype=np.float32)
         stride = shells + 1
         jobs = []
-        for index, family in enumerate(self._families):
-            field, peaks = family.field, family.peaks
-            optics = scale_march(family.preset, settings.march_scale).optics
+        for k in range(stride):
+            octave_counts[k] = schedule[min(k, len(schedule) - 1)]
+            if k < shells:
+                far[k] = 0.5 * sum(bands[k])  # mid-band: where the levels cross
+        for index, genus in enumerate(self._genera):
+            field, peaks = genus.field, genus.peaks
+            optics = scale_march(genus.preset, settings.march_scale).optics
+            # Per metre of the view's path
+            extinction = field.density * VIEW_EXTINCTION_SCALE
+            params[index] = pack_genus_params(
+                self._genus_field(index, optics), extinction=extinction,
+                octave_mean=self._octave_mean, octaves=4, shift_row=index,
+            )  # fmt: skip
             for k in range(stride):
-                octaves = schedule[min(k, len(schedule) - 1)]
-                layer = ShellSpec(
-                    0,
-                    (0.0, 0.0),
-                    1.0,
-                    octaves,
-                    octave_offset(peaks, _peaks(seed, field, self.radius, octaves)),
+                octaves = int(octave_counts[k])
+                fewer = (
+                    recipe_peaks(seed, genus.recipe, self.radius, octaves)
+                    if genus.recipe is not None
+                    else _peaks(seed, field, self.radius, octaves)
                 )
-                # The far layer is the reflection's deck too: its cap, no fade.
-                layer_optics = (
-                    replace(optics, max_optical_depth=DECK_MAX_OPTICAL_DEPTH)
-                    if k == shells
-                    else optics
+                layer = OctaveBand(
+                    0, (0.0, 0.0), 1.0, octaves, octave_offset(peaks, fewer)
                 )
-                params[index * stride + k] = pack_layer_params(
-                    layer.field_of(field),
-                    # Per metre of the view's path
-                    extinction=field.density * VIEW_EXTINCTION_SCALE,
-                    octave_mean=self._octave_mean,
-                    optics=layer_optics,
-                    octaves=octaves,
-                )
-                if k < shells and index == 0:
-                    far[k] = 0.5 * sum(bands[k])  # mid-band: where the shells cross
+                offsets[index * DETAIL_LEVELS + k] = layer.threshold_offset
+            # The far level is the reflection's deck too: its cap, no fade.
+            layer_optics = replace(optics, max_optical_depth=DECK_MAX_OPTICAL_DEPTH)
             deck = layer.field_of(field)
+            if index == 0:
+                params[MAX_GENERA, :LAYER_VEC4S] = pack_layer_params(
+                    deck, extinction=extinction, octave_mean=self._octave_mean,
+                    optics=layer_optics, octaves=octaves,
+                )  # fmt: skip
             # The deck's field and optics: the one its shadow is marched in.
-            family.deck_field = deck
-            family.deck_optics = layer_optics
+            genus.deck_field = deck
+            genus.deck_optics = layer_optics
+            genus.deck_octaves = octaves
+            if genus.recipe is not None:
+                # A recipe genus's far averages from its recipe's density
+                # at its far level (the bakes' field and octaves).
+                far_genus = replace(genus.recipe, field=deck, optics=layer_optics)
+                jobs.append(
+                    self.executor.submit_once(
+                        _recipe_deck_light,
+                        seed,
+                        far_genus,
+                        self.radius,
+                        genus.table,
+                        octaves,
+                    )  # fmt: skip
+                )
+                continue
             jobs.append(
                 self.executor.submit_once(
                     _deck_light,
@@ -1785,102 +2639,136 @@ class CloudMarch:
                     deck,
                     layer_optics,
                     self.radius,
-                    family.table,
+                    genus.table,
                     schedule[-1],
                 )
             )
+        # The recipe genera's shared frame, in the deck entry's free row 15:
+        # the stretch's axis (the focus's east) and the cells' mean F1.
+        east = (0.0, 1.0, 0.0)
+        if self._genera_spec is not None:
+            east = TangentFrame.at(*self._genera_spec.focus).east
+        f1_mean, edges_mean = cell_means(_cells())
+        params[MAX_GENERA, LAYER_VEC4S + 2] = pack_recipe_frame(east, f1_mean)
+        params[MAX_GENERA, LAYER_VEC4S + 1] = pack_recipe_cells(
+            edges_mean, *cell_spreads(_cells())
+        )
         self._layers_used = stride
         self._far_values = far
+        self._offset_values = offsets
+        self._octave_values = octave_counts
         return params, jobs
+
+    def _genus_field(self, index: int, optics: Any) -> GenusField:
+        """Genus *index* as a :class:`noise.GenusField`: its field, optics,
+        coverage source and far shadow (:data:`genera.GENUS_PRESETS`; a
+        planet without genera is one primary genus)."""
+        genus = self._genera[index]
+        if genus.recipe is not None:
+            return replace(genus.recipe, optics=optics)
+        if self._genera_spec is None:
+            return GenusField("primary", genus.field, optics)
+        name = genus.name
+        preset = GENUS_PRESETS[name]
+        return GenusField(name, genus.field, optics, preset.coverage, preset.far_shadow)
 
     def _write_params(self, params: np.ndarray) -> None:
         for i, row in enumerate(params.reshape(-1, 4)):
             self._layer_params[i] = LVecBase4f(*(float(v) for v in row))
         for i, value in enumerate(self._far_values):
             self._layer_far[i] = float(value)
+        for i, row in enumerate(self._offset_values.reshape(-1, 4)):
+            self._level_offsets[i] = LVecBase4f(*(float(v) for v in row))
+        for i, row in enumerate(self._octave_values.reshape(-1, 4)):
+            self._level_octaves[i] = LVecBase4f(*(float(v) for v in row))
         if hasattr(self, "_layer_count"):
             self._layer_count[0] = self._layers_used
 
-    # ── the clouds' shadow (as sphere.CloudVolume's) ──────────────────────
+    # ── the clouds' shadow ────────────────────────────────────────────────
 
     @property
-    def families(self) -> int:
-        """How many families of clouds it marches: 2 with genera."""
-        return len(self._families)
+    def genera_count(self) -> int:
+        """How many genera of clouds it marches (1 without genera)."""
+        return len(self._genera)
 
-    def shadow_caster(self, family: int = 0) -> _FamilyCaster:
-        """The shadow of a family of the clouds (0: the convective clouds, or
-        the only ones; 1: the stratus), as a volume's."""
-        return self._casters[family]
+    def shadow_caster(self) -> _UnionCaster:
+        """The clouds' shadow, all their genera's together (one light volume,
+        one pair of shadow maps)."""
+        return self._union
+
+    def genus_caster(self, genus: int) -> _GenusCaster:
+        """One genus's part of the shadow, as the CPU marches it (0: the
+        convective clouds, or the only ones; 1: the stratus)."""
+        return self._genus_casters[genus]
 
     @property
     def shadow_layer(self) -> int:
-        """The layer of ``layerParams`` the (first) family's shadow is marched
-        in (its far one, the deck's), -1 until the set-up is done or after
-        :meth:`remove`."""
-        return self._casters[0].shadow_layer
+        """The layer of ``layerParams`` the first genus's shadow is marched in
+        (its far one; genus g's is g * ``DETAIL_LEVELS`` past it), -1 until
+        the set-up is done or after :meth:`remove`."""
+        return self._union.shadow_layer
 
     @property
     def shadow_field(self) -> DensityField:
-        """The field the (first) family's shadow is marched in (the deck's)."""
-        return self._families[0].deck_field
+        """The field the first genus's shadow is marched in (the deck's)."""
+        return self._genera[0].deck_field
 
-    def bind_shadow_inputs(self, node: NodePath, family: int | None = None) -> None:
-        """As :meth:`sphere.CloudVolume.bind_shadow_inputs`: let the shaders
-        on a node (the planet's terrain, the maps' bake) darken the sun under
-        these clouds, through the deck's layers.
+    def _deck_textures(self, tables: list[np.ndarray]) -> dict[str, Any]:
+        """The genera's far tables: genus 0's as ``deckLight`` (the deck's
+        and genus 0's), every genus's a page of ``genusDeckLight``."""
+        out = {"deckLight": build_deck_light_texture(tables[0])}
+        if len(tables) > 1:
+            out["genusDeckLight"] = build_deck_light_array(tables)
+        return out
 
-        :param family: bind this family's alone, as the first (the maps'
-            bake); None = the first's, and the second's too as the other
-            (``uCloudShadowOther``)
+    def _shadow_inputs(self) -> dict[str, Any]:
+        """The shadow's layer, genera and sky bands (cloud_field.glsl)."""
+        return {
+            "uCloudShadowLayer": self._shadow_layer,
+            "uCloudGenera": len(self._genera),
+            "uSkyBands": self._sky_bands,
+            "uSkyBandCount": len(self.sky_bands),
+        }
+
+    def bind_shadow_inputs(self, node: NodePath) -> None:
+        """Let the shaders on a node (the planet's terrain, the light
+        resources' bakes) darken the sun under these clouds: all the genera's
+        shadow (``planetCloudShadow``), through their deck layers.
         """
-        first = 0 if family is None else family
-        other = 1 if family is None and len(self._families) > 1 else None
         node.set_shader_inputs(
             cloudNoise=self._inputs["cloudNoise"],
+            cloudCells=self._inputs["cloudCells"],
             layerParams=self._layer_params,
+            genusLevelOffset=self._level_offsets,
+            detailOctaves=self._level_octaves,
             planetRadius=self.radius,
             sunDir=self._sun,
             noiseSize=float(NOISE_SIZE),
             noiseOffset=Vec3(0, 0, 0),
             deckLightCosMin=DECK_LIGHT_COS_MIN,
             uCloudDebug=0,
-            uCloudShadowLayer=self._shadow_layers[first],
-            uCloudShadowOther=-1 if other is None else self._shadow_layers[other],
-            otherWeather=_no_weather(),
-            otherDeckLight=_no_deck_light(),
+            genusCoverA=_no_coverage(),
+            genusCoverB=_no_coverage(),
+            genusShift=_no_shift(),
+            genusDeckLight=_no_deck_light_array(),
+            **self._shadow_inputs(),
         )
-        self._shadow_nodes.append((node, first, other))
+        self._shadow_nodes.append(node)
         self._update_shadow_nodes()
 
-    def _textures_of(self, index: int) -> dict[str, Any]:
-        """A family's weather and light table, as the names the first
-        family's shaders read them by."""
-        return {
-            "weatherMap": self._family_textures[index][0],
-            "deckLight": self._family_textures[index][1],
-        }
-
     def _update_shadow_nodes(self) -> None:
-        """The shaded nodes' weather and layers: none until the set-up."""
+        """The shaded nodes' weather and layer: none until the set-up."""
         ready = self.weather is not None
-        stride = self._layers_used
-        for index, layer in enumerate(self._shadow_layers):
-            layer[0] = index * stride + stride - 1 if ready else -1
-        self._shadow_nodes = [n for n in self._shadow_nodes if not n[0].is_empty()]
+        self._shadow_layer[0] = self._layers_used - 1 if ready else -1
+        self._shadow_nodes = [n for n in self._shadow_nodes if not n.is_empty()]
         if ready:
-            for node, first, other in self._shadow_nodes:
-                node.set_shader_inputs(**self._textures_of(first))
-                if other is not None:
-                    node.set_shader_inputs(
-                        otherWeather=self._family_textures[other][0],
-                        otherDeckLight=self._family_textures[other][1],
-                    )
+            for node in self._shadow_nodes:
+                node.set_shader_inputs(**self._textures)
 
     def sun_visibility(self, *args: Any, **kwargs: Any) -> np.ndarray:
-        """The share of the sun the first family's clouds leave points
-        (:meth:`sphere.CloudVolume.sun_visibility`)."""
-        return self._casters[0].sun_visibility(*args, **kwargs)
+        """The share of the sun the clouds leave points (all the genera's:
+        :func:`field_setup.sun_visibility`)."""
+        return self._union.sun_visibility(*args, **kwargs)
 
     # ── public ────────────────────────────────────────────────────────────
 
@@ -1917,6 +2805,36 @@ class CloudMarch:
         if value != self._inputs["uPixelAngle"]:
             self._set_inputs(uPixelAngle=value)
 
+    @property
+    def genus_names(self) -> list[str]:
+        """The genera's names, by index (the convective clouds, or the one
+        type, first)."""
+        return [genus.name or "clouds" for genus in self._genera]
+
+    def set_genus_visible(self, genus: int | str, visible: bool) -> None:
+        """Draw a genus or not, live (a look-development toggle: the
+        showcase's keys, the demo's C key for the cirrus). Only the view
+        hides it: it still shades the others, and the ground.
+
+        :param genus: its index or its name (:attr:`genus_names`), or a high
+            genus's name (``genera.HIGH_CHANNELS``: ``"cirrus"`` hides all
+            the cirrus, the weather's and the features')
+        """
+        bit = 1 << self._genus_bit(genus)
+        mask = self._genus_mask[0]
+        self._genus_mask[0] = (mask | bit) if visible else (mask & ~bit)
+
+    def genus_visible(self, genus: int | str) -> bool:
+        """:returns: whether a genus is drawn (:meth:`set_genus_visible`)"""
+        return bool(self._genus_mask[0] >> self._genus_bit(genus) & 1)
+
+    def _genus_bit(self, genus: int | str) -> int:
+        """A genus's bit of ``uGenusMask`` (:data:`HIGH_MASK_SHIFT`)."""
+        if isinstance(genus, str) and genus in HIGH_CHANNELS:
+            return HIGH_MASK_SHIFT + HIGH_CHANNELS[genus] - 1
+        index = self.genus_names.index(genus) if isinstance(genus, str) else genus
+        return int(index)
+
     def set_debug(self, flags: int) -> None:
         """Profiling switches (cloud_field.glsl's ``uCloudDebug`` bits)."""
         self._set_inputs(uCloudDebug=int(flags))
@@ -1946,7 +2864,7 @@ class CloudMarch:
         if self._weather_job is not None:
             if not all(
                 job.done()
-                for job in [f.weather_job for f in self._families] + self._deck_jobs
+                for job in [f.weather_job for f in self._genera] + self._deck_jobs
             ):
                 self.stats["pending"] = 1
                 return
@@ -1984,8 +2902,8 @@ class CloudMarch:
         (planet frame), metres"""
         altitude = float(np.linalg.norm(camera)) - self.radius
         nearest = math.inf
-        for family in self._families:
-            base, thickness = family.field.slab
+        for genus in self._genera:
+            base, thickness = genus.field.slab
             nearest = min(
                 nearest, max(base - altitude, altitude - base - thickness, 0.0)
             )
@@ -1994,8 +2912,7 @@ class CloudMarch:
     def remove(self) -> None:
         """Take the clouds off the scene (and their shadow off the nodes it
         shaded)."""
-        for layer in self._shadow_layers:
-            layer[0] = -1
+        self._shadow_layer[0] = -1
         self._shadow_nodes = []
         self.detach()
         self.root.remove_node()
@@ -2004,18 +2921,45 @@ class CloudMarch:
         """Finish the set-up begun in the pool (waiting for it if need be)."""
         if self._weather_job is None:
             return
-        self._family_textures = []
-        self._textures = {}
-        names = (("weatherMap", "deckLight"), ("otherWeather", "otherDeckLight"))
-        for index, family in enumerate(self._families):
-            family.weather = family.weather_job.result()
-            weather = build_weather_texture(family.weather)
-            light = build_deck_light_texture(self._deck_jobs[index].result())
-            self._family_textures.append((weather, light))
-            self._textures[names[index][0]] = weather
-            self._textures[names[index][1]] = light
-            family.weather_job = None
-        self.weather = self._families[0].weather
+        first = self._genera[0]
+        first.weather = first.weather_job.result()
+        self._textures = {"weatherMap": build_weather_texture(first.weather)}
+        tables = [()] * len(self._genera)  # genusShift: genus 0's row unused
+        for index, genus in enumerate(self._genera[1:], start=1):
+            # A genus on coverage cube A: its coverage and the shift its
+            # table gives it (genera.genus_weather_at, the shader's
+            # genusWeatherAt) as the CPU's weather.
+            genus.cover = genus.weather_job.result()
+            coverage = genus.cover[..., genus.coverage[1]]
+            shift = coverage_to_shift(coverage, np.asarray(genus.table))
+            depth = np.zeros_like(coverage)
+            genus.weather = np.stack([coverage, shift, depth], -1).astype(np.float32)
+            tables[index] = genus.table
+            # Each coverage cube once (genusCoverA, genusCoverB).
+            name = "genusCover" + genus.coverage[0]
+            if name not in self._textures:
+                self._textures[name] = build_coverage_texture(genus.cover)
+        if self._high_job is not None and "genusCoverB" not in self._textures:
+            # The high genera's channels of cube B, with no genus on it
+            self._textures["genusCoverB"] = build_coverage_texture(
+                self._high_job.result()
+            )
+        self._high_job = None
+        if self._wind_job is not None:
+            self._textures["highWind"] = build_high_wind_texture(
+                self._wind_job.result()
+            )
+        self._wind_job = None
+        for genus in self._genera:
+            genus.weather_job = None
+        if len(self._genera) > 1:
+            self._textures["genusShift"] = build_shift_texture(
+                [t if t else np.zeros(len(self._genera[1].table)) for t in tables]
+            )
+        self._textures.update(
+            self._deck_textures([job.result() for job in self._deck_jobs])
+        )
+        self.weather = first.weather
         self._weather_job = self._deck_jobs = None
         for node in self._nodes:
             node.set_shader_inputs(**self._textures)

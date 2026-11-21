@@ -8,14 +8,18 @@
 //
 // Why: the bake samples the field at each voxel's centre, and far out
 // (the chart's texels hundreds of metres wide) a feature a texel across
-// is one voxel with a deep depth beside shallow ones. The readers jitter
-// their reads to hide the texels' grid; across such a step a jittered read
-// came out dark or bright, a speck the resolve spread over its block in
-// motion (performance.md §28). light_volume.smooth_volume on the CPU.
+// is one voxel with a deep depth beside shallow ones. The readers jittered
+// their reads then (to hide the texels' grid; no longer, cloudLightSunDepth),
+// and across such a step a read came out dark or bright, a speck the
+// resolve spread over its block in motion (performance.md §28); smoothed,
+// the step is soft for any read. light_volume.smooth_volume on the CPU.
 
 uniform sampler2D uRaw;
-// (tile, slices, columns): the atlas's layout (cloud_field.glsl's chart).
-uniform vec3 uLayout;
+// (tile, slices, columns, slices a sky band): the atlas's layout
+// (cloud_field.glsl's chart). The tent stays inside a band (a band's lowest
+// and highest slices weigh themselves in for the missing side): smoothed
+// across a gap, a tower's base took in the slice under it.
+uniform vec4 uLayout;
 
 out vec4 fragColor;
 
@@ -46,9 +50,11 @@ void main() {
     vec2 at = floor(gl_FragCoord.xy / tile);
     float slice = at.y * columns + at.x;
     vec2 local = gl_FragCoord.xy - at * tile;  // the texel's centre
-    // Across the slices: [1, 2, 1] / 4.
-    vec2 below = tentAt(max(slice - 1.0, 0.0), local, size);
-    vec2 above = tentAt(min(slice + 1.0, slices - 1.0), local, size);
+    // Across the slices: [1, 2, 1] / 4, inside the slice's band.
+    float per = uLayout.w;
+    float first = floor(slice / per) * per;
+    vec2 below = tentAt(max(slice - 1.0, first), local, size);
+    vec2 above = tentAt(min(slice + 1.0, first + per - 1.0), local, size);
     vec2 own = tentAt(slice, local, size);
     fragColor = vec4(0.25 * below + 0.5 * own + 0.25 * above, 0.0, 1.0);
 }

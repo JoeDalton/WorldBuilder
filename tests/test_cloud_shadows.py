@@ -11,15 +11,17 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from panda3d.core import NodePath, Vec3
+from panda3d.core import LVecBase4f, NodePath, PTA_LVecBase4f, Vec3
 
 from world_builder.atmosphere import bind_defaults
 from world_builder.clouds.cloud import PRESETS, CloudType
+from world_builder.clouds.field_setup import SHADE_CACHE_SIZE, _noise
 from world_builder.clouds.noise import (
     CLOUD_SHADOW_STEP_SCALE,
     DECK_LIGHT_COS_MIN,
-    LAYER_VEC4S,
-    MAX_LAYERS,
+    DETAIL_LEVELS,
+    GENUS_VEC4S,
+    MAX_GENERA,
     NOISE_FEATURE,
     NOISE_SIZE,
     build_deck_light_texture,
@@ -33,7 +35,6 @@ from world_builder.clouds.noise import (
     with_shelf,
     with_threshold,
 )
-from world_builder.clouds.sphere import SHADE_CACHE_SIZE, _noise
 from world_builder.clouds.weather import (
     WeatherSpec,
     build_weather_texture,
@@ -165,6 +166,13 @@ def test_more_cover_more_shadow(field, table):
         assert np.all(more >= less - 1e-12)
     assert depths[0].mean() < depths[-1].mean()
     assert 0.0 < (depths[1] > 0).mean() < 1.0  # broken cover: some sun, some shade
+
+
+def _level_octaves(octaves: int) -> PTA_LVecBase4f:
+    """``detailOctaves`` with level 0 at *octaves* (getField(0)'s)."""
+    levels = PTA_LVecBase4f.empty_array(DETAIL_LEVELS // 4)
+    levels[0] = LVecBase4f(float(octaves), 0.0, 0.0, 0.0)
+    return levels
 
 
 # ── cloudShadowDepth read back ─────────────────────────────────────────────────
@@ -356,7 +364,7 @@ void main() {
     fragColor = vec4(r, g, v - r * 65536.0 - g * 256.0, 255.0) / 255.0;
 }
 """
-    params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
+    params = PTA_LVecBase4f.empty_array((MAX_GENERA + 1) * GENUS_VEC4S)
     packed = pack_layer_params(
         field,
         extinction=field.density,
@@ -377,6 +385,9 @@ void main() {
         noiseOffset=Vec3(0.0, 0.0, 0.0),
         sunDir=Vec3(0.0, 0.0, 1.0),
         layerParams=params,
+        # Layer 0: genus 0 at level 0, its two octaves, no threshold offset
+        genusLevelOffset=PTA_LVecBase4f.empty_array(MAX_GENERA * DETAIL_LEVELS // 4),
+        detailOctaves=_level_octaves(2),
         planetRadius=R,
         weatherMap=build_weather_texture(cube),
         uCloudDebug=0,
@@ -433,7 +444,7 @@ def test_the_shader_knows_the_twins_constants():
     assert scale in source
 
 
-# ── CloudVolume: the binding and the CPU side ─────────────────────────────────
+# ── The march's caster: the binding and the CPU side ─────────────────────────────────
 
 
 def test_clouds_shade_a_bound_node_once_ready_and_the_cpu_alike(showbase):
@@ -442,30 +453,32 @@ def test_clouds_shade_a_bound_node_once_ready_and_the_cpu_alike(showbase):
     the twin's at the point's cell, cached until the sun changes, and
     removing the clouds takes the shadow off the node."""
     from world_builder.clouds.cloud import CloudSettings
-    from world_builder.clouds.sphere import SHADE_CELL, CloudVolume
+    from world_builder.clouds.field_setup import SHADE_CELL
+    from world_builder.clouds.march import CloudMarch
     from world_builder.terrain.workers import ChunkExecutor
 
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    clouds = CloudVolume(
+    march = CloudMarch(
         showbase.render,
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2),
+        settings=CloudSettings(octave_bands=2),
         planet=PLANETS["forest"],
     )
+    clouds = march.shadow_caster()
     ground = NodePath("ground")
     try:
         clouds.bind_shadow_inputs(ground)
         bound = ground.get_shader_input("uCloudShadowLayer")
-        assert clouds._shadow_layer[0] == -1  # the set-up is not done
+        assert clouds.shadow_layer == -1  # the set-up is not done
         up = TangentFrame.at(20.0, 40.0).up
         points = up * (R + 30.0) + np.array([[0.0, 0.0, 0.0], [3e3, 0.0, 0.0]])
         sun = np.array([0.4, 0.3, 0.866])
         assert np.all(clouds.sun_visibility(points, sun, 8) == 1.0)  # not ready
-        clouds.update(up * (R + 1000.0))
+        march.update(up * (R + 1000.0))
         assert clouds.weather is not None
-        assert clouds._shadow_layer[0] == clouds._deck_layer >= 0
+        assert clouds.shadow_layer >= 0  # the deck's layer
         assert ground.get_shader_input("uCloudShadowLayer") == bound  # in place
         light = ground.get_shader_input("deckLight").get_texture()
         assert light.get_num_components() == 4  # deck r g, ground b, octave a
@@ -499,9 +512,8 @@ def test_clouds_shade_a_bound_node_once_ready_and_the_cpu_alike(showbase):
         assert clouds.sun_visibility(moved, -sun + 2 * up, 8).shape == (2,)
         assert len(clouds._shades) == 2
     finally:
-        clouds.remove()
+        march.remove()
         executor.shutdown()
-    assert clouds._shadow_layer[0] == -1
 
 
 # ── the cloud shadow maps (part E) ─────────────────────────────────────────────
@@ -513,23 +525,24 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
     CPU twin marches it; drawn again only when the sun turns or the camera
     moves a quarter of it."""
     from world_builder.clouds.cloud import CloudSettings
+    from world_builder.clouds.march import CloudMarch
     from world_builder.clouds.shadow_map import NEAR_SPACING, CloudShadowMaps
-    from world_builder.clouds.sphere import CloudVolume
     from world_builder.terrain.workers import ChunkExecutor
 
     executor = ChunkExecutor(backend="inline", inline_budget=64)
-    clouds = CloudVolume(
+    march = CloudMarch(
         window.render,
         R,
         executor,
         altitude=2200.0,
-        settings=CloudSettings(shells=2),
+        settings=CloudSettings(octave_bands=2),
         planet=PLANETS["forest"],
     )
+    clouds = march.shadow_caster()
     size, steps = 128, 8
     maps = CloudShadowMaps(window.win, clouds, size, to_ram=True)
     try:
-        clouds.update(TangentFrame.at(20.0, 40.0).up * (R + 1000.0))
+        march.update(TangentFrame.at(20.0, 40.0).up * (R + 1000.0))
         assert clouds.weather is not None
         # The cloudiest of a few places: a map with cloud in it.
         places = [(lat, lon) for lat in range(-60, 61, 20) for lon in range(0, 360, 30)]
@@ -539,11 +552,11 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
         ]
         frame = TangentFrame.at(*places[int(np.argmax(cover))])
         camera = frame.up * (R + 1000.0)
-        clouds.update(camera)
+        march.update(camera)
         sun = 0.8 * frame.up + 0.6 * frame.east
-        clouds.set_sun(sun)
+        march.set_sun(sun)
         maps.update(camera, sun / np.linalg.norm(sun), steps)
-        assert maps._on[0][0] == 1 and maps.near.drawn is not None
+        assert maps._on[0] == 1 and maps.near.drawn is not None
         window.graphicsEngine.render_frame()
         window.graphicsEngine.render_frame()
         texture = maps.near.texture
@@ -611,7 +624,7 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
         assert maps.near.drawn is not near and maps.far.drawn is far
     finally:
         maps.destroy()
-        clouds.remove()
+        march.remove()
         executor.shutdown()
 
 
@@ -758,7 +771,7 @@ void main() {
     fragColor = vec4(r, g, v - r * 65536.0 - g * 256.0, 255.0) / 255.0;
 }
 """
-    params = PTA_LVecBase4f.empty_array(MAX_LAYERS * LAYER_VEC4S)
+    params = PTA_LVecBase4f.empty_array((MAX_GENERA + 1) * GENUS_VEC4S)
     packed = pack_layer_params(
         field,
         extinction=field.density,
@@ -779,6 +792,9 @@ void main() {
         noiseOffset=Vec3(0.0, 0.0, 0.0),
         sunDir=Vec3(0.0, 0.0, 1.0),
         layerParams=params,
+        # Layer 0: genus 0 at level 0, its two octaves, no threshold offset
+        genusLevelOffset=PTA_LVecBase4f.empty_array(MAX_GENERA * DETAIL_LEVELS // 4),
+        detailOctaves=_level_octaves(2),
         planetRadius=R,
         weatherMap=build_weather_texture(cube),
         uCloudDebug=0,
@@ -869,54 +885,13 @@ def test_the_map_with_a_local_march_is_the_sun_march(field, table, elevation):
     assert np.median(error) <= np.median(march_error) + 0.02
 
 
-def test_a_change_of_renderer_gives_the_shadow_maps_the_new_volume(window):
-    """The maps' bake cards take their field's inputs from the clouds' volume:
-    a change of renderer makes a new volume, which they must take, or the
-    ground loses its cloud shadow (it was baked from the removed one)."""
-    from world_builder.clouds.cloud import CloudSettings
-    from world_builder.clouds.planet import PlanetClouds
-    from world_builder.clouds.shadow_map import CloudShadowMaps
-    from world_builder.terrain.workers import ChunkExecutor
-
-    executor = ChunkExecutor(backend="inline", inline_budget=64)
-    clouds = PlanetClouds(
-        window.render,
-        R,
-        executor,
-        altitude=2200.0,
-        settings=CloudSettings(shells=2, renderer="billboards"),
-        planet=PLANETS["forest"],
-    )
-    maps = CloudShadowMaps(window.win, clouds, 64)
-    camera = np.array([0.0, 0.0, R + 1000.0])
-    sun = np.array([0.0, 0.6, 0.8])
-    try:
-        clouds.update(camera)
-        maps.update(camera, sun, 8)
-        assert maps._casters_bound[0] is clouds.volume
-        clouds.set_settings(replace(clouds.settings, renderer="march"))
-        clouds.update(camera)
-        maps.near.drawn = ("drawn",)
-        maps.update(camera, sun, 8)
-        assert maps._casters_bound[0] is clouds.shadow_caster(0)
-        assert maps._casters_bound[0] is not clouds.volume
-        # Drawn again from the new volume, not kept
-        assert not isinstance(maps.near.drawn[0], str)
-    finally:
-        maps.destroy()
-        clouds.remove()
-        executor.shutdown()
-
-
-@pytest.mark.parametrize("family", [0, 1])
-def test_the_raymarchs_shadow_maps_match_the_cpu_twin_for_each_family(window, family):
-    """With genera a raymarch bakes each family's map from its own deck layer
-    and weather (the convective one's depth cutting its chord at the clouds'
-    own top): the near map's total against the CPU twin."""
+def _genera_clouds(window, camera):
+    """A raymarch of the default genera (genera.DEFAULT_FEATURES: the
+    convective clouds around the focus, the stratus deck 30 km south of it),
+    its set-up done with the camera at *camera*."""
     from world_builder.clouds.cloud import CloudSettings
     from world_builder.clouds.genera import GeneraSpec
     from world_builder.clouds.planet import PlanetClouds
-    from world_builder.clouds.shadow_map import NEAR_SPACING, CloudShadowMaps
     from world_builder.clouds.weather import WeatherSpec
     from world_builder.terrain.planet import PlanetSpec
     from world_builder.terrain.workers import ChunkExecutor
@@ -928,63 +903,208 @@ def test_the_raymarchs_shadow_maps_match_the_cpu_twin_for_each_family(window, fa
         window.render,
         R,
         executor,
-        settings=CloudSettings(shells=2, renderer="march"),
+        settings=CloudSettings(octave_bands=2),
         genera=genera,
     )
+    for _ in range(400):
+        clouds.update(camera)
+        if clouds.volume.weather is not None:
+            break
+    return clouds, executor
+
+
+def _union_depth(clouds, points, sun, steps):
+    """The genera's summed shadow depth on the CPU (each genus's
+    cloud_shadow_on_sphere): what the maps and the ground's march hold."""
+    from world_builder.clouds.field_setup import genus_sun_depth
+
+    march = clouds.volume
+    return sum(
+        genus_sun_depth(march.genus_caster(g), points, sun, steps)
+        for g in range(march.genera_count)
+    )
+
+
+def test_the_raymarchs_shadow_map_is_the_genera_summed_against_the_cpu(window):
+    """With genera one map pair on the sky bands' base (the stratus's) holds
+    both genera's depth: each far texel the sum of the two CPU twins
+    (the convective one's chord cut at the clouds' own top), over both
+    feature sites at once."""
+    from world_builder.clouds.shadow_map import FAR_SPACING, CloudShadowMaps
+
+    frame = TangentFrame.at(-1.4, 0.0)
+    camera = frame.up * (R + 1000.0)
+    clouds, executor = _genera_clouds(window, camera)
     size, steps = 128, 16
     maps = CloudShadowMaps(window.win, clouds, size, to_ram=True)
     try:
-        # Over the family's own clouds: the convective ones around the focus,
-        # the stratus deck 30 km south of it (genera.DEFAULT_FEATURES)
-        frame = TangentFrame.at(-2.86 if family else 0.0, 0.0)
-        camera = frame.up * (R + 1000.0)
-        for _ in range(400):
-            clouds.update(camera)
-            if clouds.volume.weather is not None:
-                break
         sun = 0.8 * frame.up + 0.6 * frame.east
+        sun /= np.linalg.norm(sun)
         clouds.set_sun(sun)
-        maps.update(camera, sun / np.linalg.norm(sun), steps)
+        maps.update(camera, sun, steps)
+        assert maps.pair is not None and maps._on[0] == 1
         window.graphicsEngine.render_frame()
         window.graphicsEngine.render_frame()
-        caster = clouds.shadow_caster(family)
-        texture = maps.pairs[family][0].texture
+        caster = clouds.shadow_caster()
+        far = maps.far
+        texture = far.texture
         dtype = np.float32 if texture.get_component_width() == 4 else np.float16
         ram = np.frombuffer(texture.get_ram_image_as("RGBA"), dtype)
-        got = ram.reshape(size, size, 4)[..., 0].astype(np.float64)
+        got = ram.reshape(far.size, far.size, 4)[..., 0].astype(np.float64)
 
-        nodes = (np.arange(size) - 0.5 * size + 0.5) * NEAR_SPACING
+        nodes = (np.arange(far.size) - 0.5 * far.size + 0.5) * FAR_SPACING
         x, y = np.meshgrid(nodes, nodes)
-        base = R + caster.shadow_field.slab[0]
+        base = R + caster.sky_bands[0][0]  # the stratus's base
+        assert far.chart[0][3] == pytest.approx(base)
         angle = np.hypot(x, y) / base
         toward = np.stack([x, y], -1) / np.maximum(np.hypot(x, y), 1e-9)[..., None]
         dirs = np.cos(angle)[..., None] * frame.up + np.sin(angle)[..., None] * (
             toward[..., :1] * frame.east + toward[..., 1:] * frame.north
         )
-        weather = caster.weather
+        points = dirs.reshape(-1, 3) * base
+        expected = _union_depth(clouds, points, sun, steps).reshape(got.shape)
+        march = clouds.volume
+        from world_builder.clouds.field_setup import genus_sun_depth
 
-        def channel(k):
-            if weather.shape[-1] <= k:
-                return None
-            return lambda p: sample_cube(weather[..., k], p)
-
-        expected = cloud_shadow_on_sphere(
-            _noise(7),
-            caster.shadow_field,
-            caster._deck_optics,
-            dirs.reshape(-1, 3) * base,
-            sun / np.linalg.norm(sun),
-            R,
-            steps,
-            shift_at=channel(1),
-            depth_at=channel(2),
-            spread_at=channel(3),
-        ).reshape(size, size)
-        assert expected.max() > 0.2  # some cloud in it
+        # The convective clouds and the stratus (a recipe genus: its recipe,
+        # as the bake's CLOUD_RECIPE_SHADOWS) cast here (the stratocumulus,
+        # no feature in the default's, is not marched)
+        assert march.genus_names == ["convective", "stratus"]
+        for g in range(march.genera_count):
+            depth = genus_sun_depth(march.genus_caster(g), points, sun, steps)
+            assert depth.max() > 0.2, march.genus_names[g]
+        assert got.max() > 0.5  # drawn
         shade_error = np.abs(np.exp2(-got) - np.exp2(-expected))
         assert np.median(shade_error) < 5e-3
         assert np.percentile(shade_error, 99) < 0.08
     finally:
         maps.destroy()
+        clouds.remove()
+        executor.shutdown()
+
+
+def test_the_ground_shadow_is_the_genera_product_as_on_the_cpu(window):
+    """planetCloudShadow on a node the genera's raymarch shades (no maps:
+    marched through the sky bands) is the CPU's sun_visibility, the product
+    of the genera's shades, under the towers and under the stratus. That
+    march leaves the recipe genera (the stratus) to the maps (clouds.md,
+    "Where the recipe is evaluated"), so it is checked against the product
+    of the others' shades; the CPU's own (sun_visibility) has them, as the
+    maps do."""
+    from panda3d.core import (
+        Geom,
+        GeomNode,
+        GeomPoints,
+        GeomVertexData,
+        GeomVertexFormat,
+        GeomVertexWriter,
+        OmniBoundingVolume,
+        Shader,
+        Texture,
+    )
+
+    from world_builder.clouds.shadow_defaults import cloud_shadow_defaults
+
+    frame = TangentFrame.at(-1.4, 0.0)
+    camera = frame.up * (R + 1000.0)
+    clouds, executor = _genera_clouds(window, camera)
+    size, steps = 32, 32
+    try:
+        rng = np.random.default_rng(3)
+        # Half around the convective clouds, half over the stratus deck
+        sites = [TangentFrame.at(0.2, 0.0), TangentFrame.at(-2.86, 0.0)]
+        ups = []
+        for k in range(size * size):
+            site = sites[k % 2]
+            off = rng.uniform(-12e3, 12e3, 2)
+            ups.append(site.up + (off[0] * site.east + off[1] * site.north) / R)
+        up = np.array(ups)
+        up /= np.linalg.norm(up, axis=1, keepdims=True)
+        points = (up * (R + 20.0)).astype(np.float32).astype(np.float64)
+        sun = 0.8 * frame.up + 0.6 * frame.east
+        sun = (sun / np.linalg.norm(sun)).astype(np.float32).astype(np.float64)
+        expected = clouds.sun_visibility(points, sun, steps)
+        assert expected.min() < 0.5 and expected.max() > 0.9  # shade and sun
+        march = clouds.volume
+        both = np.ones(len(points))
+        for g in range(march.genera_count):
+            both *= march.genus_caster(g).sun_visibility(points, sun, steps)
+        np.testing.assert_allclose(expected, both, atol=1e-9)
+        # The march's: the genera without the recipe
+        expected = np.ones(len(points))
+        for g in range(march.genera_count):
+            caster = march.genus_caster(g)
+            if caster.recipe is None:
+                expected *= caster.sun_visibility(points, sun, steps)
+        assert expected.min() < 0.5 and expected.max() > 0.9
+
+        vdata = GeomVertexData("points", GeomVertexFormat.get_v3(), Geom.UH_static)
+        position = GeomVertexWriter(vdata, "vertex")
+        for p in points:
+            position.add_data3f(*(float(v) for v in p))
+        prim = GeomPoints(Geom.UH_static)
+        prim.add_next_vertices(len(points))
+        geom = Geom(vdata)
+        geom.add_primitive(prim)
+        node = GeomNode("ground_shadow_points")
+        node.add_geom(geom)
+        node.set_bounds(OmniBoundingVolume())
+        node.set_final(True)
+        atmosphere = SHADERS.parents[1] / "atmosphere/shaders/atmosphere.glsl"
+        shadows = SHADERS.parents[1] / "shadows/shaders/shadows.glsl"
+        include = "\n".join(
+            line
+            for path in (shadows, atmosphere, SHADERS / "cloud_field.glsl")
+            for line in path.read_text().splitlines()
+            if not line.startswith("#pragma")
+        )
+        vertex = f"""#version 330
+in vec4 p3d_Vertex;
+flat out float vVisible;
+{include}
+void main() {{
+    vVisible = planetCloudShadow(p3d_Vertex.xyz, normalize(sunDir), {steps}, 0.0);
+    int x = gl_VertexID % {size}, y = gl_VertexID / {size};
+    gl_Position = vec4((vec2(x, y) + 0.5) / {size}.0 * 2.0 - 1.0, 0.0, 1.0);
+}}
+"""
+        fragment = """#version 330
+flat in float vVisible;
+out vec4 fragColor;
+void main() {
+    float v = floor(clamp(vVisible, 0.0, 1.0) * 16711680.0 + 0.5);
+    float r = floor(v / 65536.0);
+    float g = floor((v - r * 65536.0) / 256.0);
+    fragColor = vec4(r, g, v - r * 65536.0 - g * 256.0, 255.0) / 255.0;
+}
+"""
+        root = NodePath("ground_shadow_check")
+        points_np = root.attach_new_node(node)
+        points_np.set_shader(Shader.make(Shader.SL_GLSL, vertex, fragment))
+        bind_defaults(points_np)
+        bind_shadow_defaults(points_np)
+        cloud_shadow_defaults(points_np)  # no maps: the march
+        clouds.set_sun(sun)
+        clouds.bind_shadow_inputs(points_np)
+        texture = Texture("ground_shadow_check")
+        buffer = window.win.make_texture_buffer(
+            "ground_shadow_check", size, size, texture, True
+        )
+        try:
+            camera_np = window.makeCamera(buffer)
+            camera_np.node().set_scene(root)
+            window.graphicsEngine.render_frame()
+            window.graphicsEngine.render_frame()
+            ram = np.frombuffer(texture.get_ram_image_as("RGB").get_data(), np.uint8)
+            rgb = ram.reshape(size, size, 3).astype(np.int64)
+            got = (rgb[..., 0] * 65536 + rgb[..., 1] * 256 + rgb[..., 2]) / 16711680.0
+            error = np.abs(got.ravel() - expected)
+            assert got.min() < 0.5  # shade drawn
+            assert np.median(error) < 5e-3
+            assert np.percentile(error, 99) < 0.08
+        finally:
+            window.graphicsEngine.remove_window(buffer)
+            root.remove_node()
+    finally:
         clouds.remove()
         executor.shutdown()

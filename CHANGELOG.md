@@ -7,6 +7,338 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The old cirrus sheet (cloud genera, Task 24): `clouds.cirrus`
+  (`CloudSheet`, `CirrusSpec`, the stamps), its atlas
+  (`clouds/cirrus_atlas.png` and `.json`), `scripts/bake_cirrus_atlas.py`,
+  `scripts/cirrus_preview.py` and `shaders/cirrus.vert` / `cirrus.frag`.
+  The march's high layer draws the weather's cirrus instead, 0.13-0.4 ms
+  cheaper (performance §37, Task 24). `PlanetClouds.sheet`,
+  `PlanetClouds.bind_inputs` (it bound the sheet alone) and its `game`
+  argument go with it.
+- The temporary `--high-placeholder` of the terrain demo and
+  `terrain_shots.py` (Task 20) and the placeholder cirrus, with
+  `march.thin_samples` and `THIN_TWO_SAMPLES`: every high genus is read
+  once, at the sheet point.
+- The billboard cloud renderer: `clouds.sphere` (`CloudVolume`, its tiles,
+  shells and sprite atlas), `clouds.half_res` (`HalfResClouds`), the
+  native `billboards.c`, and the `CloudSettings` knobs `renderer`,
+  `count_scale`, `overlap_near`, `overlap_far`, `interior_growth`,
+  `half_resolution`, `uploads_per_frame`, `resorts_per_frame` and
+  `tile_cache` (a saved config holding them loads with them skipped), and
+  `CloudSpec`'s `radius`, `aspect` and `deep_radius`. The low clouds are
+  always raymarched (`clouds.march.CloudMarch`). The demos lose
+  `--cloud-renderer` and `--half-res-clouds`, `cloud_bench.py` its
+  `--renderer`, `--half-res` and `--interior-growth`.
+
+### Added
+
+- The terrain demo's `B` key: a burst capture of the next 12 frames into
+  `--capture-dir` (default `captures/`, git-ignored), a folder each. Per
+  frame: the screen, and per march depth range the clouds' raw march (the
+  traced pixels) and the resolve's output, read from their framebuffers
+  (reading a render target's texture back froze the march for the rest of
+  the run). Each frame's pose, block, still frames and cloud debug bits go
+  in `meta.json`. While it runs the clock is held at the frame rate measured
+  before it, so the camera moves as far a frame as in play despite the slow
+  readbacks. Documented in clouds.md ("Testing"); its image helpers, the
+  `-` / `+` block keys and `frame_profile.py`'s bench scenes are tested
+  (`tests/test_demo_tools.py`).
+- The terrain demo's `-` and `+` keys trace a smaller or larger share of the
+  view's pixels a frame in the clouds' march (`CloudSettings.march_block`:
+  1/16, 1/9, 1/8, 1/4 or all), live: the march rebuilds its passes, as a
+  preset change does. The HUD's clouds line shows the share.
+- `frame_profile.py --scene bench-sea|bench-dry`: a simple bench scene (the
+  level's planet without vegetation, its mountains 600 m, with its reflective
+  sea or without), profiled at the ground, 1.5 km and 10 km up. Results in
+  performance.md §37. `TerrainDemo(spec_hook=)` changes the level's planet
+  spec before it is built.
+
+- The high layer's cirrus as procedural flow streaks (`clouds.md`, "The
+  cirrus"), replacing the placeholder: detached streaks along the upper
+  wind in patches, fibres in tapering bundles with fine strands, tufts
+  (heads) with tails trailing upwind from 6 taps along the flow, hooked
+  across it (the fall streak's shear), the domain warped by the curl
+  noise at two scales. The upper wind has a form on the GPU
+  (`genera.high_wind_cube`, `upper_wind_field`, `upper_stream`;
+  `highWind`, an RGBA32F cube: the wind and its stream function, the
+  streaks' across-the-wind coordinate), so the streaks curve with the jets
+  and around the lows. Each part fades to its mean where a pixel cannot
+  resolve it (`march.cirrus_means`), the fibres by the footprint across
+  and along the wind apart (`march.footprint_along`): fibres across a
+  grazing view stay sharp. The cirrus has real optics (depth 1.5, a faint
+  halo) and is read once at the sheet point, like the cirrostratus and
+  cirrocumulus. CPU mirror: `march.cirrus_streaks`, `cirrus_detail`,
+  `cirrus_tufts`, `cirrus_patches`. The showcase gains a cirrus field far
+  to the north (`genera.SHOWCASE_HIGH`, `SHOWCASE_HIGH_EYE`) and the poses
+  `genus_cirrus`, `genus_cirrus_overhead`, `genus_cirrus_grazing`.
+- The cirrus's heads are fibrous, not solid blobs (`clouds.md`, "The
+  cirrus"). The tails' taps fan out toward the head (`march.CI_FAN`), so
+  the fibres splay out there. The head is a wide, frayed window on the tuft
+  noise, striated by the strands, at most 1.2 (`CI_HEAD_*`). It costs no
+  extra fetch.
+- `--cirrus` / `--no-cirrus` (the terrain demo, `terrain_shots.py`): the
+  weather's cirrus in the march's high layer (`GeneraSpec.cirrus_weather`:
+  `weather.cirrus_cover_map` fills cube B's channel 1), on by default, off
+  by default with `--showcase`.
+- `genera.weather_cirrus`: the high layer of a march without genera, the
+  weather's cirrus alone, so a one-type march (`--no-genera`,
+  `demo_world.py`, `cloud_bench.py`) draws the cirrus too.
+- `CloudMarch.set_genus_visible` / `genus_visible` (and `PlanetClouds`')
+  take a high genus's name (`"cirrus"`): the high genera have bits of
+  `uGenusMask` past the low genera's (`march.HIGH_MASK_SHIFT`). The C key
+  shows or hides the march's cirrus; the HUD says "march cirrus on/off".
+- The high layer's cirrostratus and cirrocumulus (`clouds.md`, "The high
+  layer"). The cirrostratus is a nearly uniform veil (optical depth 0.2)
+  with slow swells 25 km across stretched 6 times along the upper jet,
+  faint fibres, the sun plain through it, milky toward the horizon, and a
+  22 degree halo in its phase (`haloRing`). The cirrocumulus is white
+  grains of Worley cells 200 m across in rows across the jet, which fade
+  to their mean where a pixel cannot resolve them
+  (`march.cirrocumulus_grains`). Both read their pattern once where the
+  ray crosses the slab's middle (`march.sheet_crossing`), with the pixel's
+  footprint stretched by the slant (`march.slab_footprint`). Each high
+  genus has optics of its own (`genera.HIGH_OPTICS`, `HighOptics`;
+  `uHighExtinction`, `uHighCap`, `march.high_optical_depth`) and the layer
+  a stretch axis (`genera.high_jet`). The showcase gains an overhead row
+  (`genera.SHOWCASE_HIGH`, `SHOWCASE_HIGH_PITCH`) and the poses
+  `genus_cirrostratus` and `genus_cirrocumulus`. `thinSlabRadiance` takes
+  a halo strength.
+- The clouds' high layer in the raymarch (`clouds.md`, "The high layer"): a
+  sky band of its own above the genera (`genera.HIGH_SLAB`, 11-12.5 km;
+  `GeneraSpec.high`, `GeneraSpec.high_slab`), crossed in one or two
+  jittered samples with no sun march, sorted among the bands' stretches.
+  Its genera (cirrus, cirrostratus, cirrocumulus) take coverage cube B's
+  channels 1-3 (`genera.HIGH_CHANNELS`, `high_genera`). It is lit as a
+  thin slab: `cloud_shading.glsl`'s `thinSlabRadiance`, which the cirrus
+  sheet now shares. The shader variant compiles only when a high genus is
+  covered (`march.march_fragment`; `cloud_march_high.frag`,
+  `cloud_march_recipes_high.frag`). For now its density is a placeholder
+  veil. `planet.check_layers` refuses a high slab under the genera's top
+  or above the air. The demo and `terrain_shots.py` gain `--no-cirrus` and
+  a temporary `--high-placeholder` (poses `high_cb`, `high_overhead`,
+  `high_grazing`, `high_above`).
+- The cloud genera showcase: `scripts/demo_genera.py` (the terrain demo's
+  `--showcase`), every genus alone (`genera.showcase_features`,
+  `GeneraSpec.background`) in two rows: the cumulus species along the
+  northern horizon (`genera.SHOWCASE_ROW`: humilis, mediocris, congestus,
+  cumulonimbus) and the stratiform and mid-level genera along the southern
+  (`genera.SHOWCASE_SOUTH`: stratocumulus, stratus, nimbostratus,
+  altostratus, altocumulus, 38 km out; `showcase_slots`). Keys 1-9 show or
+  hide each genus of the march (`PlanetClouds.set_genus_visible`; the
+  cumulus species are one genus), and `terrain_shots.py --showcase` has a
+  `genus_<name>` pose per feature (a cumulus from 1 km over the start; a
+  low sheet and the altocumulus from under it; the altostratus against the
+  sun). Cumulus humilis and mediocris features (`genera.GENUS_DEPTHS`).
+- `docs/source/cloud_genera_research.md`: the ten cloud genera and the
+  density functions the literature draws them with.
+- Recipe genera: every genus but the convective one evaluates one generic
+  density (`genusRecipeDensity` in `cloud_field.glsl`,
+  `noise.recipe_density_on_sphere` on the CPU) from its preset's knobs
+  (`GenusPreset.recipe`, `noise.GenusField`: value fbm, Worley blobs
+  `"worley"` or closed cells `"cells"`, horizontal and vertical stretch, a
+  profile, billowy or wispy erosion, `erosion_base` to keep it to the
+  base), its coverage calibrated on its own column peaks, erosion included
+  (`noise.recipe_column_peaks`), its far table its own
+  (`noise.recipe_deck_light_table`), and the CPU's cloud shadow marching it
+  as the shadow maps do (`noise.recipe_shadow_on_sphere`,
+  `field_setup.genus_sun_depth`). A tileable Worley F1/F2 volume
+  (`noise.worley_volume`, the `cloudCells` texture) and a second coverage
+  cube (`genusCoverB`). A genus preset may override its type's field
+  (`GenusPreset.field`) and optics (`GenusPreset.optics`). The march
+  compiles the recipe only where a genus needs it
+  (`cloud_march_recipes.frag`; the bakes' `CLOUD_RECIPE_SHADOWS`).
+- Five recipe genera, all in `GeneraSpec.genera` by default and marched only
+  where a feature holds them (each non-convective feature fills its own
+  genus's coverage map, `genera.genus_coverage`):
+  - stratocumulus (cube A channel 1), 0.8-1.8 km: closed cells 1.5 km
+    wide (Worley `F2 - F1`, apart however high the coverage), domed,
+    flat-based, billowy;
+  - nimbostratus (cube A channel 2), 0.6-5 km: a thick, dark, featureless
+    layer that blots out the sun, its base ragged;
+  - altostratus (cube A channel 3), 4.7-6 km: a thin grey sheet stretched
+    along east, the sun dimly through it;
+  - altocumulus (cube B channel 0), 3.5-3.8 km: a thin lens of closed
+    cells 350 m apart with billowy erosion: small rounded patches, shaded,
+    regularly arranged with small clear gaps, 1-5 degrees across from the
+    ground;
+  - and the stratus, now on the recipe (Changed).
+
+- `AsteroidField.reach(camera_world)`: how far a field's rocks can still be
+  drawn (its largest rock at the settings' `min_pixels`, at most the field's
+  far side).
+
+### Changed
+
+- Cloud colours: the stratiform genera and the cumulonimbus were far too
+  dark outside.
+  - The sheets now scale their sunward depth as the cumulus do: stratus
+    preset `shadow_strength` 0.35 (was 1), nimbostratus 0.4 with
+    `multiple_scattering` 0.35 (was 0.05). The altostratus keeps a physical 1.
+  - The sky's light under a deep column turns neutral grey (it was the blue
+    floor that made thick sheets' bases navy).
+  - A cumulonimbus's tower takes half its sky as open sky under its anvil.
+  - At noon (display levels): stratus top 200 → 226, underside 87 → 132;
+    nimbostratus top 190 → 211, face from outside 67 → 99; cumulonimbus sides
+    157 → 169. The cumulus are unchanged.
+
+- Far clouds keep their lumps. The march no longer fades features finer
+  than a share of the step's length (`uStepFade`, `march.STEP_FADES`, the
+  `genusDensity` step-length argument: removed); the view pixel alone
+  decides what a sample resolves. The billows and fine octaves now survive
+  tens of kilometres further, so towers and cumulus are no longer smooth
+  blobs. Far clouds also shimmer less against a full-resolution reference
+  (`cloud_bench --jitter`: error 6.15 → 2.51, flicker 3.28 → 2.32 at
+  `start`). Costs 0.1-0.25 ms.
+
+- Far clouds' edges: where a pixel no longer resolves the fine octaves, the
+  billows or a recipe genus's octaves, cells and erosion, their spread now
+  widens the threshold's window (`edgeWidening`: the expected density over
+  the noise a pixel spans) on top of the fade to their means. Thresholding
+  the mean alone drew far clouds with smooth, sharp outlines; their edges
+  are now softer and frayed. The march's view only: the bakes and the CPU
+  mirrors keep the plain fade. `uNoiseSigma`, `uBillowSigma`, and the cell
+  spreads in the deck entry's row 14 (`noise.cell_spreads`). Debug bit 4096
+  turns it off. No measurable cost.
+- Far clouds keep their own self-shadowing and powder as far as their shapes
+  (footprint 0.15-0.6 of the coarse feature), reading the light volume
+  alone out there. Before, they faded to the far table's averages from a
+  quarter of that (about 110 km at 2560x1440 for the cumulus). About
+  +0.05 ms, within the noise.
+
+- The cirrus defaults: `PlanetClouds(cirrus=True)` (was a `CirrusSpec`)
+  draws the weather's cirrus in the march's high layer, with or without
+  genera; `CloudLook.cirrus` is a bool (default False; was a `CirrusSpec`
+  or None), and `demo_world.py` sets it. `planet.check_layers` takes
+  `cirrus` as a bool: the sheet's rule is gone, the high slab's applies
+  whenever the cirrus is drawn. `PlanetClouds.high_slab` gives the high
+  layer's slab, which `World.depth_ranges` reaches. `cloud_bench.py`'s
+  `--no-cirrus` turns off the march's cirrus.
+- The march takes the high slab's crossings out of its sorted segments:
+  the one on the way down before every band, the one on the way up after
+  (a ray's height is convex, the slab above every band). The high variant
+  cost the low clouds 0.1-0.2 ms more with them sorted among the bands
+  (performance §37, Task 23).
+- `CloudSettings.shells` is `octave_bands` (a saved `shells` loads as it);
+  `clouds.sphere`'s helpers the march uses moved to `clouds.field_setup`,
+  `clouds.deck` and `clouds.passes`.
+- Cumulus congestus grow into connected towers that reach their top
+  (`DensityField.deep_exponent`, `deep_erosion`, `cell_power`), and the
+  cumulonimbus's anvil and shelf are smooth (`noise.anvil_weight`,
+  `ANVIL_SCALE`).
+- The genera are one union march (`CloudMarch(genera=...)`): every genus is
+  marched in one pass over the sky bands (`march.sky_bands`, the genera's
+  slabs merged; at most `noise.MAX_GENERA` genera and `MAX_SKY_BANDS` bands),
+  so genera may overlap: `planet.check_layers` no longer keeps the stratus
+  under the convective clouds; it checks the genera's and bands' counts and
+  the cirrus against the union's top (`PlanetClouds.top_radius` too). Every
+  genus keeps all its `octave_bands` (no more halving).
+- One light volume and one shadow map pair hold all the genera's summed
+  depth: `PlanetClouds.shadow_families` is removed; `shadow_caster()` and
+  `bind_shadow_inputs(node)` take no family; `CloudMarch.genus_caster(g)` is
+  one genus's part on the CPU, `CloudMarch.genera_count` how many (was
+  `families`). `CloudLightVolumes.volume` and `CloudShadowMaps.pair` are
+  single (were the lists `volumes` and `pairs`).
+- `ShadowSettings.cloud_light_slices` counts slices of each sky band a frame.
+- The stratus is a recipe genus: a grey, uniform sheet of 10 km value fbm
+  stretched three times east, a soft top, a flat base, ragged (wispy) near
+  its base only, its outline sharper; its coverage calibrated with its
+  erosion in (`noise.recipe_column_peaks`).
+- The march takes only the genera holding cloud somewhere
+  (`genera.genus_specs(covered=True)`): an empty genus sharing a band
+  cost the demo 0.65 ms. `planet.check_layers` still counts them all.
+- A slab bridging two groups of slabs (the nimbostratus between the low
+  sheets and the convective clouds) splits its sky band at the gap
+  (`march.sky_bands`; `band_masks` takes each genus reaching into a band):
+  merged, the low sheets took a 9.9 km band's light-volume slices and bake
+  steps.
+
+- The far plane reaches the asteroid fields' rocks (#39):
+  `World.depth_ranges` returns the larger of the bodies' far distance (or
+  `SPACE_FAR_M` in open space) and every field's `reach`. In open space the
+  far plane was a fixed 1,000 km, so the biggest rocks were cut while
+  still a few pixels wide: a line where the drawn rocks met the haze (the
+  `ring` preset seen from 80 km over its plane: now 3,440 km, the line
+  gone, no cost seen). With bodies the far plane still follows their
+  horizon; it only grows. `demo_terrain.py --ring` does the same.
+
+### Fixed
+
+- Clouds shimmered at rest, worst on thick sheets (nimbostratus) and with
+  large march blocks. The cause was the light volume's read jitter (a texel
+  and a slice either way, new each visit), also applied to the depth-up read
+  behind the sky's reach and the diffused light's fade. A sample near a
+  sheet's top or edge read a much deeper column, which made black dots in
+  the raw march; they moved every visit and nudged their blocks in the
+  resolve. At rest in front of the nimbostratus (4x4 block), unjittering
+  that read took the frame-to-frame change from 0.34 to 0.07 levels.
+- The jitter is now gone from the sun-depth reads too (the stratus at rest,
+  the cumulonimbus in motion still shimmered: with the jitter off alone,
+  the stratus's frame-to-frame change 0.22 → 0.09 levels, the cumulus's
+  0.45 → 0.26). It hid streaks along the sun on an anvil and on tower faces,
+  whose cause was the light window's two reads: the far one, taken where
+  the sun ray goes, blended other texels than the near one, and their
+  interpolation errors did not cancel in the difference. The far read is
+  now taken straight above the near one (`cloudLightSunDepth`): no streaks,
+  no jitter; a tower's face a little flatter. The two reads then differ only
+  by their slice, and the linear read's kinks at each slice drew bands along
+  the heights on an anvil's underside: the volume is now read across its
+  slices with a cubic B-spline (`cloudLightAt`, four slices inside the
+  band; clouds 4.53 → 4.63 ms at `genera_cb`, 5.54 → 5.37 ms at the anvil
+  pose, within noise). The exact fix, a chart sheared
+  along the sun, is in BACKLOG.md.
+
+- The clouds traced at every pixel (march block 1x1) were grainy all over
+  in motion: the resolve took a quarter of each pixel's raw sample a frame,
+  without the smooth mean the larger blocks take. At 1x1 it now takes the
+  smooth mean in motion (`march.SMOOTHING`, 1) and a sixteenth of the frame
+  at least (`march.MOVING_WEIGHTS`). Flying toward the cumulonimbus
+  (`motion_shots.py`, `genera_cb`): grain 4.97 → 1.24, specks 6.5 % →
+  0.53 %, error against the converged view 3.02 → 1.43 (HIGH's 4x2: 0.92,
+  0.11 %, 1.23). ULTRA's 2x2 (half the smooth mean, a quarter a frame) gets
+  the same: grain 1.33 → 0.88, error 1.52 → 1.36. Nothing changes at rest.
+
+- The sea reflected only the cumulus family: the reflection's deck was genus
+  0's alone. Every low and middle genus now has its own deck at its slab's
+  middle (`deck.deck_nodes`; `cloud.frag` shades it as that genus:
+  `uDeckGenus`, its weather, density and far table, none when hidden),
+  drawn highest first. The high layer is still not reflected.
+- The marched clouds ignored eclipses, the mountains' shadow and the rings':
+  only the billboards' shader took them, and the march never did. The
+  march's light (`cloudSunAndSky`, once a pixel, and the high layer's
+  crossing) now multiplies them in, as every other receiver does. The world
+  binds the shadow inputs to the march's passes and decks through
+  `PlanetClouds.bind_maps`.
+- The march's cirrus, two artefacts seen flying at its height:
+  - **A second, offset layer.** Two causes:
+    - A crossing of the high slab that never meets its middle (a camera
+      inside the slab, looking away from it) read the patterns at the
+      crossing's middle, another height for every ray; it now draws nothing
+      (`sheetCrossing` returns -1, `march.sheet_crossing` None).
+    - The showcase also drew the old cirrus sheet under its own cirrus.
+      `--cirrus` now defaults to none with `--showcase`.
+  - **Stairs along the fibres up close.** The upper wind's stream function
+    went through a cube map's 8-bit filter weights, steps of about 30 m. It
+    is now a 2D array of the faces, blended in float (`highWindAt`).
+- A faint contour across a thin cloud sheet seen at a grazing angle (the
+  altostratus): the march counted a ray opaque at transmittance 0.04 and
+  snapped its alpha from 0.96 to 1 there; the light let through now eases to
+  0 over 0.04-0.08 (`march.opaque_residual`, `opaqueResidual` in
+  `cloud_march.glsl`).
+- A field's haze ended abruptly at the depth split (#39): only the far
+  camera drew it, from the split on, on the assumption that every rock
+  nearer is drawn. A ring's dust never is, and from orbit the split sits
+  hundreds of kilometres out (halfway down to the ground: 248 km at 500 km
+  up). The near camera now draws the haze up to the split
+  (`FieldHaze.set_split`, which the field calls when the app's camera is a
+  split's near one); both passes cut the rays at the same plane, given from
+  Python (read from the near lens's projection in floats it was off by
+  kilometres: a seam).
+- Rocks beyond the split were veiled twice over the stretch before it (by
+  their own veil, then by the near camera's haze pass): their veil now
+  starts at the split (`haze.glsl`'s `hazeVeilStart`).
+
 ## [0.4.1] 2026-11-14
 
 ### Added

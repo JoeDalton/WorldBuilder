@@ -1,24 +1,22 @@
 """
 A planet's clouds.
 
-    planet.py  — a whole planet's clouds (PlanetClouds): the low clouds'
-                 volume and the cirrus sheet above it, as one part; not
-                 re-exported here, nor are the two layers:
-    sphere.py  — the volume (CloudVolume: billboard shells generated per
-                 cube-sphere tile in the worker pool, a deck beyond);
-    cirrus.py  — the sheet (CloudSheet: high cirrus, baked patches stamped
-                 along the upper wind, drawn behind and in front of the
-                 volume).
+    planet.py  — a whole planet's clouds (PlanetClouds), as one part; not
+                 re-exported here, nor is the volume:
+    march.py   — the volume (CloudMarch: the low clouds raymarched and the
+                 high layer's cirrus, a deck sphere for the sea's
+                 reflection: deck.py; what the field is built from:
+                 field_setup.py; the genera: genera.py).
     noise.py   — what a cloud type looks like: its density field (DensityField)
                  and the tileable 3D value-noise volume it is built from.
-    cloud.py   — the cloud types (PRESETS, CloudSpec), what they cost
-                 (CloudSettings) and the billboards' sprite atlas.
+    cloud.py   — the cloud types (PRESETS, CloudSpec) and what they cost
+                 (CloudSettings).
     weather.py — the planet's weather: a cube map of target coverage
                  (WeatherSpec) and the fbm shift that gives it; the upper
                  wind and the cirrus's cover.
 
-A billboard is a sample of a volume, not a sprite, and a cloud type is one density
-field over a slab of sky whose features are the clouds. Design notes:
+A cloud type is one density field over a slab of sky whose features are the
+clouds. Design notes:
 docs/source/clouds.md and docs/source/atmosphere.md.
 """
 
@@ -27,7 +25,6 @@ from world_builder.clouds.cloud import (
     CloudSettings,
     CloudSpec,
     CloudType,
-    scale_count,
     scale_march,
     with_settings,
 )
@@ -44,7 +41,6 @@ __all__ = [
     "CloudSettings",
     "DensityField",
     "PRESETS",
-    "scale_count",
     "scale_march",
     "with_settings",
     "build_noise_texture",

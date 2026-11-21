@@ -1,8 +1,9 @@
 """
-Unit tests for planet-wide clouds (world_builder.clouds.sphere, the
-planet-mode density in world_builder.clouds.noise, and the weather map in
+Unit tests for a planet's cloud field (the planet-mode density in
+world_builder.clouds.noise, its set-up in world_builder.clouds.field_setup,
+the deck in world_builder.clouds.deck, and the weather map in
 world_builder.clouds.weather). The shaders need a window (see
-scripts/terrain_shots.py); these check placement, calibration and bookkeeping.
+scripts/terrain_shots.py); these check calibration and bookkeeping.
 """
 
 from dataclasses import replace
@@ -10,7 +11,12 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
+from world_builder.clouds.cloud import PRESETS, CloudType
+from world_builder.clouds.field_setup import (
+    OctaveBand,
+    _noise,
+    octave_offset,
+)
 from world_builder.clouds.noise import (
     DECK_LIGHT_COS_MIN,
     deck_light_table,
@@ -19,14 +25,6 @@ from world_builder.clouds.noise import (
     sphere_column_peaks,
     sun_optical_depth_on_sphere,
     with_threshold,
-)
-from world_builder.clouds.sphere import (
-    CloudVolume,
-    ShellSpec,
-    SphereCloudSpec,
-    _noise,
-    generate_cloud_tile,
-    octave_offset,
 )
 from world_builder.clouds.weather import (
     WeatherSpec,
@@ -39,13 +37,11 @@ from world_builder.clouds.weather import (
     vortices,
     weather_cube,
 )
-from world_builder.quality import QualityLevel
 from world_builder.sky.starfield import cube_directions
 from world_builder.terrain.chart import TangentFrame, dirs_from_latlon
-from world_builder.terrain.cubesphere import face_dirs, grid_for
+from world_builder.terrain.cubesphere import face_dirs
 from world_builder.terrain.planet import PRESETS as PLANETS
 from world_builder.terrain.planet import Planet, PlanetSpec
-from world_builder.terrain.workers import ChunkExecutor, SharedArray
 
 R = 600e3
 
@@ -76,17 +72,6 @@ def weather():
 @pytest.fixture(scope="module")
 def cube(weather, table):
     return weather_cube(weather, table)
-
-
-@pytest.fixture(scope="module")
-def spec(field, weather, table):
-    grid = grid_for(R)
-    base = round(np.log2(8000.0 / grid.chunk_size(0)))
-    shells = tuple(
-        ShellSpec(base + k, (70 * 2**k, 140 * 2**k), 2.0, (4, 3, 2)[k])
-        for k in range(3)
-    )
-    return SphereCloudSpec(R, field, 7, weather, tuple(table), shells)
 
 
 def _uniform(coverage: float, table: np.ndarray) -> np.ndarray:
@@ -153,7 +138,7 @@ def test_dropping_octaves_keeps_the_coverage(field, peaks, table, coverage):
     full = _column_coverage(field, weather, octaves=4)
     for octaves in (3, 2):
         offset = octave_offset(peaks, sphere_column_peaks(_noise(7), RAW, R, octaves))
-        shell = ShellSpec(0, (1.0, 1.0), 1.0, octaves, offset)
+        shell = OctaveBand(0, (1.0, 1.0), 1.0, octaves, offset)
         measured = _column_coverage(shell.field_of(field), weather, octaves)
         assert measured == pytest.approx(full, abs=0.02), octaves
 
@@ -368,169 +353,8 @@ def test_windward_slopes_are_cloudier_than_the_lee():
     assert lift[0] > 0.1 and lift[1] < -0.1
 
 
-# ── Tiles ──────────────────────────────────────────────────────────────────────
-
-
-def _cloudy_dir(cube) -> np.ndarray:
-    """A direction the weather keeps well covered."""
-    dirs = cube_directions(cube.shape[1])
-    face, row, column = np.argwhere(cube[..., 0] > 0.7)[0]
-    return dirs[face, row, column][None, :]
-
-
-def test_tiles_place_billboards_on_cloud(spec, cube):
-    grid = grid_for(R)
-    level = spec.shells[0].level
-    dirs = _cloudy_dir(cube)
-    face, i, j, _, _ = grid.locate(dirs, level)
-    tile = generate_cloud_tile(spec, (level, int(face[0]), int(i[0]), int(j[0])))
-    p = tile.particles
-    assert p.dtype == np.float32 and p.shape[1] == 9
-    assert len(p) > 0
-    positions = p[:, 0:3].astype(np.float64) + tile.centre
-    # In the slab, on the field the shader draws.
-    height = np.linalg.norm(positions, axis=1) - R
-    base, thickness = spec.field.slab
-    assert np.all((height > base - 1.0) & (height < base + thickness + 1.0))
-    values = density_on_sphere(_noise(7), cube, spec.field, positions, R)
-    assert np.all(values > 0.0)
-    # Within the tile's patch.
-    tile_face, ti, tj, _, _ = grid.locate(positions, level)
-    assert np.all(tile_face == face[0]) and np.all(ti == i[0]) and np.all(tj == j[0])
-    radii = p[:, 3]
-    assert radii.min() >= 70.0 and radii.max() <= 140.0
-    assert np.all(p[:, 8] == 0)  # shell index
-    # Deterministic.
-    again = generate_cloud_tile(spec, tile.key)
-    np.testing.assert_array_equal(again.particles, tile.particles)
-
-
-def test_tiles_read_the_shared_weather(spec, cube):
-    """Workers read the weather's shift from shared memory instead of each
-    building the map (~0.6 s): the same tiles, in this process and in a
-    worker process."""
-    grid = grid_for(R)
-    level = spec.shells[0].level
-    face, i, j, _, _ = grid.locate(_cloudy_dir(cube), level)
-    key = (level, int(face[0]), int(i[0]), int(j[0]))
-    built = generate_cloud_tile(spec, key)
-    shared = SharedArray(cube[..., 1])
-    try:
-        with_shared = replace(spec, shift=shared.handle)
-        here = generate_cloud_tile(with_shared, key)
-        np.testing.assert_array_equal(here.particles, built.particles)
-        executor = ChunkExecutor(backend="process", workers=1)
-        try:
-            there = executor.submit_once(generate_cloud_tile, with_shared, key)
-            np.testing.assert_array_equal(
-                there.result(timeout=120).particles, built.particles
-            )
-        finally:
-            executor.shutdown()
-    finally:
-        shared.release()
-
-
-def test_coarser_shells_use_bigger_billboards(spec, cube):
-    grid = grid_for(R)
-    dirs = _cloudy_dir(cube)
-    for k, shell in enumerate(spec.shells):
-        face, i, j, _, _ = grid.locate(dirs, shell.level)
-        tile = generate_cloud_tile(
-            spec, (shell.level, int(face[0]), int(i[0]), int(j[0]))
-        )
-        if len(tile.particles):
-            assert tile.particles[:, 3].min() >= shell.radius[0] - 1e-3
-            assert np.all(tile.particles[:, 8] == k)
-
-
-def test_empty_sky_gives_an_empty_tile(field, spec):
-    """A coverage of zero leaves nothing to place (and no crash)."""
-    clear = replace(spec, field=replace(field, threshold=(9.0, 9.5)))
-    grid = grid_for(R)
-    level = clear.shells[0].level
-    tile = generate_cloud_tile(
-        clear, (level, 0, grid.side(level) // 2, grid.side(level) // 2)
-    )
-    assert len(tile.particles) == 0
-
-
-# ── The scene ──────────────────────────────────────────────────────────────────
-
-
-def test_clouds_draw_tiles_around_the_camera(showbase):
-    executor = ChunkExecutor(backend="inline", inline_budget=64)
-    clouds = CloudVolume(
-        showbase.render,
-        R,
-        executor,
-        altitude=2200.0,
-        settings=CloudSettings(shells=2),
-        planet=PLANETS["forest"],
-    )
-    try:
-        up = TangentFrame.at(20.0, 40.0).up
-        camera = up * (R + 1000.0)
-        for _ in range(12):
-            clouds.update(camera)
-        assert clouds.stats["tiles"] > 0
-        assert clouds.stats["billboards"] > 0
-        # Every shown tile sits where it is on the planet, relative to the
-        # camera at the render origin.
-        for key in clouds._shown:
-            tile = clouds._tiles[key]
-            expected = tile.data.centre - camera
-            np.testing.assert_allclose(
-                tile.node.get_pos(showbase.render), expected, atol=1.0
-            )
-        # Only the near shells' levels, near the camera.
-        levels = {k[0] for k in clouds._shown}
-        assert levels <= {s.level for s in clouds.spec.shells}
-        # The deck sits at the planet's centre, its far lighting bound.
-        np.testing.assert_allclose(
-            clouds.deck.get_pos(showbase.render), -camera, atol=1.0
-        )
-        light = clouds.root.get_shader_input("deckLight").get_texture()
-        assert light.get_x_size() == 32 and light.get_y_size() == 17
-    finally:
-        clouds.remove()
-        executor.shutdown()
-
-
-def test_lower_quality_places_fewer_billboards(showbase):
-    """The quality presets (the demo's F4): bigger billboards and less
-    overlap, so the same tile holds fewer of them; the far shells evaluate
-    fewer octaves."""
-    executor = ChunkExecutor(backend="inline")
-    counts = {}
-    try:
-        for quality in (QualityLevel.HIGH, QualityLevel.LOW):
-            clouds = CloudVolume(
-                showbase.render,
-                R,
-                executor,
-                altitude=2200.0,
-                planet=PLANETS["forest"],
-                settings=CloudSettings.preset(quality),
-                channel="clouds",
-            )
-            spec = clouds.spec
-            shell = spec.shells[0]
-            dirs = TangentFrame.at(20.0, 40.0).up[None, :]
-            face, i, j, _, _ = grid_for(R).locate(dirs, shell.level)
-            key = (shell.level, int(face[0]), int(i[0]), int(j[0]))
-            counts[quality] = len(generate_cloud_tile(spec, key).particles)
-            expected = {QualityLevel.HIGH: [4, 4, 4, 3], QualityLevel.LOW: [4, 3, 3, 2]}
-            assert [s.octaves for s in spec.shells] == expected[quality]
-            clouds.remove()
-    finally:
-        executor.shutdown()
-    assert counts[QualityLevel.HIGH] > 0
-    assert counts[QualityLevel.LOW] < 0.5 * counts[QualityLevel.HIGH]
-
-
 def test_deck_mesh_is_a_sphere():
-    from world_builder.clouds.sphere import deck_mesh
+    from world_builder.clouds.deck import deck_mesh
 
     node = deck_mesh(R + 2700.0, quads=4)
     vdata = node.get_geom(0).get_vertex_data()
@@ -542,6 +366,38 @@ def test_deck_mesh_is_a_sphere():
     # Same corners as the terrain's cube-sphere.
     corner = face_dirs(0, np.array([1.0]), np.array([1.0]))[0] * (R + 2700.0)
     assert np.min(np.linalg.norm(data - corner, axis=1)) < 1.0
+
+
+def test_every_genus_has_a_deck_in_the_reflection():
+    """The sea's reflection draws the decks (deck.deck_nodes): one a genus
+    at its slab's middle, shaded as that genus (uDeckGenus), the highest
+    drawn first (seen from below, the farthest first); the others hang
+    under the first, which follows the camera. cloud.frag reads each
+    genus's weather, density and far table, and skips a hidden genus."""
+    from panda3d.core import NodePath
+
+    from world_builder.clouds.deck import CLOUD_BIN, deck_nodes
+
+    root = NodePath("root")
+    slabs = [(600.0, 1600.0), (100.0, 700.0), (4700.0, 1300.0)]
+    decks = deck_nodes(root, R, slabs)
+    assert len(decks) == 3
+    assert decks[1].get_parent() == decks[0] and decks[2].get_parent() == decks[0]
+    for genus, (deck, (base, thickness)) in enumerate(zip(decks, slabs)):
+        vdata = deck.node().get_geom(0).get_vertex_data()
+        vertex = np.frombuffer(bytes(memoryview(vdata.get_array(0))), np.float32)[:3]
+        assert np.linalg.norm(vertex) == pytest.approx(R + base + 0.5 * thickness)
+        assert not deck.get_shader_input("uDeckGenus").get_blank()
+        assert deck.get_bin_name() == CLOUD_BIN
+    # The highest (genus 2) first, then genus 0, then the lowest
+    assert [d.get_bin_draw_order() for d in decks] == [1, 2, 0]
+    from world_builder.clouds.deck import _SHADERS
+
+    frag = (_SHADERS / "cloud.frag").read_text()
+    assert "genusWeatherAt(uDeckGenus, up)" in frag
+    assert "genusRecipeDensity(f, low" in frag
+    assert "cloudRadianceAt(uDeckGenus" in frag
+    assert "((uGenusMask >> uDeckGenus) & 1) == 0" in frag
 
 
 def test_the_second_order_sees_less_of_the_sunward_depth(deck_light):

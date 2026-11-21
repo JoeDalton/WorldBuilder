@@ -1,13 +1,15 @@
 // The light a sample of a planet's cloud sends toward the camera, shared by
-// the billboards and the deck (cloud.frag) and the raymarch
-// (cloud_march.frag). Include with #pragma include, after atmosphere.glsl and
-// cloud_field.glsl. See docs/source/clouds.md, "Lighting".
+// the deck (cloud.frag) and the raymarch (cloud_march.frag); and the thin
+// slab's (thinSlabRadiance), the march's high layer's. Include with
+// #pragma include, after atmosphere.glsl and cloud_field.glsl. See
+// docs/source/clouds.md, "Lighting".
 uniform vec3  sunColor;
 uniform vec3  skyColor;
 uniform float sunBrightness;
 uniform float skyStrength;
 uniform float skyOcclusion;     // share of sky light reaching a slab's underside
-// The far deck's lighting: deckLight and deckLightCosMin (cloud_field.glsl).
+// The far clouds' lighting: each genus's far table (cloud_field.glsl's
+// genusFarTable: deckLight for genus 0) and deckLightCosMin.
 
 // How the light diffused through a cloud fades with the column above it
 // (its optical depth straight up, exp2 units, from a light volume: the
@@ -66,10 +68,10 @@ void planetCloudLight(int atmo, vec3 p, out vec3 sunlight, out vec3 skylight,
 //   twilight     the lit air's above p once p is in the planet's shadow
 //   weather      the weather at p: its fbm shift, the convective depth, the
 //                anvil shelf's shift (weatherAt)
-//   deckTable    the field's light table (deckLight), sunDepth the optical
-//                depth toward the sun from p (cloudSunDepth; needed only with
-//                shading > 0)
-vec3 cloudRadianceFrom(sampler2D deckTable, float sunDepth, Field f, vec3 p,
+//   genus        whose clouds: its far table (genusFarTable), sunDepth the
+//                optical depth toward the sun from p (cloudSunDepth; needed
+//                only with shading > 0)
+vec3 cloudRadianceFrom(int genus, float sunDepth, Field f, vec3 p,
                        float density, vec3 V, float shading, float farCoverage,
                        vec3 sunlight, vec3 skylight, vec3 twilight, vec3 weather) {
     if ((uCloudDebug & 1) != 0) shading = 0.0;
@@ -91,10 +93,9 @@ vec3 cloudRadianceFrom(sampler2D deckTable, float sunDepth, Field f, vec3 p,
         // nothing changes colour closing in. A low sun marches along the
         // slab, through the clouds around: the terminator darkens gradually,
         // in the (reddened) sunlight's colour.
-        vec2 size = vec2(textureSize(deckTable, 0));
         float cosSun = dot(normalize(p), sunDir);
         vec2 at = vec2((cosSun - deckLightCosMin) / (1.0 - deckLightCosMin), farCoverage);
-        vec4 averaged = texture(deckTable, (clamp(at, 0.0, 1.0) * (size - 1.0) + 0.5) / size);
+        vec4 averaged = genusFarTable(genus, at);
         sunVisibility = mix(averaged.g, sunVisibility, shading);
         sunShadowing = mix(averaged.r, sunShadowing, shading);
         octaveShadowing = mix(averaged.a, octaveShadowing, shading);
@@ -113,13 +114,30 @@ vec3 cloudRadianceFrom(sampler2D deckTable, float sunDepth, Field f, vec3 p,
     // same floor and the open sky, in place of the ramp; and the diffused
     // light's share left by that column (DIFFUSE_FADE).
     float fade = 1.0;
+    // The share of the sky's light that comes straight, not through the
+    // column above (1 under open sky): light diffused through cloud is
+    // neutral, so what reaches a sample under a deep column is the sky's
+    // brightness without its blue. Kept blue, it was all a thick sheet's
+    // underside had: stratus and nimbostratus bases came out navy.
+    float straight = 1.0;
     if (cloudSkyHeld > 0.0 && shading > 0.0) {
         float diffuse = (uCloudDebug & 2048) == 0 ? diffused(cloudSkyDepth) : 1.0;
         fade = mix(1.0, diffuse, cloudSkyHeld);
         skyReach = mix(skyReach, mix(skyOcclusion, 1.0, exp2(-cloudSkyDepth)),
                        cloudSkyHeld);
+        straight = mix(1.0, exp2(-cloudSkyDepth), cloudSkyHeld);
+        // A cumulonimbus's tower (convective depth past 0.6) under its
+        // anvil: the column up crosses the anvil, but the tower's sides see
+        // the open sky around it (a sheet's do not), so half its sky comes
+        // as under open sky. Without, the towers were grey under their own
+        // anvils. The cumulus below 0.6 (congestus 0.5) keep the column's.
+        float open = f.anvil > 0.0 ? 0.5 * smoothstep(0.6, 0.9, weather.y) : 0.0;
+        fade = mix(fade, 1.0, open);
+        skyReach = mix(skyReach, 1.0, open);
+        straight = mix(straight, 1.0, open);
     }
     cloudSkyHeld = 0.0;
+    skylight = mix(vec3(dot(skylight, vec3(0.2126, 0.7152, 0.0722))), skylight, straight);
     // Multiple-scattering fill: sky-coloured and NOT phase-weighted, or dusk
     // shadows turn orange and sunward shadow outshines side-lit cloud.
     float fill = f.multipleScattering * sunBrightness * (1.0 - sunVisibility) * fade;
@@ -140,38 +158,64 @@ vec3 cloudRadianceFrom(sampler2D deckTable, float sunDepth, Field f, vec3 p,
          + twilight * (sunBrightness * TWILIGHT_GLOW * skyReach);
 }
 
-vec3 cloudRadianceAt(Field f, vec3 p, float density, vec3 V, float shading,
+// The radiance of a sample of genus g's clouds (f its field at the
+// sample's level): one path for every genus, its far table its own, its sun
+// depth from the one light volume (whose depth beyond its window, its
+// farShadow, is the deeper clouds' shadow on it).
+vec3 cloudRadianceAt(int genus, Field f, vec3 p, float density, vec3 V, float shading,
                      float farCoverage, vec3 sunlight, vec3 skylight,
                      vec3 twilight, vec3 weather) {
     float sunDepth = shading > 0.0 && (uCloudDebug & 1) == 0
                    ? cloudSunDepth(f, p, weather) : 0.0;
-    return cloudRadianceFrom(deckLight, sunDepth, f, p, density, V, shading,
+    return cloudRadianceFrom(genus, sunDepth, f, p, density, V, shading,
                              farCoverage, sunlight, skylight, twilight, weather);
-}
-
-#ifdef CLOUD_MAP_LIGHTING
-// The same for the second family's clouds (the stratus under the convective
-// ones: its light table, its maps, the convective clouds' shadow on it).
-vec3 cloudRadianceOther(Field f, Field above, vec3 p, float density, vec3 V,
-                        float shading, float farCoverage, vec3 sunlight,
-                        vec3 skylight, vec3 twilight, vec3 weather) {
-    float sunDepth = shading > 0.0 && (uCloudDebug & 1) == 0
-                   ? cloudSunDepthOther(f, above, p, weather) : 0.0;
-    return cloudRadianceFrom(otherDeckLight, sunDepth, f, p, density, V, shading,
-                             farCoverage, sunlight, skylight, twilight, weather);
-}
-#endif
-
-// With only the weather's shift (no convective depth, no shelf).
-vec3 cloudRadianceShifted(Field f, vec3 p, float density, vec3 V, float shading,
-                          float farCoverage, vec3 sunlight, vec3 skylight,
-                          vec3 twilight, float shift) {
-    return cloudRadianceAt(f, p, density, V, shading, farCoverage, sunlight,
-                           skylight, twilight, vec3(shift, 0.0, -NO_CLOUD_LIFT));
 }
 
 vec3 cloudRadiance(Field f, vec3 p, float density, vec3 V, float shading,
                    float farCoverage, vec3 sunlight, vec3 skylight, vec3 twilight) {
-    return cloudRadianceAt(f, p, density, V, shading, farCoverage, sunlight,
+    return cloudRadianceAt(0, f, p, density, V, shading, farCoverage, sunlight,
                            skylight, twilight, weatherAt(p));
+}
+
+// The radiance of a thin slab of ice cloud (the march's high layer), linear,
+// before the display transform: no sun march, the sunward half of the slab's
+// own depth instead; a phase of its own (strongly forward, ice); the sky's
+// light, and the sunlight the slab scatters about, as its fill; the lit air's
+// twilight once the slab is in the planet's shadow.
+//   verticalDepth  the slab's optical depth straight through it (exp2 units)
+//   up             the slab's up at the sample (unit)
+//   dir            the view ray's direction, toward the slab (unit)
+//   maxDepth       what an optical depth saturates toward, softly
+//   phase          noise.phase_weights of its optics, and its forward g
+//   light          x: its multiple scattering, y: its shadow strength
+//   halo           the 22 degree halo's strength in its phase (haloRing),
+//                  0 = none (the cirrostratus's, by its share of the depth)
+//   sunlight       the sun's colour as it reaches the slab (reddened:
+//                  planetCloudLight's)
+//   skylight       the sky's (faded through twilight)
+//   twilight       the lit air's above it (sunColor * cloudTwilight)
+// The 22 degree halo of hexagonal ice (light refracted through the
+// crystals' 60 degree prisms, the least deviation 22 degrees): a ring about
+// the sun, 1 at its peak, its inner edge sharp (no light refracts less: the
+// sky inside it darker), fading out over a few degrees outside. One acos a
+// crossing: cheaper than any sample.
+float haloRing(float cosAngle) {
+    float x = degrees(acos(clamp(cosAngle, -1.0, 1.0))) - 22.0;
+    return exp(-x * x / (x < 0.0 ? 0.5 : 8.0));
+}
+
+vec3 thinSlabRadiance(float verticalDepth, vec3 up, vec3 dir, float maxDepth, vec4 phase,
+                      vec4 light, float halo, vec3 sunlight, vec3 skylight,
+                      vec3 twilight) {
+    float cosSun = dot(up, sunDir);
+    float sunDepth = 0.5 * verticalDepth / max(cosSun, 0.1);
+    float sunVisibility = exp2(-maxDepth * (1.0 - exp(-sunDepth * light.y / maxDepth)));
+    float ambient = skyStrength + light.x * sunBrightness * (1.0 - sunVisibility);
+    float scattered = lobePhase(phase, dot(sunDir, dir));
+    if (halo > 0.0) {
+        scattered += halo * haloRing(dot(sunDir, dir));
+    }
+    return sunlight * (sunBrightness * sunVisibility * scattered)
+         + skylight * ambient
+         + twilight * (sunBrightness * TWILIGHT_GLOW);
 }

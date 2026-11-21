@@ -41,6 +41,11 @@ either. Run it from an environment where world_builder is importable::
                      world_builder.settings.WorldSettings)
     --<part>-quality one part's preset, over --quality
     --no-clouds      no clouds at all (neither cumulus nor cirrus)
+    --cirrus / --no-cirrus
+                     the weather's cirrus in the march's high layer, its
+                     flow streaks (clouds.genera's cirrus_weather): on by
+                     default, off with --showcase (its own cirrus feature
+                     alone)
     --ring           a small ring around the planet (off by default, so
                      runs compare with earlier ones)
     --test-ship      a model hung beside the white test ball, lit by the
@@ -86,7 +91,15 @@ Controls (AZERTY):
                     terrain, air, sky, clouds, ocean (each part's own
                     settings; a cloud or ocean change may refill a moment)
     F6              cycle every part's preset at once
-    C               show / hide the high cirrus
+    C               show / hide the march's cirrus
+    1-9             show / hide each genus of the low clouds (--showcase)
+    B               burst capture: the next BURST_FRAMES frames to
+                    --capture-dir (the screen, and per depth range the
+                    clouds' raw march and the resolve's output), with each
+                    frame's pose in meta.json; fly while it runs, to show
+                    the clouds' shimmer in motion
+    - / +           trace a smaller / larger share of the pixels a frame in
+                    the clouds' march (1/16, 1/9, 1/8, 1/4, all; the HUD shows it)
     F7              cycle the shadows' preset (the clouds' shadow on the
                     ground: off at low, more samples above)
     F8              cycle the models' preset (the test balls' and ship's
@@ -102,7 +115,7 @@ preset, seed and radius) and the finest detail drawn; altitude, height above
 the ground, latitude/longitude, cube face, heading, pitch and speed factor;
 the biomes under the camera and the other bodies' distances; chunk counts
 and generation, upload and LOD timings; the depth split and far plane; the
-clouds' tiles and billboards; each part's quality preset ("custom" when it
+clouds' set-up still pending; each part's quality preset ("custom" when it
 differs from every preset).
 
 Lighting: the sun is one direction for the whole system, a disc as wide as
@@ -130,10 +143,14 @@ from __future__ import annotations
 
 import argparse
 import functools
+import json
 import math
 import sys
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from direct.gui.OnscreenText import OnscreenText
@@ -148,6 +165,7 @@ from panda3d.core import (
     LQuaternionf,
     NodePath,
     TextNode,
+    Texture,
     Vec3,
     loadPrcFileData,
 )
@@ -158,10 +176,9 @@ from world_builder.asteroids.haze import ring_depth
 from world_builder.asteroids.spec import PRESETS as FIELD_PRESETS
 from world_builder.asteroids.spec import Annulus, Clumping, Density, FieldSpec
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
-from world_builder.clouds.cirrus import CirrusSpec
-from world_builder.clouds.genera import GeneraSpec
-from world_builder.clouds.half_res import HalfResClouds
+from world_builder.clouds.genera import GeneraSpec, showcase_features
 from world_builder.clouds.light_volume import CloudLightVolumes
+from world_builder.clouds.march import BLOCKS
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
@@ -187,7 +204,14 @@ from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PRESETS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.terrain.shadow_map import ShadowMap
 
+if TYPE_CHECKING:
+    from world_builder.terrain.planet import PlanetSpec
+
 INITIAL_FAR_M = 600000.0  # the lens the sea's reflection camera copies
+#: Frames a burst capture (B) saves, in a row.
+BURST_FRAMES = 12
+#: Where burst captures go (--capture-dir), a folder each.
+CAPTURE_DIR = Path("captures")
 SPEED = 300.0  # metres/second at low altitude
 BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground
@@ -440,12 +464,16 @@ class TerrainDemo(ShowBase):
         clouds: bool = True,
         cloud_debug: int = 0,
         genera: bool = False,
+        showcase: bool = False,
+        cirrus: bool | None = None,
         ocean_debug: int = 0,
         preset: str | None = None,
         seed: int | None = None,
         start: tuple[float, float] | None = None,
         ring: bool = False,
         test_ship: str | Path | None = None,
+        spec_hook: Callable[[PlanetSpec], PlanetSpec] | None = None,
+        capture_dir: str | Path = CAPTURE_DIR,
     ) -> None:
         """
         :param level_path: the planet's level file
@@ -457,6 +485,10 @@ class TerrainDemo(ShowBase):
         :param clouds: draw the planet's clouds
         :param cloud_debug: the clouds' profiling switches
             (:meth:`PlanetClouds.set_debug`)
+        :param cirrus: the weather's cirrus in the march's high layer
+            (``PlanetClouds(cirrus=True)``); None = on, or with the showcase
+            off (it has a cirrus feature of its own, which the weather's
+            would bury)
         :param ocean_debug: the sea's debug view (:meth:`Sea.set_debug_mode`)
         :param preset: overrides the level's planet preset (PRESETS)
         :param test_ship: a model hung beside the white test ball (the
@@ -465,6 +497,9 @@ class TerrainDemo(ShowBase):
         :param start: (lat, lon) in degrees to start over instead of the
             level's start (:func:`start_pose`)
         :param ring: draw the planet's ring (:func:`ring_spec`)
+        :param spec_hook: changes the level's planet spec before it is built
+            (frame_profile.py's bench scenes); None = as loaded
+        :param capture_dir: where a burst capture (B) writes its folder
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -484,6 +519,8 @@ class TerrainDemo(ShowBase):
         spec, self.start_pose = load_level(
             level_for(level_path, preset), preset=preset, seed=seed, radius=radius
         )
+        if spec_hook is not None:
+            spec = spec_hook(spec)
         self.start_pose = start_pose(spec, self.start_pose, start)
 
         from world_builder.terrain.terrain import Terrain
@@ -495,7 +532,10 @@ class TerrainDemo(ShowBase):
         self.frame_cap = FrameCap(world.display)
         # A planet drawn without clouds (the tiny test planet) has none.
         self._clouds_on = clouds and spec.has_clouds
-        self._genera = genera
+        # The showcase is the genera, each alone (--showcase)
+        self._showcase = showcase
+        self._genera = genera or showcase
+        self._cirrus = not showcase if cirrus is None else bool(cirrus)
         print("starting terrain workers ...")
         self.executor = ChunkExecutor(
             backend=backend, workers=world.terrain.workers or None
@@ -630,8 +670,6 @@ class TerrainDemo(ShowBase):
         self.sky.node.hide(HIDE_FROM_CLOUD_PASS)  # hides no cloud
         if self.clouds is not None:
             self.clouds.use_split_depth(self, self.depth)
-        self.half_res = None  # the clouds' half-resolution pass, if asked for
-        self._sync_half_res()
         self._debug = 0
         # Panda3D lights for anything not drawn by the world's own shaders
         # (models, ships): the sun and the sky as they are at the camera.
@@ -656,6 +694,12 @@ class TerrainDemo(ShowBase):
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
             ("c", self._toggle_cirrus, []),
+            ("b", self._start_burst, []),
+            ("-", self._step_march_block, [-1]),
+            ("=", self._step_march_block, [1]),
+            ("+", self._step_march_block, [1]),
+            ("shift-=", self._step_march_block, [1]),
+            *((str(k + 1), self._toggle_genus, [k]) for k in range(9)),
             ("m", self._toggle_model_shader, []),
             ("escape", self._quit, []),
             (QUALITY_ALL_KEY, self._cycle_all_quality, []),
@@ -667,6 +711,8 @@ class TerrainDemo(ShowBase):
             self.win.set_close_request_event("window-close")
             self.accept("window-close", self._quit)
 
+        self._capture_dir = Path(capture_dir)
+        self._burst: dict | None = None
         self._hud = OnscreenText(
             text="",
             pos=(-1.32, 0.92),
@@ -846,8 +892,6 @@ class TerrainDemo(ShowBase):
             # As far as the ring's rocks are drawn (World.depth_ranges)
             far = max(far, self.ring.reach(self.cam_world))
         self.depth.update(split, far)
-        if self.half_res is not None:
-            self.half_res.update()
 
         self.atmospheres.update(self.cam_world)
         self.shadows.update(self.cam_world)
@@ -860,10 +904,7 @@ class TerrainDemo(ShowBase):
                 terrain.trees.set_pixel_angle(fov_y / max(self.win.get_y_size(), 1))
         if self.clouds is not None:
             fov = math.radians(self.camLens.get_fov()[1])
-            scale = self.half_res.pixel_scale if self.half_res is not None else 1.0
-            self.clouds.set_pixel_angle(
-                fov / max(self.win.get_y_size(), 1), volume_scale=scale
-            )
+            self.clouds.set_pixel_angle(fov / max(self.win.get_y_size(), 1))
             self.clouds.update(self.cam_world)
             if self.cloud_maps is not None:
                 steps = self.shadows.settings.cloud_shadow_steps
@@ -1070,15 +1111,22 @@ class TerrainDemo(ShowBase):
         split_km, far_km = self.depth.split / 1e3, self.depth.far / 1e3
         cs = self.clouds.stats if self.clouds is not None else None
         clouds = (
-            f"clouds: {cs['tiles']} tiles, "
-            f"{cs['billboards']:,} billboards, {cs['pending']} generating "
-            f"({cs['gen_ms']:.0f} ms/tile)"
+            f"clouds: raymarched, {cs['pending']} setting up"
             if cs is not None
             else "clouds off"
         )
-        if self.clouds is not None and self.clouds.sheet is not None:
-            shown = not self.clouds.sheet.root.is_hidden()
-            clouds += f"   cirrus {'on' if shown else 'off'} (C)"
+        if cs is not None:
+            across, up = self.world.clouds.march_block
+            traced = "all" if across * up == 1 else f"1/{across * up}"
+            clouds += f"   traced {traced} ({across}x{up}, -/+)"
+        if self.clouds is not None and "cirrus" in self.clouds.volume.high_genera:
+            shown = self.clouds.genus_visible("cirrus")
+            clouds += f"   march cirrus {'on' if shown else 'off'} (C)"
+        if self.clouds is not None and len(self.clouds.genus_names) > 1:
+            clouds += "   genera: " + "  ".join(
+                f"{k + 1} {name}{'' if self.clouds.genus_visible(k) else ' (off)'}"
+                for k, name in enumerate(self.clouds.genus_names)
+            )
         quality = "   ".join(
             f"{SECTIONS[name].LABEL.lower()} {_level_name(self.world, name)}"
             for _, name in QUALITY_KEYS
@@ -1148,17 +1196,13 @@ class TerrainDemo(ShowBase):
             atmospheres=self.atmospheres,
             atmosphere=0,
             altitude=CLOUD_BASE,
-            cirrus=CirrusSpec(),
+            cirrus=self._cirrus,
             genera=self._genera_spec(),
             planet=self.terrain.spec,
             settings=self.world.clouds,
-            channel="clouds",
         )
-        self.clouds.bind_inputs(functools.partial(self.shadows.bind, body=0))
         self.clouds.bind_shadow_inputs(self.terrain.root)  # their shadow on it
         self.clouds.bind_shadow_inputs(self.home.models.inputs)  # on the models
-        if self.home.shadow_map is not None:  # the peaks' on them
-            self.clouds.bind_inputs(self.home.shadow_map.bind)
         # Their shadow marched once per texel of two maps (Shadows, part E).
         self.cloud_maps = CloudShadowMaps(
             self.win, self.clouds, self.world.shadows.cloud_map_size
@@ -1193,8 +1237,6 @@ class TerrainDemo(ShowBase):
         self.clouds.set_sun(self._sun)
         if getattr(self, "depth", None) is not None:
             self.clouds.use_split_depth(self, self.depth)
-        if getattr(self, "half_res", None) is not None:
-            self.clouds.use_half_res(self.half_res)
 
     def _genera_spec(self) -> GeneraSpec | None:
         """The low clouds by genus (--genera), around the start pose: a
@@ -1203,39 +1245,132 @@ class TerrainDemo(ShowBase):
             return None
         spec = self.terrain.spec
         pose = self.start_pose or {}
-        return GeneraSpec(
-            WeatherSpec(spec),
-            focus=(
-                pose.get("lat", spec.reference_lat),
-                pose.get("lon", spec.reference_lon),
-            ),
+        focus = (
+            pose.get("lat", spec.reference_lat),
+            pose.get("lon", spec.reference_lon),
         )
+        if self._showcase:
+            # Every genus alone: the cumulus north, the stratiform south
+            return GeneraSpec(
+                WeatherSpec(spec),
+                focus=focus,
+                features=showcase_features(),
+                background=False,
+            )
+        # The weather's cirrus: PlanetClouds(cirrus=) sets cirrus_weather
+        return GeneraSpec(WeatherSpec(spec), focus=focus)
+
+    def _toggle_genus(self, index: int) -> None:
+        """Show or hide a genus of the low clouds (keys 1-9; a look toggle:
+        the hidden genus still shades the others and the ground)."""
+        if self.clouds is None or index >= len(self.clouds.genus_names):
+            return
+        visible = self.clouds.genus_visible(index)
+        self.clouds.set_genus_visible(index, not visible)
 
     def _toggle_cirrus(self) -> None:
-        """Show or hide the high cirrus (a look toggle)."""
-        if self.clouds is None or self.clouds.sheet is None:
+        """Show or hide the march's cirrus, the weather's and the features'
+        (a look toggle: ``set_genus_visible("cirrus")``)."""
+        if self.clouds is None or "cirrus" not in self.clouds.volume.high_genera:
             return
-        root = self.clouds.sheet.root
-        if root.is_hidden():
-            root.show()
-        else:
-            root.hide()
+        visible = self.clouds.genus_visible("cirrus")
+        self.clouds.set_genus_visible("cirrus", not visible)
 
-    def _sync_half_res(self) -> None:
-        """Build or remove the clouds' half-resolution pass as the settings
-        ask (CloudSettings.half_resolution)."""
-        clouds = self.world.clouds
-        wanted = clouds.half_resolution and clouds.renderer == "billboards"
-        if wanted and self.half_res is None:
-            self.half_res = HalfResClouds(self, self.depth)
-            self.half_res.exclude(self.sky.node)
-            if self.clouds is not None:
-                self.clouds.use_half_res(self.half_res)
-        elif not wanted and self.half_res is not None:
-            if self.clouds is not None:
-                self.clouds.use_half_res(None)
-            self.half_res.destroy()
-            self.half_res = None
+    def _start_burst(self) -> None:
+        """Capture the next :data:`BURST_FRAMES` frames, one by one, after
+        each is drawn (a task after the render's): for showing the clouds'
+        shimmer, which only motion shows. Each readback stalls the GPU, so
+        the frames come slower while it runs."""
+        if self._burst is not None:
+            return
+        out = self._capture_dir / time.strftime("burst_%Y%m%d-%H%M%S")
+        out.mkdir(parents=True, exist_ok=True)
+        # The readbacks make the frames slow; the clock steps as before them
+        # (forced: each frame its last rate's step), so the camera moves as
+        # far a frame as in play, not seconds' worth.
+        clock = ClockObject.get_global_clock()
+        rate = clock.get_average_frame_rate() or 60.0
+        self._burst = {"dir": out, "frame": 0, "meta": [], "mode": clock.get_mode()}
+        clock.set_mode(ClockObject.M_forced)
+        clock.set_frame_rate(rate)
+        self.taskMgr.add(self._burst_frame, "burst_capture", sort=60)
+        print(
+            f"burst: capturing {BURST_FRAMES} frames to {out.resolve()}"
+            f" (the clock held at {rate:.0f} fps)"
+        )
+
+    def _burst_frame(self, task) -> int:
+        """One frame of a burst: the screen; per march depth range, its raw
+        march (the traced pixels, the block's corner) and the resolve's
+        output; the pose and the block in meta."""
+        burst = self._burst
+        index, out = burst["frame"], burst["dir"]
+        self.win.get_screenshot().write(
+            Filename.from_os_specific(str(out / f"{index:02d}_screen.png"))
+        )
+        layers = []
+        view = (self.win.get_y_size(), self.win.get_x_size())
+        if self.clouds is not None:
+            for k, layer in enumerate(self.clouds.volume._layers):
+                resolve = next(
+                    (r for r in layer.resolves if r.buffer.is_active()),
+                    layer.resolves[0],
+                )
+                stem = out / f"{index:02d}_range{k}"
+                # Their framebuffers' colour (get_screenshot), not their
+                # textures': extract_texture_data on a render target broke its
+                # render-to-texture binding, and the march froze for the
+                # resolve (and every later read) from the first capture on.
+                # The march fills its buffer's corner (a pixel a block), the
+                # resolve the view's: the buffers may be padded past them.
+                across, up = layer.block
+                traced = (-(-view[0] // up), -(-view[1] // across))
+                march = _corner(_texture_array(layer.buffer.get_screenshot()), traced)
+                _write_png(march[..., :3], f"{stem}_march.png")
+                resolved = _corner(
+                    _texture_array(resolve.buffer.get_screenshot()), view
+                )
+                _write_png(resolved[..., :3], f"{stem}_resolve.png")
+                layers.append(
+                    {"block": list(layer.block), "still_frames": layer._still_frames}
+                )
+        heading, pitch = self._true_heading_pitch()
+        burst["meta"].append(
+            {
+                "frame": index,
+                "time": ClockObject.get_global_clock().get_frame_time(),
+                "camera_planet": [float(v) for v in self.cam_world],
+                "heading": heading,
+                "pitch": pitch,
+                "cloud_debug": self._cloud_debug,
+                "ranges": layers,
+            }
+        )
+        burst["frame"] += 1
+        if burst["frame"] < BURST_FRAMES:
+            return task.cont
+        (out / "meta.json").write_text(json.dumps(burst["meta"], indent=1))
+        ClockObject.get_global_clock().set_mode(burst["mode"])
+        print(f"burst: {BURST_FRAMES} frames in {out.resolve()}")
+        self._burst = None
+        return task.done
+
+    def _step_march_block(self, step: int) -> None:
+        """Trace a smaller (-1) or larger (+1) fraction of the view's pixels
+        a frame in the clouds' march (CloudSettings.march_block, one of
+        clouds.march.BLOCKS by the share it traces). The march rebuilds its
+        passes on the spot; the clouds' preset reads "custom" after."""
+        if self.clouds is None:
+            return
+        blocks = sorted(BLOCKS, key=lambda b: -b[0] * b[1])  # least traced first
+        current = tuple(self.world.clouds.march_block)
+        index = min(max(blocks.index(current) + step, 0), len(blocks) - 1)
+        if blocks[index] == current:
+            return
+        self._set_world(self.world.with_value("clouds", "march_block", blocks[index]))
+        across, up = blocks[index]
+        share = "all" if across * up == 1 else f"1/{across * up}"
+        print(f"clouds: the march traces {share} of the pixels ({across}x{up})")
 
     def _cycle_quality(self, section: str) -> None:
         """One part (a WorldSettings section) to its next preset."""
@@ -1278,7 +1413,6 @@ class TerrainDemo(ShowBase):
             world.apply(self.clouds)
         if self.ring is not None:
             world.apply(self.ring)
-        self._sync_half_res()
 
     def set_debug_view(self, view: int) -> None:
         """0 shaded, 1 LOD, 2 biomes, 3 slope, 4 normals, 5 skirts, 6 the
@@ -1434,6 +1568,11 @@ def main() -> None:
     parser.add_argument(
         "--no-test-ship", action="store_true", help="the test balls alone"
     )
+    parser.add_argument(
+        "--capture-dir",
+        default=str(CAPTURE_DIR),
+        help="where a burst capture (B) writes its folder",
+    )
     add_planet_arguments(parser)
     add_world_arguments(parser)
     args = parser.parse_args()
@@ -1448,12 +1587,54 @@ def main() -> None:
         settings=settings_from_args(args),
         clouds=not args.no_clouds,
         genera=args.genera,
+        showcase=args.showcase,
+        cirrus=args.cirrus,
         preset=args.planet,
         seed=args.seed,
         start=args.start,
         ring=args.ring,
         test_ship=None if args.no_test_ship else args.test_ship,
+        capture_dir=args.capture_dir,
     ).run()
+
+
+def _texture_array(texture: Texture) -> np.ndarray:
+    """:returns: a texture's RAM image (extracted) as float32 (rows, columns,
+    components), top row first, RGBA order"""
+    dtype = {
+        Texture.T_float: np.float32,
+        Texture.T_half_float: np.float16,
+        Texture.T_unsigned_byte: np.uint8,
+    }[texture.get_component_type()]
+    image = np.frombuffer(texture.get_ram_image(), dtype).astype(np.float32)
+    if dtype == np.uint8:
+        image /= 255.0
+    channels = texture.get_num_components()
+    image = image.reshape(texture.get_y_size(), texture.get_x_size(), channels)
+    if channels >= 3:  # Panda keeps them BGR(A)
+        image = image[..., [2, 1, 0, *range(3, channels)]]
+    return image[::-1]
+
+
+def _corner(image: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """:returns: a top-row-first image's bottom-left (rows, columns) corner,
+    where a buffer's region starts (GL: its origin at the bottom left)"""
+    return image[image.shape[0] - size[0] :, : size[1]]
+
+
+def _write_png(image: np.ndarray, path: str | Path) -> None:
+    """Write (rows, columns, 1 or 3) values in [0, 1] (clipped) as a PNG
+    (one channel as grey)."""
+    data = np.clip(image * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    if data.shape[2] == 1:
+        data = np.repeat(data, 3, axis=2)
+    texture = Texture("burst")
+    texture.setup_2d_texture(
+        data.shape[1], data.shape[0], Texture.T_unsigned_byte, Texture.F_rgb
+    )
+    rows = data[::-1, :, ::-1]  # bottom row first, BGR
+    texture.set_ram_image(np.ascontiguousarray(rows).tobytes())
+    texture.write(Filename.from_os_specific(str(path)))
 
 
 #: Height of a --start pose above the ground there, metres.
@@ -1546,11 +1727,6 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         "--ring", action="store_true", help="a small ring around the planet"
     )
     parser.add_argument(
-        "--half-res-clouds",
-        action="store_true",
-        help="clouds at half resolution (CloudSettings.half_resolution)",
-    )
-    parser.add_argument(
         "--genera",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -1559,10 +1735,19 @@ def add_world_arguments(parser: argparse.ArgumentParser) -> None:
         "--no-genera for the plain field",
     )
     parser.add_argument(
-        "--cloud-renderer",
+        "--showcase",
+        action="store_true",
+        help="every genus alone, the cumulus in a row along the northern "
+        "horizon from the start, the stratiform genera along the southern "
+        "(clouds.genera.showcase_features, no other cloud); keys 1-9 show or "
+        "hide each genus",
+    )
+    parser.add_argument(
+        "--cirrus",
         default=None,
-        choices=["billboards", "march"],
-        help="the low clouds' renderer (CloudSettings.renderer)",
+        action=argparse.BooleanOptionalAction,
+        help="the weather's cirrus in the march's high layer, its flow streaks "
+        "(on by default; off by default with --showcase: its own cirrus alone)",
     )
 
 
@@ -1576,10 +1761,6 @@ def settings_from_args(args: argparse.Namespace) -> WorldSettings:
             settings = settings.with_section_level(section, level)
     if args.workers is not None:
         settings = settings.with_value("terrain", "workers", args.workers)
-    if args.half_res_clouds:
-        settings = settings.with_value("clouds", "half_resolution", True)
-    if args.cloud_renderer is not None:
-        settings = settings.with_value("clouds", "renderer", args.cloud_renderer)
     if args.frame_cap is not None:
         settings = settings.with_value("display", "frame_cap", args.frame_cap)
     return settings

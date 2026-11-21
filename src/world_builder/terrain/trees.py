@@ -93,7 +93,7 @@ def _shader(name: str) -> Shader:
 
 def pass_state(point_scale: float) -> RenderState:
     """The impostors' state for a camera drawing at another resolution than
-    the view (``world_builder.clouds.half_res.pass_camera``, its tag state
+    the view (``world_builder.clouds.passes.pass_camera``, its tag state
     for :data:`IMPOSTOR_TAG`): their sprites, sized in the view's pixels,
     scaled to its own and a pixel wider (``tree_impostor.vert``: else twice
     their size each way at half resolution, a tree's depth spread over the
