@@ -86,7 +86,15 @@ vec3 cloudRadianceFrom(int genus, float sunDepth, Field f, vec3 p,
     // it lights a cloud's shadowed side where the flat fill below is the sky's.
     float octaveShadowing = shading > 0.0
         ? exp2(-f.octaveAttenuation * sunDepth) * powdered : 1.0;
-    if (shading < 1.0) {
+    // PROTOTYPE (sheets at sunset): a recipe genus (a sheet: the stratus, the
+    // frontal shield) takes its sun terms from its far table at every
+    // distance. The march's samples land 100-300 m into a sheet, under the
+    // tens of metres a low sun lights at its top, so their own sun depth
+    // left a sunset sheet in shadow, grey beside orange cumulus; the table
+    // (baked on the CPU in fine steps) has that lit top. Debug bit 8192:
+    // off, for comparison.
+    float sunShading = f.recipe != 0 && (uCloudDebug & 8192) == 0 ? 0.0 : shading;
+    if (sunShading < 1.0) {
         // Far away: the averages of both over the clouds' columns, which
         // the aliasing per-pixel values would not give, for this sun and
         // coverage. They are what the clouds show close up, blurred, so
@@ -96,9 +104,9 @@ vec3 cloudRadianceFrom(int genus, float sunDepth, Field f, vec3 p,
         float cosSun = dot(normalize(p), sunDir);
         vec2 at = vec2((cosSun - deckLightCosMin) / (1.0 - deckLightCosMin), farCoverage);
         vec4 averaged = genusFarTable(genus, at);
-        sunVisibility = mix(averaged.g, sunVisibility, shading);
-        sunShadowing = mix(averaged.r, sunShadowing, shading);
-        octaveShadowing = mix(averaged.a, octaveShadowing, shading);
+        sunVisibility = mix(averaged.g, sunVisibility, sunShading);
+        sunShadowing = mix(averaged.r, sunShadowing, sunShading);
+        octaveShadowing = mix(averaged.a, octaveShadowing, sunShading);
     }
     // Skylight comes from above: occlude the SKY term toward the underside
     // only (of the cloud's own height, at its convective depth; over its

@@ -769,8 +769,12 @@ float genusDensity(int g, Field lf, vec3 p, vec4 weather, float t,
 #endif
     }
     farCoverage = 0.0;
-    if (shading < 1.0) {
+    if (shading < 1.0 || lf.recipe != 0) {
+        // (a recipe genus's sun term reads its far table at every distance:
+        // cloudRadianceFrom)
         farCoverage = genusCoverageAt(g, p);
+    }
+    if (shading < 1.0) {
         float mean = -log2(1.0 - FAR_ALPHA * farCoverage) / (lf.extinction * lf.slabThickness);
         density = mix(mean, density, detail);
     }
