@@ -1250,13 +1250,13 @@ def _blue_noise_texture() -> Texture:
 
 #: How far a pixel on fresh samples takes their smooth mean instead of their
 #: bilinear mix (cloud_resolve.frag's uSmooth), by the march's block: all of it
-#: at a sixteenth of the pixels a frame, half at a quarter. All of it at all of
-#: them too, which it takes only in motion or with its history lost: with
-#: none, each pixel's own sample showed its noise as it was, grain over the
-#: whole cloud in motion (motion_shots.py toward the cumulonimbus at
-#: ``genera_cb``: grain 4.97 to 1.24, specks 6.5 % to 0.53 %, with the
-#: moving weight below; 4x2's 0.92).
-SMOOTHING = {(1, 1): 1.0, (2, 2): 0.5, (4, 2): 0.75, (3, 3): 0.75, (4, 4): 1.0}
+#: at a sixteenth of the pixels a frame, and at a quarter and all of them too,
+#: which take it only in motion or with their history lost: with none (half
+#: at a quarter), each pixel's own sample showed its noise as it was, grain
+#: over the whole cloud in motion (motion_shots.py toward the cumulonimbus
+#: at ``genera_cb``, with the moving weight below: grain 4.97 to 1.24 at 1x1,
+#: 1.33 to 0.88 at 2x2; 4x2's 0.92).
+SMOOTHING = {(1, 1): 1.0, (2, 2): 1.0, (4, 2): 0.75, (3, 3): 0.75, (4, 4): 1.0}
 
 
 def smoothing_of(block: tuple[int, int]) -> float:
@@ -1267,19 +1267,19 @@ def smoothing_of(block: tuple[int, int]) -> float:
 #: This frame's least share in a pixel while the camera moves
 #: (cloud_resolve.frag's uMovingWeight, by its uStill), by the block the
 #: resolve gathers: about one cycle of the block's pixels (each pixel's own
-#: sample once), a quarter at most, and a sixteenth at all of them (a 1 x 1
-#: march's samples alone are raw noise: at a quarter, grain over the whole
-#: cloud in motion; the error against the converged view 3.02 to 1.43 at a
-#: sixteenth, the lag no worse). With :data:`MIN_WEIGHT` alone, ~33 frames
-#: of history lagged the view of a cloud whose look changes fast as the
-#: camera flies (a lumpy anvil's base seen at a grazing angle from inside
-#: the slab), and the clamp
-#: cut the lag wherever its box of noisy samples happened to be narrow: grain
-#: on the cloud's shaded side in motion (performance.md §30; Unreal's clouds
-#: refresh each pixel once a cycle for flying through them, their docs).
+#: sample once), and a sixteenth where that would be more (all the pixels or
+#: a quarter: their samples alone are raw noise; at a quarter, grain over the
+#: whole cloud in motion; the error against the converged view 3.02 to 1.43
+#: at 1x1, 1.52 to 1.36 at 2x2 at a sixteenth, the lag no worse). With
+#: :data:`MIN_WEIGHT` alone, ~33 frames of history lagged the view of a cloud
+#: whose look changes fast as the camera flies (a lumpy anvil's base seen at
+#: a grazing angle from inside the slab), and the clamp cut the lag wherever
+#: its box of noisy samples happened to be narrow: grain on the cloud's
+#: shaded side in motion (performance.md §30; Unreal's clouds refresh each
+#: pixel once a cycle for flying through them, their docs).
 MOVING_WEIGHTS = {
     (1, 1): 0.0625,  # not a cycle (1): see above
-    (2, 2): 0.25,
+    (2, 2): 0.0625,  # not a cycle (1/4): see above
     (4, 2): 0.125,
     (3, 3): 1.0 / 9.0,
     (4, 4): 0.0625,

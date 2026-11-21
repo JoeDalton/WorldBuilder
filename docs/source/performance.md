@@ -2693,6 +2693,8 @@ pixel's raw sample a frame in motion, with no smooth mean. `motion_shots.py
 | 1, 1/8 | 1.63 | 1.56 | 0.63 |
 | 1, 1/16 (kept) | 1.43 | 1.24 | 0.53 |
 | *4x2 (HIGH), for reference* | *1.23* | *0.92* | *0.11* |
+| 2x2 (ULTRA): 0.5, 1/4 (before) | 1.52 | 1.33 | 0.44 |
+| 2x2: 1, 1/16 (kept) | 1.36 | 0.88 | 0.43 |
 
 The 4x4 edges are next (the history moved by the pixel's own distance, half
 the sky's at an edge).

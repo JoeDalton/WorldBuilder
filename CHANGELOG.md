@@ -294,7 +294,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at least (`march.MOVING_WEIGHTS`). Flying toward the cumulonimbus
   (`motion_shots.py`, `genera_cb`): grain 4.97 → 1.24, specks 6.5 % →
   0.53 %, error against the converged view 3.02 → 1.43 (HIGH's 4x2: 0.92,
-  0.11 %, 1.23). Nothing changes at rest.
+  0.11 %, 1.23). ULTRA's 2x2 (half the smooth mean, a quarter a frame) gets
+  the same: grain 1.33 → 0.88, error 1.52 → 1.36. Nothing changes at rest.
 
 - The sea reflected only the cumulus family: the reflection's deck was genus
   0's alone. Every low and middle genus now has its own deck at its slab's
