@@ -39,7 +39,7 @@ uniform samplerCube weatherMap;
 // (red empty air, green cloud, blue the budget), 256 no lighting, 512 the
 // clouds' light from the shadow maps and the sky's by the height ramp, not
 // the light volume, 1024 the light volume's whole chord toward the sun, not
-// the sun march's window.
+// the sun march's window, 2048 no diffuse fade, 4096 no edge widening.
 uniform int   uCloudDebug;
 // The far clouds' averages, by the sun's cosine (x, from deckLightCosMin to
 // 1) and the weather's coverage (y): the deck's lighting
@@ -1412,20 +1412,6 @@ void lightChartCoords(vec4 chart[4], vec3 p, out vec2 t, out float s) {
 uniform sampler2D cloudLight;
 uniform vec4  cloudLightChart[4];
 uniform int   cloudLightOn;
-// Where in its texel and slice a sample reads the volumes, in [-0.5, 0.5]
-// of each, per pixel and visit (the raymarch sets it from its blue noise),
-// moved on at each sample along the ray (cloudSunDepth):
-// read at their nodes, the depths' linear interpolation between texels
-// hundreds of metres wide drew their grid on a tower's face, a few tens of
-// pixels whatever the distance; jittered, it is noise the resolve averages.
-// The same for both of a sample's reads (their difference is the light).
-vec3 cloudLightJitter = vec3(0.0);
-// The jitter's reach, texels and slices either way per unit of it: a full
-// one. At half (the first choice) the volume's coarse texels at a distance
-// showed as dark specks on far towers and silhouettes in motion, where the
-// history no longer averages them (2.7 % of the cloud more than 10 levels off
-// its still look, against 0.94 % now; 5.3 % with none). The grid stays gone.
-const float LIGHT_JITTER = 2.0;
 // Whether the sample takes the sun march's local steps before the volume
 // (the raymarch clears it for samples too far for a pixel to show the
 // nearby clouds' shape, RENDERING_PLAN.md C.3's alternate path: the volume
@@ -1443,16 +1429,6 @@ vec2 cloudLightAt(sampler2D atlas, vec4 chart[4], vec3 p, out float keep) {
     lightChartCoords(chart, p, t, s);
     float tile = chart[2].w;
     float slices = chart[3].y;
-    // The jitter keeps to the point's sky band (lightSliceAt): jittered into
-    // the band under it, a tower's base read the slice whose sun ray crosses
-    // the tower a kilometre aside, and streaked.
-    float bands = max(floor(chart[3].w + 0.5), 1.0);
-    float per = slices / bands;
-    float first = clamp(floor((s + 0.5) / per), 0.0, bands - 1.0) * per;
-    float lowest = first > 0.0 ? first : -1e30;
-    float highest = first + per < slices ? first + per - 1.0 : 1e30;
-    t += cloudLightJitter.xy * (LIGHT_JITTER * 2.0 / tile);
-    s = clamp(s + cloudLightJitter.z * LIGHT_JITTER, lowest, highest);
     keep = 1.0 - smoothstep(0.875, 1.0 - 1.0 / tile, max(abs(t.x), abs(t.y)));
     if (keep <= 0.0 || s >= slices - 0.5) {
         return vec2(0.0);
@@ -1488,13 +1464,24 @@ float cloudLightSunDepth(Field f, sampler2D atlas, vec4 chart[4], vec3 p, vec3 d
         localSteps = 0;
     }
     float reach = float(localSteps) * f.sunStepLength;
+    vec3 nearAt = p + dir * reach;
     float keepNear;
-    float near = cloudLightAt(atlas, chart, p + dir * reach, keepNear).r;
+    float near = cloudLightAt(atlas, chart, nearAt, keepNear).r;
     float far = 0.0;
     float keepFar = 1.0;
     if ((uCloudDebug & 1024) == 0) {
         float window = float(max(f.sunSteps - localSteps, 0)) * f.sunStepLength;
-        far = cloudLightAt(atlas, chart, p + dir * (reach + window), keepFar).r;
+        // At the window's end's height but the near point's place in the
+        // chart (straight above it): read where the sun ray really goes, a
+        // texel or two aside, the two reads blended other texels, whose own
+        // rays crossed the clouds above differently, and their errors no
+        // longer cancelled in the difference: streaks along the sun on an
+        // anvil and a tower's face, which a read jitter only turned into
+        // shimmer. The window's depth is then a parallel ray's, a little
+        // flatter on a tower's face (BACKLOG.md: a chart sheared along the
+        // sun for the exact difference).
+        vec3 farAt = normalize(nearAt) * length(nearAt + dir * window);
+        far = cloudLightAt(atlas, chart, farAt, keepFar).r;
     }
     float held = min(keepNear, keepFar);
     if (held <= 0.0) {
@@ -1540,17 +1527,6 @@ float cloudSunDepth(Field f, vec3 p, vec3 weather) {
             held = cloudLightSunDepth(f, cloudLight, cloudLightChart, p, sunDir, weather,
                                       localSteps, depth);
             cloudSkyDepth = cloudLightAt(cloudLight, cloudLightChart, p, cloudSkyHeld).g;
-            // Moved on for the ray's next sample (R3, low discrepancy): one
-            // draw for the whole ray put all its reads off the same way, and
-            // the pixel's light with them; moved on, they average along it
-            // (the error over grey clouds in motion 1.55 to 1.41 levels,
-            // performance.md §28). The step: Roberts' R3, (1/g, 1/g^2, 1/g^3)
-            // with g = 1.2207440846 the real root of x^4 = x + 1, which
-            // spreads its successive points over the cube most evenly (not
-            // cloud_march.frag's per-frame R2 step: sharing a direction, the
-            // offsets would repeat); the +- 0.5 keeps them in [-0.5, 0.5].
-            cloudLightJitter = fract(cloudLightJitter + 0.5
-                                     + vec3(0.8191725, 0.6710436, 0.5497005)) - 0.5;
         } else {
             held = cloudMapSunDepth(f, p, sunDir, weather, localSteps, depth);
         }

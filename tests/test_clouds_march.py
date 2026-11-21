@@ -989,3 +989,21 @@ def test_the_sky_under_deep_cloud_is_grey_and_a_towers_sides_see_open_sky():
     stratus = PRESETS[CloudType.STRATUS].optics.shadow_strength
     convective = PRESETS[CloudType.CONVECTIVE].optics.shadow_strength
     assert stratus < 0.5 and abs(stratus - convective) < 0.1
+
+
+def test_the_light_volumes_window_is_read_straight_above_its_near_end():
+    """cloudLightSunDepth (cloud_field.glsl): the window's far read is at the
+    near read's place in the chart (only its height the window's end's), so
+    the two reads' interpolation errors cancel in their difference; read on
+    the sun ray, a texel or two aside, they drew streaks along the sun. With
+    that, the volume is read without a jitter (it only turned the streaks
+    into shimmer)."""
+    field = (SHADER.parent / "cloud_field.glsl").read_text()
+    body = field[field.index("float cloudLightSunDepth(") :]
+    body = body[: body.index("\n}\n")]
+    assert "normalize(nearAt) * length(nearAt + dir * window)" in body
+    assert "cloudLightAt(atlas, chart, farAt, keepFar)" in body
+    march = (SHADER.parent / "cloud_march.glsl").read_text()
+    for text in (field, march):
+        assert "cloudLightJitter" not in text
+        assert "LIGHT_JITTER" not in text

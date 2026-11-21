@@ -93,6 +93,11 @@ Controls (AZERTY):
     F6              cycle every part's preset at once
     C               show / hide the march's cirrus
     1-9             show / hide each genus of the low clouds (--showcase)
+    B               burst capture: the next BURST_FRAMES frames to
+                    --capture-dir (the screen, and per depth range the
+                    clouds' raw march and the resolve's output), with each
+                    frame's pose in meta.json; fly while it runs, to show
+                    the clouds' shimmer in motion
     - / +           trace a smaller / larger share of the pixels a frame in
                     the clouds' march (1/16, 1/9, 1/8, 1/4, all; the HUD shows it)
     F7              cycle the shadows' preset (the clouds' shadow on the
@@ -138,8 +143,10 @@ from __future__ import annotations
 
 import argparse
 import functools
+import json
 import math
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -158,6 +165,7 @@ from panda3d.core import (
     LQuaternionf,
     NodePath,
     TextNode,
+    Texture,
     Vec3,
     loadPrcFileData,
 )
@@ -200,6 +208,10 @@ if TYPE_CHECKING:
     from world_builder.terrain.planet import PlanetSpec
 
 INITIAL_FAR_M = 600000.0  # the lens the sea's reflection camera copies
+#: Frames a burst capture (B) saves, in a row.
+BURST_FRAMES = 12
+#: Where burst captures go (--capture-dir), a folder each.
+CAPTURE_DIR = Path("captures")
 SPEED = 300.0  # metres/second at low altitude
 BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground
@@ -461,6 +473,7 @@ class TerrainDemo(ShowBase):
         ring: bool = False,
         test_ship: str | Path | None = None,
         spec_hook: Callable[[PlanetSpec], PlanetSpec] | None = None,
+        capture_dir: str | Path = CAPTURE_DIR,
     ) -> None:
         """
         :param level_path: the planet's level file
@@ -486,6 +499,7 @@ class TerrainDemo(ShowBase):
         :param ring: draw the planet's ring (:func:`ring_spec`)
         :param spec_hook: changes the level's planet spec before it is built
             (frame_profile.py's bench scenes); None = as loaded
+        :param capture_dir: where a burst capture (B) writes its folder
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -680,6 +694,7 @@ class TerrainDemo(ShowBase):
             ("r", self._reset_camera, []),
             ("f", self._print_pose, []),
             ("c", self._toggle_cirrus, []),
+            ("b", self._start_burst, []),
             ("-", self._step_march_block, [-1]),
             ("=", self._step_march_block, [1]),
             ("+", self._step_march_block, [1]),
@@ -696,6 +711,8 @@ class TerrainDemo(ShowBase):
             self.win.set_close_request_event("window-close")
             self.accept("window-close", self._quit)
 
+        self._capture_dir = Path(capture_dir)
+        self._burst: dict | None = None
         self._hud = OnscreenText(
             text="",
             pos=(-1.32, 0.92),
@@ -1259,6 +1276,88 @@ class TerrainDemo(ShowBase):
         visible = self.clouds.genus_visible("cirrus")
         self.clouds.set_genus_visible("cirrus", not visible)
 
+    def _start_burst(self) -> None:
+        """Capture the next :data:`BURST_FRAMES` frames, one by one, after
+        each is drawn (a task after the render's): for showing the clouds'
+        shimmer, which only motion shows. Each readback stalls the GPU, so
+        the frames come slower while it runs."""
+        if self._burst is not None:
+            return
+        out = self._capture_dir / time.strftime("burst_%Y%m%d-%H%M%S")
+        out.mkdir(parents=True, exist_ok=True)
+        # The readbacks make the frames slow; the clock steps as before them
+        # (forced: each frame its last rate's step), so the camera moves as
+        # far a frame as in play, not seconds' worth.
+        clock = ClockObject.get_global_clock()
+        rate = clock.get_average_frame_rate() or 60.0
+        self._burst = {"dir": out, "frame": 0, "meta": [], "mode": clock.get_mode()}
+        clock.set_mode(ClockObject.M_forced)
+        clock.set_frame_rate(rate)
+        self.taskMgr.add(self._burst_frame, "burst_capture", sort=60)
+        print(
+            f"burst: capturing {BURST_FRAMES} frames to {out.resolve()}"
+            f" (the clock held at {rate:.0f} fps)"
+        )
+
+    def _burst_frame(self, task) -> int:
+        """One frame of a burst: the screen; per march depth range, its raw
+        march (the traced pixels, the block's corner) and the resolve's
+        output; the pose and the block in meta."""
+        burst = self._burst
+        index, out = burst["frame"], burst["dir"]
+        self.win.get_screenshot().write(
+            Filename.from_os_specific(str(out / f"{index:02d}_screen.png"))
+        )
+        layers = []
+        view = (self.win.get_y_size(), self.win.get_x_size())
+        if self.clouds is not None:
+            for k, layer in enumerate(self.clouds.volume._layers):
+                resolve = next(
+                    (r for r in layer.resolves if r.buffer.is_active()),
+                    layer.resolves[0],
+                )
+                stem = out / f"{index:02d}_range{k}"
+                # Their framebuffers' colour (get_screenshot), not their
+                # textures': extract_texture_data on a render target broke its
+                # render-to-texture binding, and the march froze for the
+                # resolve (and every later read) from the first capture on.
+                # The march fills its buffer's corner (a pixel a block), the
+                # resolve the view's: the buffers may be padded past them.
+                across, up = layer.block
+                traced = (-(-view[0] // up), -(-view[1] // across))
+                march = _corner(_texture_array(layer.buffer.get_screenshot()), traced)
+                _write_png(march[..., :3], f"{stem}_march.png")
+                resolved = _corner(
+                    _texture_array(resolve.buffer.get_screenshot()), view
+                )
+                _write_png(resolved[..., :3], f"{stem}_resolve.png")
+                layers.append(
+                    {
+                        "block": list(layer.block),
+                        "still_frames": layer._still_frames,
+                        "cloud_debug": self._cloud_debug,
+                    }
+                )
+        heading, pitch = self._true_heading_pitch()
+        burst["meta"].append(
+            {
+                "frame": index,
+                "time": ClockObject.get_global_clock().get_frame_time(),
+                "camera_planet": [float(v) for v in self.cam_world],
+                "heading": heading,
+                "pitch": pitch,
+                "ranges": layers,
+            }
+        )
+        burst["frame"] += 1
+        if burst["frame"] < BURST_FRAMES:
+            return task.cont
+        (out / "meta.json").write_text(json.dumps(burst["meta"], indent=1))
+        ClockObject.get_global_clock().set_mode(burst["mode"])
+        print(f"burst: {BURST_FRAMES} frames in {out.resolve()}")
+        self._burst = None
+        return task.done
+
     def _step_march_block(self, step: int) -> None:
         """Trace a smaller (-1) or larger (+1) fraction of the view's pixels
         a frame in the clouds' march (CloudSettings.march_block, one of
@@ -1472,6 +1571,11 @@ def main() -> None:
     parser.add_argument(
         "--no-test-ship", action="store_true", help="the test balls alone"
     )
+    parser.add_argument(
+        "--capture-dir",
+        default=str(CAPTURE_DIR),
+        help="where a burst capture (B) writes its folder",
+    )
     add_planet_arguments(parser)
     add_world_arguments(parser)
     args = parser.parse_args()
@@ -1493,7 +1597,47 @@ def main() -> None:
         start=args.start,
         ring=args.ring,
         test_ship=None if args.no_test_ship else args.test_ship,
+        capture_dir=args.capture_dir,
     ).run()
+
+
+def _texture_array(texture: Texture) -> np.ndarray:
+    """:returns: a texture's RAM image (extracted) as float32 (rows, columns,
+    components), top row first, RGBA order"""
+    dtype = {
+        Texture.T_float: np.float32,
+        Texture.T_half_float: np.float16,
+        Texture.T_unsigned_byte: np.uint8,
+    }[texture.get_component_type()]
+    image = np.frombuffer(texture.get_ram_image(), dtype).astype(np.float32)
+    if dtype == np.uint8:
+        image /= 255.0
+    channels = texture.get_num_components()
+    image = image.reshape(texture.get_y_size(), texture.get_x_size(), channels)
+    if channels >= 3:  # Panda keeps them BGR(A)
+        image = image[..., [2, 1, 0, *range(3, channels)]]
+    return image[::-1]
+
+
+def _corner(image: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """:returns: a top-row-first image's bottom-left (rows, columns) corner,
+    where a buffer's region starts (GL: its origin at the bottom left)"""
+    return image[image.shape[0] - size[0] :, : size[1]]
+
+
+def _write_png(image: np.ndarray, path: str | Path) -> None:
+    """Write (rows, columns, 1 or 3) values in [0, 1] (clipped) as a PNG
+    (one channel as grey)."""
+    data = np.clip(image * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    if data.shape[2] == 1:
+        data = np.repeat(data, 3, axis=2)
+    texture = Texture("burst")
+    texture.setup_2d_texture(
+        data.shape[1], data.shape[0], Texture.T_unsigned_byte, Texture.F_rgb
+    )
+    rows = data[::-1, :, ::-1]  # bottom row first, BGR
+    texture.set_ram_image(np.ascontiguousarray(rows).tobytes())
+    texture.write(Filename.from_os_specific(str(path)))
 
 
 #: Height of a --start pose above the ground there, metres.

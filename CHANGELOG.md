@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The terrain demo's `B` key: a burst capture of the next 12 frames into
+  `--capture-dir` (default `captures/`, git-ignored), a folder each. Per
+  frame: the screen, and per march depth range the clouds' raw march (the
+  traced pixels) and the resolve's output, read from their framebuffers
+  (reading a render target's texture back froze the march for the rest of
+  the run). Each frame's pose, block, still frames and cloud debug bits go
+  in `meta.json`.
+  While it runs the clock is held at the frame rate measured before it, so
+  the camera moves as far a frame as in play despite the slow readbacks.
 - The terrain demo's `-` and `+` keys trace a smaller or larger share of the
   view's pixels a frame in the clouds' march (`CloudSettings.march_block`:
   1/16, 1/9, 1/8, 1/4 or all), live: the march rebuilds its passes, as a
@@ -253,6 +262,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   horizon; it only grows. `demo_terrain.py --ring` does the same.
 
 ### Fixed
+
+- Clouds shimmered at rest, worst on thick sheets (nimbostratus) and with
+  large march blocks. The cause was the light volume's read jitter (a texel
+  and a slice either way, new each visit), also applied to the depth-up read
+  behind the sky's reach and the diffused light's fade. A sample near a
+  sheet's top or edge read a much deeper column, which made black dots in
+  the raw march; they moved every visit and nudged their blocks in the
+  resolve. At rest in front of the nimbostratus (4x4 block), unjittering
+  that read took the frame-to-frame change from 0.34 to 0.07 levels.
+- The jitter is now gone from the sun-depth reads too (the stratus at rest,
+  the cumulonimbus in motion still shimmered: with the jitter off alone,
+  the stratus's frame-to-frame change 0.22 → 0.09 levels, the cumulus's
+  0.45 → 0.26). It hid streaks along the sun on an anvil and on tower faces,
+  whose cause was the light window's two reads: the far one, taken where
+  the sun ray goes, blended other texels than the near one, and their
+  interpolation errors did not cancel in the difference. The far read is
+  now taken straight above the near one (`cloudLightSunDepth`): no streaks,
+  no jitter; a tower's face a little flatter. The exact fix, a chart sheared
+  along the sun, is in BACKLOG.md.
 
 - The sea reflected only the cumulus family: the reflection's deck was genus
   0's alone. Every low and middle genus now has its own deck at its slab's

@@ -2676,6 +2676,21 @@ yet, but it would once the GPU's part fell under it.
   (1/16, 1/9, 1/8, 1/4 of the pixels, or all) live, and the HUD shows the
   share. F1-F5 step a part's preset.
 
+### The light volume's read jitter removed (offscreen, 2026-11-21)
+
+The jitter of §28 (`LIGHT_JITTER`, a texel and a slice either way per pixel
+and visit) is gone. At the user's stratus pose (4x2 block, at rest), with
+the jitter off alone, the stratus's frame-to-frame change went 0.22 → 0.09
+levels and its isolated dark pixels 2.3 % → 0.7 %; the cumulus's change
+0.45 → 0.26 (its remaining dots are rays grazing lumpy edges). What it hid
+was not the texels' grid: streaks along the sun on the cumulonimbus's anvil
+and tower faces, from the light window's two reads (shadows.md, "Readers").
+They stayed at 128, 256 and 512 texels, with a 5-texel binomial smoothing in
+the bake, with a cubic read and with 32-bit floats; they went with the far
+read taken straight above the near one. That costs nothing (one
+`normalize`); a tower's face is a little flatter (BACKLOG.md, the sheared
+chart).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

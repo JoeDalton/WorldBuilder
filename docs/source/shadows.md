@@ -440,7 +440,7 @@ shadow maps' four levels, whose bands showed in towers.
   25 km with 256² tiles), and 32 shells through **each sky band** (330 m in a
   tower's 10.5 km; 16 m in a 500 m stratus deck), none through the gap between
   two (`lightSliceHeight`, `lightSliceAt`; `light_volume.slice_heights`). A
-  read and its jitter stay inside the point's band (a point in a gap takes the
+  read stays inside the point's band (a point in a gap takes the
   nearer band's edge slice), and so does the smoothing's tent: mixed across the gap, a tower's
   base took in the slice under it, whose sun ray crosses the tower a kilometre
   aside, and streaked. Uniform shells through the union, 64 of them, would
@@ -460,8 +460,9 @@ shadow maps' four levels, whose bands showed in towers.
   [1, 2, 1] tent of its neighbours along the three axes,
   `light_volume.smooth_volume` on the CPU), swapped to the front: the readers
   never see a half-baked volume, nor one of two suns. Unsmoothed, a feature a
-  far texel across was one deep voxel among shallow ones, and the jittered
-  reads across it showed as dark specks in motion (performance.md §28).
+  far texel across was one deep voxel among shallow ones, and the (then
+  jittered) reads across it showed as dark specks in motion (performance.md
+  §28).
   Baked again when the sun turns past `utils.SUN_TOLERANCE`, the camera moves
   3 % of the reach, the reach changes by as much, or the clouds' layer
   changes; one bake at a time. With all still, nothing a frame. One volume
@@ -476,12 +477,19 @@ shadow maps' four levels, whose bands showed in towers.
   13's w) of the depth beyond the window: 0 for the convective clouds, 1 for
   the stratus, which takes the whole chord of the towers above it (what its
   read of their maps gave before). Past a view footprint of `march.LIGHT_LOCAL_FOOTPRINT`
-  the volume alone. Each read is jittered by up to a texel and a slice either
-  way (`LIGHT_JITTER`; per pixel and visit, the march's blue noise): read at
-  the nodes, the linear interpolation between texels hundreds of metres wide
-  drew their grid on a tower's face; jittered, the resolve averages it. At
-  half that the coarse texels of a far tower still showed in motion, as dark
-  specks the history no longer averaged (performance.md §28). The **sky's reach**
+  the volume alone. The window's far read is taken **straight above the
+  near read** (the near point's place in the chart, the window end's
+  height), not where the sun ray reaches. On the ray, a texel or two aside,
+  the two reads blended different texels, whose own sun rays had crossed the
+  clouds above differently, and their interpolation errors no longer
+  cancelled in the difference: streaks along the sun on an anvil and on a
+  tower's face, whatever the volume's resolution (128, 256, 512), its
+  smoothing (a 5-texel binomial tried), a cubic read or 32-bit floats. A
+  read jitter (a texel and a slice either way, per pixel and visit) used to
+  hide them, at the price of shimmer at rest and in motion; it is gone. The
+  window's depth is then a parallel ray's: a tower's face a little flatter.
+  The exact difference needs a chart sheared along the sun (BACKLOG.md,
+  "Light volume: a chart sheared along the sun"). The **sky's reach**
   comes from the up depth, `mix(skyOcclusion, 1, exp2(-depth))`, in place of
   the height ramp. Beyond the volume (its last eighth fades), the maps and the
   ramp as before; `--cloud-debug 512` takes them everywhere (the old look).
