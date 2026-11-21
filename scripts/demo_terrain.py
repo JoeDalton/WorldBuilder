@@ -1332,11 +1332,7 @@ class TerrainDemo(ShowBase):
                 )
                 _write_png(resolved[..., :3], f"{stem}_resolve.png")
                 layers.append(
-                    {
-                        "block": list(layer.block),
-                        "still_frames": layer._still_frames,
-                        "cloud_debug": self._cloud_debug,
-                    }
+                    {"block": list(layer.block), "still_frames": layer._still_frames}
                 )
         heading, pitch = self._true_heading_pitch()
         burst["meta"].append(
@@ -1346,6 +1342,7 @@ class TerrainDemo(ShowBase):
                 "camera_planet": [float(v) for v in self.cam_world],
                 "heading": heading,
                 "pitch": pitch,
+                "cloud_debug": self._cloud_debug,
                 "ranges": layers,
             }
         )

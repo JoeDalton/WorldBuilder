@@ -2679,10 +2679,10 @@ yet, but it would once the GPU's part fell under it.
 ### The 1x1 march in motion (offscreen, 2026-11-21)
 
 The user's bursts flying past a cumulonimbus: at 1x1 grain over the whole
-cloud (the second difference in time, 1.84 levels inside the clouds against
-4x4's 0.29), at 4x4 blinking edges (4.20 levels, 3.4 % of the edge pixels
-past 12, against 1x1's 1.73). At 1x1 the resolve took a quarter of each
-pixel's raw sample a frame in motion, with no smooth mean. `motion_shots.py
+cloud (the second difference in time above the horizon, 5.60 levels inside
+the clouds, 3.70 at their edges), at 4x4 none (0.30 inside and at the
+edges). At 1x1 the resolve took a quarter of each pixel's raw sample a
+frame in motion, with no smooth mean. `motion_shots.py
 --start 29.7159 29.8232 --at 29.7159 29.8232 432 0 8 --boost --frames 40
 --every 20 --flicker`, the block forced:
 
@@ -2696,8 +2696,12 @@ pixel's raw sample a frame in motion, with no smooth mean. `motion_shots.py
 | 2x2 (ULTRA): 0.5, 1/4 (before) | 1.52 | 1.33 | 0.44 |
 | 2x2: 1, 1/16 (kept) | 1.36 | 0.88 | 0.43 |
 
-The 4x4 edges are next (the history moved by the pixel's own distance, half
-the sky's at an edge).
+The 4x4 edges the user saw blinking in the showcase (`demo_genera.py`, the
+same settings as `demo_terrain.py`) did not show in its burst: at the
+clouds' edges 0.30 levels, as inside; what flickered there was the
+coastline below (the terrain in motion) and, faintly, the clouds' outline
+and their reflection on the sea. A first count (4.20 at the edges) had taken
+the beaches for cloud. Not pursued: the user found it fine since.
 
 ### The light volume's read jitter removed (offscreen, 2026-11-21)
 

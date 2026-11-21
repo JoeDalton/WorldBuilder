@@ -40,9 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   traced pixels) and the resolve's output, read from their framebuffers
   (reading a render target's texture back froze the march for the rest of
   the run). Each frame's pose, block, still frames and cloud debug bits go
-  in `meta.json`.
-  While it runs the clock is held at the frame rate measured before it, so
-  the camera moves as far a frame as in play despite the slow readbacks.
+  in `meta.json`. While it runs the clock is held at the frame rate measured
+  before it, so the camera moves as far a frame as in play despite the slow
+  readbacks. Documented in clouds.md ("Testing"); its image helpers, the
+  `-` / `+` block keys and `frame_profile.py`'s bench scenes are tested
+  (`tests/test_demo_tools.py`).
 - The terrain demo's `-` and `+` keys trace a smaller or larger share of the
   view's pixels a frame in the clouds' march (`CloudSettings.march_block`:
   1/16, 1/9, 1/8, 1/4 or all), live: the march rebuilds its passes, as a

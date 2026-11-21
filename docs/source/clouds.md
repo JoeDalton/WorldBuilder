@@ -1310,7 +1310,9 @@ depths:
    range was their noisy mean, and a tower went grainy whenever the camera
    moved. In motion this frame's samples are taken as their smooth mean, and
    each frame takes at least about a cycle of the block (`MOVING_WEIGHTS`:
-   1/8 at 4 × 2): with the full count's `MIN_WEIGHT` alone, ~33 frames of
+   1/8 at 4 × 2; a sixteenth at 2 × 2 and 1 × 1, whose cycle's share left
+   their raw samples' noise as grain all over a cloud in motion,
+   performance.md §37): with the full count's `MIN_WEIGHT` alone, ~33 frames of
    history lagged the view of a cloud whose look changes fast as the camera
    flies (a lumpy anvil's base at a grazing angle from inside the slab), and
    the clamp cut that lag into grain wherever its box of noisy samples
@@ -1328,9 +1330,9 @@ depths:
    (Karis' "3x3 box artifacts"; performance.md §30). The distance the history
    is moved by takes the same weights. A pixel that takes most of this
    frame's samples (its history lost or short) takes their smooth mean instead
-   of the bilinear mix of four, by `uSmooth` (`march.SMOOTHING`: all of it at a
-   quarter resolution, half at a half, none at full): each sample's noise was a
-   dot of its own. Each pixel counts the samples it has gathered (the distance
+   of the bilinear mix of four, by `uSmooth` (`march.SMOOTHING`: all of it at
+   4 × 4, 2 × 2 and 1 × 1, three quarters at 4 × 2 and 3 × 3), and in motion
+   always: each sample's noise was a dot of its own. Each pixel counts the samples it has gathered (the distance
    target's second channel): this frame's share falls as 1 / (count + 1)
    down to `MIN_WEIGHT` (0.03), and what the clamp takes away takes the
    count down (to 4 at least, so a noisy sample is not taken
@@ -1403,3 +1405,16 @@ frames read back (each pixel's brightness spread, and the raymarch's block
 grid: see the script), and each pose's frame comes with its 95th percentile
 ([performance §23](performance.md)). On WSL, run it with
 `GALLIUM_DRIVER=d3d12`, or Mesa draws on the CPU.
+
+In the terrain demo, `-` and `+` step the march's block live (1/16, 1/9, 1/8,
+1/4 of the pixels a frame, or all; the HUD shows the share), and `B` saves a
+**burst**: the next 12 frames into `--capture-dir` (default `captures/`), a
+folder each, with per frame the screen and, per march depth range, the raw
+march and the resolve's output, and the poses, blocks and debug bits in
+`meta.json`. The clock is held at the frame rate before it, so the camera
+moves as far a frame as in play while the readbacks slow the frames. A
+burst's second difference in time (each frame against the mean of its
+neighbours) measures the shimmer in motion, where the eye sees it: the
+light volume's jitter and the 1x1 grain were found that way
+([performance §37](performance.md)). `tests/test_demo_tools.py` covers the
+burst's image helpers, the block keys and `frame_profile.py`'s bench scenes.

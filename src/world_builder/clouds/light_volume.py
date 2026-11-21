@@ -37,13 +37,13 @@ its neighbours along the three axes, inside its sky band,
 :func:`smooth_volume` on the CPU) into a third atlas, swapped to the front:
 the readers never see a half-baked volume, nor one of two suns. The
 smoothing: far out a feature a texel across was one deep voxel among shallow
-ones, and the readers' jittered reads across it came out as dark specks in
-motion (performance.md §28). Baked again (change-driven, the shadow maps'
-rules) when the sun turns past ``utils.SUN_TOLERANCE``, the camera moves
-:data:`RECENTRE` of the reach, the reach changes by as much, or the steps
-or the clouds' layer change; one bake at a time, the next one started when it
-is swapped in (a sun swinging faster than a bake lags by up to two). With all
-still, nothing a frame.
+ones, and the readers' reads across it (jittered then) came out as dark
+specks in motion (performance.md §28); it keeps such steps soft. Baked again
+(change-driven, the shadow maps' rules) when the sun turns past
+``utils.SUN_TOLERANCE``, the camera moves :data:`RECENTRE` of the reach, the
+reach changes by as much, or the steps or the clouds' layer change; one bake
+at a time, the next one started when it is swapped in (a sun swinging faster
+than a bake lags by up to two). With all still, nothing a frame.
 
 One volume holds every genus. Each genus's readers take its own sun window
 from it and its ``far_shadow`` of what lies beyond (cloud_field.glsl's

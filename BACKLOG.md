@@ -250,9 +250,10 @@ then the default) is measured, not built. What is left:
   (`terrain_shots.py --pose genera_cb --start 29.7159 29.8232`, crop of the
   anvil about x 1750-2230, y 480-780 at 2560x1440). Tested, none removed
   them: the volume at 128, 256 or 512 texels, a 5-texel binomial smoothing
-  in the bake, a cubic B-spline read, 32-bit floats. A read jitter (a texel
-  and a slice either way, per pixel and visit) hid them but made the clouds
-  shimmer at rest and in motion; it was removed with this change.
+  in the bake, a cubic B-spline read between texels, 32-bit floats. A read
+  jitter (a texel and a slice either way, per pixel and visit) hid them but
+  made the clouds shimmer at rest and in motion; it was removed with this
+  change.
 
   *The exact fix.* Make every point of one sun ray fall on the same texel,
   so the near and far reads share their texel weights and differ only by
@@ -262,8 +263,9 @@ then the default) is measured, not built. What is left:
      coordinate `s` stays `lightSliceAt(|p| - base)`. The tile coordinate `t`
      becomes the chart's coordinate of the ray's foot `q`: from `p`, go
      *away* from the sun (`q = p - lambda * sun`, `lambda >= 0`) down to the
-     reference sphere `|q| = base` (the lowest band's base, `chart[0].w`).
-     That is a ray-sphere intersection (the nearer root), a few ALU per read.
+     reference sphere `|q| = base` (the lowest band's base, `chart[0].w`;
+     or the point's own band's base, step 4). That is a ray-sphere
+     intersection (the nearer root), a few ALU per read.
   2. **Inverse (bake side).** `lightVoxelAt(chart, pixel, slice)`: `q` from
      `t` as today (the radial warp on the base sphere), then `p = q + lambda
      * sun` with `|p| = base + lightSliceHeight(slice)` (the quadratic's
@@ -288,9 +290,9 @@ then the default) is measured, not built. What is left:
   5. **What stays.** The smoothing's tent across slices now runs along the
      sun ray (neighbouring slices share `t`): consistent, keep it. So does
      the cubic B-spline across slices in `cloudLightAt` (the two reads still
-     differ by their slice; linear, its kinks band an anvil's underside). The `g`
-     channel (the depth straight up, read at the sample alone for the sky's
-     reach) needs no change. Then `cloudLightSunDepth` reads `far` back on
+     differ by their slice; linear, its kinks band an anvil's underside).
+     The `g` channel (the depth straight up, read at the sample alone for
+     the sky's reach) needs no change. Then `cloudLightSunDepth` reads `far` back on
      the ray (`p + dir * (reach + window)`).
   6. **Tests.** A round trip (`lightChartCoords(lightVoxelAt(...))` gives the
      texel back) on the CPU mirror, two points of one sun ray give the same
@@ -298,7 +300,9 @@ then the default) is measured, not built. What is left:
      (tests/test_cloud_light_volume.py), and the source test
      `test_the_light_volumes_window_is_read_straight_above_its_near_end`
      (tests/test_clouds_march.py) rewritten for the ray read.
-  7. **Check.** The anvil and tower-face crops above, with no streaks; the
+  7. **Check.** The anvil and tower-face crops above, and the anvil seen
+     from below where the slice bands showed (`--at 23.08764 29.27759 3139
+     -62.9 22.3`, no `--start`), with no streaks or bands; the
      face's self-shadow against `--cloud-debug 64` (the exact march), closer
      than today's; a low sun (`--sun 270 4`, the stratus-under-towers pose
      in the item above); the burst capture (`B` in the demo) at rest on the

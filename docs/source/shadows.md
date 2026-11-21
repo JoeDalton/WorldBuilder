@@ -484,7 +484,8 @@ shadow maps' four levels, whose bands showed in towers.
   clouds above differently, and their interpolation errors no longer
   cancelled in the difference: streaks along the sun on an anvil and on a
   tower's face, whatever the volume's resolution (128, 256, 512), its
-  smoothing (a 5-texel binomial tried), a cubic read or 32-bit floats. A
+  smoothing (a 5-texel binomial tried), a cubic read between texels or
+  32-bit floats. A
   read jitter (a texel and a slice either way, per pixel and visit) used to
   hide them, at the price of shimmer at rest and in motion; it is gone. The
   window's depth is then a parallel ray's: a tower's face a little flatter.

@@ -1419,10 +1419,11 @@ uniform int   cloudLightOn;
 bool cloudLightLocal = true;
 
 // A light volume's depths at p (r: toward the sun, g: up), linear between
-// its texels, a cubic B-spline across its slices; keep: how much the volume holds p (1 inside,
-// fading over the last eighth of its tiles' half-width, 0 beyond). Above the
-// slab's top 0 (no cloud above), fading to it from the highest slice's
-// middle; below the lowest slice's middle, the lowest's.
+// its texels, a cubic B-spline across its slices; keep: how much the volume
+// holds p (1 inside, fading over the last eighth of its tiles' half-width, 0
+// beyond). Above the slab's top 0 (no cloud above), fading to it from the
+// highest slice's middle; below the lowest slice's middle, about the
+// lowest's (the spline's own mix of it and the next).
 vec2 cloudLightAt(sampler2D atlas, vec4 chart[4], vec3 p, out float keep) {
     vec2 t;
     float s;
@@ -1438,11 +1439,14 @@ vec2 cloudLightAt(sampler2D atlas, vec4 chart[4], vec3 p, out float keep) {
     float columns = chart[3].z;
     vec2 size = vec2(columns, slices / columns) * tile;
     vec2 local = clamp((t * 0.5 + 0.5) * tile, 0.5, tile - 0.5);
-    // Across the slices a cubic B-spline (four slices, kept inside the
-    // point's sky band), not linear: the light window's two reads differ only
-    // by their slice (cloudLightSunDepth), and the linear read's kinks at
-    // every slice drew bands along the heights on an anvil's underside. The
-    // same cost within noise (the clouds 4.5-5.5 ms either way).
+    // Across the slices a cubic B-spline over four, not linear: the light
+    // window's two reads differ only by their slice (cloudLightSunDepth), and
+    // the linear read's kinks at every slice drew bands along the heights on
+    // an anvil's underside. The same cost within noise (the clouds 4.5-5.5 ms
+    // either way). Its slices are kept inside the point's sky band
+    // (lightSliceAt): taken across the gap, a tower's base read the slice
+    // under it, whose sun ray crosses the tower a kilometre aside, and
+    // streaked.
     float per = slices / max(floor(chart[3].w + 0.5), 1.0);
     float k = floor(s);
     float first = floor(min(k, slices - 1.0) / per) * per;

@@ -8,10 +8,11 @@
 //
 // Why: the bake samples the field at each voxel's centre, and far out
 // (the chart's texels hundreds of metres wide) a feature a texel across
-// is one voxel with a deep depth beside shallow ones. The readers jitter
-// their reads to hide the texels' grid; across such a step a jittered read
-// came out dark or bright, a speck the resolve spread over its block in
-// motion (performance.md §28). light_volume.smooth_volume on the CPU.
+// is one voxel with a deep depth beside shallow ones. The readers jittered
+// their reads then (to hide the texels' grid; no longer, cloudLightSunDepth),
+// and across such a step a read came out dark or bright, a speck the
+// resolve spread over its block in motion (performance.md §28); smoothed,
+// the step is soft for any read. light_volume.smooth_volume on the CPU.
 
 uniform sampler2D uRaw;
 // (tile, slices, columns, slices a sky band): the atlas's layout
