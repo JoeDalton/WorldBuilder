@@ -232,7 +232,10 @@ def _lows(spec, scales, jets, t) -> list[SynopticObject]:
                     continue
                 centre = -180.0 + (q + 0.5) * width + _sector_drift(jet, birth)
                 trough = extreme_near(jet, centre, 0.5 * width, birth)
-                r = scales.cyclone_radius * (0.75 + 0.55 * size)
+                # 0.6-1.05 of the scale: 1100-1950 km across on Earth, the
+                # observed 1000-2000 km (synoptic weather plan, Task 8; it was
+                # 0.75-1.3, 1400-2450 km, 40 % of them over 2000)
+                r = scales.cyclone_radius * (0.6 + 0.45 * size)
                 axis = abs(float(jet_lat(jet, np.array([trough]), birth)[0]))
                 lon0 = trough + _deg(
                     0.25 * scales.wavelength, radius * math.cos(math.radians(axis))

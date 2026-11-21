@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Synoptic weather, part 8: `scripts/weather_report.py`, the Earth-scale
+  planet's weather against observed climatology over 5 weather seeds and 5
+  days (the jets' and the Hadley cell's latitudes, the lows' count and size,
+  the subtropical highs on the eastern basins, the tropical cyclones' count
+  and genesis, the circulation's sense, the warm front's cloud sequence);
+  exit 1 on a failed band. All pass. `terrain_shots.py` takes the demo's
+  `--time` and `--pin`.
 - Synoptic weather, part 7 (the weather's genera drawn): the stratus genus
   is a family (`noise.GenusField.family`, `RECIPE_FAMILY`), the weather's
   stratus thickening into its nimbostratus where it says so, in one slab
@@ -152,6 +159,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The extratropical lows are smaller: their radius 0.6-1.05 of the
+  cyclone scale (a quarter of the Eady wavelength), not 0.75-1.3, so
+  1100-1950 km across on Earth, the observed 1000-2000 km (40 % were over
+  2000 km: `weather_report.py`). The literature review's equation follows.
 - `WeatherSpec` loses the placeholder systems' fields (`storm_tracks`,
   `cyclones`, `tropical` and their radii, swirls and strengths): the
   systems follow the planet. `zonal`, `jets` and `cirrus_zonal` default

@@ -1269,5 +1269,7 @@ def test_the_cirrus_cover_follows_the_jets_and_the_cyclones(earth_weather):
     own_ahead = sample_cube(own_cube, np.array(ahead)).max(axis=-1)
     own_behind = sample_cube(own_cube, np.array(behind)).max(axis=-1)
     assert own_ahead.mean() > own_behind.mean() + 0.2
-    # The sheet keeps them (its cover at least theirs)
-    assert np.all(sample_cube(cover, np.array(ahead)) >= own_ahead - 0.05)
+    # The sheet keeps their cirrus (its cover at least it; their
+    # cirrostratus is a genus of its own: weather.CIRRUS_SHEET_GENERA)
+    cirrus = sample_cube(own_cube[..., 0], np.array(ahead))
+    assert np.all(sample_cube(cover, np.array(ahead)) >= cirrus - 0.05)
