@@ -338,8 +338,11 @@ GENUS_PRESETS = {
 }
 
 
-#: The frontal shield (the weather's, :data:`WEATHER_GENERA`): a family of
-#: genera in one recipe genus (:attr:`noise.GenusField.family`),
+#: The frontal shield (the weather's, :data:`WEATHER_GENERA`; clouds.md,
+#: "Genera", has what it is: the sloping sheet of cloud ahead of a warm
+#: front, high thin altostratus lowering and thickening into nimbostratus
+#: toward the front): a family of genera in one recipe genus
+#: (:attr:`noise.GenusField.family`),
 #: altostratus thickening into nimbostratus, the nimbostratus's share of
 #: the two in its coverage cube's next channel (cube A's 3, the
 #: altostratus's: the two never cover at once, :func:`coverage_cube`). The

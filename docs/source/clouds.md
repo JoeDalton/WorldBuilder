@@ -266,7 +266,26 @@ tropical cyclones, and three genera's coverage (`genera.WEATHER_GENERA`,
 - the stratus sheet's from its stratus and stratocumulus;
 - the **frontal shield**'s from its altostratus and nimbostratus: one genus
   for both (`GENUS_PRESETS["frontal_shield"]`), a *family* like the
-  convective clouds' depth. Cube A's channel 2 holds its coverage, channel 3
+  convective clouds' depth.
+
+  *What it is.* Ahead of a warm front, warm moist air glides up over the
+  wedge of cold air in front of it (the warm conveyor belt), so the cloud
+  it forms slopes: highest and thinnest far ahead, lowest and thickest at
+  the front. An observer under an approaching warm front sees the sequence
+  cirrus, cirrostratus, altostratus, nimbostratus over 12-24 hours: the sky
+  whitens, the sun turns watery behind a grey sheet (altostratus, a few
+  hundred metres thick, 2-7 km up), then the sheet lowers and darkens into
+  a featureless rain cloud from near the ground to 5 km or more
+  (nimbostratus), and steady rain sets in. Meteorologists call that sheet
+  the frontal cloud **shield**; the weather's lows draw it as bands ahead of
+  each warm front, and as a comma head poleward of the centre
+  (`synoptic.rules`). Altostratus and nimbostratus are thus one cloud seen
+  at two stages, not two independent genera: the altostratus thickens
+  downward into the nimbostratus, never lies over it. That is why one
+  genus can draw both: where the weather says nimbostratus its base comes
+  down and its density goes up.
+
+  *How it is drawn.* Cube A's channel 2 holds its coverage, channel 3
   the nimbostratus's share of the two (`genera.genus_share`), which the
   shader reads as the genus's depth (`genusWeatherAt`'s z, flag
   `RECIPE_FAMILY`). `familyProfile` (`noise.family_profile`) turns the
