@@ -26,9 +26,10 @@ density field over its own slab, which the raymarch marches as one union
   (:func:`anvil_spread`).
 
 The maps (:func:`genus_planes`, cube maps as the weather's) are the
-weather's own: its convective coverage, depth and anvil shelf, and each
-other genus's coverage its channel of the weather (:func:`genus_coverage`);
-plus, around :attr:`GeneraSpec.focus`, the features of
+weather's own: its convective coverage, depth and anvil shelf, and the
+stratus's coverage its stratus and stratocumulus (:data:`WEATHER_GENERA`,
+:func:`genus_coverage`; the other genera are their features' alone for
+now); plus, around :attr:`GeneraSpec.focus`, the features of
 :attr:`GeneraSpec.features`.
 
 **Coverage to the field.** The share of columns holding cloud depends on
@@ -589,6 +590,12 @@ def high_jet(spec: GeneraSpec) -> np.ndarray:
     return axis / norm
 
 
+#: The recipe genera the weather covers, and the channels of
+#: :func:`weather.synoptic_cube` each takes (the larger): the stratus sheet
+#: takes the weather's stratus and stratocumulus. The others are their
+#: features' alone for now: each genus the march draws costs it as a full
+#: one wherever it is (+0.65 ms at 2560 x 1440, :func:`genus_specs`).
+WEATHER_GENERA = {"stratus": ("stratus", "stratocumulus")}
 #: A weather genus channel under this everywhere holds no cloud
 #: (:func:`has_coverage`): the march skips the genus.
 WEATHER_COVER_FLOOR = 0.01
@@ -596,21 +603,17 @@ WEATHER_COVER_FLOOR = 0.01
 
 def has_coverage(spec: GeneraSpec, name: str) -> bool:
     """Whether genus *name* of *spec* holds cloud anywhere: the primary one
-    (the weather's) always; another where the weather's channel of it
-    (with :attr:`GeneraSpec.background`) or a feature is its
-    (:func:`genus_coverage`)."""
+    (the weather's) always; another where the weather's channels of it
+    (:data:`WEATHER_GENERA`, with :attr:`GeneraSpec.background`) or a
+    feature is its (:func:`genus_coverage`)."""
     if GENUS_PRESETS[name].coverage[0] == "weather":
         return True
     if any(f.genus == name for f in spec.features):
         return True
-    return (
-        spec.background
-        and name in SYNOPTIC_CHANNELS
-        and bool(
-            synoptic_cube(spec.weather)[..., SYNOPTIC_CHANNELS.index(name)].max()
-            > WEATHER_COVER_FLOOR
-        )
-    )
+    if not spec.background or name not in WEATHER_GENERA:
+        return False
+    picks = [SYNOPTIC_CHANNELS.index(n) for n in WEATHER_GENERA[name]]
+    return bool(synoptic_cube(spec.weather)[..., picks].max() > WEATHER_COVER_FLOOR)
 
 
 def genus_specs(
@@ -818,18 +821,17 @@ def _weather_channels(spec: GeneraSpec, names: tuple, size: int) -> np.ndarray:
 @functools.cache
 def genus_coverage(spec: GeneraSpec, name: str, size: int = GENUS_SIZE) -> np.ndarray:
     """A genus's own coverage map (a genus other than the convective one):
-    the weather's (its channel of :func:`weather.synoptic_cube`, with
-    :attr:`GeneraSpec.background`; a high genus's weather is the cirrus
-    cover instead, :attr:`GeneraSpec.cirrus_weather`), and over it its features'
-    (:attr:`Feature.genus` *name*), each its coverage over its core, fading
-    out over its outer third (cached per process).
+    the weather's (its channels of :func:`weather.synoptic_cube`,
+    :data:`WEATHER_GENERA`, with :attr:`GeneraSpec.background`), and over
+    it its features' (:attr:`Feature.genus` *name*), each its coverage over
+    its core, fading out over its outer third (cached per process).
 
     :returns: (6, size, size) float32, the layout of
         :func:`sky.starfield.cube_directions`
     """
     dirs = cube_directions(size).reshape(-1, 3)
-    if name in SYNOPTIC_CHANNELS and name not in HIGH_CHANNELS:
-        cover = _weather_channels(spec, (name,), size)[:, 0]
+    if name in WEATHER_GENERA:
+        cover = _weather_channels(spec, WEATHER_GENERA[name], size).max(axis=1)
     else:
         cover = np.zeros(len(dirs))
     for f, centre, angle in _feature_dirs(spec):

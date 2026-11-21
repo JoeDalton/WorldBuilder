@@ -102,6 +102,9 @@ from world_builder.clouds.march import (
     thin_optical_depth,
 )
 from world_builder.clouds.planet import check_layers, layer_slabs
+from world_builder.clouds.synoptic import Scales
+from world_builder.clouds.synoptic.state import synoptic_state
+from world_builder.clouds.synoptic.systems import Kind, intensity, position
 from world_builder.clouds.weather import (
     WeatherSpec,
     cirrus_cover_map,
@@ -110,7 +113,6 @@ from world_builder.clouds.weather import (
     stream_table,
     stream_vortices,
     upper_wind,
-    vortices,
 )
 from world_builder.sky.starfield import cube_directions
 from world_builder.terrain.chart import TangentFrame, dirs_from_latlon, latlon
@@ -1165,8 +1167,9 @@ def test_the_zonal_stream_function_is_the_wind(earth_weather):
     np.testing.assert_allclose(
         slope[inner], upper_wind(earth_weather, lat)[inner], atol=0.02
     )
-    # Westerly jets in both hemispheres at 30 degrees
-    assert upper_wind(earth_weather, np.array([30.0, -30.0])) == pytest.approx(
+    # The subtropical jets, westerly in both hemispheres, the fastest
+    edge = Scales.from_planet(earth_weather.planet).jet_lats[0]
+    assert upper_wind(earth_weather, np.array([edge, -edge])) == pytest.approx(
         [1.0, 1.0]
     )
 
@@ -1184,12 +1187,14 @@ def test_zonal_fibres_run_east_west(earth_weather):
 
 def test_the_fibres_turn_around_the_weather_systems(earth_weather):
     """Each system's share is constant on circles around it (the wind turns
-    around a low), a low's a minimum in the north, and the strongest wind it
-    adds is the configured share of the jets'."""
+    around a low), a low's a minimum in the north (a high's a maximum), and
+    the strongest wind it adds is the configured share of the jets', by its
+    intensity."""
+    state = synoptic_state(earth_weather)
     rows = stream_vortices(earth_weather)
-    systems = vortices(earth_weather)
+    systems = [o for o in state.systems if intensity(o, state.t) > 0.0]
     assert len(rows) == len(systems) > 0
-    for row, v in zip(rows, systems):
+    for row, obj in zip(rows, systems):
         centre, k, amplitude = row[:3], row[3], row[4]
         frame = TangentFrame.at(*(float(x[0]) for x in latlon(centre[None, :])))
         ring = np.array(
@@ -1202,13 +1207,17 @@ def test_the_fibres_turn_around_the_weather_systems(earth_weather):
         )
         psi = stream_function(np.zeros(4), row[None, :], ring)
         np.testing.assert_allclose(psi, psi[0], rtol=1e-6)
-        if not v.tropical:
+        if obj.kind in (Kind.LOW, Kind.CUTOFF):
             assert (amplitude < 0.0) == (centre[2] > 0.0)
-        # Its fastest wind: the steepest slope across the rings
+        elif obj.kind is Kind.HIGH:
+            assert (amplitude > 0.0) == (centre[2] > 0.0)
         r = np.linspace(0.01, 3.0, 400) / math.sqrt(k)
         profile = amplitude * np.exp(-((2.0 * np.sin(r / 2.0)) ** 2) * k)
         speed = np.abs(np.gradient(profile, r * R)).max()
-        assert speed == pytest.approx(earth_weather.jet_vortex, rel=0.02)
+        expected = earth_weather.jet_vortex * intensity(obj, state.t)
+        # Within 10 %: the small planet's systems span ~0.6 rad, where the
+        # chord the Gaussian is in departs from the arc
+        assert speed == pytest.approx(expected, rel=0.1)
 
 
 def test_the_cirrus_cover_follows_the_jets_and_the_cyclones(earth_weather):
@@ -1219,23 +1228,42 @@ def test_the_cirrus_cover_follows_the_jets_and_the_cyclones(earth_weather):
     dirs = cube_directions(128).reshape(-1, 3)
     lat, _ = latlon(dirs)
     flat = cover.reshape(-1)
-    # The wet tropics' anvils and the subtropical jet against the dry
-    # air between them
+    # The wet tropics' anvils against the drier air poleward of them
     tropics = flat[np.abs(lat) < 5].mean()
     between = flat[(np.abs(lat) > 18) & (np.abs(lat) < 22)].mean()
     assert tropics > between + 0.1
-    # A shield poleward and east of the extratropical lows, against their
-    # cold sector behind
+    # The sheet carries the systems' own cirrus: the warm fronts' shields
+    # far ahead of the mature lows (on the fronts' cold side), none in the
+    # cold air behind them
+    from world_builder.clouds.synoptic.fronts import fronts_in_radii
+    from world_builder.clouds.weather import SYNOPTIC_CHANNELS, synoptic_cube
+
+    state = synoptic_state(earth_weather)
+    pick = [SYNOPTIC_CHANNELS.index(g) for g in ("cirrus", "cirrostratus")]
+    own_cube = synoptic_cube(earth_weather)[..., pick]
     ahead, behind = [], []
-    for v in vortices(earth_weather):
-        if v.tropical:
+    for obj in state.systems:
+        if obj.kind is not Kind.LOW or intensity(obj, state.t) < 0.5:
             continue
-        frame = TangentFrame.at(*(float(x[0]) for x in latlon(np.array([v.centre]))))
-        poleward = frame.north if v.centre[2] > 0 else -frame.north
-        ahead.append(frame.up + v.radius * (0.9 * frame.east + 1.0 * poleward))
-        behind.append(frame.up + v.radius * (-1.5 * frame.east - 0.9 * poleward))
-    assert len(ahead) >= 3
-    assert (
-        sample_cube(cover, np.array(ahead)).mean()
-        > sample_cube(cover, np.array(behind)).mean() + 0.2
-    )
+        lat, lon = position(obj, state.t)
+        frame = TangentFrame.at(lat, lon)
+        h = 1.0 if lat > 0 else -1.0
+        c, s = math.cos(obj.heading), math.sin(obj.heading)
+        along = c * frame.east + s * frame.north
+        poleward = h * (-s * frame.east + c * frame.north)
+        warm = fronts_in_radii(obj, state.t).warm
+        mid = len(warm) // 2
+        tangent = warm[mid + 1] - warm[mid - 1]
+        normal = np.array([-tangent[1], tangent[0]]) / np.linalg.norm(tangent)
+        for local, out in (
+            (warm[mid] + 0.9 * normal, ahead),
+            (np.array([-1.5, -0.9]), behind),
+        ):
+            d = frame.up + obj.radius / R * (local[0] * along + local[1] * poleward)
+            out.append(d / np.linalg.norm(d))
+    assert len(ahead) >= 1
+    own_ahead = sample_cube(own_cube, np.array(ahead)).max(axis=-1)
+    own_behind = sample_cube(own_cube, np.array(behind)).max(axis=-1)
+    assert own_ahead.mean() > own_behind.mean() + 0.2
+    # The sheet keeps them (its cover at least theirs)
+    assert np.all(sample_cube(cover, np.array(ahead)) >= own_ahead - 0.05)

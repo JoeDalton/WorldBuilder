@@ -132,8 +132,8 @@ def test_interfaces_unchanged():
     from world_builder.clouds.genera import (
         CONVECTIVE,
         DEPTHS,
-        STRATIFORM,
         GeneraSpec,
+        coverage_cube,
         genus_cube,
         genus_planes,
     )
@@ -151,7 +151,7 @@ def test_interfaces_unchanged():
     genera = GeneraSpec(weather, focus=(29.7, 29.8))
     tables = tuple(tuple(table) for _ in DEPTHS)
     assert genus_cube(genera, CONVECTIVE, tables, 32).shape == (6, 32, 32, 4)
-    assert genus_cube(genera, STRATIFORM, (tuple(table),), 32).shape == (6, 32, 32, 3)
+    assert coverage_cube(genera, "A", 32).shape == (6, 32, 32, 4)
     # The showcase's features still show where they are.
     planes = genus_planes(genera, 128)
     from world_builder.clouds.genera import _feature_dirs

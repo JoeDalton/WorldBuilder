@@ -260,10 +260,13 @@ congestus to cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.ge
 there, `--no-genera` for the plain field; opt-in in `cloud_bench.py`). Its maps are
 the weather's (`weather.synoptic_cube`, see [the weather](atmosphere.md)): the
 convective coverage, depth and anvil shelf from its fronts, lows, highs and
-tropical cyclones, and each recipe genus's coverage its own channel of the
-weather (`genera.genus_coverage`); the weather's cirrus, cirrostratus and
-cirrocumulus go into the high layer's cirrus cover
-(`weather.cirrus_cover_map`). `GeneraSpec.features` adds hand-placed
+tropical cyclones, and the stratus sheet's coverage from their stratus and
+stratocumulus (`genera.WEATHER_GENERA`, `genera.genus_coverage`); the
+weather's cirrus, cirrostratus and cirrocumulus go into the high layer's
+cirrus cover (`weather.cirrus_cover_map`). The weather computes the
+nimbostratus, altostratus and altocumulus too, but those genera are still
+their features' alone: each genus the march draws costs it as a full one
+wherever it is. `GeneraSpec.features` adds hand-placed
 features around one point over them, a showcase (the demo leaves them out
 when `--pin` asks for the weather there). One `CloudMarch` draws them all,
 as one union of genera.

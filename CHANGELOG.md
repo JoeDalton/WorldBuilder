@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Synoptic weather on the cloud genera (rebased on #59): the stratus
+  genus's coverage is the weather's stratus and stratocumulus under its
+  features (`genera.WEATHER_GENERA`, `genus_coverage`, `has_coverage`), the
+  convective depth and anvil shelf the weather's, and the upper wind
+  (`genera.upper_stream`, `upper_wind_at`) the weather's meandering jets
+  (`weather.upper_stream`). The nimbostratus, altostratus and altocumulus,
+  and the cirrostratus and cirrocumulus channels of the high layer, stay
+  their features' alone (the weather's Ci, Cs and Cc feed the cirrus cover).
 - Synoptic weather, part 1 (issue #8): the weather's scales follow the
   planet. `PlanetSpec` gains `day_length_h` (6 h by default) and
   `stratification` (N*H, 100 m/s); `clouds.synoptic.Scales.from_planet`

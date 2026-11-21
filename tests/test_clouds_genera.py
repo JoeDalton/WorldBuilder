@@ -601,8 +601,15 @@ def test_the_march_takes_the_genera_that_hold_cloud(genera):
         assert name in genera.genera and not has_coverage(genera, name)
     showcase = replace(genera, features=showcase_features(), background=False)
     assert [s[0] for s in genus_specs(showcase, covered=True)] == list(genera.genera)
+    # No feature: the weather's own stratus and stratocumulus still make a
+    # stratus sheet (genera.WEATHER_GENERA); without the weather, nothing
     alone = replace(genera, features=())
-    assert [s[0] for s in genus_specs(alone, covered=True)] == ["convective"]
+    assert [s[0] for s in genus_specs(alone, covered=True)] == [
+        "convective",
+        "stratus",
+    ]
+    bare = replace(alone, background=False)
+    assert [s[0] for s in genus_specs(bare, covered=True)] == ["convective"]
 
 
 def test_the_genera_may_overlap(genera):

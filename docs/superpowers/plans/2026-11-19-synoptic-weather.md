@@ -391,3 +391,38 @@ It also samples the warm-front genus order and the CCW/CW sense. Exit code 1 on 
   a flight and a ground pose. On Kerbin use `--start 29.7159 29.8232` with a pin there.
 - [ ] **Step 3: Stop.** Hand the user the report output and the shots, plus the exact commands so
   they can fly around themselves.
+
+Rocky Jupiter is dropped from Task 7's shots (it runs out of memory in game; the user's ruling,
+2026-11-20): Kerbin-like and Earth only.
+
+### Task 8: Draw the weather's other genera (after Task 7)
+
+Since the rebase on #59 the march draws a genus per coverage map. The weather fills only the
+convective field, the stratus (`genera.WEATHER_GENERA`: its stratus and stratocumulus) and the
+cirrus cover (its Ci, Cs and Cc together). Its nimbostratus, altostratus, altocumulus,
+cirrostratus and cirrocumulus are computed but not drawn: those genera show their features alone.
+
+**Files:**
+- Modify: `src/world_builder/clouds/genera.py`:
+  - `WEATHER_GENERA` gains `stratocumulus`, `nimbostratus`, `altostratus` and `altocumulus`, each
+    its own channel; the stratus takes the weather's stratus alone;
+  - the high layer: the cirrostratus and cirrocumulus channels of cube B take the weather's;
+    `high_genera(covered=True)` lists them where the weather has them.
+- Modify: `src/world_builder/clouds/weather.py` `_cirrus_compose`: the cirrus cover takes the
+  weather's Ci alone (Cs and Cc have their own channels now).
+- Modify: the tests that assume a genus without a feature is empty (`test_clouds_genera.py`
+  `test_the_march_takes_the_genera_that_hold_cloud`, `test_clouds_high.py`,
+  `test_clouds_union.py`, `test_cloud_shadows.py`), each with a ruling.
+- Docs: clouds.md (Genera, The high layer), atmosphere.md (Cirrus), CHANGELOG.
+
+- [ ] **Step 1: Benchmark first.** Warn the user before running it. Measure the march at
+  2560×1440 (quality high), today versus every genus drawn, at the ground, 20 km and orbit poses,
+  Kerbin-like and Earth. Main measured +0.65 ms per extra genus drawn.
+- [ ] **Step 2: Stop.** Report the costs. If it is over budget (>160 FPS), propose options, for
+  example skipping a genus whose weather cover is under a floor within the view's reach, or
+  merging Ns into As. The user picks.
+- [ ] **Step 3:** Implement the chosen option (TDD: each genus's coverage is its weather channel
+  under its features; a genus that holds no cloud is still skipped).
+- [ ] **Step 4:** Shots of a pinned `warm_front_approach` and `overcast_drizzle` (ground and flight)
+  on Earth and Kerbin-like, before and after. Full test suite.
+- [ ] **Step 5: Stop.** Report the shots, the FPS and the test output.
