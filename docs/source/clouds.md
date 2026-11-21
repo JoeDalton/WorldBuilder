@@ -1320,6 +1320,23 @@ cloud). Here each pixel steps along its own ray:
   deck's expected coverage as a homogeneous slab whose vertical crossing
   takes the deck's alpha, lit by the deck's averages. The march reaches
   orbit with no deck, and nothing changes colour closing in.
+- **Masses, not a wash** (`macroCover`, `macroThickness` in
+  `cloud_march.glsl`): drawn as `alpha = 0.92 c`, a partial coverage c was
+  a translucent wash from orbit, the ground and its coastlines showing
+  through, the weather's texels (39 km on Earth) soft brushes. The far
+  coverage is moved by two octaves of the noise volume at 40 and 14 km
+  (a standard score times `MACRO_AMOUNT` 0.18 of coverage), then stepped at
+  a half (`MACRO_EDGE` 0.04): opaque masses with sharp, ragged edges and
+  clear gaps. Each octave fades in as the view pixel resolves it, so
+  closing in hands over to the sampled field. A mass's alpha follows the
+  weather's coverage under it, from `MACRO_THIN` (0.6) of the full where
+  it barely covers to the full where it covers wholly, so a band's
+  streaks and a swirl's arms show as thinner and thicker cloud. The far
+  table's light keeps the pixel's own coverage. Debug bit 16384 turns both
+  off (comparison). Two designs were dropped: thresholding the noise at the
+  coverage's own probit (every partial area the same random spots, the
+  weather's masses lost), and stepping only near the edges (translucent
+  fringes and rings beside them).
 
 **The passes.** One march covers both depth ranges of `SplitDepthCameras`
 (`CloudMarch.attach`; `PlanetClouds.use_split_depth`, which a `World` calls

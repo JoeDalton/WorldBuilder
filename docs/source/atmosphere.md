@@ -430,7 +430,11 @@ reflection draws it, `clouds.deck`), fade from the sampled field to its
 that hold cloud: the weather map's coverage, which the near field reproduces
 by construction. Self-shadowing goes first (it is smaller than the
 cloud). So the pattern from orbit is the one you fly into, without the
-speckle.
+speckle. That coverage is then drawn as opaque masses with sharp edges and
+clear gaps rather than a translucent slab ([clouds.md](clouds.md), "Masses,
+not a wash"), and the weather's mesoscale texture keeps its physical size
+(`WeatherSpec.meso_wavelength`, 160 km, on every planet: scaled by the
+planet's size it was 1700 km on Earth).
 
 Lighting goes the same way: from afar, the self-shadowing and the powder
 term are their **averages** over the clouds' columns

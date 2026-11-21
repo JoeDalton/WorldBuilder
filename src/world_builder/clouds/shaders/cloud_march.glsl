@@ -564,6 +564,61 @@ float opaqueResidual(float transmittance) {
 }
 // A cloudy column's alpha seen from afar: the deck's.
 const float FAR_ALPHA = 0.92;
+
+// Far clouds' edges (genusDensity's far path): where a pixel no longer
+// resolves the clouds, a coverage c drawn as a slab of alpha 0.92 c was a
+// translucent wash wherever c was partial, the ground (its coastlines)
+// showing through, the weather's texels (39 km on Earth) soft brushes.
+// Instead the coverage is moved by a noise of two octaves of the noise
+// volume at these features, metres (a standard score times MACRO_AMOUNT of
+// coverage), then stepped at a half: opaque masses with sharp, ragged
+// edges at 14-40 km and clear gaps, their insides varying in thickness with
+// the weather (macroThickness). Stepped only near the edges, translucent
+// fringes and rings showed beside them. Each octave fades in as the view pixel resolves it (resolved()).
+// Thresholding the noise at the cover's own probit (every partial area the
+// same random spots, the weather's masses lost) was tried first.
+const vec2 MACRO_FEATURES = vec2(40000.0, 14000.0);
+const vec2 MACRO_WEIGHTS = vec2(0.7, 0.3);
+// How far the noise moves the coverage (per standard score), and the
+// step's half-width, in coverage.
+const float MACRO_AMOUNT = 0.18;
+const float MACRO_EDGE = 0.04;
+// A mass's optical thickness follows the weather's coverage under it
+// (macroThickness): this share of the full alpha where it barely covers,
+// the full alpha where it covers wholly. A band's streaks and a swirl's arms
+// show as thinner and thicker cloud, not as holes.
+const float MACRO_THIN = 0.6;
+// Off the field's own noise coordinates (decorrelated from its octaves).
+const vec3 MACRO_OFFSET = vec3(0.53, 0.11, 0.87);
+
+// A far mass's alpha relative to FAR_ALPHA (MACRO_THIN): thinner where
+// the weather's coverage c barely passes a half, whole where it is 1.
+float macroThickness(float c) {
+    return (uCloudDebug & 16384) != 0 ? 1.0 : mix(MACRO_THIN, 1.0, smoothstep(0.5, 1.0, c));
+}
+
+// The share of a far pixel's area that holds cloud: coverage c with sharp,
+// ragged edges (MACRO_*), c itself where the pixel resolves none of the
+// noise. mean: the noise volume's (the field's octaveMean; uNoiseSigma its
+// spread). Debug bit 16384: c (comparison).
+float macroCover(float c, vec3 p, float footprint, float mean) {
+    if ((uCloudDebug & 16384) != 0 || c <= 0.0 || c >= 1.0) {
+        return c;
+    }
+    float k0 = MACRO_WEIGHTS.x * resolved(MACRO_FEATURES.x, footprint);
+    float k1 = MACRO_WEIGHTS.y * resolved(MACRO_FEATURES.y, footprint);
+    float kept = length(vec2(k0, k1));
+    if (kept < 0.02) {
+        return c;
+    }
+    vec3 q = p * (NOISE_FEATURE / MACRO_FEATURES.x) + MACRO_OFFSET;
+    vec3 r = OCTAVE_3_TURN * (p * (NOISE_FEATURE / MACRO_FEATURES.y)) + OCTAVE_2_OFFSET;
+    float z = (k0 * (sampleNoise(q) - mean) + k1 * (sampleNoise(r) - mean))
+            / (max(uNoiseSigma, 1e-4) * kept);
+    float sharp = smoothstep(0.5 - MACRO_EDGE, 0.5 + MACRO_EDGE, c + MACRO_AMOUNT * z);
+    return mix(c, sharp, kept / length(MACRO_WEIGHTS));
+}
+
 // The weather is read once this far along the ray, metres (uWeatherStretch):
 // the fair-weather shift varies over kilometres, but a convective cloud's depth
 // (its top) changes over a fraction of a tower's width: read once a kilometre
@@ -774,7 +829,12 @@ float genusDensity(int g, Field lf, vec3 p, vec4 weather, float t,
     farCoverage = 0.0;
     if (shading < 1.0) {
         farCoverage = genusCoverageAt(g, p);
-        float mean = -log2(1.0 - FAR_ALPHA * farCoverage) / (lf.extinction * lf.slabThickness);
+        // Patches, not a wash (macroCover); the far table's light keeps the
+        // pixel's mean coverage
+        float view = t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y));
+        float cover = macroCover(farCoverage, p, view, lf.octaveMean)
+                    * macroThickness(farCoverage);
+        float mean = -log2(1.0 - FAR_ALPHA * cover) / (lf.extinction * lf.slabThickness);
         density = mix(mean, density, detail);
     } else if (lf.recipe != 0) {
         // A recipe genus's sun term reads its far table at every distance

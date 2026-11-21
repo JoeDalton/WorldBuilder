@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Crisp clouds from orbit: the march's far path draws a coverage as
+  opaque masses with sharp, ragged edges and clear gaps (`macroCover`: the
+  coverage moved by two octaves of the noise volume at 40 and 14 km, then
+  stepped at a half, each octave fading in as the view pixel resolves it),
+  their alpha following the weather's coverage under them
+  (`macroThickness`), not a translucent slab of alpha 0.92 c through which
+  the ground and its coastlines showed. The weather's mesoscale texture
+  (`WeatherSpec.meso_wavelength`, 160 km) keeps its physical size on every
+  planet: scaled by the planet's feature scale it was 1700 km on Earth.
+  Debug bit 16384 turns the far masses off.
 - Clear skies (synoptic weather, clear-sky step): the fair-weather
   background goes through a contrast (`weather.contrast`, a smooth step at
   `CLOUD_EDGE` 0.30), so the sky is clear or cloudy, not a thin cover

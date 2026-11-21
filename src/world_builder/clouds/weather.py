@@ -110,7 +110,11 @@ class WeatherSpec:
         (:func:`synoptic.rules.zonal_cover`)
     :ivar season: degrees north the equatorial band is moved (it follows
         the sun)
-    :ivar meso_wavelength: the mesoscale texture's largest feature, metres
+    :ivar meso_wavelength: the mesoscale texture's largest feature, metres,
+        on any planet: mesoscale cloud organisation (cell clusters, streets,
+        the gaps between decks) is 10-200 km whatever the planet's size
+        (scaled by the planet's feature scale, it was 1700 km on Earth, and
+        its clouds drew as broad brushes from orbit)
     :ivar meso_strength: its amplitude, in coverage
     :ivar dry_floor: what the background is multiplied by with no humidity
     :ivar desert_clearing: share of the cover hot, dry land loses
@@ -487,7 +491,7 @@ def genus_fields(
     warped = swirled(dirs, state.systems, state.scales, state.t)
     meso = fbm(
         warped * radius,
-        spec.meso_wavelength * _feature_scale(spec),
+        spec.meso_wavelength,
         3,
         spec.seed * 1000 + _SEED_MESO,
     )
@@ -688,7 +692,6 @@ CIRRUS_SHEET_GENERA = ("cirrus", "cirrocumulus")
 
 def _cirrus_compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate):
     radius = spec.planet.radius
-    scale = _feature_scale(spec)
     lat, _ = latlon(dirs)
     cover = _cirrus_zonal(spec, dirs, lat)
     # Ice cloud high above the ground cares less for its humidity than the
@@ -705,7 +708,7 @@ def _cirrus_compose(spec: WeatherSpec, dirs: np.ndarray, planet: Planet, climate
     warped = swirled(dirs, state.systems, state.scales, state.t)
     meso = fbm(
         warped * radius,
-        spec.meso_wavelength * scale,
+        spec.meso_wavelength,
         3,
         spec.seed * 1000 + _SEED_CIRRUS,
     )
