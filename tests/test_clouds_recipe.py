@@ -22,6 +22,7 @@ from world_builder.clouds.noise import (
     RECIPE_CELLS,
     RECIPE_EROSION_OFFSET,
     RECIPE_EROSION_SCALE,
+    RECIPE_FAMILY,
     RECIPE_LENS,
     RECIPE_ON,
     RECIPE_RESOLVED,
@@ -454,7 +455,8 @@ def test_a_preset_recipe_reaches_its_genus_field(recipe_genera, showbase):
         assert rows[3, 14, 0] == RECIPE_ON | RECIPE_LENS and rows[3, 14, 3] == 3.0
         assert tuple(rows[3, 13, :2]) == (COVERAGE_SOURCES["B"], 0.0)
         assert not rows[0, 14:].any()  # the convective clouds: no recipe
-        assert rows[1, 14, 0] == RECIPE_ON  # the stratus: value noise
+        # The stratus: value noise, a family (its nimbostratus: genera)
+        assert rows[1, 14, 0] == RECIPE_ON | RECIPE_FAMILY
         # The deck: no recipe; its row 14 the closed cells' mean F2 - F1, then
         # the spreads of F1 and F2 - F1 (the march's far edges' widening)
         np.testing.assert_allclose(
@@ -624,7 +626,8 @@ def test_the_stratiform_presets_are_recipe_genera(name):
         # A low-frequency fbm sheet, three times longer along east, a soft
         # top, wispy erosion low down only
         assert genus.noise_kind == "value" and genus.stretch == pytest.approx(3.0)
-        assert field.feature_size[0] >= 10e3 and field.slab[0] == 900.0
+        # Its family's slab: 300 m under its 900 m base (genera.STRATUS_FAMILY)
+        assert field.feature_size[0] >= 10e3 and field.slab == (600.0, 1550.0)
         assert genus.profile[1] == pytest.approx(0.3) and genus.erosion[0] < 0
         assert 0.0 < genus.erosion_base < 1.0
     elif name == "stratocumulus":

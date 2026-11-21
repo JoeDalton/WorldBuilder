@@ -35,6 +35,27 @@ float powder(Field f, float density) {
     return 1.0 - exp2(-f.fieldExtinction * density * f.powderLength * 2.0);
 }
 
+// The share of the sky's light a cloud at p keeps (noise.sky_light_fade):
+// the day's fall as the sun lowers, smoothstep(-0.3, 0.1) of its cosine,
+// times the sunlit share of the air column above p. With the sun below the
+// horizon, the air is sunlit only above the planet's shadow, from radius
+// ground / sin(sun's zenith angle), so that share is exp(-(that - |p|) / H),
+// H the air's Rayleigh scale height. On a 600 km planet, with the sun 8
+// degrees down, a cloud 5 km up keeps ~90 % (the shadow 0.9 km above it);
+// on Earth ~0.1 % (60 km): the curve alone kept 35 % there, and Earth's
+// night clouds glowed against a black sky.
+float cloudSkyFade(int atmo, vec3 p, vec3 sunDir) {
+    float r = length(p);
+    float mu = dot(p / r, sunDir);
+    float fade = smoothstep(-0.3, 0.1, mu);
+    if (mu < 0.0) {
+        vec4 shape = uAtmoShape[atmo];  // x: the ground's radius, z: H
+        float lit = shape.x / sqrt(max(1.0 - mu * mu, 1e-6));
+        fade *= exp(-max(lit - r, 0.0) / shape.z);
+    }
+    return fade;
+}
+
 // The sunlight, skylight and twilight on a cloud at p (planet frame) through
 // the planet's air atmo (-1: none), per fragment: the billboards work the
 // same out per vertex (cloud_sphere.vert).
@@ -49,10 +70,10 @@ void planetCloudLight(int atmo, vec3 p, out vec3 sunlight, out vec3 skylight,
         vec3 tint = cloudSunTint(atmo, p, sunDir);
         sunlight *= tint;
         twilight = sunColor * cloudTwilight(atmo, p, sunDir, tint);
-        // The sky's light fades through twilight as the air's own fill
-        // does (atmosphere.glsl), so clouds in the planet's shadow stay as
-        // bright as the air around them.
-        skylight *= smoothstep(-0.3, 0.1, dot(normalize(p), sunDir));
+        // The sky's light fades through twilight with the sunlit share of
+        // the air above (cloudSkyFade): long on a small planet, whose shadow
+        // rises slowly, short on Earth's.
+        skylight *= cloudSkyFade(atmo, p, sunDir);
     }
 }
 
@@ -86,7 +107,15 @@ vec3 cloudRadianceFrom(int genus, float sunDepth, Field f, vec3 p,
     // it lights a cloud's shadowed side where the flat fill below is the sky's.
     float octaveShadowing = shading > 0.0
         ? exp2(-f.octaveAttenuation * sunDepth) * powdered : 1.0;
-    if (shading < 1.0) {
+    // Sheets at sunset: a recipe genus (a sheet: the stratus and its
+    // nimbostratus, the altostratus...) takes its sun terms from its far table at every
+    // distance. The march's samples land 100-300 m into a sheet, under the
+    // tens of metres a low sun lights at its top, so their own sun depth
+    // left a sunset sheet in shadow, grey beside orange cumulus; the table
+    // (baked on the CPU in fine steps) has that lit top. Debug bit 8192:
+    // off, for comparison.
+    float sunShading = f.recipe != 0 && (uCloudDebug & 8192) == 0 ? 0.0 : shading;
+    if (sunShading < 1.0) {
         // Far away: the averages of both over the clouds' columns, which
         // the aliasing per-pixel values would not give, for this sun and
         // coverage. They are what the clouds show close up, blurred, so
@@ -96,9 +125,9 @@ vec3 cloudRadianceFrom(int genus, float sunDepth, Field f, vec3 p,
         float cosSun = dot(normalize(p), sunDir);
         vec2 at = vec2((cosSun - deckLightCosMin) / (1.0 - deckLightCosMin), farCoverage);
         vec4 averaged = genusFarTable(genus, at);
-        sunVisibility = mix(averaged.g, sunVisibility, shading);
-        sunShadowing = mix(averaged.r, sunShadowing, shading);
-        octaveShadowing = mix(averaged.a, octaveShadowing, shading);
+        sunVisibility = mix(averaged.g, sunVisibility, sunShading);
+        sunShadowing = mix(averaged.r, sunShadowing, sunShading);
+        octaveShadowing = mix(averaged.a, octaveShadowing, sunShading);
     }
     // Skylight comes from above: occlude the SKY term toward the underside
     // only (of the cloud's own height, at its convective depth; over its

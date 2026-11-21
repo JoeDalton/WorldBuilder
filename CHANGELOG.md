@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.4.2] 2026-11-21
+
 ### Removed
 
 - The old cirrus sheet (cloud genera, Task 24): `clouds.cirrus`
@@ -33,6 +36,190 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--renderer`, `--half-res` and `--interior-growth`.
 
 ### Added
+
+- Crisp clouds from orbit: the march's far path draws a coverage as
+  opaque masses with sharp, ragged edges and clear gaps (`macroCover`: the
+  coverage moved by two octaves of the noise volume at 40 and 14 km, then
+  stepped at a half, each octave fading in as the view pixel resolves it),
+  their alpha following the weather's coverage under them
+  (`macroThickness`), not a translucent slab of alpha 0.92 c through which
+  the ground and its coastlines showed. The weather's mesoscale texture
+  (`WeatherSpec.meso_wavelength`, 160 km) keeps its physical size on every
+  planet: scaled by the planet's feature scale it was 1700 km on Earth.
+  Debug bit 16384 turns the far masses off.
+- Clear skies (synoptic weather, clear-sky step): the fair-weather
+  background goes through a contrast (`weather.contrast`, a smooth step at
+  `CLOUD_EDGE` 0.30), so the sky is clear or cloudy, not a thin cover
+  everywhere, and `synoptic.rules.zonal_cover` drops its 0.15 floor to 0.10
+  (ITCZ 0.55, storm tracks 0.45): the subtropics are clear. Tunables:
+  `WeatherSpec.cloud_amount` (bias), `cloud_contrast` (the step's
+  half-width, 0.10), `cirrus_amount`. The cirrus cover takes the same
+  contrast, its floor 0.02 (was 0.08): patches, not a veil. On Earth the
+  drawn low cloud's mean is 0.41-0.43, 37-39 % of the planet clear (13 %
+  before), 32-35 % overcast, 70-73 % of the subtropics clear;
+  `scripts/weather_report.py` checks these bands too (ISCCP's total 0.675
+  counts the high and middle clouds not drawn). Widening the highs'
+  subsidence was tried and changed nothing measurable: left as it was.
+- Synoptic weather, part 8: `scripts/weather_report.py`, the Earth-scale
+  planet's weather against observed climatology over 5 weather seeds and 5
+  days (the jets' and the Hadley cell's latitudes, the lows' count and size,
+  the subtropical highs on the eastern basins, the tropical cyclones' count
+  and genesis, the circulation's sense, the warm front's cloud sequence);
+  exit 1 on a failed band. All pass. `terrain_shots.py` takes the demo's
+  `--time` and `--pin`.
+- Synoptic weather, part 7 (the weather's genera drawn): the stratus genus
+  is a family (`noise.GenusField.family`, `RECIPE_FAMILY`), the weather's
+  stratus thickening into its nimbostratus where it says so, in one slab
+  from 300 m under its base, 1550 m thick (`genera.STRATUS_FAMILY`: under
+  the convective clouds' 2.2 km base). The nimbostratus's share, in cube
+  A's channel 2 (`noise.FAMILY_SHARE_CHANNEL`, `genera.genus_share`), sets
+  the cloud's extent and density (`noise.family_range`, `family_height`):
+  the stratus at 0, a deep rain cloud at 1. `CloudSettings.weather_nimbostratus`
+  (restart; off at the low and mid presets) draws it. The cirrostratus
+  takes the weather's own (cube B's channel 2); the cirrus cover keeps its
+  cirrus and cirrocumulus (`weather.CIRRUS_SHEET_GENERA`). The weather's
+  altostratus is not drawn: as a genus of its own (altostratus to
+  nimbostratus over 0.6-6 km, a first version) it shared both sky bands
+  and cost 2-3 ms on the Kerbin-like planet, 6-8 ms on Earth. clouds.md,
+  "Genera", has what the frontal shield is and why it is drawn low.
+- Synoptic weather on the cloud genera (rebased on #59): the stratus
+  genus's coverage is the weather's stratus and stratocumulus under its
+  features (`genera.WEATHER_GENERA`, `genus_coverage`, `has_coverage`), the
+  convective depth and anvil shelf the weather's, and the upper wind
+  (`genera.upper_stream`, `upper_wind_at`) the weather's meandering jets
+  (`weather.upper_stream`). The nimbostratus, altostratus and altocumulus,
+  and the cirrostratus and cirrocumulus channels of the high layer, stay
+  their features' alone (the weather's Ci, Cs and Cc feed the cirrus cover).
+- Synoptic weather, part 1 (issue #8): the weather's scales follow the
+  planet. `PlanetSpec` gains `day_length_h` (6 h by default) and
+  `stratification` (N*H, 100 m/s); `clouds.synoptic.Scales.from_planet`
+  derives the cyclones' size (Eady wavelength of the deformation radius),
+  the storm-track wavenumber, the Hadley cell's edge (eddy-limited, as
+  Omega^-1/2), the jets (Rhines / Williams spacing), one storm band per
+  eddy-driven jet and the tropical cyclones' band and size, calibrated on
+  Earth. A literature review with every equation of the model:
+  `docs/literature/synoptic-weather-review.tex`.
+- Synoptic weather, part 2: the weather as a closed-form function of time,
+  `WeatherSpec.time_s` (no simulation, no state). `clouds.synoptic.jets`:
+  each jet a meandering axis of three Rossby waves (long waves near still,
+  short ones moving east), its troughs and ridges, and the upper wind's
+  stream function along it. `clouds.synoptic.systems`: lows (Norwegian or
+  Shapiro-Keyser), migratory, blocking and subtropical highs (on the
+  eastern flanks of the ocean basins), cut-off lows and tropical cyclones
+  (born over warm sea, recurving, dying at landfall), each on a
+  closed-form track with a life cycle; a train of lows per storm band,
+  born downstream of their jet's troughs and riding its wave.
+  `clouds.synoptic.fields`: sea-level pressure (a zonal climatology plus a
+  kernel per system, Holland's profile for tropical cyclones) and the wind
+  (geostrophic, gradient wind in a tropical cyclone, friction at the
+  surface, the trades near the equator), culled by cube-face tiles.
+- Synoptic weather, part 3: the clouds come from the weather (closes the
+  placeholder of issue #8). `clouds.synoptic.fronts`: each low's warm, cold
+  and occluded fronts (Norwegian), or its fractured cold front and
+  bent-back warm front (Shapiro-Keyser), shaped by its stage.
+  `clouds.synoptic.rules`: the genera each zone holds: the warm front's
+  cirrus, cirrostratus, altostratus and nimbostratus shield, the cold
+  front's cumulonimbus line, the warm sector's stratus and
+  stratocumulus, the comma head and the dry slot, the cold air's open
+  cells, a high's clear core, stratocumulus deck over cold sea and fog, a
+  tropical cyclone's eye, eyewall, spiral bands and outflow cirrostratus;
+  all eight other genera are computed. `weather.synoptic_cube` holds
+  them; `coverage_map`, `weather_cube` and `genera.genus_planes` read it
+  (the convective family's coverage, depth and anvil shelf; the
+  stratiform sheet's stratus and stratocumulus) and the cirrus sheet takes
+  the systems' cirrus. The cirrus and the anvils follow the meandering
+  jets (`weather.upper_stream`); the orographic cloud follows the
+  systems' surface wind.
+- Synoptic weather, part 4: local weather presets pinned at coordinates
+  (`WeatherSpec.pins`, `clouds.synoptic.presets.WeatherPin`): a fair-weather
+  high, a warm front approaching, a cold front, a squall line, overcast
+  and drizzle, a hurricane, thunderstorms. A preset is a role relative to
+  a weather system (the pin on the cold front of a mature low): the
+  system is placed so, its track worked back to its birth, the jets
+  refitted so a pinned low lies downstream of a trough and a pinned high
+  under a ridge, and the free systems form round it, keeping clear of
+  it. A pin the planet cannot hold raises with the reason (no ocean,
+  latitude, land, cold sea, outside the storm track, dry air, pins too
+  close); pins on the same low share it. Stable air under a warm front's
+  shield and in its warm sector calms the fair-weather cumulus.
+- Synoptic weather, part 5: `python -m world_builder.terrain.preview
+  --weather` draws three maps per planet: the globe under all its cloud,
+  the genera by colour, and a surface chart (isobars every 4 hPa, cold,
+  warm and occluded fronts with their symbols, the jets' axes, the
+  systems' centres: `clouds.synoptic.chart`). It and
+  `scripts/demo_terrain.py` take `--time SECONDS` and `--pin LAT LON
+  PRESET` (repeatable; a bad preset name lists the good ones); the
+  demo's showcase features are left out when a pin asks for the weather
+  there. The weather docs (atmosphere.md, clouds.md) describe the
+  synoptic model.
+- Planet presets `earth` (6371 km, a 23.934 h day: Earth's weather scales)
+  and `jupiter_rocky` (69 911 km, a 9.925 h day: many narrow jets and small
+  storms; too heavy for the demo yet), each with a level of its own
+  (`terrain/levels/earth.yaml`, `jupiter_rocky.yaml`: the demo level's
+  600 km radius no longer overrides theirs).
+
+### Fixed
+
+- A thin veil of a near cloud recoloured every cloud behind it (at
+  sunset, red clouds far behind a yellow one turned yellow): the march took
+  the light (the sun's colour through the air, twilight, eclipses:
+  `cloudSunAndSky`) once a pixel, at its first cloud. It takes it again as
+  the ray goes on, at a cloud sample past `max(growth × where it was last
+  taken, that + a least distance)` (`lightStale`, the uniform
+  `uLightRefresh`): `CloudSettings.light_refresh_growth` (presets 2× low,
+  1.6× mid, 1.4× high, 1.25× ultra; 0 once a pixel; the demo's L cycles
+  them) and `light_refresh_min` (2 km on a 600 km planet, scaled by the
+  radius). The takes along a ray grow with the log of its far/near
+  distance ratio, not its length: grazing views through a cloud field stay
+  cheap.
+- Clouds glowed grey on the Earth-scale planet's night side, against a
+  black sky and sea: their sky light faded on a curve of the sun's height
+  alone (`smoothstep(-0.3, 0.1)`), tuned on the 600 km planet, where the
+  air above a cloud stays sunlit for many degrees after sunset. It now also
+  takes the sunlit share of the air above the cloud, from the planet's
+  shadow height and the air's scale height (`cloudSkyFade`,
+  `noise.sky_light_fade`): with the sun 8° down, ~0.1 % on Earth (35 %
+  before), ~90 % of the curve on the 600 km planet, whose twilight is
+  unchanged. A render of every commit since #59 showed no regression: the
+  Earth preset, new on this branch, had never been seen at night.
+- Stratiform sheets stayed grey-white at sunset beside orange cumulus: the
+  march's samples land 100-300 m into a sheet, under the tens of metres a
+  low sun lights at its top, so their sun depth left it in shadow. A recipe
+  genus (the stratus, its nimbostratus) takes its sun terms from its far
+  table at every distance (`cloudRadianceFrom`; debug bit 8192 restores
+  the per-sample ones).
+- The march's loop over a band shared by several genera re-read each
+  genus's weather at every sample when they alternated, and read the field
+  of a genus without coverage: each keeps its weather now
+  (`BAND_WEATHER`), and a genus without coverage is skipped first
+  (2-4 ms at the ground with a deep slab sharing the bands). A family
+  genus reads no noise outside its cloud's extent, and a genus without
+  coverage where a band's chord starts no longer sets the band's cut top
+  (`skyBandChord`).
+- The terrain demo's clouds stayed sunlit through an eclipse (since the
+  cloud genera, #59): the demo no longer bound the world's `Shadows` (the
+  moon, the rings, the mountains) to the clouds' nodes, which kept their
+  defaults (no casters). It binds them again (`PlanetClouds.bind_maps`, as
+  `World` does), so `terrain_shots.py`'s eclipse poses show it too.
+- The weather's population spacing check kept its systems in arrays
+  rebuilt for every candidate: 2 s of a 9 s bake on a planet of thousands
+  of systems.
+
+### Changed
+
+- The extratropical lows are smaller: their radius 0.6-1.05 of the
+  cyclone scale (a quarter of the Eady wavelength), not 0.75-1.3, so
+  1100-1950 km across on Earth, the observed 1000-2000 km (40 % were over
+  2000 km: `weather_report.py`). The literature review's equation follows.
+- `WeatherSpec` loses the placeholder systems' fields (`storm_tracks`,
+  `cyclones`, `tropical` and their radii, swirls and strengths): the
+  systems follow the planet. `zonal`, `jets` and `cirrus_zonal` default
+  to None (the planet's own); `systems=False` gives the climate's
+  background alone (`cloud_bench.py`'s uniform weather); `cirrus_shield`
+  is now the share of the systems' cirrus the sheet keeps.
+- `weather.vortices` and its comma-shaped `Vortex` are gone (the
+  synoptic systems replace them). `stream_table`, `stream_vortices` and
+  `stream_function` keep their signatures as the zonal-mean upper wind.
 
 - The terrain demo's `B` key: a burst capture of the next 12 frames into
   `--capture-dir` (default `captures/`, git-ignored), a folder each. Per

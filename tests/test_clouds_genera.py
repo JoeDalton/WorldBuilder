@@ -19,6 +19,7 @@ from world_builder.clouds.field_setup import _noise
 from world_builder.clouds.genera import (
     CONVECTIVE,
     DEPTHS,
+    STRATUS_FAMILY,
     Feature,
     GeneraSpec,
     coverage_cube,
@@ -345,6 +346,9 @@ def _sample(genera, direction):
 
 
 def test_the_features_are_where_they_are_placed(genera):
+    # The features alone: the weather's own cover there (overcast at the
+    # fixture's focus since the background's contrast) would hide their shapes
+    genera = replace(genera, background=False)
     for feature in genera.features:
         convective, depth, stratiform, shelf = _sample(genera, _at(genera, feature))
         if feature.genus == "cumulonimbus":
@@ -397,28 +401,54 @@ def test_the_anvil_streams_downwind(genera):
 
 
 def test_the_upper_wind_is_the_jets():
+    """With no systems' swirl, the upper wind on a jet's meandering axis
+    blows along it at the jet's speed (the fastest jet's 1)."""
     from world_builder.clouds.genera import upper_wind_at
-    from world_builder.clouds.weather import upper_wind
+    from world_builder.clouds.synoptic.jets import jet_lat, meander_slope
+    from world_builder.clouds.synoptic.state import synoptic_state
+    from world_builder.terrain.planet import PlanetSpec
 
-    weather = replace(WeatherSpec(PLANETS["earthlike"]), jet_vortex=0.0)
-    for lat in (0.0, 20.0, 30.0):
-        wind = upper_wind_at(weather, TangentFrame.at(lat, 10.0).up)
-        expected = upper_wind(weather, np.array([lat]))[0]
-        assert wind[0] == pytest.approx(expected, abs=0.01)  # eastward
-        assert wind[1] == pytest.approx(0.0, abs=0.01)
+    earth = PlanetSpec("earth", radius=6.371e6, day_length_h=23.934)
+    weather = replace(WeatherSpec(earth), jet_vortex=0.0)
+    state = synoptic_state(weather)
+    for jet in [j for j in state.jets if j.hemisphere == 1]:
+        lon = 10.0
+        lat = float(jet_lat(jet, np.array([lon]), state.t)[0])
+        wind = upper_wind_at(weather, TangentFrame.at(lat, lon).up)
+        slope = float(meander_slope(jet, np.array([lon]), state.t)[0])
+        heading = np.degrees(np.arctan2(slope, np.cos(np.radians(lat))))
+        assert np.hypot(*wind) == pytest.approx(jet.speed / 30.0, abs=0.05)
+        assert np.degrees(np.arctan2(wind[1], wind[0])) == pytest.approx(
+            heading, abs=5.0
+        )
 
 
 def test_away_from_the_features_it_is_the_weather(genera):
-    from world_builder.clouds.weather import coverage_map, sample_cube
+    from world_builder.clouds.weather import (
+        SYNOPTIC_CHANNELS,
+        coverage_map,
+        sample_cube,
+        synoptic_cube,
+    )
 
     dirs = cube_directions(128)
     planes = genus_planes(genera, 128)
     far = (dirs @ TangentFrame.at(*genera.focus).up) < 0.0  # the other side
-    assert np.all(planes[..., 1][far] == 0.0)
-    assert np.all(planes[..., 2][far] == 0.0)
-    assert np.all(planes[..., 3][far] == 0.0)
     weather = sample_cube(coverage_map(genera.weather), dirs[far])
     assert np.allclose(planes[..., 0][far], weather, atol=1e-6)
+    cube = synoptic_cube(genera.weather)
+    at = sample_cube(cube, dirs[far])
+    channel = SYNOPTIC_CHANNELS.index
+    assert np.allclose(planes[..., 1][far], at[..., channel("depth")], atol=1e-6)
+    # The stratus's: the weather's stratus, stratocumulus and nimbostratus
+    # (its family's thick end: genera.WEATHER_GENERA)
+    low = np.maximum.reduce(
+        [at[..., channel(n)] for n in ("stratus", "stratocumulus", "nimbostratus")]
+    )
+    assert np.allclose(planes[..., 2][far], low, atol=1e-6)
+    assert np.allclose(planes[..., 3][far], at[..., channel("shelf")], atol=1e-6)
+    # The weather now holds more than fair-weather cumulus there.
+    assert planes[..., 2][far].max() > 0.3
 
 
 def test_the_weather_cube_and_coverage_cube_a(genera, convective):
@@ -435,7 +465,10 @@ def test_the_weather_cube_and_coverage_cube_a(genera, convective):
     covers = coverage_cube(genera, "A", 64)
     assert covers.shape == (6, 64, 64, 4)
     assert np.array_equal(covers[..., 0], planes[..., 2])
-    assert not covers[..., 1:].any()
+    # The stratocumulus none (no feature), 2 the stratus family's
+    # nimbostratus share (noise.FAMILY_SHARE_CHANNEL), 3 none
+    assert not covers[..., 1].any() and not covers[..., 3].any()
+    assert covers[..., 2].any()
     assert not coverage_cube(genera, "B", 64).any()
     with pytest.raises(ValueError):
         genus_cube(genera, "stratus", tuple(map(tuple, tables)), 64)
@@ -506,7 +539,11 @@ def test_the_raymarch_marches_both_genera_and_casts_one_summed_shadow(
         assert clouds.shadow_caster() is march.shadow_caster()
         convective, stratiform = (f.field for f in march._genera)
         assert convective.min_top < 1.0
-        assert stratiform.slab[0] == genera.stratus_altitude
+        # The stratus's family slab, under its base (genera.STRATUS_FAMILY)
+        assert stratiform.slab == (
+            genera.stratus_altitude - STRATUS_FAMILY[0],
+            STRATUS_FAMILY[1],
+        )
         # Each genus its 6 bands and its far level (DETAIL_LEVELS slots each)
         assert march._layers_used == 7
         assert march._layer_count[0] == march._layers_used
@@ -579,8 +616,16 @@ def test_the_march_takes_the_genera_that_hold_cloud(genera):
         assert name in genera.genera and not has_coverage(genera, name)
     showcase = replace(genera, features=showcase_features(), background=False)
     assert [s[0] for s in genus_specs(showcase, covered=True)] == list(genera.genera)
+    # No feature: the weather's own stratus, stratocumulus and nimbostratus
+    # still make the stratus's family sheet (genera.WEATHER_GENERA); without
+    # the weather, nothing
     alone = replace(genera, features=())
-    assert [s[0] for s in genus_specs(alone, covered=True)] == ["convective"]
+    assert [s[0] for s in genus_specs(alone, covered=True)] == [
+        "convective",
+        "stratus",
+    ]
+    bare = replace(alone, background=False)
+    assert [s[0] for s in genus_specs(bare, covered=True)] == ["convective"]
 
 
 def test_the_genera_may_overlap(genera):

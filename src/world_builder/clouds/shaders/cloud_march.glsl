@@ -45,7 +45,13 @@ uniform vec3  uCamRender;        // camera, render frame
 uniform vec3  camPos;            // camera, planet frame
 uniform float exposure;
 uniform int   uOwnAtmosphere;    // the planet's atmosphere (reddens sunlight), -1 none
-uniform float uPixelAngle;       // radians per pixel of the march (a block's area's side)
+uniform float uPixelAngle;
+// The light along a ray (cloudSunAndSky) is taken anew at a cloud sample
+// past max(y x where it was last taken, that + x), metres (march.py's
+// CloudSettings.light_refresh_*): a far cloud behind a near one is lit by
+// its own light (its sunset colour), not the near one's. Taken once a pixel,
+// a thin veil nearby coloured every cloud behind it. y 0: once a pixel.
+uniform vec2 uLightRefresh;       // radians per pixel of the march (a block's area's side)
 uniform int   uMarchSteps;       // the step budget per pixel
 uniform float uMinStep;          // metres: the shortest step, near the camera
 uniform float uStepGrowth;       // a step's length per metre of distance, farther
@@ -564,6 +570,61 @@ float opaqueResidual(float transmittance) {
 }
 // A cloudy column's alpha seen from afar: the deck's.
 const float FAR_ALPHA = 0.92;
+
+// Far clouds' edges (genusDensity's far path): where a pixel no longer
+// resolves the clouds, a coverage c drawn as a slab of alpha 0.92 c was a
+// translucent wash wherever c was partial, the ground (its coastlines)
+// showing through, the weather's texels (39 km on Earth) soft brushes.
+// Instead the coverage is moved by a noise of two octaves of the noise
+// volume at these features, metres (a standard score times MACRO_AMOUNT of
+// coverage), then stepped at a half: opaque masses with sharp, ragged
+// edges at 14-40 km and clear gaps, their insides varying in thickness with
+// the weather (macroThickness). Stepped only near the edges, translucent
+// fringes and rings showed beside them. Each octave fades in as the view pixel resolves it (resolved()).
+// Thresholding the noise at the cover's own probit (every partial area the
+// same random spots, the weather's masses lost) was tried first.
+const vec2 MACRO_FEATURES = vec2(40000.0, 14000.0);
+const vec2 MACRO_WEIGHTS = vec2(0.7, 0.3);
+// How far the noise moves the coverage (per standard score), and the
+// step's half-width, in coverage.
+const float MACRO_AMOUNT = 0.18;
+const float MACRO_EDGE = 0.04;
+// A mass's optical thickness follows the weather's coverage under it
+// (macroThickness): this share of the full alpha where it barely covers,
+// the full alpha where it covers wholly. A band's streaks and a swirl's arms
+// show as thinner and thicker cloud, not as holes.
+const float MACRO_THIN = 0.6;
+// Off the field's own noise coordinates (decorrelated from its octaves).
+const vec3 MACRO_OFFSET = vec3(0.53, 0.11, 0.87);
+
+// A far mass's alpha relative to FAR_ALPHA (MACRO_THIN): thinner where
+// the weather's coverage c barely passes a half, whole where it is 1.
+float macroThickness(float c) {
+    return (uCloudDebug & 16384) != 0 ? 1.0 : mix(MACRO_THIN, 1.0, smoothstep(0.5, 1.0, c));
+}
+
+// The share of a far pixel's area that holds cloud: coverage c with sharp,
+// ragged edges (MACRO_*), c itself where the pixel resolves none of the
+// noise. mean: the noise volume's (the field's octaveMean; uNoiseSigma its
+// spread). Debug bit 16384: c (comparison).
+float macroCover(float c, vec3 p, float footprint, float mean) {
+    if ((uCloudDebug & 16384) != 0 || c <= 0.0 || c >= 1.0) {
+        return c;
+    }
+    float k0 = MACRO_WEIGHTS.x * resolved(MACRO_FEATURES.x, footprint);
+    float k1 = MACRO_WEIGHTS.y * resolved(MACRO_FEATURES.y, footprint);
+    float kept = length(vec2(k0, k1));
+    if (kept < 0.02) {
+        return c;
+    }
+    vec3 q = p * (NOISE_FEATURE / MACRO_FEATURES.x) + MACRO_OFFSET;
+    vec3 r = OCTAVE_3_TURN * (p * (NOISE_FEATURE / MACRO_FEATURES.y)) + OCTAVE_2_OFFSET;
+    float z = (k0 * (sampleNoise(q) - mean) + k1 * (sampleNoise(r) - mean))
+            / (max(uNoiseSigma, 1e-4) * kept);
+    float sharp = smoothstep(0.5 - MACRO_EDGE, 0.5 + MACRO_EDGE, c + MACRO_AMOUNT * z);
+    return mix(c, sharp, kept / length(MACRO_WEIGHTS));
+}
+
 // The weather is read once this far along the ray, metres (uWeatherStretch):
 // the fair-weather shift varies over kilometres, but a convective cloud's depth
 // (its top) changes over a fraction of a tower's width: read once a kilometre
@@ -719,6 +780,9 @@ int layerAt(float t) {
     return uLayerCount - 1;
 }
 
+// The genera of a shared band whose weather the march keeps apart (main).
+const int BAND_WEATHER = 3;
+
 float interleavedGradient(vec2 pixel) {
     return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
 }
@@ -771,10 +835,26 @@ float genusDensity(int g, Field lf, vec3 p, vec4 weather, float t,
     farCoverage = 0.0;
     if (shading < 1.0) {
         farCoverage = genusCoverageAt(g, p);
-        float mean = -log2(1.0 - FAR_ALPHA * farCoverage) / (lf.extinction * lf.slabThickness);
+        // Patches, not a wash (macroCover); the far table's light keeps the
+        // pixel's mean coverage
+        float view = t * uPixelAngle / sqrt(float(uBlock.x * uBlock.y));
+        float cover = macroCover(farCoverage, p, view, lf.octaveMean)
+                    * macroThickness(farCoverage);
+        float mean = -log2(1.0 - FAR_ALPHA * cover) / (lf.extinction * lf.slabThickness);
         density = mix(mean, density, detail);
+    } else if (lf.recipe != 0) {
+        // A recipe genus's sun term reads its far table at every distance
+        // (cloudRadianceFrom); close up, the weather's coverage at hand
+        farCoverage = weather.r;
     }
     return density;
+}
+
+// Whether the light taken litAt metres along the ray is stale at t
+// (uLightRefresh): t past growth x litAt and past litAt + the least distance.
+bool lightStale(float t, float litAt) {
+    return uLightRefresh.y > 0.0
+        && t > max(uLightRefresh.y * litAt, litAt + uLightRefresh.x);
 }
 
 void main() {
@@ -937,6 +1017,7 @@ void main() {
     vec3 skylight = vec3(0.0);
     vec3 twilight = vec3(0.0);
     bool lit = false;
+    float litAt = 0.0;  // where the light was last taken (uLightRefresh)
     int current = -1;
     Field lf = getField(0);  // replaced at the first sample (current -1)
     int steps = 0;
@@ -958,7 +1039,6 @@ void main() {
         }
         vec2 seg = segments[s];
         int genera = int(uSkyBands[bandOf[s]].z + 0.5);  // the band's, a bit each
-        int weatherGenus = -1;
         float weatherUntil = -1.0;
         float a = seg.x;
         float least = (seg.y - seg.x) / SEGMENT_SAMPLES;  // the fewest a segment takes
@@ -1000,10 +1080,12 @@ void main() {
                 continue;
             }
             float alpha = 1.0 - exp2(-lf.extinction * density * dt);
-            if (!lit) {
-                // The light (the air's, eclipses, mountains, rings), once a pixel.
+            if (!lit || lightStale(t, litAt)) {
+                // The light (the air's, eclipses, mountains, rings), at the
+                // first cloud and again as the ray goes on (lightStale).
                 cloudSunAndSky(p, sunlight, skylight, twilight);
                 lit = true;
+                litAt = t;
             }
             vec3 radiance = (uCloudDebug & 256) != 0 ? vec3(0.8)  // no lighting (profiling)
                 : cloudRadianceAt(only, lf, p, density, -dir, shading, farCoverage, sunlight,
@@ -1014,7 +1096,19 @@ void main() {
             transmittance *= 1.0 - alpha;
         }
         // Genera sharing a band: every genus whose slab holds the sample adds
-        // its extinction (sigma), its light weighted by it.
+        // its extinction (sigma), its light weighted by it. Each of the
+        // band's first BAND_WEATHER genera keeps its own weather a
+        // uWeatherStretch (one cache for all re-read it at every sample, the
+        // genera alternating), and a genus without coverage there is skipped
+        // before its field is read: a deep slab sharing a band with others
+        // (a nimbostratus feature's, 0.6-5 km), mostly empty, cost 3 ms at
+        // the ground with no cloud anywhere (synoptic weather plan, Task 7).
+        vec4 bandWeather[BAND_WEATHER];
+        float bandUntil[BAND_WEATHER];
+        for (int w = 0; w < BAND_WEATHER; ++w) {
+            bandWeather[w] = vec4(0.0);
+            bandUntil[w] = -1.0;
+        }
         while (!alone && a < seg.y && steps < 2 * uMarchSteps + 8 && transmittance > OPAQUE) {
             float k = a < uSplit ? stretch.x : stretch.y;
             float dt = min(min(k * max(dtMin, a * growth), least), seg.y - a);
@@ -1030,18 +1124,30 @@ void main() {
             float height = heightOf(p);
             float sigma = 0.0;
             vec3 radiance = vec3(0.0);
+            int slot = -1;  // the genus's place among the band's
             for (int g = 0; g < MAX_GENERA; ++g) {
                 if (g >= uCloudGenera) {
                     break;
                 }
-                vec2 slab = layerParams[g * GENUS_VEC4S + 4].xy;  // its slab (getField's)
-                if (((genera >> g) & 1) == 0 || height <= slab.x || height >= slab.x + slab.y) {
+                if (((genera >> g) & 1) == 0) {
                     continue;
                 }
-                if (g != weatherGenus || t > weatherUntil) {
+                ++slot;
+                vec2 slab = layerParams[g * GENUS_VEC4S + 4].xy;  // its slab (getField's)
+                if (height <= slab.x || height >= slab.x + slab.y) {
+                    continue;
+                }
+                if (slot < BAND_WEATHER) {
+                    if (t > bandUntil[slot]) {
+                        bandWeather[slot] = genusWeatherAt(g, p);
+                        bandUntil[slot] = t + uWeatherStretch;
+                    }
+                    weather = bandWeather[slot];
+                } else {
                     weather = genusWeatherAt(g, p);
-                    weatherGenus = g;
-                    weatherUntil = t + uWeatherStretch;
+                }
+                if (weather.r <= 0.0) {
+                    continue;  // no cover here: nothing to read
                 }
                 int layer = g * DETAIL_LEVELS + level;
                 if (layer != current) {
@@ -1052,9 +1158,10 @@ void main() {
                 if (density <= 0.0) {
                     continue;
                 }
-                if (!lit) {
+                if (!lit || lightStale(t, litAt)) {
                     cloudSunAndSky(p, sunlight, skylight, twilight);
                     lit = true;
+                    litAt = t;
                 }
                 float own = lf.extinction * density;
                 sigma += own;

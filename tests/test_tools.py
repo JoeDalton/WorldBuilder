@@ -38,11 +38,12 @@ def test_preview_maps_are_images(planet):
     assert np.any(np.all(globe == (255, 0, 0), axis=-1))
 
 
-def test_preview_weather_shows_the_globe_and_its_coverage(planet):
+def test_preview_weather_shows_the_globe_its_genera_and_a_chart(planet):
     image = preview.render_weather(planet, 12)
-    assert image.shape == (12, 4 * 12 + 4, 3)
-    coverage = image[:, 12 * 2 + 4 :]
-    assert coverage.min() < coverage.max()  # not uniform
+    assert image.shape == (12, 6 * 12 + 2 * 4, 3)
+    for k in range(3):
+        panel = image[:, k * (2 * 12 + 4) : k * (2 * 12 + 4) + 2 * 12]
+        assert panel.min() < panel.max()  # not uniform
 
 
 def test_preview_command_writes_sheets(tmp_path, monkeypatch):

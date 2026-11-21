@@ -355,23 +355,30 @@ shadow maps.
 
 ### The weather
 
-`clouds.weather` builds a cube map (6 × 256², ~3.7 km a texel on a 600 km
-planet) of **target coverage**, the share of the slab's columns that hold
-cloud, from the planet's own `PlanetSpec` and a `WeatherSpec` (seed and
-tunables):
+The weather is **synoptic and analytic** (`clouds.synoptic`): jets, lows,
+highs and tropical cyclones are objects on closed-form tracks, so the
+weather at any `WeatherSpec.time_s` is a pure function of the spec, with
+no simulation and no state. The design, the literature behind it and every
+equation are in
+[the synoptic weather review](../literature/synoptic-weather-review.tex)
+(section 11, "The model's equations").
 
-| Component | What it does |
+| Part | What it does |
 |---|---|
-| Zonal circulation | A curve of latitude (`WeatherSpec.zonal`): wet equatorial band (~0.7), dry subtropical highs (~0.15 at 24–33°), storm tracks (~0.55 at 52–62°), polar caps (~0.4). `season` moves it north or south. |
-| Extratropical cyclones | A few in the storm tracks (6 on the 600 km planet, scaled by area in features). Each is a vortex that winds the mesoscale texture into spiral arms (counter-clockwise in the north, clockwise in the south), plus a comma of cloud along one wound arm: its head curls poleward of the low, its tail trails equatorward and west as the cold front, with clear air behind it. |
-| Tropical cyclones | One or two over open sea at 10–25°: a tight two-armed spiral, an eyewall and a clear eye. None on a planet without sea. |
-| Mesoscale texture | fbm (160 km and finer) wound by the same vortices: ragged edges, streaks around the systems. |
-| Climate | The planet's humidity scales the cover (a dry planet is nearly clear); hot, dry land loses most of what is left (deserts stay clear); the sea adds a little. |
-| Terrain | Slopes facing the prevailing wind (easterly trades, westerlies, polar easterlies) gain cloud, their lee loses it, in proportion to the humidity. Only the ranges count: the relief is band-limited to 60 km. |
+| Scales (`synoptic.Scales`) | Follow the planet's radius, its rotation (`PlanetSpec.day_length_h`) and its stratification (`PlanetSpec.stratification`, N·H): the deformation radius sets the cyclones' size (Eady wavelength, ~1000 km on Earth); the thermal Rossby number the Hadley cell's edge (Ω^-1/2, 30° on Earth); the Rhines/Williams spacing the number of jets, each with its storm band. The 600 km demo planet with a 6 h day behaves like a slowly turning Earth: a Hadley cell to ~49°, two or three large lows a hemisphere. |
+| Jets (`synoptic.jets`) | Each jet's axis meanders as three Rossby waves, `c = U − β/K²`: long waves near still, short ones travelling east. Troughs and ridges come from it. |
+| Systems (`synoptic.systems`) | A train of lows per storm band, born just downstream of their jet's troughs and riding its wave (Norwegian or Shapiro–Keyser life cycles); migratory, blocking and permanent subtropical highs (on the eastern flanks of the ocean basins); cut-off lows; tropical cyclones born over warm sea, recurving, dying at landfall. Each has a closed-form track and life; the population at a time comes from seeded slots, with no state. |
+| Pressure and wind (`synoptic.fields`) | A zonal climatology plus a kernel per system (Holland's profile for tropical cyclones); geostrophic wind, the gradient wind in a tropical cyclone, friction at the surface, the trades near the equator. |
+| Fronts (`synoptic.fronts`) | Warm, cold and occluded fronts per low, shaped by its stage. |
+| Genera (`synoptic.rules`) | What each zone holds: the warm front's Ci → Cs → As → Ns shield, the cold front's Cb line, the warm sector's St/Sc, the comma head, the dry slot, the cold air's open cells, a high's clear core and its Sc deck over cold sea, a tropical cyclone's eye, eyewall and bands, air-mass convection. Stable air (under a shield, in a warm sector) calms the fair-weather cumulus. |
+| Background | Fair-weather cumulus by latitude (the wet tropics, the storm tracks, the clear subtropics between: `synoptic.rules.zonal_cover`), scaled by the planet's humidity, hot dry land cleared, the sea adding a little, slopes facing the systems' surface wind lifting cloud (their lee losing it); a mesoscale texture curled round the systems, which also breaks up their decks and shields. The sum goes through a contrast (`weather.contrast`: a smooth step at `CLOUD_EDGE`), so the sky is clear or cloudy, with the texture drawing the boundaries, not a thin cover everywhere. **Tunables:** `WeatherSpec.cloud_amount` (a bias: +0.1 is about 10 points more cloud, -0.1 less), `cloud_contrast` (the step's half-width: larger, softer and more uniform), `cirrus_amount` (the cirrus's bias). On Earth the drawn low cloud covers 0.41-0.43 of the planet, 37-39 % clear, 32-35 % overcast, 70-73 % of the subtropics clear (`scripts/weather_report.py`'s bands). |
+| Presets (`synoptic.presets`) | `WeatherSpec.pins`: a fair high, a warm front approaching, a cold front, a squall line, overcast and drizzle, a hurricane or thunderstorms pinned at a coordinate. Each is a role relative to a system, placed so; the jets bend round it and the free systems form round it. A pin the planet cannot hold raises with the reason. |
 
-Lengths follow the planet's feature scale, like the terrain's. The climate is
-sampled on a coarse 6 × 64² grid and upsampled; the whole map takes ~3 s,
-once per process (cached by spec).
+`weather.synoptic_cube` (6 × 256² × 11, ~3.7 km a texel on a 600 km planet)
+holds the convective coverage, depth and anvil shelf and the eight other
+genera; `coverage_map`, `weather_cube` and `genera.genus_planes` read it.
+The climate is sampled on a coarse 6 × 64² grid and upsampled; the whole
+cube takes ~4 s, once per process (cached by spec).
 
 **Coverage to the field, exactly.** The clouds never use coverage directly.
 The sorted column peaks of the field (`noise.sphere_column_peaks`, the coverage
@@ -383,8 +390,12 @@ its shift (g, through the table), so the shader pays one fetch. The far
 field reads the coverage, the near field the shift, and the two agree by
 construction (a test checks the round trip within 3 % at 0.1–0.9).
 
-`python -m world_builder.terrain.preview --weather` draws each preset's globe
-under its weather, and the coverage alone, for tuning.
+`python -m world_builder.terrain.preview --weather [--time S] [--pin LAT LON
+PRESET ...]` draws each planet preset's weather three ways, for tuning: the
+globe under all its cloud, the genera by colour, and a surface chart
+(isobars every 4 hPa, fronts with their symbols, the jets' axes, the
+systems' centres). `scripts/demo_terrain.py` takes the same `--time` and
+`--pin`.
 
 ### Near: the raymarch
 
@@ -419,7 +430,11 @@ reflection draws it, `clouds.deck`), fade from the sampled field to its
 that hold cloud: the weather map's coverage, which the near field reproduces
 by construction. Self-shadowing goes first (it is smaller than the
 cloud). So the pattern from orbit is the one you fly into, without the
-speckle.
+speckle. That coverage is then drawn as opaque masses with sharp edges and
+clear gaps rather than a translucent slab ([clouds.md](clouds.md), "Masses,
+not a wash"), and the weather's mesoscale texture keeps its physical size
+(`WeatherSpec.meso_wavelength`, 160 km, on every planet: scaled by the
+planet's size it was 1700 km on Earth).
 
 Lighting goes the same way: from afar, the self-shadowing and the powder
 term are their **averages** over the clouds' columns
@@ -443,8 +458,8 @@ blue sky alone: grey-blue from orbit, turning orange about 200 km closer.
 A cloud stays sunlit after sunset below it: at 2.7 km over a 600 km planet,
 until the sun is 5.4° below its horizon. The air alone dimmed its light only
 to about 15 % of red by then, and the planet's shadow then cut it to black,
-which drew a hard line across the clouds, close up and from orbit. Two terms
-in `cloud_field.glsl` (per sample in the march, per pixel on the deck) spread it:
+which drew a hard line across the clouds, close up and from orbit. Three terms
+(per sample in the march, per pixel on the deck) spread it:
 
 - **The grazing edge** (`grazingLight`): sunlight whose path dips below the
   cloud's own altitude crosses the haze, the terrain and the cloud deck
@@ -461,6 +476,18 @@ in `cloud_field.glsl` (per sample in the march, per pixel on the deck) spread it
   light from the sky: not phase-weighted, not self-shadowed, and reaching
   undersides as the sky's light does. It carries the clouds from lit to dark
   over about 4° past the line (about 40 km on this planet).
+
+- **The sky's light** (`cloudSkyFade`, `noise.sky_light_fade` on the CPU)
+  fades with the sun's height (`smoothstep(-0.3, 0.1)` of its cosine) and,
+  once the sun is below the horizon, with the sunlit share of the air above
+  the cloud: the air is sunlit only above the planet's shadow, at radius
+  `ground / sin(sun's zenith angle)`, so the share is
+  `exp(-(that - cloud's radius) / H)`, H the Rayleigh scale height (8 km).
+  The planet's size sets how long it lasts: with the sun 8° down, a cloud 5
+  km up keeps ~90 % of the curve on the 600 km planet (the shadow 0.9 km
+  over it) and ~0.1 % on Earth (60 km). The curve alone, tuned on the small
+  planet, kept 35 % on Earth there: its night clouds glowed grey against a
+  black sky and sea.
 
 Another body's eclipse multiplies both, and the clouds' sky light dims with
 it (`eclipseVisibility`, see [Shadows](shadows.md)).
@@ -524,19 +551,20 @@ weather, from the same systems as the cumulus:
 
 - **Cover**: the cirrus cover map (`weather.cirrus_cover_map`, 6 × 128²),
   the share of the layer that holds cirrus:
-  - `WeatherSpec.cirrus_zonal`: anvils over the wet tropics, streaks along
-    the jets;
-  - a shield poleward and east of each extratropical low (ahead of its warm
-    front) and over each tropical cyclone;
+  - anvils over the wet tropics and streaks along the meandering jets
+    (or `WeatherSpec.cirrus_zonal`);
+  - the systems' own cirrus (`synoptic_cube`'s Ci and Cc,
+    `weather.CIRRUS_SHEET_GENERA`): the jets' streaks ahead of the warm
+    fronts, the tropical cyclones' outflow. Their cirrostratus is a genus
+    of its own in the high layer (`genera.WEATHER_GENERA`);
   - mesoscale texture;
   - humidity, which counts for less than for the cumulus.
 - **The upper wind** the streaks follow, by its stream function
-  (`genera.upper_stream`, on the GPU `genera.high_wind_cube`):
-  `psi = -R * integral(u dlat)` from `WeatherSpec.jets`
-  (`weather.stream_table`: weak tropical easterlies, the subtropical and
-  polar-front jets), plus one Gaussian per weather system
-  (`weather.stream_vortices`), turning the wind around each low and over
-  each tropical cyclone's outflow.
+  (`genera.upper_stream`, on the GPU `genera.high_wind_cube`), the
+  weather's (`weather.upper_stream`): each jet a Gaussian profile across its
+  meandering axis (measured across it, not along the meridian), plus one
+  Gaussian per weather system (`synoptic.jets.system_rows`), turning the
+  wind around each low and over each high and tropical cyclone's outflow.
 
 **Draw order** needs nothing of its own: the march composites the high
 layer's crossings with the low clouds' along each ray (the downward one
@@ -571,5 +599,6 @@ shader (texture bombing: about 30 candidates a pixel on a 3D lattice).
   only the crossing of its middle ahead, with no volume.
 - **The cirrus in the sea's reflection:** the reflection draws the deck
   alone.
-- **Weather that moves:** the map is fixed; the cyclones could drift with the
-  zonal wind and the map be rebuilt (a few seconds) or advected.
+- **Weather that moves:** the weather is a function of time
+  (`WeatherSpec.time_s`), but a running scene is drawn at one time; moving it
+  means rebuilding the maps (a few seconds) as time goes on.

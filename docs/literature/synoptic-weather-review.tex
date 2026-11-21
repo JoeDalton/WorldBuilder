@@ -1,0 +1,978 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{geometry}
+\geometry{margin=2.4cm}
+\usepackage[hidelinks]{hyperref}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{enumitem}
+\setlist{nosep}
+
+\newcommand{\verif}[1]{\textsf{\small[#1]}}
+\newcommand{\takes}{\par\noindent\textbf{What we take.}\ }
+\newcommand{\used}{\par\noindent\textbf{Where it is used.}\ }
+
+\title{Credible procedural weather without simulation:\\
+a literature review for WorldBuilder's synoptic weather model}
+\author{WorldBuilder --- branch \texttt{weather-synoptic}}
+\date{19 November 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+WorldBuilder renders volumetric clouds over procedural planets whose radii range from
+600\,km to Jupiter scale. Its weather must look credible from orbit, from an aircraft and
+from the ground, cost nothing per frame, and accept local presets pinned at coordinates.
+This review collects the meteorological and graphics literature behind the chosen design:
+an \emph{analytic synoptic-object model}, in which jets are Rossby waves, lows, highs and
+tropical cyclones are parametric objects on closed-form tracks, and pressure, wind, fronts
+and cloud genera are derived from them by conceptual-model rules. For each source we state
+what it says, the quantitative relations we take from it, and where they enter the design.
+Verification tags give the level at which each claim was checked:
+\verif{FT} full text, \verif{abs} abstract, \verif{2nd} secondary source only,
+\verif{meta} bibliographic data only.
+\end{abstract}
+
+\tableofcontents
+
+%====================================================================
+\section{Requirements that drive the review}
+\begin{enumerate}
+\item \textbf{Recognisable structure}: jets that meander; cyclones with fronts and the
+  classic comma cloud; anticyclones that are clear or capped by stratocumulus; tropical
+  cyclones with an eye.
+\item \textbf{No simulation}: the weather state $W(t)$ must be a pure function of time and
+  seed. For now it is evaluated at one fixed $t$.
+\item \textbf{Scales from the planet}: cyclone size, number of jets and belt latitudes
+  follow the radius, the rotation and the stratification. They are not resized Earth tables.
+\item \textbf{Local presets}: a situation pinned at a coordinate (``warm front
+  approaching'') must sit naturally inside the global pattern.
+\end{enumerate}
+
+%====================================================================
+\section{General circulation and its scaling with rotation}
+
+\paragraph{Held \& Hou (1980) \cite{held1980}.}
+An axisymmetric, angular-momentum-conserving theory of the Hadley cell. It predicts the
+cell's width, its heat flux, the latitude of the subtropical jet and the surface
+easterly/westerly pattern \verif{abs}. In the small-angle limit the edge is
+\begin{equation}
+  \phi_H = \left(\frac{5}{3}\,\frac{gH\,\Delta\theta}{\Omega^2 a^2\,\theta_0}\right)^{1/2}
+  \;\propto\; \Omega^{-1},
+\end{equation}
+as quoted in \citet[Eq.~56]{showman2009} \verif{FT of the secondary}.
+\takes The functional dependence on $\Omega a$ and the thermal Rossby number
+$Ro_T \propto gH\Delta\theta/(\Omega a)^2$. Its exponent $1/2$ is used only as the upper
+bound.
+\used \texttt{Scales.hadley\_edge}.
+
+\paragraph{Schneider (2006) \cite{schneider2006}.}
+A review of the general circulation. It sets the Held--Hou bound
+$\phi_M \propto (gH\Delta_h/\Omega^2a^2T_0)^{1/2}$ against the edge limited by baroclinic
+instability, $\phi_c \approx (gH\Delta_v/\Omega^2a^2T_0)^{1/4} \propto \Omega^{-1/2}$
+(Eq.~3, after Held 2000) \verif{FT}. Earth's observed cell is closer to the eddy-limited
+regime.
+\takes $\phi_H = 30^\circ\,(Ro_T/Ro_{T,\oplus})^{1/4}$, calibrated to Earth's
+$30^\circ$ and clamped to $[10^\circ, 60^\circ]$.
+\used \texttt{Scales.hadley\_edge}, and through it every belt latitude.
+
+\paragraph{Walker \& Schneider (2006) \cite{walker2006}.}
+An idealised dry GCM varied over radius, rotation and forcing. The Hadley strength and
+extent follow regimes that axisymmetric theory misses, with upper-branch Rossby numbers of
+0.1--0.8 \verif{abs}. Their extent falls with $\Omega$, but more slowly than $\Omega^{-1}$
+(per \cite{schneider2006}, \verif{FT}).
+\takes This justifies the $\Omega^{-1/2}$ choice above instead of Held--Hou's $\Omega^{-1}$.
+
+\paragraph{Kaspi \& Showman (2015) \cite{kaspi2015}.}
+An idealised moist GCM run from $1/16$ to $8\,\Omega_\oplus$, with radius, gravity, mass
+and stellar flux also varied. At slow rotation the Hadley cell is nearly global, and it
+contracts as rotation speeds up. Jets multiply with rotation, and fast rotators have larger
+equator-to-pole temperature differences \verif{FT}.
+\takes These are qualitative checks on our scalings. A slowly rotating small world (our
+600\,km planet with a 6\,h day has $\Omega a/NH \approx 1.75$ against Earth's $4.65$)
+should show a broad Hadley cell and a single jet. A fast, large world should show many jets.
+\used Test expectations in \texttt{tests/test\_weather\_scales.py}.
+
+\paragraph{Showman, Cho \& Menou (2009) \cite{showman2009}.}
+A review of atmospheric circulation on exoplanets. It notes that the number of jets scales
+as $\Omega^{1/2}$ and the Rhines scale as $\approx \pi (U/\beta)^{1/2}$ \verif{FT}.
+\takes This cross-checks the jet count.
+
+%====================================================================
+\section{Jets and Rossby waves}
+
+\paragraph{Rossby et al.\ (1939) \cite{rossby1939}; Rossby (1945) \cite{rossby1945}.}
+The 1939 paper gives the barotropic phase speed
+\begin{equation}
+  c = U - \frac{\beta}{K^2}, \qquad L_s = 2\pi\sqrt{U/\beta},
+\end{equation}
+where $L_s$ is the stationary wavelength \verif{2nd; the 1939 PDF was not reachable}. The
+1945 paper adds group velocity and energy propagation \verif{meta}.
+\takes Each jet axis is
+$\phi_j(\lambda,t)=\phi_0+\sum_m A_m\sin(k_m\lambda-\omega_m t+\theta_m)$ with
+$\omega_m = k_m(U - \beta/K_m^2)/(a\cos\phi_0)$. Long waves come out quasi-stationary and
+short ones move east, which is the behaviour a forecaster expects to see.
+\used \texttt{synoptic/jets.py}.
+
+\paragraph{Rhines (1975) \cite{rhines1975}.}
+On a $\beta$-plane, the inverse energy cascade stops at $k_\beta=(\beta/2U)^{1/2}$, with $U$
+the rms particle speed. Beyond it the flow turns into waves and then into alternating zonal
+jets. $k_\beta^{-1}$ is about 1000\,km in the atmosphere \verif{abs}.
+
+\paragraph{Williams (1978) \cite{williams1978}.}
+A forced barotropic model on the sphere reproduces Jovian banding with a band scale of
+$L_\beta=\pi(2U/\beta)^{1/2}$. With Earth's parameters it gives one midlatitude westerly jet
+and the trades \verif{abs}.
+\takes Jet spacing $L_\beta=\pi\sqrt{2U/\beta_{45}}$ with $U\approx20$\,m\,s$^{-1}$. The
+number of eddy-driven jets is the width of the extratropics divided by $L_\beta$, clamped to
+1--8.
+\used \texttt{Scales.jet\_lats}.
+
+\paragraph{Uccellini \& Kocin (1987) \cite{uccellini1987}.}
+In eight East-Coast heavy-snow cases, a direct circulation in the entrance of one jet
+streak couples with the indirect circulation in the exit of another. This sets up
+frontogenesis and cyclogenesis \verif{abs}.
+\takes The placement rule: new lows spawn on the downstream side of a trough, under the
+jet's left exit. Pinned lows get jet phases refitted so that this still holds.
+\used \texttt{systems.population}, \texttt{presets.solve}.
+
+\paragraph{Hoskins \& Valdes (1990) \cite{hoskins1990}; Hoskins \& Hodges (2002) \cite{hoskins2002}.}
+Storm tracks maintain themselves: diabatic heating restores the baroclinicity that eddy fluxes
+remove \verif{abs}. Feature tracking on reanalyses shows where the tracks lie, and shows that
+anticyclonic features are weaker and less coherent than cyclones \verif{abs}.
+\takes Storm tracks are bands just poleward of the Hadley edge, starting downstream of
+continents. Highs get broader, weaker kernels than lows.
+\used \texttt{Scales.storm\_track}, \texttt{fields.pressure}.
+
+\paragraph{Rex (1950a,b) \cite{rex1950a,rex1950b}.}
+The definition of blocking: the westerlies split into two branches over at least
+$45^\circ$ of longitude, persisting at least 10 days \verif{2nd}.
+\takes About 10\,\% of migratory highs are blocking highs: three times the lifetime, a fifth
+of the speed, and they push the local jet poleward.
+\used \texttt{systems.py}.
+
+%====================================================================
+\section{Extratropical cyclones and fronts}
+
+\paragraph{Bjerknes \& Solberg (1922) \cite{bjerknes1922}.}
+The Norwegian model: a wave on the polar front grows into a cyclone with warm and cold
+fronts, which then occludes \verif{meta, through a 1923 review}.
+\takes The life-cycle stages: incipient wave, open wave, mature, occluding,
+occluded or decaying. Each is mapped to the stage parameter $s\in[0,1]$.
+\used \texttt{systems.stage}, \texttt{fronts.fronts}.
+
+\paragraph{Shapiro \& Keyser (1990) \cite{shapiro1990}.}
+An alternative life cycle typical of intense marine cyclones: frontal fracture, a bent-back
+warm front with a ``T-bone'', then warm-core seclusion \verif{2nd}.
+\takes A seeded share of lows (\texttt{variant="sk"}) follows this geometry instead.
+\used \texttt{fronts.py}.
+
+\paragraph{Schultz \& Vaughan (2011) \cite{schultz2011}.}
+Occlusion comes from the warm tongue wrapping up by deformation and rotation, not from the
+cold front catching up. Warm-type occlusions are more common. Cyclones often keep deepening
+by 10--30\,hPa for 12--36\,h after the occlusion forms \verif{abs}.
+\takes The occluded front wraps poleward around the centre as $s$ passes
+$\approx0.5$. Peak intensity comes after the occlusion starts, so the strength curve peaks
+at $s\approx0.6$.
+\used \texttt{fronts.py}, \texttt{systems.py}.
+
+\paragraph{Carlson (1980) \cite{carlson1980}.}
+An isentropic relative-flow analysis. The warm conveyor belt, the cold conveyor belt and the
+dry airstream organise the comma cloud, and the boundaries between airstreams give its sharp
+edges \verif{abs}.
+\takes The zones: the warm conveyor belt ascends over the warm front (the frontal cloud
+shield), the cold conveyor belt feeds the comma head, and the dry intrusion makes a clear
+dry slot behind the cold front. Zone edges are sharp (narrow smoothstep), not Gaussian.
+\used \texttt{rules.py} zone table.
+
+\paragraph{Browning (1990) \cite{browning1990}; Browning \& Roberts (1994) \cite{browning1994}.}
+A review of how cloud and precipitation are organised in extratropical cyclones
+\verif{meta}. The 1994 case study shows the cloud head's sharp convex edge, the warm conveyor
+belt splitting under the dry intrusion, and line convection on the cold front \verif{abs}.
+\takes Narrow line convection, Cb with congestus, along the cold front. Embedded
+convection in the comma head.
+\used \texttt{rules.py}.
+
+\paragraph{Warm-front cloud sequence.}
+Teaching sources give the order Ci $\to$ Cs $\to$ As $\to$ Ns (then St/fog) as the surface
+front approaches. The frontal slope is about 1:100--1:300, with cirrus around 1000\,km or
+more ahead of the surface front on Earth \verif{2nd; sources disagree on the slope}. We cite
+the textbook treatment \cite{holton2013} and the WMO atlas \cite{wmo2017} for the genera.
+\takes A band of about $1\,L_R$ on the cold side of the warm front, with the genus chosen by
+the distance to the surface front. Test: \texttt{test\_warm\_front\_sequence}.
+
+%====================================================================
+\section{Anticyclones and the stratocumulus decks}
+
+\paragraph{Wood (2012) \cite{wood2012}.}
+Stratocumulus needs strong lower-tropospheric stability, subsidence and a shallow coupled
+boundary layer. It is driven by cloud-top longwave cooling and covers more than 50\,\% of
+the cool subtropical and midlatitude oceans every year \verif{abs}.
+\paragraph{Klein \& Hartmann (1993) \cite{klein1993}.}
+They identify ten regions of persistent stratus, the subtropical marine ones on the eastern
+sides of ocean basins. Stratus amount rises by about 6\,\% per 1\,K of lower-tropospheric
+stability \verif{abs}.
+\takes High cores are clear (subsidence). Over cool sea on the eastern basin flank, an Sc
+deck sits under the inversion, with St/fog near the coast. Deck coverage rises with a
+stability proxy (cold sea under a strong high).
+\used \texttt{rules.py}; the subtropical high placement in \texttt{systems.py}
+(longitude bias toward eastern basins).
+
+%====================================================================
+\section{Tropical cyclones}
+
+\paragraph{Holland (1980) \cite{holland1980}.}
+A two-parameter radial pressure profile
+\begin{equation}
+  p(r) = p_c + \Delta p\,\exp\!\left[-\left(R_m/r\right)^B\right],
+\end{equation}
+with gradient wind derived from it \verif{abs; the B range is from secondary sources}.
+\paragraph{Willoughby \& Rahn (2004) \cite{willoughby2004}.}
+Fits to 493 aircraft sorties give $B$ between 0.5 and 2.5, with mean
+$1.31\pm0.36$ \verif{FT}.
+\takes The TC pressure kernel, with $B\sim\mathcal{N}(1.3,0.35)$ clamped to $[0.8,2.2]$,
+and gradient wind near the core.
+\used \texttt{fields.pressure}, \texttt{fields.wind}.
+
+\paragraph{Gray (1968) \cite{gray1968}; Camargo et al.\ (2007) \cite{camargo2007}.}
+Most genesis is equatorward of $20^\circ$, on the poleward side of the equatorial trough,
+where vertical shear is weak \verif{abs}. The genesis potential index
+$\mathrm{GP}=|10^5\eta|^{3/2}(H/50)^3(V_{pot}/70)^3(1+0.1V_{shear})^{-2}$ combines
+absolute vorticity, humidity, potential intensity and shear \verif{FT}. The
+$26^\circ$C sea-temperature threshold comes from Gray's later papers, not 1968.
+\takes Genesis only over sea, inside $[5^\circ, \min(25^\circ, 0.8\phi_H)]$, weighted by a
+GP-like proxy built from the planet's temperature and humidity fields.
+\used \texttt{Scales.tc\_band}, \texttt{systems.population}, and the HURRICANE pin check.
+
+\paragraph{Emanuel et al.\ (2006) \cite{emanuel2006}; Bloemendaal et al.\ (2020) \cite{bloemendaal2020}.}
+Synthetic tracks generated without a full model: Markov chains, or beta-and-advection
+steering by synthetic winds \verif{abs}. STORM resamples 38 years of observations into
+10\,000 synthetic years that preserve the statistics \verif{abs}.
+\takes This is precedent that statistically generated tracks are credible. Our TCs move west
+and poleward, recurve at the subtropical ridge, and become extratropical: closed-form
+parabolas in the local frame.
+\used \texttt{systems.position}.
+
+%====================================================================
+\section{Wind from pressure}
+Standard textbook material \cite{holton2013,vallis2017} \verif{meta}:
+\begin{itemize}
+\item the geostrophic wind $\mathbf{v}_g = \hat{\mathbf{k}}\times\nabla p/(\rho f)$;
+\item the gradient-wind correction in curved flow;
+\item boundary-layer friction turns the surface wind across the isobars toward low pressure
+  and slows it.
+\end{itemize}
+\takes The surface wind is geostrophic, turned $25^\circ$ and scaled by 0.7, and blends to
+the trades for $|\phi|<10^\circ$, where $f\to0$. Its circulation is counter-clockwise around
+northern lows (test: \texttt{test\_circulation\_sense}).
+\used \texttt{fields.wind}. It replaces the latitude-only wind in the orographic term and the
+fixed anvil axis.
+
+%====================================================================
+\section{Games and graphics practice}
+
+\paragraph{Schneider \& Vos (2015, 2017); Schneider (2022, 2023) \cite{schneider2015,schneider2017,schneider2022,schneider2023}.}
+Horizon Zero Dawn's volumetric clouds, and later Nubis, are driven by a 2D \emph{weather
+map} with coverage, type and precipitation channels, authored and then animated at regional
+scale. Later versions add flyable cloud environments and voxel SDF clouds
+\verif{2nd and course abstracts}.
+\takes This confirms the split WorldBuilder already has: a weather layer writes maps, the
+renderer reads them. Our work changes only what fills the maps.
+
+\paragraph{Hillaire (2016) \cite{hillaire2016}.}
+Frostbite's physically based sky, atmosphere and clouds under dynamic weather
+\verif{2nd}. This is renderer context only.
+
+\paragraph{Bauer (2019) \cite{bauer2019}.}
+Red Dead Redemption 2's integrated atmosphere and clouds. Weather is authored as regional
+presets with transitions \verif{meta; content not verified}.
+\takes This is the closest precedent for local presets. Its weakness, that regions are not
+globally consistent, is what our object-relative presets address.
+
+\paragraph{Webanck et al.\ (2018) \cite{webanck2018}.}
+Procedural cloudscapes built from primitive-based field functions, with cloud types by
+altitude, animated by optimal-transport morphing along terrain- and wind-aware paths
+\verif{abs}.
+\takes Genus assignment by altitude band and situation.
+
+\paragraph{Microsoft Flight Simulator (meteoblue) \cite{meteoblue_msfs}.}
+Live weather from a global forecast model (about 250 million grid boxes, 60 levels) fed to
+the renderer \verif{vendor pages}.
+\takes This is realism through data. It is not applicable to procedural planets, but it is
+the quality bar.
+
+%====================================================================
+\section{Approaches considered and rejected}
+
+\paragraph{Fluid simulation \cite{harris2003,goswami2017}.}
+GPU cloud dynamics \verif{meta} and Lagrangian parcels for landscape-scale convection
+\verif{2nd}. These work at the scale of a single cloud or a landscape. They are too
+expensive and at the wrong scale for planetary synoptic weather, which is the user's
+``no simulation'' constraint.
+
+\paragraph{Pre-baked climate models: ExoPlaSim \cite{paradise2022}, Isca \cite{vallis2018}.}
+Laptop-runnable GCMs for arbitrary planets, with rotation, radius and continents
+configurable \verif{abs}. They are rejected for $W(t)$ for three reasons:
+\begin{itemize}
+\item the data volume;
+\item a T21--T42 grid is a handful of cells on a 600\,km world;
+\item local pins would need nudging and a rerun.
+\end{itemize}
+They remain a possible offline cross-check of our climatology.
+
+\paragraph{Reanalysis analogues: ERA5 \cite{hersbach2020}.}
+Hourly 31\,km global fields since 1950 \verif{abs}. Earth cut-outs pasted onto other planets
+would carry Earth's scales and leave seams. ERA5 could serve as a reference for kernel shapes.
+
+\paragraph{Stochastic weather generators: WGEN \cite{richardson1981}.}
+Markov-chain wet/dry days with conditioned temperature and radiation \verif{abs}. This is a
+point process with no spatial structure, so no fronts or systems.
+
+%====================================================================
+\section{Resulting scales for WorldBuilder's planets}
+The relations above, with $NH=100$\,m\,s$^{-1}$, $U=20$\,m\,s$^{-1}$, Eady wavelength
+$3.9\,L_R$ and $\phi_H\propto Ro_T^{1/4}$ calibrated to Earth, give the values below. They
+were computed while writing this review. The values that ship are those of
+\texttt{Scales.from\_planet}; the full set of relations is in \S\ref{sec:equations}.
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+ & Kerbin-like & Earth & rocky Jupiter \\
+\midrule
+radius (km) & 600 & 6\,371 & 69\,911 \\
+day (h) & 6 & 23.934 & 9.925 \\
+$\Omega a / NH$ & 1.75 & 4.65 & 123 \\
+$L_R$ at $45^\circ$ (km) & 243 & 970 & 402 \\
+storm-track wavenumber $k^*$ & 2.8 & 7.5 & $\approx 200$ \\
+$L_\beta$ (degrees of latitude) & 72 & 44 & 8.6 \\
+Hadley edge & $49^\circ$ & $30^\circ$ & $10^\circ$ (clamped from $5.8^\circ$) \\
+eddy-driven jets / hemisphere & 1 (clamped from 0.4) & 1 & $\approx 7$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The 600\,km world behaves like a slowly rotating Earth: a broad Hadley cell and two or three
+large lows per hemisphere. Earth-like zonation at that radius needs $\Omega a$ equal to
+Earth's, which is a day of about 2.3\,h. \texttt{day\_length\_h} and
+\texttt{stratification} are the design knobs for this.
+
+%====================================================================
+\section{The model's equations}
+\label{sec:equations}
+This section lists every relation the implementation uses, so that the code can be checked
+against it line by line. The notation is:
+\begin{itemize}
+\item planet radius $a$ (m), latitude $\phi$, longitude $\lambda$, time $t$ (s);
+\item hemisphere sign $h=\operatorname{sign}\phi$ (north $+1$);
+\item the smoothstep $S(e_0,e_1,x)=u^2(3-2u)$ with $u=\operatorname{clamp}\!\big((x-e_0)/(e_1-e_0),0,1\big)$;
+\item the bump $\Pi(x;x_0,x_1,e)=S(x_0-e,x_0,x)\,\big(1-S(x_1,x_1+e,x)\big)$;
+\item the Gaussian $G(x;x_0,\sigma)=\exp[-((x-x_0)/\sigma)^2]$.
+\end{itemize}
+Constants marked $^\dagger$ are starting values, to be tuned on preview maps within the
+ranges of the cited sources. Every other relation is fixed by the design.
+
+%--------------------------------------------------------------------
+\subsection{Planetary scales}
+\label{sec:eq-scales}
+Inputs: the radius $a$, the day length $d$ in hours, and the stratification
+$NH$ ($100$\,m\,s$^{-1}$ by default, Earth's value).
+\begin{align}
+  \Omega &= \frac{2\pi}{3600\,d}, &
+  f(\phi) &= 2\Omega\sin\phi, &
+  \beta(\phi) &= \frac{2\Omega\cos\phi}{a}, \\
+  L_R &= \frac{NH}{f(45^\circ)}, &
+  \lambda_E &= 3.9\,L_R, &
+  k^* &= \frac{2\pi a\cos 45^\circ}{\lambda_E}.
+\end{align}
+$L_R$ is the deformation radius and $\lambda_E = 2\pi L_R/1.61$ is the most unstable Eady
+wavelength \cite{holton2013,vallis2017}. $k^*$ is the storm-track zonal wavenumber at
+$45^\circ$.
+
+The radius of an extratropical system is
+\begin{equation}
+  r_c = 0.25\,\lambda_E\,\xi_r,\qquad \xi_r\sim\mathcal{U}(0.6,1.05).
+\end{equation}
+
+The jet spacing \cite{williams1978,rhines1975}, with eddy velocity $U_e=20$\,m\,s$^{-1}$, is
+\begin{equation}
+  L_\beta = \pi\sqrt{\frac{2U_e}{\beta(45^\circ)}},\qquad
+  L_\beta^\circ = \frac{180}{\pi}\frac{L_\beta}{a}.
+\end{equation}
+
+The Hadley edge, eddy-limited, $\propto\Omega^{-1/2}$ \cite{schneider2006}, is
+\begin{equation}
+  Ro_T = \left(\frac{NH}{\Omega a}\right)^2,\qquad
+  \phi_H = \operatorname{clamp}\!\left(30^\circ\left(\frac{Ro_T}{Ro_{T,\oplus}}\right)^{1/4},
+  \,10^\circ,\,60^\circ\right),
+\end{equation}
+with $Ro_{T,\oplus}$ evaluated for $a=6.371\times10^6$\,m, $d=23.934$\,h and $NH=100$.
+
+The belts, in degrees of $|\phi|$, are:
+\begin{align}
+  \text{eddy-driven jets}\quad & n_j=\operatorname{clamp}\!\left(\operatorname{round}
+     \frac{75^\circ-\phi_H}{L_\beta^\circ},1,8\right),\\
+  & \phi_{j,i}=\phi_H+\Big(i+\tfrac12\Big)\frac{75^\circ-\phi_H}{n_j},\ i=0..n_j-1,\\
+  \text{subtropical jet}\quad & \phi_{j,\mathrm{st}}=\phi_H,\\
+  \text{storm bands}\quad & [\phi_{j,i}-\delta,\ \phi_{j,i}+\delta],\quad
+     \delta=\min\!\Big(\frac{75^\circ-\phi_H}{2n_j},\,12.5^\circ\Big)\quad\text{(per eddy jet)},\\
+  \text{storm track}\quad & [\phi_{j,0}-\delta,\ \phi_{j,n_j-1}+\delta],\\
+  \text{tropical cyclone band}\quad & [5^\circ,\ \min(25^\circ,0.8\,\phi_H)].
+\end{align}
+
+The tropical-cyclone radius of maximum wind, with $V_{TC}=20$\,m\,s$^{-1}$$^\dagger$, is
+\begin{equation}
+  R_m = 0.1\,r_{TC},\qquad
+  r_{TC}=\operatorname{clamp}\!\left(\frac{V_{TC}}{f(20^\circ)},\,0.1\,r_c,\,0.5\,r_c\right).
+\end{equation}
+
+Jet and steering speeds$^\dagger$: $U_{\mathrm{st}}=30$, $U_j=25$, and
+$c_s=0.6\,U_j$ (m\,s$^{-1}$).
+
+%--------------------------------------------------------------------
+\subsection{Jet axes as Rossby waves}
+\label{sec:eq-jets}
+For each hemisphere and each jet $j$, there are three waves $m=1,2,3$ with integer
+wavenumbers (needed for continuity in $\lambda$):
+\begin{equation}
+  k_m\in\Big\{\max\!\big(1,\operatorname{round}\tfrac{k^*}{2}\big),\
+  \max\!\big(1,\operatorname{round}k^*\big),\
+  \max\!\big(1,\operatorname{round}\tfrac{3k^*}{2}\big)\Big\}.
+\end{equation}
+The axis is
+\begin{equation}
+  \phi_j(\lambda,t)=\phi_{0,j}+h\sum_{m=1}^{3}A_m\sin\!\big(k_m\lambda-\varpi_m t+\theta_m\big),
+\end{equation}
+with the dispersion relation \cite{rossby1939}
+\begin{equation}
+  K_m=\frac{k_m}{a\cos\phi_{0,j}},\qquad
+  c_m = U_j-\frac{\beta(\phi_{0,j})}{K_m^2},\qquad
+  \varpi_m = \frac{k_m\,c_m}{a\cos\phi_{0,j}}.
+\end{equation}
+Here $\varpi_m t$ is reduced modulo $2\pi$ in float64 before evaluation. The amplitudes are
+\begin{equation}
+  A_m = A_{\mathrm{tot}}\,\frac{w_m}{\sum w},\quad
+  w=\big(\mathcal{U}(0.3,0.7),\,1,\,\mathcal{U}(0.3,0.7)\big),\qquad
+  A_{\mathrm{tot}}=\min(8^\circ,\,0.25\,L_\beta^\circ),
+\end{equation}
+halved for the subtropical jet. The storm-track wave ($m=2$, $k_2\approx k^*$) dominates: the
+lows ride it (\S\ref{sec:eq-objects}).
+and the phases $\theta_m\sim\mathcal{U}(0,2\pi)$ are seeded, or refitted by pins
+(\S\ref{sec:eq-pins}).
+
+Troughs are the minima of $h\,\phi_j$ in $\lambda$ (equatorward excursions), and ridges are the
+maxima. Both are found on a grid of $\max(512,16\max_m k_m)$ points in $\lambda$, refined by a
+parabolic fit; the one a system is born at is the deepest within its sector (65 points).
+
+The upper wind has a Gaussian jet profile across the meandering axis. Its half-width is a
+quarter of the jet spacing, but never more than 0.4 of the gap to the neighbouring jet (on a slow
+rotator the subtropical and eddy-driven jets crowd together):
+\begin{equation}
+  w_j=\min\!\big(0.25\,L_\beta,\ 0.4\,a\,\min_i|\phi_{0,i+1}-\phi_{0,i}|\big)^\dagger.
+\end{equation}
+The distance $y$ is measured across the axis, not along the meridian (where the axis tilts, the
+meridian crosses it at a slant, and the wind would come out too fast):
+\begin{equation}
+  u_\parallel = U_j\,G(y;0,w_j),\qquad
+  y = \frac{a\,(\phi-\phi_j(\lambda,t))}{\sqrt{1+\tau^2}},\quad
+  \tau=\frac{\partial\phi_j/\partial\lambda}{\cos\phi}.
+\end{equation}
+Its stream function, with contours along the axis, is
+\begin{equation}
+  \psi_j = -\frac{U_j}{U_{\max}}\,w_j\,\frac{\sqrt{\pi}}{2}\,\operatorname{erf}\!\left(\frac{y}{w_j}\right),
+\end{equation}
+in metres (the fastest jet's speed is 1, as \texttt{cirrus.py} expects), with
+$U_j=25$ and $30$\,m\,s$^{-1}$ for the subtropical jet.
+The total is
+$\psi=\sum_j\psi_j+\sum_i a_i\exp(-|\mathbf{d}-\mathbf{c}_i|^2\kappa_i)$, where the system
+bumps keep the sign rules of today's \texttt{stream\_vortices}, and the wind is
+$\mathbf{v}=\hat{\mathbf{z}}\times\nabla\psi$.
+
+%--------------------------------------------------------------------
+\subsection{Synoptic objects: tracks, stages and strength}
+\label{sec:eq-objects}
+\paragraph{Stage and strength.}
+An object has birth time $t_b$, lifetime $T$ and peak strength $P$. Then
+\begin{equation}
+  s(t)=\frac{t-t_b}{T}\in[0,1],\qquad
+  \Sigma(s)=P\;S(0,s_p,s)\,\big(1-S(s_p,1,s)\big),\quad s_p=0.6,
+\end{equation}
+where $s_p=0.6$ means peak intensity comes after the occlusion starts \cite{schultz2011}.
+The mean lifetime of a low and the speed it rides at are
+\begin{equation}
+  \bar T_{\mathrm{LOW}}=2.5\,\frac{\lambda_E}{c_s},\qquad
+  c_2=\frac{\varpi_2\,a\cos\phi_{0,j}}{k_2}\ \text{(its jet's storm-track wave)},
+\end{equation}
+which gives $\bar T_{\mathrm{LOW}}\approx 5.8$ days and $c_2\approx 20$\,m\,s$^{-1}$ on Earth.
+Lows ride the wave so that they stay downstream of the trough they formed at
+\cite{uccellini1987}.
+
+\paragraph{Tracks.}
+Every track is closed-form in $\tau=t-t_b$, held within the life:
+\begin{equation}
+  \phi(\tau)=\phi_0+\dot\phi\,\tau,\qquad
+  \lambda(\tau)=\lambda_0+\dot\lambda\,\tau+\tfrac12\ddot\lambda\,\tau^2.
+\end{equation}
+\begin{center}
+\begin{tabular}{lp{5.6cm}p{3.6cm}}
+\toprule
+system & $\dot\lambda$ (east) & $\dot\phi$ (poleward, $\times h$) \\
+\midrule
+LOW & $c_2/(a\cos\phi_0)$ & $0.5\,r/(aT)$\\
+migratory HIGH & $c_2/(a\cos\phi_0)$ (with the wave) & 0\\
+blocking HIGH & $0.2\,c_2/(a\cos\phi_0)$ & 0\\
+CUTOFF & $0.2\,c_2/(a\cos\phi_0)$ & 0\\
+subtropical HIGH & 0 (permanent) & 0\\
+TROPICAL & $-u_w/(a\cos\phi_0)$, $\ddot\lambda=u_w/(0.4\,T\,a\cos\phi_0)$ & $v_w/a$\\
+\bottomrule
+\end{tabular}
+\end{center}
+with $u_w=5$ and $v_w=2.5$\,m\,s$^{-1}$$^\dagger$. A tropical cyclone moves west until
+$\tau=0.4\,T$, then recurves east: a parabola in latitude and longitude. If its track
+reaches land or leaves the Hadley cell at $\tau_{\mathrm{exit}}$ (sampled at 33 points), it
+decays: its life is shortened to $T'=\min\big(T,\max(\tau_{\mathrm{exit}}+0.25\,T,\ 0.3\,T)\big)$.
+Extratropical transition is deferred.
+
+\paragraph{Population (stateless renewal).}
+Each storm band (one per eddy-driven jet $j$, \S\ref{sec:eq-scales}) is cut into sectors
+that ride the storm-track wave east:
+\begin{equation}
+  n_s=\max\!\Big(1,\operatorname{round}\Big(k^*\frac{\cos\phi_{0,j}}{\cos45^\circ}\Big)\Big),\qquad
+  \lambda_q(t)=-180^\circ+\big(q+\tfrac12\big)\frac{360^\circ}{n_s}
+  +\frac{180}{\pi}\Big(\frac{\varpi_2}{k_2}\,t \bmod 2\pi\Big).
+\end{equation}
+A sector hosts one low at a time, the next born soon after the last dies:
+\begin{equation}
+  t_b(q,n)=(n+\eta_q)\,\Delta t,\quad \Delta t=\bar T_{\mathrm{LOW}},\quad
+  T=\Delta t\;\mathcal{U}(0.9,1),\quad \eta_q\sim\mathcal{U}(0,1)\ \text{per sector},
+\end{equation}
+with every slot spawning. The random draws come from a hash of $(\mathrm{seed},j,q,n)$, and
+only the slots $n\in\{\lfloor t/\Delta t\rfloor-3,\dots,\lfloor t/\Delta t\rfloor\}$ are
+looked at, so the active set at any $t$ costs the same and needs no state. A low is born on the
+downstream side of the deepest trough in its sector, on the jet's poleward side, and stays in
+its storm band $[\phi_{lo},\phi_{hi}]$ after its drift:
+\begin{equation}
+  \lambda_0=\lambda_{\mathrm{trough}}(t_b)+\frac{0.25\,\lambda_E}{a\cos\phi_{\mathrm{axis}}},\qquad
+  |\phi_0| = \min\!\big(|\phi_j(\lambda_0,t_b)|+0.3\,r^\circ,\ \phi_{hi}-0.5\,r^\circ\big),
+\end{equation}
+with $r^\circ$ the radius in degrees, $r=r_c\,\mathcal{U}(0.75,1.3)$, strength
+$25\,\mathcal{U}(0.7,1.3)$\,hPa, and the Shapiro--Keyser variant with probability 0.3.
+
+The other kinds use the same scheme, with independent birth phases $\eta_{qn}$:
+
+\begin{center}
+\small
+\begin{tabular}{lcccp{4.2cm}}
+\toprule
+system & sectors & chance & life & birth place\\
+\midrule
+migratory HIGH & $n_s/2$ & 0.7 & $1.5\,\bar T\,\mathcal{U}(0.8,1.2)$ & ridge, $|\phi_j|-0.6\,r^\circ$\\
+blocking HIGH (10\,\%) & --- & --- & $\times3$ & ridge, $|\phi_j|+0.5\,r^\circ$\\
+CUTOFF & $n_s/4$ & 0.3 & $1.5\,\bar T\,\mathcal{U}(0.8,1.2)$ & trough, $|\phi_j|-0.5\,r^\circ$, $r=0.6\,r_c$\\
+TROPICAL & $\max(2,\operatorname{round}\frac{k^*}{2})$ & 0.5 & $1.5\,\bar T\,\mathcal{U}(0.8,1.2)$ & best GP of 12 draws\\
+subtropical HIGH & $\max(1,\operatorname{round}\frac{k^*}{3})$ & 1 & permanent & $h\phi_H$, eastern basin flank\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Highs get $r=r_c\,\mathcal{U}(0.9,1.3)$ (subtropical: $1.5\,r_c$). A subtropical high's
+longitude maximises $\mathrm{sea}(\lambda)\times\text{(land share within }\min(60^\circ,r^\circ)
+\text{ east)}$, the eastern flank of an ocean basin \cite{klein1993}; the highs are at least
+$0.6\cdot360^\circ/n$ apart, and evenly spaced on a dry planet. A tropical cyclone forms
+only where the genesis proxy of \S\ref{sec:eq-rules} is positive (warm sea), so there are
+none on a planet without ocean.
+
+\paragraph{Spacing.}
+Objects are processed with pinned ones first, then in birth order. Each one needs room
+$\varrho=r\,(0.5+0.5\,\Sigma')$ (a filling low takes less room than a deep one). An object is
+dropped if, for an object $k$ already kept,
+\begin{equation}
+  \operatorname{gc}(\mathbf{c}_i,\mathbf{c}_k)<
+  \begin{cases}
+    0.75\,(\varrho_i+\varrho_k) & \text{same pressure sign},\\
+    0.75\,\min(\varrho_i,\varrho_k) & \text{opposite signs (a low may flank a high)},
+  \end{cases}
+\end{equation}
+where $\operatorname{gc}$ is the great-circle distance.
+
+%--------------------------------------------------------------------
+\subsection{Pressure}
+\label{sec:eq-pressure}
+The climatological zonal pressure (hPa)$^\dagger$, with $\phi_{st}$ the storm-track centre, is
+\begin{equation}
+  p_{\mathrm{clim}}(\phi)=1013-4\,G(\phi;\phi_{\mathrm{ITCZ}},8^\circ)
+  +8\,G(|\phi|;\phi_H,8^\circ)-10\,G(|\phi|;\phi_{st},10^\circ)+4\,G(|\phi|;90^\circ,10^\circ).
+\end{equation}
+In each object's local frame $(x,y)$, with $x$ along the jet and $y$ poleward, LOW and HIGH
+kernels are anisotropic Gaussians:
+\begin{equation}
+  \Delta p_{\mathrm{LOW}}=-\Sigma(s)\exp\!\left[-\frac{x^2}{(1.3r)^2}-\frac{y^2}{(0.8r)^2}\right],\qquad
+  \Delta p_{\mathrm{HIGH}}=+\Sigma(s)\exp\!\left[-\frac{x^2+y^2}{(1.5r)^2}\right],
+\end{equation}
+with $P_{\mathrm{LOW}}=25$ and $P_{\mathrm{HIGH}}=15$\,hPa$^\dagger$. Highs get broader,
+weaker kernels \cite{hoskins2002}.
+
+A tropical cyclone uses the Holland profile \cite{holland1980}:
+\begin{equation}
+  \Delta p_{TC}(r)=-\Sigma(s)\left(1-\exp\!\left[-\left(\frac{R_m}{r}\right)^{B}\right]\right),
+  \qquad B\sim\mathcal{N}(1.3,0.35)\ \text{clamped to }[0.8,2.2]
+  \ \text{\cite{willoughby2004}},
+\end{equation}
+with $P_{TC}=60$\,hPa$^\dagger$. The total is
+$p=p_{\mathrm{clim}}+\sum_i\Delta p_i$. Each kernel is evaluated only within $4r_i$ of its
+centre, found through cube-face tiles of about 64 directions (spatial culling), and tapered by
+$1-S(3r_i,4r_i,\rho)$ so that the cut is smooth. A tropical cyclone's $R_m=0.1\,r_{TC}$, and
+$B$ is drawn from its own seed.
+
+%--------------------------------------------------------------------
+\subsection{Wind}
+\label{sec:eq-wind}
+The geostrophic wind, with $\rho=1.2$\,kg\,m$^{-3}$ and $f$ floored near the equator, is
+\begin{equation}
+  u_g=-\frac{1}{\rho\,\tilde f}\frac{\partial p}{\partial y},\qquad
+  v_g=\frac{1}{\rho\,\tilde f}\frac{\partial p}{\partial x},\qquad
+  \tilde f=h\,\max\!\big(|f(\phi)|,f(5^\circ)\big).
+\end{equation}
+Within $3R_m$ of a tropical cyclone, the gradient wind from the Holland profile replaces
+it, blowing tangentially in the cyclonic sense:
+\begin{equation}
+  V(r)=\sqrt{\frac{B\,\Delta p}{\rho}\left(\frac{R_m}{r}\right)^{B}
+  e^{-(R_m/r)^B}+\frac{r^2f^2}{4}}-\frac{rf}{2}.
+\end{equation}
+Friction at the surface turns the wind toward low pressure, counter-clockwise in the north,
+and slows it:
+\begin{equation}
+  \mathbf{v}_s=0.7\,\mathsf{R}(h\cdot25^\circ)\,\mathbf{v}_g.
+\end{equation}
+Near the equator the wind blends into the trades:
+\begin{equation}
+  \mathbf{v}=w\,\mathbf{v}_s+(1-w)\,\mathbf{v}_{\mathrm{trade}},\quad
+  w=S(5^\circ,12^\circ,|\phi|),\quad
+  \mathbf{v}_{\mathrm{trade}}=(-5,\,-1.5\,h)\ \mathrm{m\,s^{-1}}.
+\end{equation}
+Derivatives are central differences on the sphere, over a step of $0.05\,r_c$.
+
+%--------------------------------------------------------------------
+\subsection{Fronts}
+\label{sec:eq-fronts}
+Fronts are drawn in each LOW's local frame, with $(x,y)$ in units of $r$, $x$ along its
+motion and $y$ poleward. Each front is a curve of linearly varying heading, i.e.\ a circular
+arc in closed form:
+\begin{equation}
+  \boldsymbol{\gamma}(\sigma)=\mathbf{P}_0+\int_0^{\sigma}
+  \big(\cos\vartheta(\sigma'),\sin\vartheta(\sigma')\big)\,d\sigma',\qquad
+  \vartheta(\sigma)=\vartheta_0+\kappa\,\sigma,\quad \sigma\in[\sigma_0,\ell].
+\end{equation}
+Angles are measured from $+x$ toward poleward.
+
+\paragraph{Occlusion and triple point.} Let $o(s)=S(0.35,0.9,s)$. The occluded front runs from
+the centre to the triple point $\mathbf{P}_T$, curving poleward (it wraps):
+\begin{equation}
+  \ell_o=1.2\,o(s),\quad \vartheta_0=-20^\circ,\quad \kappa_o=+60^\circ\!/r,\qquad
+  \mathbf{P}_T=\boldsymbol{\gamma}_o(\ell_o).
+\end{equation}
+
+\paragraph{Norwegian variant} (the default):
+\begin{align}
+  \text{warm front}:&\quad \mathbf{P}_0=\mathbf{P}_T,\ \vartheta_0=-10^\circ,\ \kappa=-10^\circ\!/r,\
+     \ell_w=1.5\,S(0,0.2,s);\\
+  \text{cold front}:&\quad \mathbf{P}_0=\mathbf{P}_T,\ \vartheta_0=-80^\circ,\ \kappa=-16^\circ\!/r,\
+     \ell_c=2.5\,S(0,0.2,s),\ \sigma_0=0.
+\end{align}
+
+\paragraph{Shapiro--Keyser variant} \cite{shapiro1990}, a seeded 30\,\% of LOWs:
+\begin{itemize}
+\item the warm front continues as a bent-back front, with
+  $\vartheta(\sigma)=-10^\circ+\max(0,\sigma-1)\cdot150^\circ\!/r$ and length
+  $1.5\,S(0,0.2,s)+S(0.3,0.7,s)$. Past its bend ($\sigma>1$) it is kept apart: inside its
+  curl a point is on the cold side of one part and the warm side of another, so it has no
+  signed distance. It is wrapped in cloud on both sides instead (the cloud head):
+  $c_{Ns}\mathrel{+}=0.8\,G(|d_b|;0,0.25)\,\Sigma'$, $c_{As}\mathrel{+}=0.6\,G(|d_b|;0,0.5)\,\Sigma'$;
+\item the cold front is fractured, with $\sigma_0=0.4\,S(0.3,0.6,s)$;
+\item the cold front meets the warm front at a T-bone, with $\vartheta_0=-90^\circ$;
+\item there is no occlusion: $\ell_o=0$, and a warm seclusion $G(\rho;0,0.3)$ clears the core
+  for $s>0.7$.
+\end{itemize}
+
+\paragraph{Signed distances.}
+Every front is stored with its cold side on its left (the warm front from the triple point east,
+the cold front from its tip back to the triple point). For a point $\mathbf{q}$, let $\sigma^*$
+be the arc length of the closest point on the front. The signed distance, positive on the cold
+side, is
+\begin{equation}
+  d_f(\mathbf{q})=\pm\min_{\sigma}|\mathbf{q}-\boldsymbol{\gamma}_f(\sigma)|,
+\end{equation}
+except past either end, where it is the signed distance from the end segment's extended line:
+that crosses 0 smoothly, where the distance to the end point, signed by side, would jump. A
+point past an end overshoots it by $o_f$, measured along the front's direction there. The
+along-front tapers are
+\begin{equation}
+  T_f=\big(1-S(0.7\ell,\ell,\sigma^*)\big)\big(1-S(0,0.3,o_f)\big)
+\end{equation}
+for the fronts' own bands, and $P_f=1-S(0,1,o_f)$ for the broad zones they bound (the warm
+sector, the cold air), where which side of a front a point is on no longer means anything
+past its end. Points farther than 2.5 radii from a front's bounding box get $d_f=+\infty$
+without being measured: every rule gives nothing there.
+
+%--------------------------------------------------------------------
+\subsection{Genus rules}
+\label{sec:eq-rules}
+Each genus channel $g$ accumulates the contributions of all systems with a soft maximum,
+$c_g=1-\prod_i(1-c_{g,i})$, and is clamped to $[0,1]$. Distances are in units of the system's
+$r$. $\Sigma'=\Sigma(s)/P$ is the normalised intensity.
+
+\paragraph{Warm-front shield} \cite{carlson1980}. Let $\xi=d_w$ on the cold side
+($\xi\ge0$), with taper $T_w$ and edge softness $e=0.15$. Each layer is
+$c_g=C_g\,\Pi(\xi;\xi_0,\xi_1,e)\,T_w\,\Sigma'$, with:
+
+\begin{center}
+\begin{tabular}{lcccl}
+\toprule
+genus & $\xi_0$ & $\xi_1$ & $C_g$ & channel\\
+\midrule
+nimbostratus & 0.00 & 0.20 & 0.95 & A2\\
+altostratus  & 0.15 & 0.50 & 0.85 & A3\\
+cirrostratus & 0.45 & 0.85 & 0.70 & B2\\
+cirrus       & 0.80 & 1.20 & 0.55 & B1\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Cold front} \cite{browning1994}. A narrow Cb line on the front, with congestus in a
+band ahead of it on the warm side:
+\begin{align}
+  c_{\mathrm{conv}}&=0.9\,G(d_c;0,0.08)\,T_c\,\Sigma',&
+  \mathrm{depth}&=G(d_c;0,0.08)\,\big(1-0.5\,\sigma^*/\ell_c\big);\\
+  c_{\mathrm{conv}}&\mathrel{+}=0.5\,\Pi(-d_c;0.08,0.25,0.05)\,T_c\,\Sigma',&
+  \mathrm{depth}&\mathrel{+}=0.5\,\Pi(-d_c;0.08,0.25,0.05).
+\end{align}
+The anvil shelf is
+$\mathrm{shelf}=S(0.8,0.95,\mathrm{depth})$ wherever the convective cover exceeds 0.05. It is
+not yet stretched downwind as the hand-placed features' anvils are (\texttt{anvil\_spread}).
+
+\paragraph{Warm sector.} Overcast with drizzle near the warm front; stratocumulus elsewhere,
+mostly over sea. With $m$ the sea fraction:
+\begin{equation}
+  c_{St}=0.6\,G(d_w;0,0.4)\,W\,\Sigma',\qquad
+  c_{Sc}=(0.35+0.3\,m)\,W\,\Sigma',
+\end{equation}
+with soft edges at both fronts (the warm sector's stratus carries on a little under the warm
+front's nimbostratus: pre-frontal stratus):
+\begin{equation}
+  W=\big(1-S(-0.25,0.25,d_w)\big)\big(1-S(-0.25,0.25,d_c)\big)\,\big(1-S(2,2.5,\rho)\big)\,P_w\,P_c.
+\end{equation}
+
+\paragraph{Comma head and dry slot} \cite{carlson1980,browning1994}.
+\begin{align}
+  H&=G(x;0.3,0.9)\,G(y;0.6,0.5)\,S(0.3,0.6,s)\,\big(1-S(0.85,1,s)\big),\\
+  c_{Ns}&\mathrel{+}=0.8H,\quad c_{As}\mathrel{+}=0.6H,\quad c_{\mathrm{conv}}\mathrel{+}=0.3H,
+  \quad \mathrm{depth}\mathrel{+}=0.3H;\\
+  D&=G(x;-0.3,0.4)\,G(y;-0.6,0.5)\,S(0.2,0.4,s),\qquad
+  c_g\leftarrow c_g\,(1-0.9D).
+\end{align}
+The cloud head outlives the low's deepening (it lasts through the occlusion
+\cite{schultz2011}), so it follows its own life curve, not $\Sigma'$. The dry-slot factor $D$
+multiplies every genus channel.
+
+\paragraph{Post-frontal cold air.} Open-cell convection over sea, behind the cold front:
+\begin{equation}
+  Q=\Pi(d_c;0.2,2.0,0.2)\,m\,\Sigma'\,P_c:\qquad
+  c_{\mathrm{conv}}\mathrel{+}=0.45Q,\ \mathrm{depth}\mathrel{+}=0.3Q,\ c_{Sc}\mathrel{+}=0.3Q.
+\end{equation}
+
+\paragraph{Anticyclones} \cite{wood2012,klein1993}. Let $\rho$ be the distance from the centre in
+units of $r$, $T$ the climate temperature (\textdegree C) and $m$ the sea fraction.
+\begin{align}
+  \text{subsidence clearing:}\quad & c_g\leftarrow c_g\,\big(1-0.9\,\Sigma'\,G(\rho;0,0.6)\big)
+     \quad g\in\{\mathrm{conv},St,Sc,Ns,As,Ac\};\\
+  \text{stability proxy:}\quad & \Lambda=\Sigma'\,\big(1-S(14,26,T)\big)\,m\,
+     \Big(\tfrac12+\tfrac12 S(-0.2,0.6,x)\Big);\\
+  \text{Sc deck:}\quad & c_{Sc}\mathrel{+}=0.85\,\Lambda\,\Pi(\rho;0.5,1.6,0.3);\\
+  \text{St / fog near the coast:}\quad & c_{St}\mathrel{+}=0.7\,\Lambda\,
+     S(-200,-20,e_{\mathrm{elev}})\,\Pi(\rho;0.5,1.6,0.3);\\
+  \text{flank Ac:}\quad & c_{Ac}\mathrel{+}=0.35\,\Sigma'\,\Pi(\rho;1.0,1.6,0.2).
+\end{align}
+The factor $\frac12+\frac12S(\dots,x)$ biases the deck to the eastern flank. In the stability
+proxy, colder sea means stronger stability, about $+6\,\%$ cover per K \cite{klein1993}.
+
+\paragraph{Tropical cyclone.} With $r$ the distance in metres, $\vartheta$ the azimuth and
+$\alpha_b=15^\circ$ the band pitch angle:
+\begin{align}
+  \text{eye:}\quad & E=S(0.3R_m,0.6R_m,r),\qquad c_g\leftarrow E\,c_g\ \ \forall g;\\
+  \text{eyewall:}\quad & c_{\mathrm{conv}}\mathrel{+}=0.95\,G(r;R_m,0.5R_m)\,\Sigma',\quad
+     \mathrm{depth}\mathrel{+}=G(r;R_m,0.5R_m);\\
+  \text{spiral bands:}\quad & B=\Big[\tfrac12+\tfrac12\cos\!\Big(2\vartheta-
+     \frac{2\,h\ln(r/R_m)}{\tan\alpha_b}\Big)\Big]^3G(r;0,4R_m)\,S(1.5R_m,2R_m,r),\\
+  & c_{\mathrm{conv}}\mathrel{+}=0.6B\,\Sigma',\quad \mathrm{depth}\mathrel{+}=0.7B;\\
+  \text{CDO and outflow:}\quad & c_{Cs}\mathrel{+}=0.8\,G(r;0,3R_m)\,\Sigma'.
+\end{align}
+
+\paragraph{Air-mass convection, the ITCZ and the genesis proxy.} With humidity $H\in[0,1]$:
+\begin{align}
+  I&=S(0.4,0.8,H)\,S(20,30,T),\\
+  c_{\mathrm{conv}}&\mathrel{+}=0.4\,I\,\big(0.5+0.5\,G(\phi;\phi_{\mathrm{ITCZ}},6^\circ)\big),\qquad
+  \mathrm{depth}=\max\big(\mathrm{depth},\,I\big),\\
+  \mathrm{GP}&=\big|\sin\phi\big|^{3/2}\,H^3\,S(24,28,T)\,m.
+\end{align}
+GP is a stand-in for the Camargo et al.\ index \cite{camargo2007}: $|\eta|\propto|\sin\phi|$,
+there is no shear term, and sea temperature is replaced by the climate temperature.
+
+\paragraph{Cut-off lows.} No fronts: a blob of rain cloud and showers,
+$c_{Ns}\mathrel{+}=0.5\,G(\rho;0,0.8)\Sigma'$, $c_{As}\mathrel{+}=0.4\,G(\rho;0,1.2)\Sigma'$,
+$c_{\mathrm{conv}}\mathrel{+}=0.3\,G(\rho;0,1)\Sigma'$, depth $\ge0.5\,G(\rho;0,1)$.
+
+\paragraph{Climate terms (kept from today's \texttt{weather.py}).} Let $W(H)$ be the existing
+wetness smoothstep and $\mathbf{v}_s$ the surface wind of \S\ref{sec:eq-wind}:
+\begin{align}
+  F_{\mathrm{clim}}&=\big(d_f+(1-d_f)W(H)\big)\big(1-D_{\mathrm{des}}\,S_{\mathrm{hot}}\,S_{\mathrm{dry}}\big),\\
+  c_{\mathrm{oro}}&=O\tanh\!\left(\frac{e(\mathbf{q})-e(\mathbf{q}-\Delta\,\hat{\mathbf{v}}_s)}
+     {\Delta\,s_0}\right)W(H),\\
+  c_{\mathrm{conv}}&=\operatorname{clamp}\Big(C\big(Z(\phi)F_{\mathrm{clim}}+c_{\mathrm{oro}}+M\,m
+     +A\,\operatorname{fbm}(\mathbf{q}_{\mathrm{warped}})+b\big)+\textstyle\sum c_{\mathrm{conv},i},\,0,1\Big)
+     \cdot E\cdot(1-\text{clearings}),\\
+  C(x)&=\operatorname{smoothstep}(x_e-w,\,x_e+w,\,x),\qquad x_e=0.30,\ w=0.10.
+\end{align}
+The background fair-weather cover follows the belts:
+\begin{equation}
+  Z(\phi)=0.10+0.55\,G(\phi;\phi_{\mathrm{ITCZ}},\phi_H/3)+0.45\,G(|\phi|;\phi_{st},12^\circ).
+\end{equation}
+The contrast $C$ makes the background clear or cloudy rather than a thin cover everywhere:
+point cloud amounts are U-shaped, mostly clear or overcast, at small viewing areas
+\cite{usaf_cloudfree}. Its bias $b$ (\texttt{WeatherSpec.cloud\_amount}, 0) and half-width $w$
+(\texttt{cloud\_contrast}) are the user's knobs. The constants were tuned on the Earth-scale
+planet (\texttt{scripts/weather\_report.py}, 5 seeds by 5 days): the drawn low cloud's mean is
+0.41--0.43, under ISCCP's total cloud amount of 0.675 \cite{rossow1999}, which counts the high
+and middle clouds not drawn here; 37--39\,\% of the planet is clear, 32--35\,\% overcast, and
+70--73\,\% of the subtropics (20--35$^\circ$, the Hadley cells' descending branch) clear. Before,
+the floor of 0.15 and no contrast left 0.1--0.5 of cover over 69\,\% of the planet.
+The mesoscale texture's coordinates are wound by each system, most at its centre, so it curls
+into spiral arms round the lows: a rotation of $\mathbf{q}$ about the centre $\mathbf{c}$ by
+\begin{equation}
+  \alpha=-h\,\Omega_k\,\Sigma'\exp\!\big(-(\angle(\mathbf{q},\mathbf{c})/w)^2\big),\quad
+  w=\rho_k\,r/a,
+\end{equation}
+within $2w$, with $(\Omega_k,\rho_k)$ = $(3.4,1.6)$ for a LOW, $(2,1.2)$ for a CUTOFF,
+$(5,0.8)$ for a TROPICAL and $(-1,1.6)$ for a HIGH (anticyclonic). The same texture
+modulates every system layer, so decks and shields break up as the cumulus do, with no
+stencilled edges:
+\begin{equation}
+  c_g\leftarrow\operatorname{clamp}\big(c_g\cdot\operatorname{clamp}(1+2A\operatorname{fbm},0,2),0,1\big).
+\end{equation}
+
+\paragraph{Where the layers go on this branch.} The cloud renderer here has two families
+(convective and stratiform) and the cirrus sheet. The convective family reads the convective
+coverage, depth and shelf; the stratiform sheet reads $\max(c_{St},c_{Sc})$; the cirrus sheet's
+cover is its background (anvils over the wet tropics $0.45\,G(\phi;\phi_{\mathrm{ITCZ}},\phi_H/2)$,
+streaks along the meandering jets $0.3\,G(y;0,w_j)$, a floor of 0.02, scaled by
+$0.4+0.6\,W(H)$) combined with $\max(c_{Ci},c_{Cc})$ by the soft maximum, plus its
+mesoscale texture and \texttt{cirrus\_amount}, through the same contrast at
+$x_e=0.35$: patches and streaks, not a veil. The other layers are computed for the eight-genus renderer.
+
+\paragraph{Coverage to fbm shift (unchanged).} For each genus table,
+\begin{equation}
+  \operatorname{shift}_g(c)=\theta_{lo}-Q_{\mathrm{peaks}}(1-c),
+\end{equation}
+where $Q$ is the quantile of the sorted column peaks. This keeps the near field and the far
+deck consistent.
+
+%--------------------------------------------------------------------
+\subsection{Local presets}
+\label{sec:eq-pins}
+A pin is $(\phi^*,\lambda^*,\text{preset},\vartheta_h)$, all at time $t$. Each preset fixes an
+object kind, a target stage $s^*$ and a role point $\mathbf{X}$ in the object's local frame
+(units of $r$; $\boldsymbol\gamma_f(\cdot)$ by share of arc length from the triple point):
+
+\begin{center}
+\small
+\begin{tabular}{llcp{6.3cm}}
+\toprule
+preset & object & $s^*$ & role point $\mathbf{X}$\\
+\midrule
+FAIR\_HIGH & HIGH, $1.2\,r_c$ & 0.5 & $(0,0)$\\
+WARM\_FRONT\_APPROACH & LOW & 0.4 & $\boldsymbol\gamma_w(0.5)+0.3\,\mathbf{n}_w$ (As overhead)\\
+COLD\_FRONT & LOW & 0.4 & $\boldsymbol\gamma_c(0.3)$ (depth $>0.8$)\\
+SQUALL\_LINE & LOW (squall) & 0.4 & $\boldsymbol\gamma_c(0.3)-0.17\,\mathbf{n}_c$ (the line ahead)\\
+OVERCAST\_DRIZZLE & LOW & 0.4 & $\boldsymbol\gamma_w(0.3)-0.2\,\mathbf{n}_w$ (warm sector)\\
+HURRICANE & TROPICAL & 0.5 & $(0,0)$ (its eye)\\
+THUNDERSTORMS & none & --- & $I\leftarrow\max(I,G(\angle;0,0.3\,r_c/a))$, cover $\mathrel{+}=0.7\,G$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Here $\mathbf{n}_f$ is the unit normal toward the front's cold side. A squall low's band ahead
+of its cold front is a cumulonimbus line, $c_{\mathrm{conv}}\mathrel{+}=0.85\,\Pi(-d_c;0.08,0.25,0.05)\,T_c\,\Sigma'$
+with depth $\Pi(\cdot)$, where an ordinary low has congestus. Two rules help a pin's genus
+dominate as observed: stable air calms the fair-weather background (not the systems' own
+convection) under the warm front's shield and in the warm sector,
+\begin{equation}
+  c_{\mathrm{bg}}\leftarrow c_{\mathrm{bg}}\big(1-0.8\max(c_{Ns},c_{As})_{\mathrm{shield}}\big)\big(1-0.8\,W\,\Sigma'\big),
+\end{equation}
+and free systems keep the full $0.75(\varrho_i+\varrho_k)$ from a pinned one whatever their
+signs (a free high next to a pinned cold front would thin its line and lay its deck over it).
+Pinned systems are always kept.
+
+\paragraph{Placing the pinned object.} The centre $\mathbf{c}$ is solved so that the pin's
+gnomonic coordinates round it, in its heading frame (\S\ref{sec:eq-rules}), are $\mathbf{X}$:
+\begin{equation}
+  \mathbf{X}\big(\mathbf{p}^*;\mathbf{c}\big)=\mathbf{X}^*.
+\end{equation}
+It starts at the exponential map $\exp_{\mathbf{p}^*}(-r\,\mathsf{R}(\vartheta_h)\mathbf{X}^*)$
+and takes Newton steps of tangent moves of $\mathbf{c}$, with a finite-difference Jacobian
+(steps of $0.01\,r$). A system may span a good share of a small planet, and near a pole a fixed
+point iteration diverges: moving the centre east also turns its frame. The track is then
+inverted so that the object is at $\mathbf{c}$ with stage $s^*$ at time $t$, with
+$\tau=s^*T$ and the drifts of \S\ref{sec:eq-objects}:
+\begin{equation}
+  t_b=t-\tau,\qquad
+  \phi_0=\phi_c-\dot\phi\,\tau,\qquad
+  \lambda_0=\lambda_c-\dot\lambda\,\tau-\tfrac12\ddot\lambda\,\tau^2.
+\end{equation}
+A pinned HIGH stands still (as a blocking high, life $3\,\bar T_{\mathrm{LOW}}$), so the fair spot
+stays fair. A TROPICAL pin is accepted even if its worked-back genesis point is over land:
+the storm is then taken as already mature at the pin, and it does not decay.
+
+\paragraph{Refitting the jets.} Write each wave as
+$a_m\sin\theta_m+b_m\cos\theta_m$ with $\theta_m=k_m\lambda-\varpi_m t$. A pinned LOW asks the
+nearest eddy-driven jet of its hemisphere for a trough upstream of it,
+$\lambda_{\mathrm{tr}}=\lambda_c-0.25\lambda_E/(a\cos\phi_c)$, with target meander
+$-A_{\mathrm{tot}}$. A pinned HIGH asks for a ridge, $+A_{\mathrm{tot}}$ at $\lambda_c$. The
+coefficients solve the ridge regression
+\begin{equation}
+  \min_{a,b}\ \sum_{i\in\text{pins}}\big(g(\lambda_i)-g_i^{\mathrm{target}}\big)^2
+  +\mu\sum_m\big[(a_m-a_m^0)^2+(b_m-b_m^0)^2\big],\qquad \mu=0.1,
+\end{equation}
+which is linear in $(a,b)$, so it has a closed-form solution. Both the amplitudes
+$A_m=\sqrt{a_m^2+b_m^2}$ and the phases change, rescaled so that
+$\sum_m A_m\le1.5\,A_{\mathrm{tot}}$.
+
+\paragraph{Feasibility (raise, never move).}
+\begin{align}
+  \text{HURRICANE:}\quad & \text{ocean},\ |\phi^*|\in\text{TC band}\pm2^\circ,\
+     e(\mathbf{p}^*)<-100\,\mathrm{m},\ T(\mathbf{p}^*)\ge24^\circ\mathrm{C};\\
+  \text{LOW presets:}\quad & |\phi^*|\in[\phi_{b,lo}-L_R^\circ,\ \phi_{b,hi}+L_R^\circ]
+     \ \text{for some storm band } b;\\
+  \text{THUNDERSTORMS:}\quad & S(0.4,0.8,H)\,S(20,30,T)\ge0.3;\\
+  \text{two pins:}\quad & \operatorname{gc}(\mathbf{c}_i,\mathbf{c}_k)\ge
+     \begin{cases}0.75(r_i+r_k) & \text{same sign,}\\ 0.75\min(r_i,r_k) & \text{opposite;}\end{cases}
+\end{align}
+unless both pins ask for a LOW and their centres fall within $0.6\,r$: then they share it (a
+cold front and the squall line ahead of it). The error names the preset, the place and the
+reason (no ocean, latitude, land, cold sea, outside the storm track, dry air, too close).
+
+%====================================================================
+\section{Open points}
+\begin{itemize}
+\item Warm-front distances and slopes vary by source (1:100--1:300). We tune them on preview
+  maps within that range.
+\item The GP-like genesis proxy uses the terrain climate fields, not real SST or shear.
+\item The content of \cite{hillaire2016,bauer2019,harris2003,browning1990} was not checked
+  beyond the bibliographic data.
+\end{itemize}
+
+\bibliographystyle{plainnat}
+\bibliography{synoptic-weather}
+\end{document}

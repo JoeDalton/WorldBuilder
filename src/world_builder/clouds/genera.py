@@ -1,9 +1,9 @@
 """
 A planet's low and middle clouds by genus: stratus, stratocumulus,
 nimbostratus, altostratus, altocumulus, and the convective
-continuum from fair-weather cumulus through congestus to cumulonimbus. A
-PLACEHOLDER for the weather (issue #8): its maps are features laid out
-around one point.
+continuum from fair-weather cumulus through congestus to cumulonimbus,
+drawn from the weather (:func:`weather.synoptic_cube`), with optional
+hand-placed features over it.
 
 The genera (:data:`GENUS_PRESETS`, :attr:`GeneraSpec.genera`), each one
 density field over its own slab, which the raymarch marches as one union
@@ -26,9 +26,13 @@ density field over its own slab, which the raymarch marches as one union
   (:func:`anvil_spread`).
 
 The maps (:func:`genus_planes`, cube maps as the weather's) are the
-weather's own coverage for the fair-weather cumulus everywhere, plus, around
-:attr:`GeneraSpec.focus`, the features of :attr:`GeneraSpec.features`; each
-other genus's coverage is its own features' (:func:`genus_coverage`).
+weather's own: its convective coverage, depth and anvil shelf, and
+(:data:`WEATHER_GENERA`, :func:`genus_coverage`) the stratus's coverage its
+stratus, stratocumulus and nimbostratus (a family genus, the stratus
+thickening into nimbostratus where the weather says: :func:`genus_share`,
+:data:`STRATUS_FAMILY`), the cirrostratus's its own; the other genera are
+their features' alone; plus, around :attr:`GeneraSpec.focus`, the features of
+:attr:`GeneraSpec.features`.
 
 **Coverage to the field.** The share of columns holding cloud depends on
 how tall they may grow, so the convective field's fbm shift is tabulated by
@@ -52,6 +56,7 @@ from numpy.typing import ArrayLike
 
 from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.noise import (
+    FAMILY_SHARE_CHANNEL,
     MIE_ASYMMETRY_ICE,
     DensityField,
     _smoothstep,
@@ -59,6 +64,7 @@ from world_builder.clouds.noise import (
     sphere_column_peaks,
 )
 from world_builder.clouds.weather import (
+    SYNOPTIC_CHANNELS,
     WEATHER_SIZE,
     WeatherSpec,
     cirrus_cover_map,
@@ -66,9 +72,10 @@ from world_builder.clouds.weather import (
     coverage_to_shift,
     sample_cube,
     shift_table,
-    stream_function,
-    stream_table,
-    stream_vortices,
+    synoptic_cube,
+)
+from world_builder.clouds.weather import (
+    upper_stream as weather_upper_stream,
 )
 from world_builder.sky.starfield import cube_directions
 from world_builder.terrain.chart import TangentFrame, latlon
@@ -169,12 +176,16 @@ GENUS_PRESETS = {
         CloudType.STRATUS,
         ("A", 0),
         far_shadow=1.0,
+        # A family (noise.FAMILY_*, STRATUS_FAMILY): the weather's stratus
+        # thickening into nimbostratus where it says so; its knobs below are
+        # the stratus's, over the cloud's own height
         recipe=dict(
             noise_kind="value",
             stretch=3.0,
             profile=(0.03, 0.3, False),
             erosion=(-1.5, 1.0),
             erosion_base=0.4,
+            family=True,
         ),
         field=dict(
             noise_scale=(0.0004, 0.0004, 0.0004),
@@ -182,6 +193,9 @@ GENUS_PRESETS = {
             edge_softness=1.2,
             top_erosion=0.1,
             top_exponent=2.0,
+            # The nimbostratus's (its thick end); the stratus's 0.05 at
+            # share 0 (noise.FAMILY_THIN_DENSITY)
+            density=0.08,
         ),
     ),
     # Lumpy, tessellated grey-white cells with dark parts (WMO: "always some
@@ -331,6 +345,15 @@ GENUS_PRESETS = {
     ),
 }
 
+
+#: The stratus's family slab (:attr:`noise.GenusField.family`): from this
+#: far under :attr:`GeneraSpec.stratus_altitude`, this thick (0.6-2.15 km
+#: for its 900 m), the nimbostratus's at the thick end, the stratus's 500 m
+#: from its base at the thin end (noise.FAMILY_THIN_BASE, FAMILY_THIN_TOP).
+#: Under the convective clouds' 2.2 km base: one genus a band, each band
+#: its own loop in the march (a genus sharing a band with another made it
+#: march both at every sample: 2-6 ms).
+STRATUS_FAMILY = (300.0, 1550.0)
 
 #: The high layer's slab (base, thickness) above sea level, metres: its own
 #: sky band above the union of the genera (the convective clouds' top, 10.5
@@ -507,6 +530,10 @@ class GeneraSpec:
         (:func:`weather.cirrus_cover_map`), not only its features: the march
         draws the planet's cirrus (``PlanetClouds(cirrus=True)`` sets it, the
         demo's ``--cirrus``); False = its features alone (the showcase)
+    :ivar weather_nimbostratus: the stratus thickens into the weather's
+        nimbostratus (:data:`WEATHER_GENERA`); False = the weather's stratus
+        and stratocumulus alone (``CloudSettings.weather_nimbostratus``, off
+        under the high preset)
     """
 
     weather: WeatherSpec
@@ -526,6 +553,7 @@ class GeneraSpec:
     high: tuple[str, ...] = tuple(HIGH_CHANNELS)
     high_slab: tuple[float, float] = HIGH_SLAB
     cirrus_weather: bool = False
+    weather_nimbostratus: bool = True
 
 
 def weather_cirrus(weather: WeatherSpec) -> GeneraSpec:
@@ -550,7 +578,8 @@ def high_genera(spec: GeneraSpec, covered: bool = False) -> list[tuple[str, int]
     """The high genera of *spec* (:attr:`GeneraSpec.high`) and their channels
     of coverage cube B.
 
-    :param covered: only those a feature covers, as the march takes them
+    :param covered: only those a feature or the weather covers
+        (:attr:`GeneraSpec.cirrus_weather`), as the march takes them
         (:func:`genus_specs`' *covered*): with none it compiles no high
         layer at all (``march.march_fragment``)
     :returns: (name, channel) each, in :attr:`GeneraSpec.high`'s order
@@ -561,6 +590,7 @@ def high_genera(spec: GeneraSpec, covered: bool = False) -> list[tuple[str, int]
         if not covered
         or any(f.genus == name for f in spec.features)
         or (name == "cirrus" and spec.cirrus_weather)
+        or _weather_covers(spec, name)
     ]
 
 
@@ -586,13 +616,65 @@ def high_jet(spec: GeneraSpec) -> np.ndarray:
     return axis / norm
 
 
+#: The genera the weather covers, and the channels of
+#: :func:`weather.synoptic_cube` each takes (the larger): the stratus its
+#: stratus, stratocumulus and nimbostratus (a family, the nimbostratus its
+#: thick end: :data:`FAMILY_SHARES`; without
+#: :attr:`GeneraSpec.weather_nimbostratus`, the first two alone), the
+#: cirrostratus its own (the cirrus cover takes its cirrus and
+#: cirrocumulus: :data:`weather.CIRRUS_SHEET_GENERA`). The others are their
+#: features' alone: each genus the march draws costs it as a full one
+#: wherever it is (+0.65 ms at 2560 x 1440, :func:`genus_specs`; Task 7 of
+#: the synoptic weather plan merged the rest into these).
+WEATHER_GENERA = {
+    "stratus": ("stratus", "stratocumulus", "nimbostratus"),
+    "cirrostratus": ("cirrostratus",),
+}
+#: A family genus's thick end: the weather's channel whose share of its
+#: :data:`WEATHER_GENERA` channels it reads (:func:`genus_share`).
+FAMILY_SHARES = {"stratus": "nimbostratus"}
+#: A weather genus channel under this everywhere holds no cloud
+#: (:func:`has_coverage`): the march skips the genus.
+WEATHER_COVER_FLOOR = 0.01
+
+
+def _weather_on(spec: GeneraSpec, name: str) -> bool:
+    """Whether genus *name* of *spec* takes the weather's cover: a high
+    genus with :attr:`GeneraSpec.cirrus_weather`, another with
+    :attr:`GeneraSpec.background`."""
+    return spec.cirrus_weather if name in HIGH_CHANNELS else spec.background
+
+
+def _weather_names(spec: GeneraSpec, name: str) -> tuple[str, ...]:
+    """The weather's channels genus *name* of *spec* takes
+    (:data:`WEATHER_GENERA`), the nimbostratus only with
+    :attr:`GeneraSpec.weather_nimbostratus`."""
+    names = WEATHER_GENERA.get(name, ())
+    if not spec.weather_nimbostratus:
+        names = tuple(n for n in names if n != "nimbostratus")
+    return names
+
+
+def _weather_covers(spec: GeneraSpec, name: str) -> bool:
+    """Whether the weather holds genus *name* of *spec* anywhere
+    (:data:`WEATHER_GENERA`, over :data:`WEATHER_COVER_FLOOR`)."""
+    names = _weather_names(spec, name)
+    if not names or not _weather_on(spec, name):
+        return False
+    picks = [SYNOPTIC_CHANNELS.index(n) for n in names]
+    return bool(synoptic_cube(spec.weather)[..., picks].max() > WEATHER_COVER_FLOOR)
+
+
 def has_coverage(spec: GeneraSpec, name: str) -> bool:
     """Whether genus *name* of *spec* holds cloud anywhere: the primary one
-    (the weather's) always; another where a feature is its
-    (:func:`genus_coverage`; the placeholder's maps are features alone)."""
+    (the weather's) always; another where the weather's channels of it
+    (:data:`WEATHER_GENERA`, with :attr:`GeneraSpec.background`) or a
+    feature is its (:func:`genus_coverage`)."""
     if GENUS_PRESETS[name].coverage[0] == "weather":
         return True
-    return any(f.genus == name for f in spec.features)
+    if any(f.genus == name for f in spec.features):
+        return True
+    return _weather_covers(spec, name)
 
 
 def genus_specs(
@@ -620,6 +702,9 @@ def genus_specs(
             base = altitude
         elif preset.slab is None and preset.cloud_type is CloudType.STRATUS:
             base = spec.stratus_altitude
+            if (preset.recipe or {}).get("family"):
+                below, thickness = STRATUS_FAMILY
+                base -= below
         out.append((name, preset.cloud_type, base, thickness, preset.coverage))
     return out
 
@@ -649,9 +734,9 @@ def _frame(centre: np.ndarray) -> TangentFrame:
 
 
 def upper_wind_at(spec: WeatherSpec, centre: np.ndarray) -> np.ndarray:
-    """The upper wind at a direction: the cirrus's (the jets, swirled by
-    the weather systems: :func:`weather.stream_function`), which blows
-    along its stream function's contours, ``up x grad psi``.
+    """The upper wind at a direction: the cirrus's (the meandering jets,
+    swirled by the weather systems: :func:`weather.upper_stream`), which
+    blows along its stream function's contours, ``up x grad psi``.
 
     :param centre: (3,) unit direction
     :returns: (east, north), the jets' fastest 1
@@ -667,7 +752,7 @@ def upper_wind_at(spec: WeatherSpec, centre: np.ndarray) -> np.ndarray:
         ]
     )
     probes /= np.linalg.norm(probes, axis=1, keepdims=True)
-    psi = stream_function(stream_table(spec), stream_vortices(spec), probes)
+    psi = weather_upper_stream(spec, probes)
     grad_east = (psi[0] - psi[1]) / (2.0 * _WIND_STEP)
     grad_north = (psi[2] - psi[3]) / (2.0 * _WIND_STEP)
     return np.array([-grad_north, grad_east])
@@ -688,7 +773,7 @@ def _tangent_east_north(dirs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 def upper_stream(spec: GeneraSpec, dirs: ArrayLike) -> np.ndarray:
     """The upper wind's stream function at unit *dirs*, metres: the
-    weather's (:func:`weather.stream_function`), or with
+    weather's (:func:`weather.upper_stream`), or with
     :attr:`GeneraSpec.wind` set, a uniform wind's, that wind at the focus
     (``psi = speed * R * dirs . (axis x up)``), the jets' fastest 1. The
     wind blows along its contours, ``up x grad psi`` (:func:`upper_wind_at`).
@@ -697,8 +782,7 @@ def upper_stream(spec: GeneraSpec, dirs: ArrayLike) -> np.ndarray:
     """
     dirs = np.asarray(dirs, dtype=np.float64).reshape(-1, 3)
     if spec.wind is None:
-        weather = spec.weather
-        return stream_function(stream_table(weather), stream_vortices(weather), dirs)
+        return weather_upper_stream(spec.weather, dirs)
     frame = TangentFrame.at(*spec.focus)
     up = np.asarray(frame.up, dtype=np.float64)
     wind = np.asarray(spec.wind, dtype=np.float64)
@@ -784,17 +868,41 @@ def anvil_spread(
     return 1.0 - _smoothstep(*_ANVIL_REACH, np.hypot(x, y))
 
 
+def _weather_channels(
+    spec: GeneraSpec, names: tuple, size: int, on: bool
+) -> np.ndarray:
+    """The weather's genus channels *names* (:data:`weather.SYNOPTIC_CHANNELS`)
+    at the cube's directions, smooth, upsampled from its own map; zeros
+    unless *on*.
+
+    :returns: (6 * size * size, len(names)) float64
+    """
+    if not on:
+        return np.zeros((6 * size * size, len(names)))
+    dirs = cube_directions(size).reshape(-1, 3)
+    picks = [SYNOPTIC_CHANNELS.index(n) for n in names]
+    return sample_cube(synoptic_cube(spec.weather)[..., picks], dirs).astype(np.float64)
+
+
 @functools.cache
 def genus_coverage(spec: GeneraSpec, name: str, size: int = GENUS_SIZE) -> np.ndarray:
     """A genus's own coverage map (a genus other than the convective one):
-    its features' (:attr:`Feature.genus` *name*), each its coverage over its
-    core, fading out over its outer third; 0 elsewhere (cached per process).
+    the weather's (its channels of :func:`weather.synoptic_cube`,
+    :data:`WEATHER_GENERA`, with :attr:`GeneraSpec.background`, or for a
+    high genus :attr:`GeneraSpec.cirrus_weather`), and over
+    it its features' (:attr:`Feature.genus` *name*), each its coverage over
+    its core, fading out over its outer third (cached per process).
 
     :returns: (6, size, size) float32, the layout of
         :func:`sky.starfield.cube_directions`
     """
     dirs = cube_directions(size).reshape(-1, 3)
-    cover = np.zeros(len(dirs))
+    names = _weather_names(spec, name)
+    if names:
+        on = _weather_on(spec, name)
+        cover = _weather_channels(spec, names, size, on).max(axis=1)
+    else:
+        cover = np.zeros(len(dirs))
     for f, centre, angle in _feature_dirs(spec):
         if f.genus != name:
             continue
@@ -805,21 +913,43 @@ def genus_coverage(spec: GeneraSpec, name: str, size: int = GENUS_SIZE) -> np.nd
 
 
 @functools.cache
-def genus_planes(spec: GeneraSpec, size: int = GENUS_SIZE) -> np.ndarray:
-    """The convective genus's maps as cube maps (cached per process).
+def genus_share(spec: GeneraSpec, name: str, size: int = GENUS_SIZE) -> np.ndarray:
+    """A family genus's thick end's share (:data:`FAMILY_SHARES`): its
+    channel's share of the genus's weather channels (0 where they hold
+    none), the march's depth slot for it (``genusWeatherAt``'s z; cached per
+    process).
 
-    :returns: (6, size, size, 4) float32: the convective coverage (the
-        weather's, smooth, upsampled from its own map), the convective depth,
-        the stratus's coverage (:func:`genus_coverage`) and the anvil
-        shelf's spread, the layout of :func:`sky.starfield.cube_directions`
+    :returns: (6, size, size) float32 in [0, 1]
+    """
+    names = _weather_names(spec, name)
+    if FAMILY_SHARES[name] not in names:
+        return np.zeros((6, size, size), dtype=np.float32)
+    channels = _weather_channels(spec, names, size, _weather_on(spec, name))
+    thick = channels[:, names.index(FAMILY_SHARES[name])]
+    total = channels.sum(axis=1)
+    share = np.where(total > 1e-6, thick / np.maximum(total, 1e-6), 0.0)
+    return share.reshape(6, size, size).astype(np.float32)
+
+
+@functools.cache
+def genus_planes(spec: GeneraSpec, size: int = GENUS_SIZE) -> np.ndarray:
+    """The convective genus's maps as cube maps (cached per process): the
+    weather's (:func:`weather.coverage_map` and
+    :func:`weather.synoptic_cube`, smooth, upsampled from their own maps),
+    the features over them.
+
+    :returns: (6, size, size, 4) float32: the convective coverage, the
+        convective depth, the stratus's coverage (:func:`genus_coverage`) and
+        the anvil shelf's spread, the layout of
+        :func:`sky.starfield.cube_directions`
     """
     dirs = cube_directions(size).reshape(-1, 3)
     convective = sample_cube(coverage_map(spec.weather), dirs).astype(np.float64)
     if not spec.background:
         convective = np.zeros(len(dirs))
-    depth = np.zeros(len(dirs))
+    weather = _weather_channels(spec, ("depth", "shelf"), size, spec.background)
+    depth, shelf = weather[:, 0], weather[:, 1]
     stratiform = genus_coverage(spec, "stratus", size).reshape(-1)
-    shelf = np.zeros(len(dirs))
     for f, centre, angle in _feature_dirs(spec):
         if f.genus not in CONVECTIVE_SPECIES:
             continue  # a map of its own (genus_coverage)
@@ -913,21 +1043,48 @@ def genus_cube(
 def coverage_cube(
     spec: GeneraSpec, cube: str = "A", size: int = GENUS_SIZE
 ) -> np.ndarray:
-    """A coverage cube of the union march: each genus of *spec* whose
-    coverage is a channel of *cube* (:attr:`GenusPreset.coverage`) has its
-    coverage map there (:func:`genus_coverage`: its own features'), and cube
-    B the high genera's in channels 1-3 (:data:`HIGH_CHANNELS`), the
-    others' channels 0. The shift comes from each genus's own table
-    (:func:`genus_weather_at`, ``genusShift`` on the GPU).
+    """A coverage cube of the union march: each genus of *spec* that holds
+    cloud (:func:`has_coverage`) whose coverage is a channel of *cube*
+    (:attr:`GenusPreset.coverage`) has its coverage map there
+    (:func:`genus_coverage`), a family its share in
+    :data:`noise.FAMILY_SHARE_CHANNEL` (:func:`genus_share`), and cube B
+    the high genera's in channels 1-3 (:data:`HIGH_CHANNELS`), the others'
+    channels 0. The shift comes from
+    each genus's own table (:func:`genus_weather_at`, ``genusShift`` on the
+    GPU).
 
     :param cube: ``"A"`` or ``"B"``
     :returns: (6, size, size, 4) float32
+    :raises ValueError: two genera holding cloud share a channel (the
+        stratus's family drawing the weather's nimbostratus, and a
+        nimbostratus feature)
     """
     out = np.zeros((6, size, size, 4), dtype=np.float32)
+    used: dict[int, str] = {}
     for name in spec.genera:
         source, channel = GENUS_PRESETS[name].coverage
-        if source == cube:
-            out[..., channel] = genus_coverage(spec, name, size)
+        if source != cube or not has_coverage(spec, name):
+            continue
+        # A family whose thick end the weather draws: its share in
+        # FAMILY_SHARE_CHANNEL (the plain nimbostratus's)
+        sharing = (
+            name in FAMILY_SHARES
+            and FAMILY_SHARES[name] in _weather_names(spec, name)
+            and _weather_on(spec, name)
+        )
+        for c in (channel, FAMILY_SHARE_CHANNEL) if sharing else (channel,):
+            if c in used:
+                raise ValueError(
+                    f"genera {used[c]!r} and {name!r} both hold cloud in channel "
+                    f"{c} of coverage cube {cube}: the stratus's family takes the "
+                    "nimbostratus's channel for the weather's nimbostratus (drop "
+                    "the nimbostratus features, or the weather's: "
+                    "weather_nimbostratus=False or background=False)"
+                )
+            used[c] = name
+        out[..., channel] = genus_coverage(spec, name, size)
+        if sharing:
+            out[..., FAMILY_SHARE_CHANNEL] = genus_share(spec, name, size)
     if cube == "B":
         # The high genera's (channels 1-3), those a feature covers
         for name, channel in high_genera(spec, covered=True):

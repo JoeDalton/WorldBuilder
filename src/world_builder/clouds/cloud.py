@@ -25,7 +25,13 @@ from world_builder.clouds.noise import (
     delta_eddington,
     field_offset,
 )
-from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
+from world_builder.quality import (
+    REBUILD,
+    RESTART,
+    QualityLevel,
+    QualitySettings,
+    knob,
+)
 
 #: Most distance bands of the march's detail (each a detail level of a
 #: genus, plus its far level): they fit ``DETAIL_LEVELS``.
@@ -234,6 +240,18 @@ class CloudSettings(QualitySettings):
     :ivar octave_bands: the march's distance bands before the deck's far field,
         each twice as far as the last. Rebuild
     :ivar reflected: drawn in the ocean's reflection. Live
+    :ivar light_refresh_growth: the march's light (the sun's colour through
+        the air, twilight, eclipses: cloudSunAndSky) is taken anew at a cloud
+        sample once the ray is this many times farther than where it was
+        last taken (and at least :attr:`light_refresh_min` farther): a far
+        cloud behind a near one gets its own light, not the near one's. 0:
+        once a pixel, at its first cloud. Live
+    :ivar light_refresh_min: the least distance between two takes, metres on
+        a 600 km planet (scaled by the planet's radius). Live
+    :ivar weather_nimbostratus: the weather's nimbostratus drawn (its
+        stratus thickening into it, genera.GeneraSpec.weather_nimbostratus):
+        off under the high preset, where a front's rain clouds cost 2-6 ms.
+        Restart
     """
 
     march_steps: int = knob(
@@ -297,6 +315,38 @@ class CloudSettings(QualitySettings):
         "In reflections",
         help="Draw the clouds in the sea's reflection (about 1-1.7 ms).",
     )
+    light_refresh_growth: float = knob(
+        1.4,
+        "Light along the view",
+        choices={
+            "Once a pixel": 0.0,
+            "Coarse (2x)": 2.0,
+            "1.6x": 1.6,
+            "1.4x": 1.4,
+            "Fine (1.25x)": 1.25,
+        },
+        help="How often the clouds' light (the sun's colour, twilight) is taken "
+        "again along a view ray: each time the ray is this many times farther. "
+        "Far clouds behind near ones get their own sunset colour; finer costs "
+        "a little more where a ray crosses many clouds.",
+    )
+    light_refresh_min: float = knob(
+        2000.0,
+        "Light refresh distance",
+        unit="m",
+        range=(100.0, 50000.0),
+        advanced=True,
+        help="The least distance between two takes of the clouds' light along a "
+        "ray, on a 600 km planet (scaled by the planet's size).",
+    )
+    weather_nimbostratus: bool = knob(
+        True,
+        "Rain clouds",
+        RESTART,
+        help="The weather's nimbostratus: its stratus thickening into a dark "
+        "rain cloud up to 2 km over fronts and lows (2-6 ms where they are in "
+        "view). Applies when the clouds are next built.",
+    )
 
     LABEL: ClassVar = "Clouds"
     # Saved by label: "Quarter", "Half" and "Full" keep their blocks.
@@ -309,18 +359,23 @@ class CloudSettings(QualitySettings):
             "reflected": False,
             "march_steps": 24,
             "march_block": (4, 4),
+            "weather_nimbostratus": False,
+            "light_refresh_growth": 2.0,
         },
         QualityLevel.MID: {
             "march_scale": 2.0 / 3.0,
             "shell_octaves": (4, 4, 3, 3),
             "march_steps": 40,
             "march_block": (4, 4),
+            "weather_nimbostratus": False,
+            "light_refresh_growth": 1.6,
         },
         QualityLevel.ULTRA: {
             "march_scale": 1.5,
             "shell_octaves": (4,),
             "march_steps": 96,
             "march_block": (2, 2),
+            "light_refresh_growth": 1.25,
         },
     }
 

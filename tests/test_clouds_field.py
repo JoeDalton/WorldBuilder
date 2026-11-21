@@ -26,15 +26,18 @@ from world_builder.clouds.noise import (
     sun_optical_depth_on_sphere,
     with_threshold,
 )
+from world_builder.clouds.synoptic import Scales
+from world_builder.clouds.synoptic.state import synoptic_state
+from world_builder.clouds.synoptic.systems import Kind, position, stage
 from world_builder.clouds.weather import (
+    SYNOPTIC_CHANNELS,
     WeatherSpec,
-    coverage_at,
     coverage_map,
     coverage_to_shift,
     orographic,
     sample_cube,
     shift_table,
-    vortices,
+    synoptic_cube,
     weather_cube,
 )
 from world_builder.sky.starfield import cube_directions
@@ -287,45 +290,89 @@ def _band_mean(cover, lat_lo, lat_hi):
     return float(values[band].mean())
 
 
-def test_weather_follows_the_zonal_circulation(earth_map):
-    """Wet tropics, dry subtropics, cloudy storm tracks."""
-    equator = _band_mean(earth_map, 0.0, 6.0)
-    subtropics = _band_mean(earth_map, 22.0, 30.0)
-    storm_tracks = _band_mean(earth_map, 48.0, 60.0)
+def test_weather_follows_the_zonal_circulation(weather):
+    """Wet tropics, dry subtropical highs at the Hadley cell's edge, cloudy
+    storm tracks (the planet's own latitudes: :class:`synoptic.Scales`), in
+    every genus (a storm track's warm sectors and shields are stratiform)."""
+    scales = Scales.from_planet(weather.planet)
+    cube = synoptic_cube(weather, 64)
+    picks = [
+        SYNOPTIC_CHANNELS.index(n)
+        for n in SYNOPTIC_CHANNELS
+        if n not in ("depth", "shelf")
+    ]
+    cloud = np.ascontiguousarray(cube[..., picks].max(axis=-1))
+    equator = _band_mean(cloud, 0.0, 6.0)
+    edge = scales.hadley_edge
+    subtropics = _band_mean(cloud, edge - 3.0, edge + 1.0)
+    track = 0.5 * (scales.storm_track[0] + scales.storm_track[1])
+    storm_tracks = _band_mean(cloud, track - 5.0, track + 5.0)
     assert equator > subtropics + 0.15
     assert storm_tracks > subtropics + 0.15
 
 
-def test_cyclone_cores_are_cloudier_than_their_surroundings(weather):
-    planet = Planet(weather.planet)
-    systems = vortices(weather, planet)
-    assert sum(not v.tropical for v in systems) >= 4
-    assert any(v.tropical for v in systems)  # the earthlike planet has sea
-    for v in systems:
-        c = np.asarray(v.centre)
-        frame_east = np.cross([0.0, 0.0, 1.0], c)
-        frame_east /= np.linalg.norm(frame_east)
-        north = np.cross(c, frame_east)
+def _local_dir(obj, t, along, poleward, radius):
+    """The direction at (along its heading, poleward) radii from a system."""
+    lat, lon = position(obj, t)
+    frame = TangentFrame.at(lat, lon)
+    h = 1.0 if lat >= 0.0 else -1.0
+    c, s = np.cos(obj.heading), np.sin(obj.heading)
+    ahead = c * frame.east + s * frame.north
+    left = -s * frame.east + c * frame.north
+    d = frame.up + obj.radius / radius * (along * ahead + poleward * h * left)
+    return d / np.linalg.norm(d)
+
+
+def _cloud(cube, dirs):
+    """The most of any genus's coverage at *dirs*."""
+    picks = [
+        SYNOPTIC_CHANNELS.index(n)
+        for n in SYNOPTIC_CHANNELS
+        if n not in ("depth", "shelf")
+    ]
+    return sample_cube(cube[..., picks], np.atleast_2d(dirs)).max(axis=-1)
+
+
+def test_systems_are_cloudier_than_their_surroundings(weather):
+    """A mature low's comma head and a tropical cyclone's eyewall against a
+    ring four radii out."""
+    state = synoptic_state(weather)
+    cube = synoptic_cube(weather)
+    checked = 0
+    for obj in state.systems:
+        if obj.kind is Kind.LOW and stage(obj, state.t) > 0.45:
+            spot = _local_dir(obj, state.t, 0.3, 0.6, R)
+        elif obj.kind is Kind.TROPICAL:
+            spot = _local_dir(obj, state.t, 0.1, 0.0, R)
+        else:
+            continue
         angles = np.linspace(0.0, 2.0 * np.pi, 24, endpoint=False)
-        ring = c + 4.0 * v.radius * (
-            np.cos(angles)[:, None] * frame_east + np.sin(angles)[:, None] * north
+        ring = np.array(
+            [_local_dir(obj, state.t, 4 * np.cos(a), 4 * np.sin(a), R) for a in angles]
         )
-        ring /= np.linalg.norm(ring, axis=1, keepdims=True)
-        # Just off the centre: a tropical cyclone's eye is clear.
-        core = c + 0.4 * v.radius * frame_east
-        values = coverage_at(weather, np.vstack([core, ring]), planet)
         # The median: the ring may cross a neighbouring system.
-        assert values[0] > np.median(values[1:]) + 0.2, v
+        assert _cloud(cube, spot)[0] > np.median(_cloud(cube, ring)) + 0.2, obj
+        checked += 1
+    assert checked >= 1
 
 
-def test_tropical_cyclones_stay_over_the_sea(weather):
+def test_tropical_cyclones_form_over_the_sea(weather):
     planet = Planet(weather.planet)
-    tropical = [v for v in vortices(weather, planet) if v.tropical]
-    centres = np.array([v.centre for v in tropical])
-    elevation, _, _ = planet.sample_dirs(centres, min_wavelength=60e3)
-    assert np.all(elevation < 0.0)
-    dry = WeatherSpec(PLANETS["desert"])
-    assert not any(v.tropical for v in vortices(dry))
+    seen = 0
+    for t in np.linspace(0.0, 200.0 * 86400.0, 20):
+        state = synoptic_state(replace(weather, time_s=float(t)))
+        tropical = [o for o in state.systems if o.kind is Kind.TROPICAL]
+        if not tropical:
+            continue
+        seen += len(tropical)
+        genesis = dirs_from_latlon(
+            [o.lat0 for o in tropical], [o.lon0 for o in tropical]
+        )
+        elevation, _, _ = planet.sample_dirs(genesis, min_wavelength=60e3)
+        assert np.all(elevation < 0.0)
+    assert seen > 0
+    dry = synoptic_state(WeatherSpec(PLANETS["desert"]))
+    assert not any(o.kind is Kind.TROPICAL for o in dry.systems)
 
 
 def test_a_desert_planet_is_clearer(earth_map):

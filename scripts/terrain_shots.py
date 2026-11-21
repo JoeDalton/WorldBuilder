@@ -35,6 +35,8 @@ times a few frames, then saves a screenshot::
                      clouds, ocean
     --no-clouds      no clouds at all
     --ring           a small ring around the planet (and its poses)
+    --time           the weather's time, seconds (as the demo's)
+    --pin            LAT LON PRESET: a local weather preset there (as the demo's)
     --workers        generation processes (the terrain's setting)
     --cloud-debug    PlanetClouds.set_debug bits (cloud.frag's
                      uCloudDebug: 1 no sun march, 2 no atmosphere, 4 two
@@ -185,6 +187,10 @@ from world_builder.terrain.chart import (  # noqa: E402
     latlon,
 )
 from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
+from world_builder.terrain.preview import (  # noqa: E402
+    add_weather_arguments,
+    pins_from_args,
+)
 
 CORNER = np.array([1.0, 1.0, 1.0]) / math.sqrt(3.0)
 #: The middle height of each showcase cumulus's cloud, metres above sea
@@ -821,6 +827,7 @@ def main() -> None:
         "--offscreen", action="store_true", help="an offscreen buffer, no window"
     )
     add_world_arguments(parser)
+    add_weather_arguments(parser)  # --time, --pin: the weather's, as the demo's
     parser.set_defaults(frame_cap=0)  # timings: never capped (--frame-cap N)
     parser.add_argument(
         "--cloud-debug", type=int, default=0, help="PlanetClouds.set_debug bits"
@@ -840,6 +847,7 @@ def main() -> None:
         "--model", default=None, help="a model for the ship poses (a glTF ship)"
     )
     args = parser.parse_args()
+    pins = pins_from_args(parser, args)
     window_config("Terrain shots", args.size, args.offscreen, vsync=False)
     args.out.mkdir(parents=True, exist_ok=True)
     settings = settings_from_args(args)
@@ -858,6 +866,8 @@ def main() -> None:
         preset=args.planet,
         seed=args.seed,
         start=args.start,
+        weather_time=args.time,
+        pins=pins,
     )
     demo.setFrameRateMeter(False)
     if args.panda_lights:

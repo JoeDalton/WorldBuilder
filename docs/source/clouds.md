@@ -258,8 +258,72 @@ altocumulus) and the convective continuum from fair-weather cumulus through
 congestus to cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
 `--genera` in the demo and the scripts sharing its options, on by default
 there, `--no-genera` for the plain field; opt-in in `cloud_bench.py`). Its maps are
-a **placeholder** for the weather (issue #8): features laid out around one
-point. One `CloudMarch` draws them all, as one union of genera.
+the weather's (`weather.synoptic_cube`, see [the weather](atmosphere.md)): the
+convective coverage, depth and anvil shelf from its fronts, lows, highs and
+tropical cyclones, and two genera's coverage (`genera.WEATHER_GENERA`,
+`genera.genus_coverage`):
+
+- the **stratus**'s from its stratus, stratocumulus and nimbostratus: a
+  *family* (like the convective clouds' depth), the stratus thickening into
+  nimbostratus where the weather says.
+
+  *What it is.* Ahead of a warm front, warm moist air glides up over the
+  wedge of cold air in front of it (the warm conveyor belt), so the cloud
+  it forms slopes: highest and thinnest far ahead, lowest and thickest at
+  the front. An observer under an approaching warm front sees the sequence
+  cirrus, cirrostratus, altostratus, nimbostratus over 12-24 hours: the sky
+  whitens, the sun turns watery behind a grey sheet (altostratus, a few
+  hundred metres thick, 2-7 km up), then the sheet lowers and darkens into
+  a featureless rain cloud from near the ground to 5 km or more
+  (nimbostratus), and steady rain sets in. Meteorologists call that sheet
+  the frontal cloud *shield*; the weather's lows draw it as bands ahead of
+  each warm front, and as a comma head poleward of the centre
+  (`synoptic.rules`). Here the shield is drawn **low**: its altostratus is
+  not drawn (the weather computes it), and its nimbostratus is the stratus
+  deck thickened down to 0.6 km and up to 2.15 km, not 5 km.
+
+  *Why low.* A first version drew the shield as a genus of its own,
+  altostratus thickening into nimbostratus over 0.6-6 km. Its slab shared
+  both sky bands with the others (`march.sky_bands`), so the march took
+  each band's samples through its loop for several genera, and the shield
+  cost 2-3 ms on the Kerbin-like planet and 6-8 ms on Earth at the ground
+  (synoptic weather plan, Task 7). As one genus with the stratus, under the
+  convective clouds' 2.2 km base, each band keeps one genus and its own
+  loop.
+
+  *How it is drawn.* The stratus's slab is the family's
+  (`genera.STRATUS_FAMILY`: 300 m under `GeneraSpec.stratus_altitude`,
+  1550 m thick). Cube A's channel 0 holds its coverage, channel 2 (the
+  plain nimbostratus's, `noise.FAMILY_SHARE_CHANNEL`) the nimbostratus's
+  share of the three (`genera.genus_share`), which the shader reads as the
+  genus's depth (`genusWeatherAt`'s z, flag `RECIPE_FAMILY`). The share
+  sets the part of the slab the cloud spans and its density
+  (`noise.family_range`): the stratus's 0.9-1.4 km at its 0.05 at share 0,
+  the whole slab at the nimbostratus's 0.08 at 1. Its height is taken over
+  that part (`noise.family_height`), so the stratus's profile, top lift
+  and fractus base hold at each end. It keeps the stratus's recipe and
+  optics: the nimbostratus is a deep, dense stratus.
+
+  *Quality.* `CloudSettings.weather_nimbostratus` (on at the high and ultra
+  presets, off at low and mid; applies when the clouds are next built)
+  draws the weather's nimbostratus; off, the stratus is the weather's
+  stratus and stratocumulus alone;
+- the cirrostratus's from its own, in the high layer (with
+  `GeneraSpec.cirrus_weather`); the cirrus cover takes its cirrus and
+  cirrocumulus (`weather.CIRRUS_SHEET_GENERA`).
+
+Its stratocumulus, altostratus and altocumulus stay their features' alone
+(the stratocumulus draws as the stratus): each genus the march draws costs
+it as a full one wherever it is, and drawing every genus from the weather
+cost 4-9 ms more a frame at the ground (synoptic weather plan, Task 7). The
+family's share takes the plain nimbostratus's channel, which the showcase
+keeps (no weather there); a spec holding both raises
+(`genera.coverage_cube`). A genus without coverage where a band's chord
+starts no longer sets the band's cut top (`skyBandChord`): an empty deep
+slab stretched every cumulus shadow's steps over its height. `GeneraSpec.features` adds hand-placed
+features around one point over them, a showcase (the demo leaves them out
+when `--pin` asks for the weather there). One `CloudMarch` draws them all,
+as one union of genera.
 
 **The genera and their sky bands.** A genus is one field (one cloud type)
 over its own slab, with its own coverage, shift table and far table
@@ -511,24 +575,11 @@ takes 8.6-12.5 ms, above the showcase's 60 FPS: the cumulus row 12.2-12.5
 ms, the southern sheets 8.6 (St) to 10.4 ms (Sc) (performance §37, "Phase
 5 summary").
 
-The high genera have an overhead row (`SHOWCASE_HIGH`): the high layer
-(11-12.5 km) lies over the rows, so each is shot from the start's ground
-looking up at its own pitch (`SHOWCASE_HIGH_PITCH`), with the rows' clouds
-under the view's bottom edge or off its sides. The cirrostratus is a veil
-64 km wide to the west (bearing 280, 25 km), in the gap between the
-altocumulus (240) and the humilis (318). Its pose `genus_cirrostratus`
-looks 35° up at the sun, set at azimuth 280 for it, so the veil and its
-halo are seen around the sun. The cirrocumulus is a patch 12 km wide to
-the east-south-east (bearing 120, 16 km), over the low sheets and away
-from the cumulonimbus's anvil (60). Its pose `genus_cirrocumulus` looks 34°
-up at it. Ruling: the high discs never overlap each other (a test checks,
-and that every low feature's top is under each pose's view or off its
-sides). The low clouds under the cirrostratus's west edge (the humilis)
-are never in its pose's view. The cirrus's slot is Task 23's.
-
 **Not yet, for the convective clouds.** The anvil does not lean downwind with height (a shear; it is
 the genus framework's, docs/superpowers/plans/2026-11-15-cloud-genera.md).
-The plume is straight: the wind is read at the tower, not
+The weather's own cumulonimbus (its fronts', its tropical cyclones') take an
+anvil shelf where they are deepest, but are not yet stretched downwind as a
+feature's is. The plume is straight: the wind is read at the tower, not
 along the plume. Its underside is lit as the rest of the cloud: no darker base
 for deep clouds. The tower's stem, at coverage 1, has
 straight sides. From the ground, the air hazes out a cumulonimbus's lower half at
@@ -1138,8 +1189,19 @@ other receiver takes it (shadows.glsl):
 - the planet's mountains (`terrainShadow`);
 - its rings (`ringVisibility`).
 
-It is evaluated once a pixel, at the first lit sample, where the air's light
-was already taken; the high layer's crossing takes it too. The world binds
+It is evaluated at the first lit sample, and again as the ray goes on
+(`lightStale`): at a cloud sample past `max(growth × where it was last
+taken, that + the least distance)` (`CloudSettings.light_refresh_growth`,
+`light_refresh_min`: 2 km on a 600 km planet, scaled by the radius; the
+`uLightRefresh` uniform). Taken once a pixel, a thin veil of a near cloud
+lit every cloud behind it with its own light: at sunset, a yellow veil
+turned the red clouds far behind it yellow. A geometric growth bounds the
+takes along a ray by the log of its far/near distance ratio (about 19 from
+2 to 300 km at 1.3×), however much cloud a grazing ray crosses: a fixed
+distance would have taken one every few kilometres of it. The quality
+presets go from 2× (low) through 1.6×, 1.4× (high) to 1.25× (ultra); 0 is
+once a pixel; the demo's L cycles them. The high layer's crossing takes
+the light too. The world binds
 the inputs to every pass (`World`: `Shadows.bind` and `ShadowMap.bind`
 through `PlanetClouds.bind_maps`). Before, the march took none of them, since
 the billboards' `cloud.frag` was the only cloud shader that did: in an
@@ -1269,6 +1331,23 @@ cloud). Here each pixel steps along its own ray:
   deck's expected coverage as a homogeneous slab whose vertical crossing
   takes the deck's alpha, lit by the deck's averages. The march reaches
   orbit with no deck, and nothing changes colour closing in.
+- **Masses, not a wash** (`macroCover`, `macroThickness` in
+  `cloud_march.glsl`): drawn as `alpha = 0.92 c`, a partial coverage c was
+  a translucent wash from orbit, the ground and its coastlines showing
+  through, the weather's texels (39 km on Earth) soft brushes. The far
+  coverage is moved by two octaves of the noise volume at 40 and 14 km
+  (a standard score times `MACRO_AMOUNT` 0.18 of coverage), then stepped at
+  a half (`MACRO_EDGE` 0.04): opaque masses with sharp, ragged edges and
+  clear gaps. Each octave fades in as the view pixel resolves it, so
+  closing in hands over to the sampled field. A mass's alpha follows the
+  weather's coverage under it, from `MACRO_THIN` (0.6) of the full where
+  it barely covers to the full where it covers wholly, so a band's
+  streaks and a swirl's arms show as thinner and thicker cloud. The far
+  table's light keeps the pixel's own coverage. Debug bit 16384 turns both
+  off (comparison). Two designs were dropped: thresholding the noise at the
+  coverage's own probit (every partial area the same random spots, the
+  weather's masses lost), and stepping only near the edges (translucent
+  fringes and rings beside them).
 
 **The passes.** One march covers both depth ranges of `SplitDepthCameras`
 (`CloudMarch.attach`; `PlanetClouds.use_split_depth`, which a `World` calls
