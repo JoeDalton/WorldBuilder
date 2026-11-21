@@ -29,6 +29,7 @@ from world_builder.clouds.genera import (
     genus_weather_at,
 )
 from world_builder.clouds.noise import (
+    FAMILY_SHARE_CHANNEL,
     CloudOptics,
     DensityField,
     GenusField,
@@ -373,8 +374,8 @@ def genus_sun_depth(
             cube, index, table = source
             shift_at = lambda p: genus_weather_at(cube, index, table, p)[1]  # noqa: E731
             if recipe.family:
-                # Its share, the next channel (the shader's genusWeatherAt)
-                share_at = lambda p: sample_cube(cube[..., index + 1], p)  # noqa: E731
+                # Its share (the shader's genusWeatherAt)
+                share_at = lambda p: sample_cube(cube[..., FAMILY_SHARE_CHANNEL], p)  # noqa: E731
         return recipe_shadow_on_sphere(
             _noise(genus._seed),
             _cells(),

@@ -86,8 +86,8 @@ vec3 cloudRadianceFrom(int genus, float sunDepth, Field f, vec3 p,
     // it lights a cloud's shadowed side where the flat fill below is the sky's.
     float octaveShadowing = shading > 0.0
         ? exp2(-f.octaveAttenuation * sunDepth) * powdered : 1.0;
-    // PROTOTYPE (sheets at sunset): a recipe genus (a sheet: the stratus, the
-    // frontal shield) takes its sun terms from its far table at every
+    // Sheets at sunset: a recipe genus (a sheet: the stratus and its
+    // nimbostratus, the altostratus...) takes its sun terms from its far table at every
     // distance. The march's samples land 100-300 m into a sheet, under the
     // tens of metres a low sun lights at its top, so their own sun depth
     // left a sunset sheet in shadow, grey beside orange cumulus; the table

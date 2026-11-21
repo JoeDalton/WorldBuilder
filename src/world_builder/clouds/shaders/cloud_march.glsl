@@ -1024,8 +1024,8 @@ void main() {
         // band's first BAND_WEATHER genera keeps its own weather a
         // uWeatherStretch (one cache for all re-read it at every sample, the
         // genera alternating), and a genus without coverage there is skipped
-        // before its field is read: the frontal shield's slab (0.6-6 km)
-        // shares both bands with the others, mostly empty, and cost 3 ms at
+        // before its field is read: a deep slab sharing a band with others
+        // (a nimbostratus feature's, 0.6-5 km), mostly empty, cost 3 ms at
         // the ground with no cloud anywhere (synoptic weather plan, Task 7).
         vec4 bandWeather[BAND_WEATHER];
         float bandUntil[BAND_WEATHER];

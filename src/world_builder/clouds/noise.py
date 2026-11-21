@@ -974,18 +974,21 @@ RECIPE_CELLS = 8
 #: thick end, read from the channel after its coverage's.
 RECIPE_FAMILY = 16
 
-#: The frontal shield's family (:attr:`GenusField.family`,
-#: :func:`family_profile`): altostratus at share 0, nimbostratus at 1, in
-#: one slab (0.6 to 6 km). At share 0 the cloud lies over the slab's top
-#: from FAMILY_THIN_BASE of it (the altostratus's 4.7 km) at
-#: FAMILY_THIN_DENSITY of the density (the altostratus's 0.0015 against the
-#: nimbostratus's 0.08); at 1 from the base to FAMILY_THICK_TOP (5 km), at
-#: full density; each edge soft over FAMILY_EDGE of the slab. MUST match
+#: The stratus's family (:attr:`GenusField.family`, :func:`family_range`):
+#: stratus at share 0, nimbostratus at 1, in one slab 300 m under the
+#: stratus's base and 1550 m thick (0.6-2.15 km for its 900 m: under the
+#: convective clouds' 2.2 km base, so the two keep bands of their own,
+#: march.sky_bands). At share 0 the cloud lies from FAMILY_THIN_BASE to
+#: FAMILY_THIN_TOP of the slab (the stratus's 0.9-1.4 km) at
+#: FAMILY_THIN_DENSITY of the density (the stratus's 0.05 against the
+#: nimbostratus's 0.08); at 1 over the whole slab. MUST match
 #: cloud_field.glsl's FAMILY_* constants.
-FAMILY_THIN_BASE = 0.76
-FAMILY_THICK_TOP = 0.81
-FAMILY_THIN_DENSITY = 0.02
-FAMILY_EDGE = 0.05
+FAMILY_THIN_BASE = 0.1935
+FAMILY_THIN_TOP = 0.5161
+FAMILY_THIN_DENSITY = 0.625
+#: The coverage cube channel (cube A's 2, the plain nimbostratus's) that
+#: holds a family's thick end's share. MUST match cloud_field.glsl's.
+FAMILY_SHARE_CHANNEL = 2
 
 
 @dataclass(frozen=True)
@@ -1040,10 +1043,12 @@ class GenusField:
     :ivar east: the stretch's axis, a unit vector in the planet frame (the
         march sets the focus's east; the GPU reads the genera's shared one,
         :func:`pack_recipe_frame`)
-    :ivar family: a family of genera (:data:`RECIPE_FAMILY`): its density
-        also times :func:`family_profile` of its thick end's share, read from
-        its coverage cube's next channel (the frontal shield: altostratus
-        thickening into nimbostratus)
+    :ivar family: a family of genera (:data:`RECIPE_FAMILY`): its cloud
+        spans the part of its slab its thick end's share sets, its profile,
+        lift and erosion over that part, its density scaled
+        (:func:`family_range`), the share read from coverage cube A's
+        :data:`FAMILY_SHARE_CHANNEL` (the stratus thickening into
+        nimbostratus)
     """
 
     name: str
@@ -1322,21 +1327,29 @@ def recipe_profile(genus: GenusField, h: ArrayLike) -> np.ndarray:
     return out
 
 
-def family_profile(h: ArrayLike, share: ArrayLike) -> np.ndarray:
-    """A family genus's density factor at slab height *h* (cloud_field.glsl's
-    ``familyProfile``), its thick end's share *share* (0 to 1): the cloud's
-    base falls from :data:`FAMILY_THIN_BASE` of the slab to its bottom, its
-    top from the slab's top to :data:`FAMILY_THICK_TOP`, each soft over
-    :data:`FAMILY_EDGE`, and its density rises from
-    :data:`FAMILY_THIN_DENSITY` to 1 (geometrically)."""
-    h = np.asarray(h, dtype=np.float64)
+def family_range(share: ArrayLike) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """A family genus's cloud at its thick end's share *share* (0 to 1;
+    cloud_field.glsl's ``genusRecipeDensity``): the slab heights it spans,
+    from (:data:`FAMILY_THIN_BASE`, :data:`FAMILY_THIN_TOP`) at 0 to the
+    whole slab at 1, and its density factor, from
+    :data:`FAMILY_THIN_DENSITY` to 1 (geometrically).
+
+    :returns: (base, top, factor), each broadcast from *share*
+    """
     s = np.clip(np.asarray(share, dtype=np.float64), 0.0, 1.0)
     base = FAMILY_THIN_BASE * (1.0 - s)
-    top = 1.0 + (FAMILY_THICK_TOP - 1.0) * s
-    density = np.exp2(np.log2(FAMILY_THIN_DENSITY) * (1.0 - s))
-    rise = _smoothstep(base, base + FAMILY_EDGE, h)
-    fall = 1.0 - _smoothstep(top - FAMILY_EDGE, top, h)
-    return rise * fall * density
+    top = FAMILY_THIN_TOP + (1.0 - FAMILY_THIN_TOP) * s
+    factor = np.exp2(np.log2(FAMILY_THIN_DENSITY) * (1.0 - s))
+    return base, top, factor
+
+
+def family_height(h: ArrayLike, share: ArrayLike) -> np.ndarray:
+    """A family genus's slab height *h* as a height in the cloud it holds at
+    *share* (:func:`family_range`): 0 at its base, 1 at its top, outside
+    [0, 1] outside it (no cloud). Its profile, lift and erosion take it, so
+    each end keeps its genus's own vertical shape."""
+    base, top, _ = family_range(share)
+    return (np.asarray(h, dtype=np.float64) - base) / (top - base)
 
 
 def recipe_value(
@@ -1407,13 +1420,15 @@ def recipe_terms(
     radius: float,
     octaves: int = 4,
     footprint: ArrayLike = 0.0,
+    share: ArrayLike = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """What a recipe genus's density at *points* takes before the weather
     (which only shifts it): their slab heights, the base value less the
     threshold lift (:func:`recipe_value`), and the erosion's deviation (the
     small cells about their mean, signed by the erosion's kind, resolved by
     the footprint, times :func:`recipe_erosion_weight`; None without
-    erosion). :func:`recipe_density_from` finishes it for a shift.
+    erosion). :func:`recipe_density_from` finishes it for a shift. A
+    family's heights are its cloud's at *share* (:func:`family_height`).
 
     :returns: (h, value, deviation), each (...)
     """
@@ -1421,6 +1436,8 @@ def recipe_terms(
     points = np.asarray(points, dtype=np.float64)
     base, thickness = spec.slab
     h = (np.linalg.norm(points, axis=-1) - radius - base) / max(thickness, 1e-3)
+    if genus.family:
+        h = family_height(h, share)
     m = recipe_position(genus, points, radius)
     cells_mean = float(cells[..., 0].mean())
     value = recipe_value(volume, cells, genus, m, octaves, footprint, None, cells_mean)
@@ -1446,8 +1463,9 @@ def recipe_density_from(
 ) -> np.ndarray:
     """A recipe genus's density from :func:`recipe_terms` and the weather's
     *shift* (broadcast): eroded at its edge, through its window, times its
-    profile (and a family's :func:`family_profile` of *share*), 0 outside
-    its slab."""
+    profile, 0 outside its slab (a family's: its cloud at *share*, its
+    density times :func:`family_range`'s factor; *h* from
+    :func:`recipe_terms` at the same share)."""
     spec = genus.field
     _require_resolved(spec)
     raw = value + np.asarray(shift, dtype=np.float64)
@@ -1461,7 +1479,7 @@ def recipe_density_from(
     t = np.clip((raw - lo) / max(window, 1e-9), 0.0, 1.0)
     density = t * t * (3.0 - 2.0 * t) * recipe_profile(genus, np.clip(h, 0.0, 1.0))
     if genus.family:
-        density = density * family_profile(np.clip(h, 0.0, 1.0), share)
+        density = density * family_range(share)[2]
     return np.where((h > 0.0) & (h < 1.0), density, 0.0)
 
 
@@ -1504,7 +1522,7 @@ def recipe_density_on_sphere(
     plane = weather[..., 1] if weather.ndim == 4 else weather
     shift = sample_cube(plane, points)
     h, value, deviation = recipe_terms(
-        volume, cells, genus, points, radius, octaves, footprint
+        volume, cells, genus, points, radius, octaves, footprint, share
     )
     return recipe_density_from(genus, h, value, deviation, shift, share)
 
@@ -1545,10 +1563,13 @@ def recipe_column_peaks(
     base, thickness = genus.field.slab
     h = (np.arange(levels) + 0.5) / levels
     points = dirs[:, None, :] * (radius + base + h * thickness)[None, :, None]
-    _, value, deviation = recipe_terms(volume, cells, genus, points, radius, octaves)
+    h, value, deviation = recipe_terms(volume, cells, genus, points, radius, octaves)
     if deviation is not None:
         window = recipe_window(volume, cells, genus)
         value = value - abs(genus.erosion[0]) * window * deviation
+    # A family's levels outside its cloud (at share 0: recipe_terms) hold
+    # none: left in, they lifted the peaks and the coverage came out low
+    value = np.where((h > 0.0) & (h < 1.0), value, -np.inf)
     peaks = value.max(axis=1)
     peaks.sort()
     return peaks
@@ -2427,15 +2448,22 @@ def recipe_shadow_on_sphere(
     positions, counted, step_length, alive, start = _shadow_chords(
         spec, optics, points[under], dirs[under], radius, max_steps
     )
-    terms = recipe_terms(
-        volume, cells, genus, positions, radius, octaves, optics.sun_step_length
-    )
     shift = np.zeros(start.shape[:-1])
     if shift_at is not None:
         shift = np.reshape(shift_at(start.reshape(-1, 3)), start.shape[:-1])
     share = np.zeros(start.shape[:-1])
     if share_at is not None:
         share = np.reshape(share_at(start.reshape(-1, 3)), start.shape[:-1])
+    terms = recipe_terms(
+        volume,
+        cells,
+        genus,
+        positions,
+        radius,
+        octaves,
+        optics.sun_step_length,
+        share[..., None],
+    )
     density = recipe_density_from(genus, *terms, shift[..., None], share[..., None])
     density = np.where(counted, density, 0.0).sum(axis=-1)
     total = density * step_length * spec.density * optics.shadow_strength

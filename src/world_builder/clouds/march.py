@@ -2153,6 +2153,8 @@ class CloudMarch:
         self._octave_mean = float(volume.mean())
         if genera is not None and cirrus and not genera.cirrus_weather:
             genera = replace(genera, cirrus_weather=True)
+        if genera is not None and not settings.weather_nimbostratus:
+            genera = replace(genera, weather_nimbostratus=False)
         self._genera_spec = genera
         specs = (
             genus_specs(genera, altitude, covered=True)

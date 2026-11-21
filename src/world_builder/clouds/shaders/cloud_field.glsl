@@ -545,12 +545,13 @@ const int RECIPE_WORLEY = 2;                        // noise.RECIPE_WORLEY
 const int RECIPE_LENS = 4;                          // noise.RECIPE_LENS
 const int RECIPE_CELLS = 8;                         // noise.RECIPE_CELLS
 const int RECIPE_FAMILY = 16;                       // noise.RECIPE_FAMILY
-// A family genus's profile (noise.family_profile, noise.FAMILY_*): the
-// frontal shield, altostratus at share 0, nimbostratus at 1.
-const float FAMILY_THIN_BASE = 0.76;
-const float FAMILY_THICK_TOP = 0.81;
-const float FAMILY_THIN_DENSITY = 0.02;
-const float FAMILY_EDGE = 0.05;
+// A family genus's cloud (noise.family_range, noise.FAMILY_*): the
+// stratus at share 0, nimbostratus at 1; the share in coverage cube A's
+// FAMILY_SHARE_CHANNEL (genusWeatherAt).
+const float FAMILY_THIN_BASE = 0.1935;
+const float FAMILY_THIN_TOP = 0.5161;
+const float FAMILY_THIN_DENSITY = 0.625;
+const int FAMILY_SHARE_CHANNEL = 2;
 // The erosion's cells, this many times smaller than the base's, from this
 // offset in cells (noise.RECIPE_EROSION_SCALE, RECIPE_EROSION_OFFSET).
 const float RECIPE_EROSION_SCALE = 6.0;
@@ -640,19 +641,6 @@ float recipeProfile(Field f, float h) {
     return profile;
 }
 
-// A family genus's density factor at slab height h, its thick end's share
-// (its weather's z, genusWeatherAt) share: its base falls from
-// FAMILY_THIN_BASE of the slab to the bottom, its top to FAMILY_THICK_TOP,
-// its density rises from FAMILY_THIN_DENSITY to 1 (noise.family_profile).
-float familyProfile(float h, float share) {
-    float s = clamp(share, 0.0, 1.0);
-    float base = FAMILY_THIN_BASE * (1.0 - s);
-    float top = mix(1.0, FAMILY_THICK_TOP, s);
-    return smoothstep(base, base + FAMILY_EDGE, h)
-         * (1.0 - smoothstep(top - FAMILY_EDGE, top, h))
-         * exp2(log2(FAMILY_THIN_DENSITY) * (1.0 - s));
-}
-
 // How much of the erosion is kept at slab height h (noise.recipe_erosion_weight):
 // all of it, or full at the base fading out by erosionBase of the slab.
 float recipeErosionBase(Field f, float h) {
@@ -676,15 +664,20 @@ float genusRecipeDensity(Field f, vec3 p, vec4 weather, float footprint) {
     if (h <= 0.0 || h >= 1.0) {
         return 0.0;
     }
-    // A family's profile first: where it is 0 (most of the frontal shield's
-    // slab where it is altostratus: its top quarter alone holds cloud), no
-    // noise to read.
+    // A family (noise.family_range): its cloud spans the part of the slab
+    // its thick end's share (weather.z) sets, h taken over that part (its
+    // profile, lift and erosion each end's own), its density scaled; none
+    // outside it, before any noise is read.
     float family = 1.0;
     if ((f.recipe & RECIPE_FAMILY) != 0) {
-        family = familyProfile(h, weather.z);
-        if (family <= 0.0) {
+        float s = clamp(weather.z, 0.0, 1.0);
+        float base = FAMILY_THIN_BASE * (1.0 - s);
+        float top = mix(FAMILY_THIN_TOP, 1.0, s);
+        h = (h - base) / (top - base);
+        if (h <= 0.0 || h >= 1.0) {
             return 0.0;
         }
+        family = exp2(log2(FAMILY_THIN_DENSITY) * (1.0 - s));
     }
     vec3 m = recipePosition(f, p);
     vec3 coord = m * f.noiseScale;
@@ -973,7 +966,7 @@ float genusCoverageAt(int genus, vec3 p) {
 // reads the weather cube; the others their coverage (genusCoverageAt), the
 // shift their table gives it (the coverage filtered, then turned into a
 // shift: genera.genus_weather_at), no spread, and no depth but a family's
-// thick end's share (RECIPE_FAMILY: the channel after its coverage's).
+// thick end's share (RECIPE_FAMILY: FAMILY_SHARE_CHANNEL of its cube).
 vec4 genusWeatherAt(int genus, vec3 p) {
     if (genus == 0) {
         return texture(weatherMap, p);
@@ -986,7 +979,7 @@ vec4 genusWeatherAt(int genus, vec3 p) {
     float share = 0.0;
     int flags = int(layerParams[genus * GENUS_VEC4S + LAYER_VEC4S + 1].x + 0.5);
     if ((flags & RECIPE_FAMILY) != 0) {
-        share = cover[min(int(row.y + 0.5) + 1, 3)];
+        share = cover[FAMILY_SHARE_CHANNEL];
     }
     return vec4(coverage, texture(genusShift, at).r, share, 0.0);
 }
@@ -1018,9 +1011,9 @@ float skyTopRadius() {
 // A band's chord ahead of p toward dir (shellChord), cut, where the ray
 // enters the band, at its genera's highest own top there (cloudChordToTop:
 // a band of one genus is cut as its own slab's chord). A genus without
-// coverage there sets no top: a deep empty slab (the frontal shield's,
-// 0.6-6 km) would stretch the band's steps over its height, coarsening its
-// other genera's shadow. 0 for none.
+// coverage there sets no top: a deep empty slab (a nimbostratus
+// feature's, 0.6-5 km) would stretch the band's steps over its height,
+// coarsening its other genera's shadow. 0 for none.
 float skyBandChord(int band, vec3 p, vec3 dir, bool cut, out float enter) {
     float chord;
     if (!shellChord(planetRadius + uSkyBands[band].x, planetRadius + uSkyBands[band].y,

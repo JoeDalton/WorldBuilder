@@ -898,14 +898,7 @@ def _genera_clouds(window, camera):
 
     executor = ChunkExecutor(backend="inline", inline_budget=64)
     spec = PlanetSpec(name="clouds", radius=R)
-    # Without the weather's frontal shield: its deep slab bridges the two
-    # genera's bands (march.sky_bands), whose summed march these tests check
-    # against the CPU's per-genus one; the bridge's own approximation is the
-    # nimbostratus's (clouds.md, "The nimbostratus")
     genera = GeneraSpec(weather=WeatherSpec(spec, seed=11))
-    genera = replace(
-        genera, genera=tuple(g for g in genera.genera if g != "frontal_shield")
-    )
     clouds = PlanetClouds(
         window.render,
         R,

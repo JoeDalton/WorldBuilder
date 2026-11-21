@@ -182,9 +182,9 @@ def test_cube_a_holds_the_stratus_coverage_in_its_channel(genera_spec):
     planes = genus_planes(genera_spec)
     assert cube.shape == planes.shape[:-1] + (4,) and cube.dtype == np.float32
     np.testing.assert_array_equal(cube[..., 0], planes[..., 2])
-    # The stratocumulus's: its features' alone (none); channels 2 and 3
-    # the weather's frontal shield's (genera.WEATHER_GENERA)
-    assert not cube[..., 1].any()
+    # The stratocumulus's and the altostratus's: their features' alone
+    # (none); channel 2 the stratus family's nimbostratus share
+    assert not cube[..., 1].any() and not cube[..., 3].any()
 
 
 def test_a_genus_coverage_turns_into_its_shift_through_its_table():
@@ -323,7 +323,8 @@ def test_a_third_genus_takes_its_slab_and_its_channel(mid_genus):
 
     specs = genus_specs(mid_genus, 2200.0)
     assert [s[0] for s in specs] == ["convective", "stratus", MID]
-    assert specs[0][2] == 2200.0 and specs[1][2] == mid_genus.stratus_altitude
+    # The stratus: its family's slab, 300 m under its base (genera.STRATUS_FAMILY)
+    assert specs[0][2] == 2200.0 and specs[1][2] == mid_genus.stratus_altitude - 300.0
     assert specs[2][2:] == (3000.0, 1000.0, ("A", 1))
     cube = coverage_cube(mid_genus, "A", 256)
     planes = genus_planes(mid_genus, 256)
@@ -331,7 +332,8 @@ def test_a_third_genus_takes_its_slab_and_its_channel(mid_genus):
     # Its own feature's map, not the stratus's
     np.testing.assert_array_equal(cube[..., 1], genus_coverage(mid_genus, MID, 256))
     assert cube[..., 1].max() > 0.5 and not np.array_equal(cube[..., 1], cube[..., 0])
-    assert not cube[..., 2:].any()
+    # Channel 2 the stratus family's nimbostratus share, 3 none
+    assert not cube[..., 3].any()
 
 
 @pytest.fixture
@@ -388,7 +390,8 @@ def test_a_genus_inside_another_s_slab_renders(window, mid_genus):
     try:
         march = clouds.volume
         assert march.genera_count == 3
-        assert march.sky_bands == [(900.0, 500.0), (2200.0, 8300.0)]  # 2.2-10.5 km
+        # The stratus's family slab (0.6-2.15 km), the convective's 2.2-10.5 km
+        assert march.sky_bands == [(600.0, 1550.0), (2200.0, 8300.0)]
         assert [march._sky_bands[k][2] for k in range(2)] == [0b010, 0b101]
         rows = np.array([tuple(march._layer_params[i]) for i in range(3 * GENUS_VEC4S)])
         assert tuple(rows[2 * GENUS_VEC4S + 13]) == (COVERAGE_SOURCES["A"], 1, 2, 1)

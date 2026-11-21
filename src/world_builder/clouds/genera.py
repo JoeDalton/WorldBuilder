@@ -28,10 +28,10 @@ density field over its own slab, which the raymarch marches as one union
 The maps (:func:`genus_planes`, cube maps as the weather's) are the
 weather's own: its convective coverage, depth and anvil shelf, and
 (:data:`WEATHER_GENERA`, :func:`genus_coverage`) the stratus's coverage its
-stratus and stratocumulus, the **frontal shield**'s its altostratus and
-nimbostratus (one family genus, altostratus thickening into nimbostratus:
-:func:`genus_share`), the cirrostratus's its own; the other genera are their
-features' alone; plus, around :attr:`GeneraSpec.focus`, the features of
+stratus, stratocumulus and nimbostratus (a family genus, the stratus
+thickening into nimbostratus where the weather says: :func:`genus_share`,
+:data:`STRATUS_FAMILY`), the cirrostratus's its own; the other genera are
+their features' alone; plus, around :attr:`GeneraSpec.focus`, the features of
 :attr:`GeneraSpec.features`.
 
 **Coverage to the field.** The share of columns holding cloud depends on
@@ -49,13 +49,14 @@ from __future__ import annotations
 
 import functools
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import ArrayLike
 
 from world_builder.clouds.cloud import CloudType
 from world_builder.clouds.noise import (
+    FAMILY_SHARE_CHANNEL,
     MIE_ASYMMETRY_ICE,
     DensityField,
     _smoothstep,
@@ -175,12 +176,16 @@ GENUS_PRESETS = {
         CloudType.STRATUS,
         ("A", 0),
         far_shadow=1.0,
+        # A family (noise.FAMILY_*, STRATUS_FAMILY): the weather's stratus
+        # thickening into nimbostratus where it says so; its knobs below are
+        # the stratus's, over the cloud's own height
         recipe=dict(
             noise_kind="value",
             stretch=3.0,
             profile=(0.03, 0.3, False),
             erosion=(-1.5, 1.0),
             erosion_base=0.4,
+            family=True,
         ),
         field=dict(
             noise_scale=(0.0004, 0.0004, 0.0004),
@@ -188,6 +193,9 @@ GENUS_PRESETS = {
             edge_softness=1.2,
             top_erosion=0.1,
             top_exponent=2.0,
+            # The nimbostratus's (its thick end); the stratus's 0.05 at
+            # share 0 (noise.FAMILY_THIN_DENSITY)
+            density=0.08,
         ),
     ),
     # Lumpy, tessellated grey-white cells with dark parts (WMO: "always some
@@ -338,23 +346,14 @@ GENUS_PRESETS = {
 }
 
 
-#: The frontal shield (the weather's, :data:`WEATHER_GENERA`; clouds.md,
-#: "Genera", has what it is: the sloping sheet of cloud ahead of a warm
-#: front, high thin altostratus lowering and thickening into nimbostratus
-#: toward the front): a family of genera in one recipe genus
-#: (:attr:`noise.GenusField.family`),
-#: altostratus thickening into nimbostratus, the nimbostratus's share of
-#: the two in its coverage cube's next channel (cube A's 3, the
-#: altostratus's: the two never cover at once, :func:`coverage_cube`). The
-#: nimbostratus's recipe and optics over both genera's slabs (0.6 to 6 km):
-#: at share 0 a thin layer over 4.7 km (noise.FAMILY_*), at 1 the
-#: nimbostratus. One genus in the march for the two: each genus drawn costs
-#: it as a full one wherever it is.
-GENUS_PRESETS["frontal_shield"] = replace(
-    GENUS_PRESETS["nimbostratus"],
-    slab=(600.0, 5400.0),
-    recipe={**GENUS_PRESETS["nimbostratus"].recipe, "family": True},
-)
+#: The stratus's family slab (:attr:`noise.GenusField.family`): from this
+#: far under :attr:`GeneraSpec.stratus_altitude`, this thick (0.6-2.15 km
+#: for its 900 m), the nimbostratus's at the thick end, the stratus's 500 m
+#: from its base at the thin end (noise.FAMILY_THIN_BASE, FAMILY_THIN_TOP).
+#: Under the convective clouds' 2.2 km base: one genus a band, each band
+#: its own loop in the march (a genus sharing a band with another made it
+#: march both at every sample: 2-6 ms).
+STRATUS_FAMILY = (300.0, 1550.0)
 
 #: The high layer's slab (base, thickness) above sea level, metres: its own
 #: sky band above the union of the genera (the convective clouds' top, 10.5
@@ -531,6 +530,10 @@ class GeneraSpec:
         (:func:`weather.cirrus_cover_map`), not only its features: the march
         draws the planet's cirrus (``PlanetClouds(cirrus=True)`` sets it, the
         demo's ``--cirrus``); False = its features alone (the showcase)
+    :ivar weather_nimbostratus: the stratus thickens into the weather's
+        nimbostratus (:data:`WEATHER_GENERA`); False = the weather's stratus
+        and stratocumulus alone (``CloudSettings.weather_nimbostratus``, off
+        under the high preset)
     """
 
     weather: WeatherSpec
@@ -545,12 +548,12 @@ class GeneraSpec:
         "nimbostratus",
         "altostratus",
         "altocumulus",
-        "frontal_shield",
     )
     background: bool = True
     high: tuple[str, ...] = tuple(HIGH_CHANNELS)
     high_slab: tuple[float, float] = HIGH_SLAB
     cirrus_weather: bool = False
+    weather_nimbostratus: bool = True
 
 
 def weather_cirrus(weather: WeatherSpec) -> GeneraSpec:
@@ -614,22 +617,22 @@ def high_jet(spec: GeneraSpec) -> np.ndarray:
 
 
 #: The genera the weather covers, and the channels of
-#: :func:`weather.synoptic_cube` each takes (the larger): the stratus sheet
-#: its stratus and stratocumulus, the frontal shield its altostratus and
-#: nimbostratus (a family: :data:`FAMILY_SHARES`), the cirrostratus its own
-#: (the cirrus cover takes its cirrus and cirrocumulus:
-#: :data:`weather.CIRRUS_SHEET_GENERA`). The others are their features'
-#: alone: each genus the march draws costs it as a full one wherever it is
-#: (+0.65 ms at 2560 x 1440, :func:`genus_specs`; Task 7 of the synoptic
-#: weather plan merged the rest into these).
+#: :func:`weather.synoptic_cube` each takes (the larger): the stratus its
+#: stratus, stratocumulus and nimbostratus (a family, the nimbostratus its
+#: thick end: :data:`FAMILY_SHARES`; without
+#: :attr:`GeneraSpec.weather_nimbostratus`, the first two alone), the
+#: cirrostratus its own (the cirrus cover takes its cirrus and
+#: cirrocumulus: :data:`weather.CIRRUS_SHEET_GENERA`). The others are their
+#: features' alone: each genus the march draws costs it as a full one
+#: wherever it is (+0.65 ms at 2560 x 1440, :func:`genus_specs`; Task 7 of
+#: the synoptic weather plan merged the rest into these).
 WEATHER_GENERA = {
-    "stratus": ("stratus", "stratocumulus"),
-    "frontal_shield": ("altostratus", "nimbostratus"),
+    "stratus": ("stratus", "stratocumulus", "nimbostratus"),
     "cirrostratus": ("cirrostratus",),
 }
 #: A family genus's thick end: the weather's channel whose share of its
 #: :data:`WEATHER_GENERA` channels it reads (:func:`genus_share`).
-FAMILY_SHARES = {"frontal_shield": "nimbostratus"}
+FAMILY_SHARES = {"stratus": "nimbostratus"}
 #: A weather genus channel under this everywhere holds no cloud
 #: (:func:`has_coverage`): the march skips the genus.
 WEATHER_COVER_FLOOR = 0.01
@@ -642,12 +645,23 @@ def _weather_on(spec: GeneraSpec, name: str) -> bool:
     return spec.cirrus_weather if name in HIGH_CHANNELS else spec.background
 
 
+def _weather_names(spec: GeneraSpec, name: str) -> tuple[str, ...]:
+    """The weather's channels genus *name* of *spec* takes
+    (:data:`WEATHER_GENERA`), the nimbostratus only with
+    :attr:`GeneraSpec.weather_nimbostratus`."""
+    names = WEATHER_GENERA.get(name, ())
+    if not spec.weather_nimbostratus:
+        names = tuple(n for n in names if n != "nimbostratus")
+    return names
+
+
 def _weather_covers(spec: GeneraSpec, name: str) -> bool:
     """Whether the weather holds genus *name* of *spec* anywhere
     (:data:`WEATHER_GENERA`, over :data:`WEATHER_COVER_FLOOR`)."""
-    if name not in WEATHER_GENERA or not _weather_on(spec, name):
+    names = _weather_names(spec, name)
+    if not names or not _weather_on(spec, name):
         return False
-    picks = [SYNOPTIC_CHANNELS.index(n) for n in WEATHER_GENERA[name]]
+    picks = [SYNOPTIC_CHANNELS.index(n) for n in names]
     return bool(synoptic_cube(spec.weather)[..., picks].max() > WEATHER_COVER_FLOOR)
 
 
@@ -688,6 +702,9 @@ def genus_specs(
             base = altitude
         elif preset.slab is None and preset.cloud_type is CloudType.STRATUS:
             base = spec.stratus_altitude
+            if (preset.recipe or {}).get("family"):
+                below, thickness = STRATUS_FAMILY
+                base -= below
         out.append((name, preset.cloud_type, base, thickness, preset.coverage))
     return out
 
@@ -880,9 +897,10 @@ def genus_coverage(spec: GeneraSpec, name: str, size: int = GENUS_SIZE) -> np.nd
         :func:`sky.starfield.cube_directions`
     """
     dirs = cube_directions(size).reshape(-1, 3)
-    if name in WEATHER_GENERA:
+    names = _weather_names(spec, name)
+    if names:
         on = _weather_on(spec, name)
-        cover = _weather_channels(spec, WEATHER_GENERA[name], size, on).max(axis=1)
+        cover = _weather_channels(spec, names, size, on).max(axis=1)
     else:
         cover = np.zeros(len(dirs))
     for f, centre, angle in _feature_dirs(spec):
@@ -903,7 +921,9 @@ def genus_share(spec: GeneraSpec, name: str, size: int = GENUS_SIZE) -> np.ndarr
 
     :returns: (6, size, size) float32 in [0, 1]
     """
-    names = WEATHER_GENERA[name]
+    names = _weather_names(spec, name)
+    if FAMILY_SHARES[name] not in names:
+        return np.zeros((6, size, size), dtype=np.float32)
     channels = _weather_channels(spec, names, size, _weather_on(spec, name))
     thick = channels[:, names.index(FAMILY_SHARES[name])]
     total = channels.sum(axis=1)
@@ -1026,16 +1046,18 @@ def coverage_cube(
     """A coverage cube of the union march: each genus of *spec* that holds
     cloud (:func:`has_coverage`) whose coverage is a channel of *cube*
     (:attr:`GenusPreset.coverage`) has its coverage map there
-    (:func:`genus_coverage`), a family its share in the next channel
-    (:func:`genus_share`), and cube B the high genera's in channels 1-3
-    (:data:`HIGH_CHANNELS`), the others' channels 0. The shift comes from
+    (:func:`genus_coverage`), a family its share in
+    :data:`noise.FAMILY_SHARE_CHANNEL` (:func:`genus_share`), and cube B
+    the high genera's in channels 1-3 (:data:`HIGH_CHANNELS`), the others'
+    channels 0. The shift comes from
     each genus's own table (:func:`genus_weather_at`, ``genusShift`` on the
     GPU).
 
     :param cube: ``"A"`` or ``"B"``
     :returns: (6, size, size, 4) float32
     :raises ValueError: two genera holding cloud share a channel (the
-        frontal shield and an altostratus or nimbostratus feature)
+        stratus's family drawing the weather's nimbostratus, and a
+        nimbostratus feature)
     """
     out = np.zeros((6, size, size, 4), dtype=np.float32)
     used: dict[int, str] = {}
@@ -1043,19 +1065,26 @@ def coverage_cube(
         source, channel = GENUS_PRESETS[name].coverage
         if source != cube or not has_coverage(spec, name):
             continue
-        family = name in FAMILY_SHARES
-        for c in (channel, channel + 1) if family else (channel,):
+        # A family whose thick end the weather draws: its share in
+        # FAMILY_SHARE_CHANNEL (the plain nimbostratus's)
+        sharing = (
+            name in FAMILY_SHARES
+            and FAMILY_SHARES[name] in _weather_names(spec, name)
+            and _weather_on(spec, name)
+        )
+        for c in (channel, FAMILY_SHARE_CHANNEL) if sharing else (channel,):
             if c in used:
                 raise ValueError(
                     f"genera {used[c]!r} and {name!r} both hold cloud in channel "
-                    f"{c} of coverage cube {cube}: the weather's frontal shield "
-                    "takes the altostratus's and nimbostratus's channels (drop "
-                    "their features, or the weather: background=False)"
+                    f"{c} of coverage cube {cube}: the stratus's family takes the "
+                    "nimbostratus's channel for the weather's nimbostratus (drop "
+                    "the nimbostratus features, or the weather's: "
+                    "weather_nimbostratus=False or background=False)"
                 )
             used[c] = name
         out[..., channel] = genus_coverage(spec, name, size)
-        if family:
-            out[..., channel + 1] = genus_share(spec, name, size)
+        if sharing:
+            out[..., FAMILY_SHARE_CHANNEL] = genus_share(spec, name, size)
     if cube == "B":
         # The high genera's (channels 1-3), those a feature covers
         for name, channel in high_genera(spec, covered=True):

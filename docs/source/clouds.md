@@ -260,13 +260,12 @@ congestus to cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.ge
 there, `--no-genera` for the plain field; opt-in in `cloud_bench.py`). Its maps are
 the weather's (`weather.synoptic_cube`, see [the weather](atmosphere.md)): the
 convective coverage, depth and anvil shelf from its fronts, lows, highs and
-tropical cyclones, and three genera's coverage (`genera.WEATHER_GENERA`,
+tropical cyclones, and two genera's coverage (`genera.WEATHER_GENERA`,
 `genera.genus_coverage`):
 
-- the stratus sheet's from its stratus and stratocumulus;
-- the **frontal shield**'s from its altostratus and nimbostratus: one genus
-  for both (`GENUS_PRESETS["frontal_shield"]`), a *family* like the
-  convective clouds' depth.
+- the **stratus**'s from its stratus, stratocumulus and nimbostratus: a
+  *family* (like the convective clouds' depth), the stratus thickening into
+  nimbostratus where the weather says.
 
   *What it is.* Ahead of a warm front, warm moist air glides up over the
   wedge of cold air in front of it (the warm conveyor belt), so the cloud
@@ -277,38 +276,51 @@ tropical cyclones, and three genera's coverage (`genera.WEATHER_GENERA`,
   hundred metres thick, 2-7 km up), then the sheet lowers and darkens into
   a featureless rain cloud from near the ground to 5 km or more
   (nimbostratus), and steady rain sets in. Meteorologists call that sheet
-  the frontal cloud **shield**; the weather's lows draw it as bands ahead of
+  the frontal cloud *shield*; the weather's lows draw it as bands ahead of
   each warm front, and as a comma head poleward of the centre
-  (`synoptic.rules`). Altostratus and nimbostratus are thus one cloud seen
-  at two stages, not two independent genera: the altostratus thickens
-  downward into the nimbostratus, never lies over it. That is why one
-  genus can draw both: where the weather says nimbostratus its base comes
-  down and its density goes up.
+  (`synoptic.rules`). Here the shield is drawn **low**: its altostratus is
+  not drawn (the weather computes it), and its nimbostratus is the stratus
+  deck thickened down to 0.6 km and up to 2.15 km, not 5 km.
 
-  *How it is drawn.* Cube A's channel 2 holds its coverage, channel 3
-  the nimbostratus's share of the two (`genera.genus_share`), which the
-  shader reads as the genus's depth (`genusWeatherAt`'s z, flag
-  `RECIPE_FAMILY`). `familyProfile` (`noise.family_profile`) turns the
-  share into the cloud's base, top and density in a 0.6-6 km slab: a thin
-  layer over 4.7 km at 2 % of the density at share 0 (altostratus), from
-  the slab's bottom to 5 km at full density at 1 (nimbostratus). It takes
-  the nimbostratus's recipe and optics throughout: the altostratus's ice
-  optics (its forward glow) are lost;
+  *Why low.* A first version drew the shield as a genus of its own,
+  altostratus thickening into nimbostratus over 0.6-6 km. Its slab shared
+  both sky bands with the others (`march.sky_bands`), so the march took
+  each band's samples through its loop for several genera, and the shield
+  cost 2-3 ms on the Kerbin-like planet and 6-8 ms on Earth at the ground
+  (synoptic weather plan, Task 7). As one genus with the stratus, under the
+  convective clouds' 2.2 km base, each band keeps one genus and its own
+  loop.
+
+  *How it is drawn.* The stratus's slab is the family's
+  (`genera.STRATUS_FAMILY`: 300 m under `GeneraSpec.stratus_altitude`,
+  1550 m thick). Cube A's channel 0 holds its coverage, channel 2 (the
+  plain nimbostratus's, `noise.FAMILY_SHARE_CHANNEL`) the nimbostratus's
+  share of the three (`genera.genus_share`), which the shader reads as the
+  genus's depth (`genusWeatherAt`'s z, flag `RECIPE_FAMILY`). The share
+  sets the part of the slab the cloud spans and its density
+  (`noise.family_range`): the stratus's 0.9-1.4 km at its 0.05 at share 0,
+  the whole slab at the nimbostratus's 0.08 at 1. Its height is taken over
+  that part (`noise.family_height`), so the stratus's profile, top lift
+  and fractus base hold at each end. It keeps the stratus's recipe and
+  optics: the nimbostratus is a deep, dense stratus.
+
+  *Quality.* `CloudSettings.weather_nimbostratus` (on at the high and ultra
+  presets, off at low and mid; applies when the clouds are next built)
+  draws the weather's nimbostratus; off, the stratus is the weather's
+  stratus and stratocumulus alone;
 - the cirrostratus's from its own, in the high layer (with
   `GeneraSpec.cirrus_weather`); the cirrus cover takes its cirrus and
   cirrocumulus (`weather.CIRRUS_SHEET_GENERA`).
 
-Its stratocumulus and altocumulus stay their features' alone (the
-stratocumulus draws as the stratus): each genus the march draws costs it as
-a full one wherever it is, and drawing every genus from the weather cost 4-9
-ms more a frame at the ground (synoptic weather plan, Task 7). The shield shares cube A's
-channels 2-3 with the plain nimbostratus and altostratus, which the
-showcase keeps (no weather there); a spec holding both raises
-(`genera.coverage_cube`). Its deep slab bridges the low sheets' band and the
-convective clouds' (`march.sky_bands`, as the nimbostratus's), and a genus
-without coverage where a band's chord starts no longer sets the band's cut
-top (`skyBandChord`), or the empty shield stretched every cumulus shadow's
-steps to 6 km. `GeneraSpec.features` adds hand-placed
+Its stratocumulus, altostratus and altocumulus stay their features' alone
+(the stratocumulus draws as the stratus): each genus the march draws costs
+it as a full one wherever it is, and drawing every genus from the weather
+cost 4-9 ms more a frame at the ground (synoptic weather plan, Task 7). The
+family's share takes the plain nimbostratus's channel, which the showcase
+keeps (no weather there); a spec holding both raises
+(`genera.coverage_cube`). A genus without coverage where a band's chord
+starts no longer sets the band's cut top (`skyBandChord`): an empty deep
+slab stretched every cumulus shadow's steps over its height. `GeneraSpec.features` adds hand-placed
 features around one point over them, a showcase (the demo leaves them out
 when `--pin` asks for the weather there). One `CloudMarch` draws them all,
 as one union of genera.

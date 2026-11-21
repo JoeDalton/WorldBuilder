@@ -34,6 +34,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Synoptic weather, part 7 (the weather's genera drawn): the stratus genus
+  is a family (`noise.GenusField.family`, `RECIPE_FAMILY`), the weather's
+  stratus thickening into its nimbostratus where it says so, in one slab
+  from 300 m under its base, 1550 m thick (`genera.STRATUS_FAMILY`: under
+  the convective clouds' 2.2 km base). The nimbostratus's share, in cube
+  A's channel 2 (`noise.FAMILY_SHARE_CHANNEL`, `genera.genus_share`), sets
+  the cloud's extent and density (`noise.family_range`, `family_height`):
+  the stratus at 0, a deep rain cloud at 1. `CloudSettings.weather_nimbostratus`
+  (restart; off at the low and mid presets) draws it. The cirrostratus
+  takes the weather's own (cube B's channel 2); the cirrus cover keeps its
+  cirrus and cirrocumulus (`weather.CIRRUS_SHEET_GENERA`). The weather's
+  altostratus is not drawn: as a genus of its own (altostratus to
+  nimbostratus over 0.6-6 km, a first version) it shared both sky bands
+  and cost 2-3 ms on the Kerbin-like planet, 6-8 ms on Earth. clouds.md,
+  "Genera", has what the frontal shield is and why it is drawn low.
 - Synoptic weather on the cloud genera (rebased on #59): the stratus
   genus's coverage is the weather's stratus and stratocumulus under its
   features (`genera.WEATHER_GENERA`, `genus_coverage`, `has_coverage`), the
@@ -112,6 +127,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stratiform sheets stayed grey-white at sunset beside orange cumulus: the
+  march's samples land 100-300 m into a sheet, under the tens of metres a
+  low sun lights at its top, so their sun depth left it in shadow. A recipe
+  genus (the stratus, its nimbostratus) takes its sun terms from its far
+  table at every distance (`cloudRadianceFrom`; debug bit 8192 restores
+  the per-sample ones).
+- The march's loop over a band shared by several genera re-read each
+  genus's weather at every sample when they alternated, and read the field
+  of a genus without coverage: each keeps its weather now
+  (`BAND_WEATHER`), and a genus without coverage is skipped first
+  (2-4 ms at the ground with a deep slab sharing the bands). A family
+  genus reads no noise outside its cloud's extent, and a genus without
+  coverage where a band's chord starts no longer sets the band's cut top
+  (`skyBandChord`).
 - The terrain demo's clouds stayed sunlit through an eclipse (since the
   cloud genera, #59): the demo no longer bound the world's `Shadows` (the
   moon, the rings, the mountains) to the clouds' nodes, which kept their

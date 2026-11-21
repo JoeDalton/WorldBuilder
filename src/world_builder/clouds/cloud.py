@@ -25,7 +25,13 @@ from world_builder.clouds.noise import (
     delta_eddington,
     field_offset,
 )
-from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
+from world_builder.quality import (
+    REBUILD,
+    RESTART,
+    QualityLevel,
+    QualitySettings,
+    knob,
+)
 
 #: Most distance bands of the march's detail (each a detail level of a
 #: genus, plus its far level): they fit ``DETAIL_LEVELS``.
@@ -234,6 +240,10 @@ class CloudSettings(QualitySettings):
     :ivar octave_bands: the march's distance bands before the deck's far field,
         each twice as far as the last. Rebuild
     :ivar reflected: drawn in the ocean's reflection. Live
+    :ivar weather_nimbostratus: the weather's nimbostratus drawn (its
+        stratus thickening into it, genera.GeneraSpec.weather_nimbostratus):
+        off under the high preset, where a front's rain clouds cost 2-6 ms.
+        Restart
     """
 
     march_steps: int = knob(
@@ -297,6 +307,14 @@ class CloudSettings(QualitySettings):
         "In reflections",
         help="Draw the clouds in the sea's reflection (about 1-1.7 ms).",
     )
+    weather_nimbostratus: bool = knob(
+        True,
+        "Rain clouds",
+        RESTART,
+        help="The weather's nimbostratus: its stratus thickening into a dark "
+        "rain cloud up to 2 km over fronts and lows (2-6 ms where they are in "
+        "view). Applies when the clouds are next built.",
+    )
 
     LABEL: ClassVar = "Clouds"
     # Saved by label: "Quarter", "Half" and "Full" keep their blocks.
@@ -309,12 +327,14 @@ class CloudSettings(QualitySettings):
             "reflected": False,
             "march_steps": 24,
             "march_block": (4, 4),
+            "weather_nimbostratus": False,
         },
         QualityLevel.MID: {
             "march_scale": 2.0 / 3.0,
             "shell_octaves": (4, 4, 3, 3),
             "march_steps": 40,
             "march_block": (4, 4),
+            "weather_nimbostratus": False,
         },
         QualityLevel.ULTRA: {
             "march_scale": 1.5,
