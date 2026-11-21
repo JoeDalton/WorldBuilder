@@ -279,7 +279,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the sun ray goes, blended other texels than the near one, and their
   interpolation errors did not cancel in the difference. The far read is
   now taken straight above the near one (`cloudLightSunDepth`): no streaks,
-  no jitter; a tower's face a little flatter. The exact fix, a chart sheared
+  no jitter; a tower's face a little flatter. The two reads then differ only
+  by their slice, and the linear read's kinks at each slice drew bands along
+  the heights on an anvil's underside: the volume is now read across its
+  slices with a cubic B-spline (`cloudLightAt`, four slices inside the
+  band; clouds 4.53 → 4.63 ms at `genera_cb`, 5.54 → 5.37 ms at the anvil
+  pose, within noise). The exact fix, a chart sheared
   along the sun, is in BACKLOG.md.
 
 - The sea reflected only the cumulus family: the reflection's deck was genus

@@ -1007,3 +1007,16 @@ def test_the_light_volumes_window_is_read_straight_above_its_near_end():
     for text in (field, march):
         assert "cloudLightJitter" not in text
         assert "LIGHT_JITTER" not in text
+
+
+def test_the_light_volume_is_read_with_a_cubic_across_its_slices():
+    """cloudLightAt (cloud_field.glsl): a cubic B-spline over four slices,
+    kept inside the point's sky band. The window's two reads differ only by
+    their slice; read linearly, the kinks at every slice drew bands along
+    the heights on an anvil's underside."""
+    field = (SHADER.parent / "cloud_field.glsl").read_text()
+    body = field[field.index("vec2 cloudLightAt(") :]
+    body = body[: body.index("\n}\n")]
+    assert "for (int i = 0; i < 4; i++)" in body
+    assert "clamp(k + float(i - 1), first, first + per - 1.0)" in body
+    assert "mix(lower, upper" not in body

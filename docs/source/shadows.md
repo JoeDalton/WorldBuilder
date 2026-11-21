@@ -489,7 +489,11 @@ shadow maps' four levels, whose bands showed in towers.
   hide them, at the price of shimmer at rest and in motion; it is gone. The
   window's depth is then a parallel ray's: a tower's face a little flatter.
   The exact difference needs a chart sheared along the sun (BACKLOG.md,
-  "Light volume: a chart sheared along the sun"). The **sky's reach**
+  "Light volume: a chart sheared along the sun"). The two reads then differ
+  only by their slice, so `cloudLightAt` reads **across the slices with a
+  cubic B-spline** (four slices, kept inside the point's band), linear
+  between texels: read linearly, the kinks at every slice drew bands along
+  the heights on an anvil's underside. Same cost within noise. The **sky's reach**
   comes from the up depth, `mix(skyOcclusion, 1, exp2(-depth))`, in place of
   the height ramp. Beyond the volume (its last eighth fades), the maps and the
   ramp as before; `--cloud-debug 512` takes them everywhere (the old look).

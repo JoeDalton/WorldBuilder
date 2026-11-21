@@ -1419,7 +1419,7 @@ uniform int   cloudLightOn;
 bool cloudLightLocal = true;
 
 // A light volume's depths at p (r: toward the sun, g: up), linear between
-// its texels and its slices; keep: how much the volume holds p (1 inside,
+// its texels, a cubic B-spline across its slices; keep: how much the volume holds p (1 inside,
 // fading over the last eighth of its tiles' half-width, 0 beyond). Above the
 // slab's top 0 (no cloud above), fading to it from the highest slice's
 // middle; below the lowest slice's middle, the lowest's.
@@ -1435,16 +1435,29 @@ vec2 cloudLightAt(sampler2D atlas, vec4 chart[4], vec3 p, out float keep) {
     }
     float top = clamp((slices - 0.5 - s) / 0.5, 0.0, 1.0);
     s = clamp(s, 0.0, slices - 1.0);
-    float k0 = min(floor(s), slices - 2.0);
-    float k1 = k0 + 1.0;
     float columns = chart[3].z;
     vec2 size = vec2(columns, slices / columns) * tile;
     vec2 local = clamp((t * 0.5 + 0.5) * tile, 0.5, tile - 0.5);
-    vec2 a0 = vec2(mod(k0, columns), floor(k0 / columns)) * tile + local;
-    vec2 a1 = vec2(mod(k1, columns), floor(k1 / columns)) * tile + local;
-    vec2 lower = texture(atlas, a0 / size).rg;
-    vec2 upper = texture(atlas, a1 / size).rg;
-    return mix(lower, upper, s - k0) * (s > slices - 1.0 ? top : 1.0);
+    // Across the slices a cubic B-spline (four slices, kept inside the
+    // point's sky band), not linear: the light window's two reads differ only
+    // by their slice (cloudLightSunDepth), and the linear read's kinks at
+    // every slice drew bands along the heights on an anvil's underside. The
+    // same cost within noise (the clouds 4.5-5.5 ms either way).
+    float per = slices / max(floor(chart[3].w + 0.5), 1.0);
+    float k = floor(s);
+    float first = floor(min(k, slices - 1.0) / per) * per;
+    float f = s - k;
+    vec4 w = vec4((1.0 - f) * (1.0 - f) * (1.0 - f),
+                  4.0 - 6.0 * f * f + 3.0 * f * f * f,
+                  1.0 + 3.0 * f + 3.0 * f * f - 3.0 * f * f * f,
+                  f * f * f) / 6.0;
+    vec2 depths = vec2(0.0);
+    for (int i = 0; i < 4; i++) {
+        float ki = clamp(k + float(i - 1), first, first + per - 1.0);
+        vec2 at = vec2(mod(ki, columns), floor(ki / columns)) * tile + local;
+        depths += w[i] * texture(atlas, at / size).rg;
+    }
+    return depths * (s > slices - 1.0 ? top : 1.0);
 }
 
 // The optical depth toward the sun (unit dir) from a point p of the slab, by

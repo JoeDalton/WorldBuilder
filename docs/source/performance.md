@@ -2689,7 +2689,12 @@ They stayed at 128, 256 and 512 texels, with a 5-texel binomial smoothing in
 the bake, with a cubic read and with 32-bit floats; they went with the far
 read taken straight above the near one. That costs nothing (one
 `normalize`); a tower's face is a little flatter (BACKLOG.md, the sheared
-chart).
+chart). The reads then differing only by their slice, the linear
+interpolation's kinks at each slice drew bands on an anvil's underside
+(`--at 23.08764 29.27759 3139 -62.9 22.3`, no `--start`): the slices are now
+read with a cubic B-spline, four reads instead of two. At 2560x1440 HIGH,
+frame / clouds: `genera_cb` 9.19 / 4.53 → 9.20 / 4.63 ms, the anvil pose
+8.49 / 5.54 → 8.33 / 5.37 ms (noise).
 
 ## Not covered
 

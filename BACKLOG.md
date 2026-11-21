@@ -286,7 +286,9 @@ then the default) is measured, not built. What is left:
      the shear out to the current straight-above read. Below the horizon the
      sun's light is gone anyway.
   5. **What stays.** The smoothing's tent across slices now runs along the
-     sun ray (neighbouring slices share `t`): consistent, keep it. The `g`
+     sun ray (neighbouring slices share `t`): consistent, keep it. So does
+     the cubic B-spline across slices in `cloudLightAt` (the two reads still
+     differ by their slice; linear, its kinks band an anvil's underside). The `g`
      channel (the depth straight up, read at the sample alone for the sky's
      reach) needs no change. Then `cloudLightSunDepth` reads `far` back on
      the ray (`p + dir * (reach + window)`).
