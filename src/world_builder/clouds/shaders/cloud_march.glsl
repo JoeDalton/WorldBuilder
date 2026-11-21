@@ -719,6 +719,9 @@ int layerAt(float t) {
     return uLayerCount - 1;
 }
 
+// The genera of a shared band whose weather the march keeps apart (main).
+const int BAND_WEATHER = 3;
+
 float interleavedGradient(vec2 pixel) {
     return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
 }
@@ -769,14 +772,14 @@ float genusDensity(int g, Field lf, vec3 p, vec4 weather, float t,
 #endif
     }
     farCoverage = 0.0;
-    if (shading < 1.0 || lf.recipe != 0) {
-        // (a recipe genus's sun term reads its far table at every distance:
-        // cloudRadianceFrom)
-        farCoverage = genusCoverageAt(g, p);
-    }
     if (shading < 1.0) {
+        farCoverage = genusCoverageAt(g, p);
         float mean = -log2(1.0 - FAR_ALPHA * farCoverage) / (lf.extinction * lf.slabThickness);
         density = mix(mean, density, detail);
+    } else if (lf.recipe != 0) {
+        // A recipe genus's sun term reads its far table at every distance
+        // (cloudRadianceFrom); close up, the weather's coverage at hand
+        farCoverage = weather.r;
     }
     return density;
 }
@@ -962,7 +965,6 @@ void main() {
         }
         vec2 seg = segments[s];
         int genera = int(uSkyBands[bandOf[s]].z + 0.5);  // the band's, a bit each
-        int weatherGenus = -1;
         float weatherUntil = -1.0;
         float a = seg.x;
         float least = (seg.y - seg.x) / SEGMENT_SAMPLES;  // the fewest a segment takes
@@ -1018,7 +1020,19 @@ void main() {
             transmittance *= 1.0 - alpha;
         }
         // Genera sharing a band: every genus whose slab holds the sample adds
-        // its extinction (sigma), its light weighted by it.
+        // its extinction (sigma), its light weighted by it. Each of the
+        // band's first BAND_WEATHER genera keeps its own weather a
+        // uWeatherStretch (one cache for all re-read it at every sample, the
+        // genera alternating), and a genus without coverage there is skipped
+        // before its field is read: the frontal shield's slab (0.6-6 km)
+        // shares both bands with the others, mostly empty, and cost 3 ms at
+        // the ground with no cloud anywhere (synoptic weather plan, Task 7).
+        vec4 bandWeather[BAND_WEATHER];
+        float bandUntil[BAND_WEATHER];
+        for (int w = 0; w < BAND_WEATHER; ++w) {
+            bandWeather[w] = vec4(0.0);
+            bandUntil[w] = -1.0;
+        }
         while (!alone && a < seg.y && steps < 2 * uMarchSteps + 8 && transmittance > OPAQUE) {
             float k = a < uSplit ? stretch.x : stretch.y;
             float dt = min(min(k * max(dtMin, a * growth), least), seg.y - a);
@@ -1034,18 +1048,30 @@ void main() {
             float height = heightOf(p);
             float sigma = 0.0;
             vec3 radiance = vec3(0.0);
+            int slot = -1;  // the genus's place among the band's
             for (int g = 0; g < MAX_GENERA; ++g) {
                 if (g >= uCloudGenera) {
                     break;
                 }
-                vec2 slab = layerParams[g * GENUS_VEC4S + 4].xy;  // its slab (getField's)
-                if (((genera >> g) & 1) == 0 || height <= slab.x || height >= slab.x + slab.y) {
+                if (((genera >> g) & 1) == 0) {
                     continue;
                 }
-                if (g != weatherGenus || t > weatherUntil) {
+                ++slot;
+                vec2 slab = layerParams[g * GENUS_VEC4S + 4].xy;  // its slab (getField's)
+                if (height <= slab.x || height >= slab.x + slab.y) {
+                    continue;
+                }
+                if (slot < BAND_WEATHER) {
+                    if (t > bandUntil[slot]) {
+                        bandWeather[slot] = genusWeatherAt(g, p);
+                        bandUntil[slot] = t + uWeatherStretch;
+                    }
+                    weather = bandWeather[slot];
+                } else {
                     weather = genusWeatherAt(g, p);
-                    weatherGenus = g;
-                    weatherUntil = t + uWeatherStretch;
+                }
+                if (weather.r <= 0.0) {
+                    continue;  // no cover here: nothing to read
                 }
                 int layer = g * DETAIL_LEVELS + level;
                 if (layer != current) {

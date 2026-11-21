@@ -676,6 +676,16 @@ float genusRecipeDensity(Field f, vec3 p, vec4 weather, float footprint) {
     if (h <= 0.0 || h >= 1.0) {
         return 0.0;
     }
+    // A family's profile first: where it is 0 (most of the frontal shield's
+    // slab where it is altostratus: its top quarter alone holds cloud), no
+    // noise to read.
+    float family = 1.0;
+    if ((f.recipe & RECIPE_FAMILY) != 0) {
+        family = familyProfile(h, weather.z);
+        if (family <= 0.0) {
+            return 0.0;
+        }
+    }
     vec3 m = recipePosition(f, p);
     vec3 coord = m * f.noiseScale;
     float unit = NOISE_FEATURE / f.noiseScale.x;
@@ -741,11 +751,7 @@ float genusRecipeDensity(Field f, vec3 p, vec4 weather, float footprint) {
     }
     vec2 edge = recipeWiden ? edgeWidening(f.threshLo, f.threshHi, spread)
                             : vec2(f.threshLo, f.threshHi);
-    float profile = recipeProfile(f, h);
-    if ((f.recipe & RECIPE_FAMILY) != 0) {
-        profile *= familyProfile(h, weather.z);
-    }
-    return smoothstep(edge.x, edge.y, raw) * profile;
+    return smoothstep(edge.x, edge.y, raw) * recipeProfile(f, h) * family;
 }
 
 // Optical depth along a straight stretch of the field: steps samples
