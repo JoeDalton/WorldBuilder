@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.4.2] 2026-11-21
+
 ### Removed
 
 - The old cirrus sheet (cloud genera, Task 24): `clouds.cirrus`
@@ -157,6 +160,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A thin veil of a near cloud recoloured every cloud behind it (at
+  sunset, red clouds far behind a yellow one turned yellow): the march took
+  the light (the sun's colour through the air, twilight, eclipses:
+  `cloudSunAndSky`) once a pixel, at its first cloud. It takes it again as
+  the ray goes on, at a cloud sample past `max(growth × where it was last
+  taken, that + a least distance)` (`lightStale`, the uniform
+  `uLightRefresh`): `CloudSettings.light_refresh_growth` (presets 2× low,
+  1.6× mid, 1.4× high, 1.25× ultra; 0 once a pixel; the demo's L cycles
+  them) and `light_refresh_min` (2 km on a 600 km planet, scaled by the
+  radius). The takes along a ray grow with the log of its far/near
+  distance ratio, not its length: grazing views through a cloud field stay
+  cheap.
 - Clouds glowed grey on the Earth-scale planet's night side, against a
   black sky and sea: their sky light faded on a curve of the sun's height
   alone (`smoothstep(-0.3, 0.1)`), tuned on the 600 km planet, where the

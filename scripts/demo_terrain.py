@@ -100,6 +100,10 @@ Controls (AZERTY):
                     the clouds' shimmer in motion
     - / +           trace a smaller / larger share of the pixels a frame in
                     the clouds' march (1/16, 1/9, 1/8, 1/4, all; the HUD shows it)
+    L               cycle how often the clouds' light is taken along a view
+                    ray (CloudSettings.light_refresh_growth: once a pixel,
+                    2x, 1.6x, 1.4x, 1.25x farther; the HUD shows it): far
+                    clouds behind near ones get their own sunset colour
     F7              cycle the shadows' preset (the clouds' shadow on the
                     ground: off at low, more samples above)
     F8              cycle the models' preset (the test balls' and ship's
@@ -706,6 +710,7 @@ class TerrainDemo(ShowBase):
             ("b", self._start_burst, []),
             ("-", self._step_march_block, [-1]),
             ("=", self._step_march_block, [1]),
+            ("l", self._cycle_light_refresh, []),
             ("+", self._step_march_block, [1]),
             ("shift-=", self._step_march_block, [1]),
             *((str(k + 1), self._toggle_genus, [k]) for k in range(9)),
@@ -1128,6 +1133,7 @@ class TerrainDemo(ShowBase):
             across, up = self.world.clouds.march_block
             traced = "all" if across * up == 1 else f"1/{across * up}"
             clouds += f"   traced {traced} ({across}x{up}, -/+)"
+            clouds += f"   light {_light_refresh_label(self.world.clouds)} (L)"
         if self.clouds is not None and "cirrus" in self.clouds.volume.high_genera:
             shown = self.clouds.genus_visible("cirrus")
             clouds += f"   march cirrus {'on' if shown else 'off'} (C)"
@@ -1394,6 +1400,22 @@ class TerrainDemo(ShowBase):
         across, up = blocks[index]
         share = "all" if across * up == 1 else f"1/{across * up}"
         print(f"clouds: the march traces {share} of the pixels ({across}x{up})")
+
+    def _cycle_light_refresh(self) -> None:
+        """The clouds' light along the view to its next choice
+        (CloudSettings.light_refresh_growth: once a pixel, then coarse to
+        fine), live; the clouds' preset reads "custom" after."""
+        if self.clouds is None:
+            return
+        values = list(LIGHT_REFRESH_CHOICES)
+        current = float(self.world.clouds.light_refresh_growth)
+        value = (
+            values[(values.index(current) + 1) % len(values)]
+            if current in values
+            else values[0]
+        )
+        self._set_world(self.world.with_value("clouds", "light_refresh_growth", value))
+        print(f"clouds: light along the view {_light_refresh_label(self.world.clouds)}")
 
     def _cycle_quality(self, section: str) -> None:
         """One part (a WorldSettings section) to its next preset."""
@@ -1691,6 +1713,16 @@ def start_pose(spec, pose: dict | None, start: tuple[float, float] | None):
     pose = dict(pose or {})
     pose.update(lat=lat, lon=lon, alt=ground + START_CLEARANCE)
     return pose
+
+
+#: The clouds' light along the view, as the L key cycles it
+#: (CloudSettings.light_refresh_growth): once a pixel, then coarse to fine.
+LIGHT_REFRESH_CHOICES = (0.0, 2.0, 1.6, 1.4, 1.25)
+
+
+def _light_refresh_label(settings) -> str:
+    growth = float(settings.light_refresh_growth)
+    return "once" if growth <= 0.0 else f"{growth:g}x"
 
 
 def start_sun(spec, pose: dict | None) -> np.ndarray:

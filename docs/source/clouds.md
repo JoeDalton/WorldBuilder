@@ -1189,8 +1189,19 @@ other receiver takes it (shadows.glsl):
 - the planet's mountains (`terrainShadow`);
 - its rings (`ringVisibility`).
 
-It is evaluated once a pixel, at the first lit sample, where the air's light
-was already taken; the high layer's crossing takes it too. The world binds
+It is evaluated at the first lit sample, and again as the ray goes on
+(`lightStale`): at a cloud sample past `max(growth × where it was last
+taken, that + the least distance)` (`CloudSettings.light_refresh_growth`,
+`light_refresh_min`: 2 km on a 600 km planet, scaled by the radius; the
+`uLightRefresh` uniform). Taken once a pixel, a thin veil of a near cloud
+lit every cloud behind it with its own light: at sunset, a yellow veil
+turned the red clouds far behind it yellow. A geometric growth bounds the
+takes along a ray by the log of its far/near distance ratio (about 19 from
+2 to 300 km at 1.3×), however much cloud a grazing ray crosses: a fixed
+distance would have taken one every few kilometres of it. The quality
+presets go from 2× (low) through 1.6×, 1.4× (high) to 1.25× (ultra); 0 is
+once a pixel; the demo's L cycles them. The high layer's crossing takes
+the light too. The world binds
 the inputs to every pass (`World`: `Shadows.bind` and `ShadowMap.bind`
 through `PlanetClouds.bind_maps`). Before, the march took none of them, since
 the billboards' `cloud.frag` was the only cloud shader that did: in an

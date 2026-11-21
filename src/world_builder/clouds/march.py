@@ -81,6 +81,7 @@ from panda3d.core import (
     PTA_float,
     PTA_int,
     PTA_LMatrix4f,
+    PTA_LVecBase2f,
     PTA_LVecBase2i,
     PTA_LVecBase3f,
     PTA_LVecBase4f,
@@ -348,6 +349,11 @@ def _merged(slabs: list[tuple[float, float]]) -> list[list[float]]:
         else:
             out.append([base, top])
     return out
+
+
+#: The planet radius CloudSettings.light_refresh_min is given for (the
+#: demo's 600 km planet): it scales with the planet's.
+LIGHT_REFRESH_RADIUS = 600e3
 
 
 def sky_bands(slabs: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -2286,6 +2292,9 @@ class CloudMarch:
         self._sun = PTA_LVecBase3f.empty_array(1)
         self._sun[0] = LVecBase3f(0.0, 0.0, 1.0)
         self._steps = PTA_int.empty_array(1)
+        # (least distance, growth) between two takes of the light along a ray
+        # (CloudSettings.light_refresh_*; cloud_march.glsl's uLightRefresh)
+        self._light_refresh = PTA_LVecBase2f.empty_array(1)
         self._split = PTA_float.empty_array(1)  # the near range's end (uSplit)
         self._frame = PTA_int.empty_array(1)
         #: The genera drawn, a bit each, the high genera's past the low
@@ -2319,6 +2328,7 @@ class CloudMarch:
             "uPixelAngle": 0.001,
             "uCloudDebug": 0,
             "uMarchSteps": self._steps,
+            "uLightRefresh": self._light_refresh,
             "uSplit": self._split,
             "uMinStep": min(min_step(f.field) for f in self._genera),
             "uStepGrowth": STEP_GROWTH,
@@ -2556,6 +2566,10 @@ class CloudMarch:
 
     def _apply_live(self, settings: CloudSettings) -> None:
         self._steps[0] = int(settings.march_steps)
+        self._light_refresh[0] = LVecBase2f(
+            float(settings.light_refresh_min) * self.radius / LIGHT_REFRESH_RADIUS,
+            float(settings.light_refresh_growth),
+        )
         if settings.reflected:
             self.root.show(REFLECTION_CAMERA_MASK)
         else:

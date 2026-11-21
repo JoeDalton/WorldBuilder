@@ -45,7 +45,13 @@ uniform vec3  uCamRender;        // camera, render frame
 uniform vec3  camPos;            // camera, planet frame
 uniform float exposure;
 uniform int   uOwnAtmosphere;    // the planet's atmosphere (reddens sunlight), -1 none
-uniform float uPixelAngle;       // radians per pixel of the march (a block's area's side)
+uniform float uPixelAngle;
+// The light along a ray (cloudSunAndSky) is taken anew at a cloud sample
+// past max(y x where it was last taken, that + x), metres (march.py's
+// CloudSettings.light_refresh_*): a far cloud behind a near one is lit by
+// its own light (its sunset colour), not the near one's. Taken once a pixel,
+// a thin veil nearby coloured every cloud behind it. y 0: once a pixel.
+uniform vec2 uLightRefresh;       // radians per pixel of the march (a block's area's side)
 uniform int   uMarchSteps;       // the step budget per pixel
 uniform float uMinStep;          // metres: the shortest step, near the camera
 uniform float uStepGrowth;       // a step's length per metre of distance, farther
@@ -844,6 +850,13 @@ float genusDensity(int g, Field lf, vec3 p, vec4 weather, float t,
     return density;
 }
 
+// Whether the light taken litAt metres along the ray is stale at t
+// (uLightRefresh): t past growth x litAt and past litAt + the least distance.
+bool lightStale(float t, float litAt) {
+    return uLightRefresh.y > 0.0
+        && t > max(uLightRefresh.y * litAt, litAt + uLightRefresh.x);
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy) * uBlock + uOffset;
     if (any(greaterThanEqual(vec2(pixel), uViewSize))) {
@@ -1004,6 +1017,7 @@ void main() {
     vec3 skylight = vec3(0.0);
     vec3 twilight = vec3(0.0);
     bool lit = false;
+    float litAt = 0.0;  // where the light was last taken (uLightRefresh)
     int current = -1;
     Field lf = getField(0);  // replaced at the first sample (current -1)
     int steps = 0;
@@ -1066,10 +1080,12 @@ void main() {
                 continue;
             }
             float alpha = 1.0 - exp2(-lf.extinction * density * dt);
-            if (!lit) {
-                // The light (the air's, eclipses, mountains, rings), once a pixel.
+            if (!lit || lightStale(t, litAt)) {
+                // The light (the air's, eclipses, mountains, rings), at the
+                // first cloud and again as the ray goes on (lightStale).
                 cloudSunAndSky(p, sunlight, skylight, twilight);
                 lit = true;
+                litAt = t;
             }
             vec3 radiance = (uCloudDebug & 256) != 0 ? vec3(0.8)  // no lighting (profiling)
                 : cloudRadianceAt(only, lf, p, density, -dir, shading, farCoverage, sunlight,
@@ -1142,9 +1158,10 @@ void main() {
                 if (density <= 0.0) {
                     continue;
                 }
-                if (!lit) {
+                if (!lit || lightStale(t, litAt)) {
                     cloudSunAndSky(p, sunlight, skylight, twilight);
                     lit = true;
+                    litAt = t;
                 }
                 float own = lf.extinction * density;
                 sigma += own;
