@@ -11,7 +11,6 @@ from dataclasses import replace
 
 import numpy as np
 from panda3d.core import BitMask32, NodePath
-from planets import PRESETS
 
 from world_builder.depth import (
     CLOUD_FAR_BIT,
@@ -34,6 +33,7 @@ from world_builder.terrain.mesh import (
     shared_triangles,
     vertex_format,
 )
+from world_builder.world_file import load_planet
 
 
 def test_vertex_format_matches_the_packed_records():
@@ -44,7 +44,7 @@ def test_vertex_format_matches_the_packed_records():
 
 
 def test_chunk_node_holds_the_bytes_and_shared_indices():
-    spec = replace(PRESETS["desert"], seed=3).resolved()
+    spec = replace(load_planet("desert"), seed=3).resolved()
     chunk = generate_chunk(spec, (2, 4, 1, 1))
     node = build_chunk_node(chunk)
     fine, coarse = (child.node() for child in NodePath(node).get_children())
@@ -77,7 +77,7 @@ def test_the_coarse_passes_draw_the_coarse_mesh_alone():
     """The clouds' depth passes and the sea's reflection draw every other
     vertex (a quarter of the triangles: performance.md §34); the view's
     cameras the fine mesh alone."""
-    spec = replace(PRESETS["desert"], seed=3).resolved()
+    spec = replace(load_planet("desert"), seed=3).resolved()
     node = build_chunk_node(generate_chunk(spec, (2, 4, 1, 1)))
     fine, coarse = (child.node() for child in NodePath(node).get_children())
     for camera in (NEAR_CAMERA_MASK, FAR_CAMERA_MASK):

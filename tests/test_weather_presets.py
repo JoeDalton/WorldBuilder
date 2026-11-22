@@ -6,7 +6,6 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from planets import PRESETS
 
 from world_builder.clouds.synoptic import Scales
 from world_builder.clouds.synoptic.jets import troughs
@@ -28,8 +27,9 @@ from world_builder.clouds.weather import (
 )
 from world_builder.terrain.chart import dirs_from_latlon
 from world_builder.terrain.planet import Planet
+from world_builder.world_file import load_planet
 
-PLANET = PRESETS["earthlike"]
+PLANET = load_planet("earthlike")
 SCALES = Scales.from_planet(PLANET)
 LOW_LAT = 0.5 * (SCALES.storm_bands[0][0] + SCALES.storm_bands[0][1])
 
@@ -139,7 +139,7 @@ def test_infeasible_raises(planet):
             SCALES,
             planet,
         )
-    desert = PRESETS["desert"]
+    desert = load_planet("desert")
     with pytest.raises(ValueError, match="ocean"):
         solve(
             WeatherSpec(desert, pins=(WeatherPin(15.0, 0.0, Preset.HURRICANE),)),

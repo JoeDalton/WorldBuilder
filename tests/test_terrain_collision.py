@@ -20,7 +20,6 @@ from panda3d.core import (
     CollisionTraverser,
     GeomNode,
 )
-from planets import PRESETS
 from timing import unbudgeted
 
 from world_builder.terrain.biomes import BIOMES
@@ -29,6 +28,7 @@ from world_builder.terrain.chunkgen import QUADS, VERTS, generate_chunk
 from world_builder.terrain.native import NativeCollisionError, NativeTerrain, _binding
 from world_builder.terrain.planet import Planet
 from world_builder.terrain.query import TerrainQuery
+from world_builder.world_file import load_planet
 
 #: The demo level's reference point: a coast, with a range to the south.
 REFERENCE = (20.91, 30.4)
@@ -52,7 +52,7 @@ def _native_or_skip(planet, ocean):
 @pytest.fixture(scope="module")
 def planet():
     spec = replace(
-        PRESETS["earthlike"],
+        load_planet("earthlike"),
         seed=19,
         reference_lat=REFERENCE[0],
         reference_lon=REFERENCE[1],
@@ -290,7 +290,7 @@ def moon(showbase):
     executor = ChunkExecutor(backend="inline", inline_budget=16)
     terrain = Terrain(
         showbase.render,
-        PRESETS["moon"],
+        load_planet("moon"),
         executor=executor,
         settings=unbudgeted(TerrainSettings(min_level=7)),
     )
@@ -500,7 +500,7 @@ def ocean_terrain(showbase):
     from world_builder.terrain.terrain import Terrain, TerrainSettings
     from world_builder.terrain.workers import ChunkExecutor
 
-    spec = replace(PRESETS["earthlike"], seed=19).resolved()
+    spec = replace(load_planet("earthlike"), seed=19).resolved()
     planet = Planet(spec)
     dirs = np.random.default_rng(8).normal(size=(4000, 3))
     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)

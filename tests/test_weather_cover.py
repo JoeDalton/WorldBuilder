@@ -8,7 +8,6 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from planets import PRESETS
 
 from world_builder.clouds import weather
 from world_builder.clouds.synoptic import Scales
@@ -22,6 +21,7 @@ from world_builder.clouds.weather import (
     synoptic_cube,
 )
 from world_builder.terrain.chart import latlon
+from world_builder.world_file import load_planet
 
 _DIRS = np.random.default_rng(1).normal(size=(20000, 3))
 _DIRS /= np.linalg.norm(_DIRS, axis=1, keepdims=True)
@@ -41,7 +41,7 @@ def _drawn(spec):
 
 @pytest.fixture(scope="module")
 def earth():
-    return WeatherSpec(PRESETS["earth"])
+    return WeatherSpec(load_planet("earth"))
 
 
 def test_the_contrast_is_a_smooth_step_about_its_edge():
@@ -54,7 +54,7 @@ def test_the_contrast_is_a_smooth_step_about_its_edge():
 
 
 def test_the_subtropics_are_the_backgrounds_minimum():
-    scales = Scales.from_planet(PRESETS["earth"])
+    scales = Scales.from_planet(load_planet("earth"))
     lat = np.linspace(0.0, 90.0, 181)
     cover = zonal_cover(lat, scales)
     sub = (lat > 20.0) & (lat < 35.0)

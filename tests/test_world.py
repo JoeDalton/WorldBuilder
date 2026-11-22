@@ -14,7 +14,6 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 from panda3d.core import LPoint3f, NodePath, Shader, ShaderAttrib
-from planets import PRESETS
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
@@ -46,9 +45,10 @@ from world_builder.world import (
     SunLook,
     World,
 )
+from world_builder.world_file import load_planet
 
 R = 600e3
-EARTHLIKE = PRESETS["earthlike"]
+EARTHLIKE = load_planet("earthlike")
 #: A small icy ring around the world's origin.
 RING = FieldSpec(
     shape=Annulus(2.0e6, 3.0e6, 2000.0, edge=300.0),
@@ -56,7 +56,7 @@ RING = FieldSpec(
     sizes=Distribution.power_law(3.0, 50.0, 2000.0),
     shapes=ShapeSpec(prototypes=2),
 )
-MOON = replace(PRESETS["moon"], seed=7)
+MOON = replace(load_planet("moon"), seed=7)
 
 
 # ── looks ──────────────────────────────────────────────────────────────────────
@@ -111,7 +111,10 @@ def test_looks_are_their_parts_arguments(look, part, own):
             [BodyLook("a", EARTHLIKE, clouds=CloudLook(), mass=1.0)],
             "need an atmosphere",
         ),
-        ([BodyLook("a", PRESETS["desert"], ocean=OceanLook(), mass=1.0)], "has_ocean"),
+        (
+            [BodyLook("a", load_planet("desert"), ocean=OceanLook(), mass=1.0)],
+            "has_ocean",
+        ),
         (
             # The cirrus's slab (11-12.5 km) inside the clouds' (10.8-11.8)
             [

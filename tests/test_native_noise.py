@@ -11,10 +11,10 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from planets import PRESETS
 
 from world_builder.terrain import noise
 from world_builder.terrain.chunkgen import generate_chunk, planet_for
+from world_builder.world_file import load_planet
 
 
 @pytest.fixture(scope="module")
@@ -102,7 +102,7 @@ def _coast(spec, level=8):
 def test_chunks_match_numpy(native, monkeypatch):
     """The native noise and the native geometry (chunk.c: face grid,
     normals, slope, packing, the sea box) give numpy's chunk."""
-    spec = replace(PRESETS["earthlike"], seed=19).resolved()
+    spec = replace(load_planet("earthlike"), seed=19).resolved()
     grid = planet_for(spec).grid
     keys = [
         (level, 2, grid.side(level) // 2, grid.side(level) // 2) for level in (0, 5, 10)

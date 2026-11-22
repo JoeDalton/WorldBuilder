@@ -8,7 +8,6 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from fields import PRESETS
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.motion import orientation
@@ -26,6 +25,7 @@ from world_builder.asteroids.spec import (
     SpinSpec,
     Tumble,
 )
+from world_builder.world_file import load_field
 
 PPR = 900 / math.radians(40.0)  # a 900-pixel-high view, 40 degrees
 
@@ -171,7 +171,7 @@ def test_the_population_holds_the_rocks_in_range():
 
 
 def test_ranges_follow_the_pixel_size():
-    pop = Population(Scatter(PRESETS["cube"]))
+    pop = Population(Scatter(load_field("asteroid_cube")))
     ranges = pop.ranges(PPR, 2.0, 1e9)
     hi = np.array([c.hi for c in pop.scatter.classes])
     np.testing.assert_allclose(ranges, 2.0 * hi * PPR / 2.0 + hi)

@@ -9,11 +9,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from planets import PRESETS
 
 from world_builder.terrain import bench, preview
 from world_builder.terrain.planet import Planet
 from world_builder.terrain.pngio import read_image as read_png
+from world_builder.world_file import load_planet
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
@@ -24,7 +24,7 @@ from make_sample_stamps import cliff_lake, write_sample_stamps  # noqa: E402
 
 @pytest.fixture(scope="module")
 def planet():
-    return Planet(PRESETS["earthlike"])
+    return Planet(load_planet("earthlike"))
 
 
 def test_preview_maps_are_images(planet):

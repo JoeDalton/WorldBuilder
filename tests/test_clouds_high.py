@@ -1137,9 +1137,9 @@ def test_the_shader_blends_the_wind_in_float():
 
 @pytest.fixture(scope="module")
 def earth_weather():
-    from planets import PRESETS as PLANETS
+    from world_builder.world_file import load_planet
 
-    return WeatherSpec(PLANETS["earthlike"])
+    return WeatherSpec(load_planet("earthlike"))
 
 
 def test_the_zonal_stream_function_is_the_wind(earth_weather):

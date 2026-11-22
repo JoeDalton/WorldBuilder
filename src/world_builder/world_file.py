@@ -41,6 +41,7 @@ Positions are metres in the world frame; the game places its camera there.
 
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -159,40 +160,54 @@ def parse_world(source: Path | str | dict) -> WorldSpec:
 
 def load_planet(source: Path | str) -> PlanetSpec:
     """The planet of a body file (``planet:`` block) or of a world file's
-    first body (no window needed).
+    first body (no window needed). Read once per file version: the specs are
+    frozen, so callers share them.
 
-    :param source: a path, or a shipped body's name (``"desert"``: see
-        :data:`SHIPPED_PLANETS`)
+    :param source: a path, or the name of a body file of the shipped worlds
+        folder (``"desert"``: see :data:`SHIPPED_PLANETS`)
     :raises ConfigError: if the file has no planet, or it is not valid
     """
+    return _planet(*_locate(source))
+
+
+def load_field(source: Path | str) -> FieldSpec:
+    """The spec of a field file (``spec:`` block) or of a world file's first
+    field (no window needed). Read once per file version, as
+    :func:`load_planet`.
+
+    :param source: a path, or the name of a field file of the shipped worlds
+        folder (``"ring"``: see :data:`SHIPPED_FIELDS`)
+    :raises ConfigError: if the file has no field, or it is not valid
+    """
+    return _field_spec(*_locate(source))
+
+
+def _locate(source: Path | str) -> tuple[str, int]:
+    """:returns: the file's path and modification time, for the caches"""
     path = Path(source)
     if not path.suffix and not path.exists():
         path = WORLDS_PATH / f"{source}.yaml"
+    return str(path), path.stat().st_mtime_ns
+
+
+@functools.lru_cache(maxsize=64)
+def _planet(path: str, mtime: int) -> PlanetSpec:
     data = load_document(path)
     if "planet" not in data and data.get("bodies"):
         data = data["bodies"][0]
     if "planet" not in data:
         raise ConfigError(f"{path}: has no planet")
-    return build(PlanetSpec, data["planet"], Context(path.parent), "planet")
+    return build(PlanetSpec, data["planet"], Context(Path(path).parent), "planet")
 
 
-def load_field(source: Path | str) -> FieldSpec:
-    """The spec of a field file (``spec:`` block) or of a world file's first
-    field (no window needed).
-
-    :param source: a path, or a shipped field's name (``"ring"``: see
-        :data:`SHIPPED_FIELDS`)
-    :raises ConfigError: if the file has no field, or it is not valid
-    """
-    path = Path(source)
-    if not path.suffix and not path.exists():
-        path = WORLDS_PATH / f"{source}.yaml"
+@functools.lru_cache(maxsize=64)
+def _field_spec(path: str, mtime: int) -> FieldSpec:
     data = load_document(path)
     if "spec" not in data and data.get("fields"):
         data = data["fields"][0]
     if "spec" not in data:
         raise ConfigError(f"{path}: has no field")
-    return build(FieldSpec, data["spec"], Context(path.parent), "spec")
+    return build(FieldSpec, data["spec"], Context(Path(path).parent), "spec")
 
 
 def _body(data: Any, base: Path, path: str) -> BodyLook:

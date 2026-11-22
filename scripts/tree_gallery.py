@@ -1,6 +1,6 @@
 """
 The tree assets (world_builder.datafiles) on the ground of the tiny test
-planet (scripts/worlds/tiny.yaml), for a look at them: the world demo (its
+planet (worlds/tiny_world.yaml), for a look at them: the world demo (its
 controls, its light, the world's model shader) with every asset set out in
 rows near the start, each labelled with its name, kind and triangles.
 
@@ -39,7 +39,7 @@ from world_builder.terrain.chart import TangentFrame, dirs_from_latlon  # noqa: 
 from world_builder.terrain.planet import Planet  # noqa: E402
 
 #: The world: the tiny planet alone (no clouds), the gallery's ground.
-WORLD = Path(__file__).resolve().parent / "worlds" / "tiny.yaml"
+WORLD = tools.WORLDS_PATH / "tiny_world.yaml"
 #: The sun, as seen at the site: azimuth and elevation, degrees.
 SUN = (210.0, 35.0)
 

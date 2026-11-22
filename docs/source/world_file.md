@@ -128,9 +128,11 @@ Links nest; a circle is an error.
 They are the library's former presets and demo level written out in full (the
 library keeps no presets: every planet and field is defined in a file), and
 `earth.yaml`, `desert.yaml` and `forest.yaml` are further planets to link from
-a world of your own; `tests/test_world_file.py` checks that they still equal the
-specs the tests were written around. `world_builder.load_planet("desert")`
-reads one planet.
+a world of your own. `world_builder.load_planet("desert")` reads one planet and
+`load_field("ring")` one field (a name of this folder, or a path; each file is
+read once). The tests read these files too: `earthlike.yaml` is the plain
+default planet, `tiny.yaml` the 20 km one (`tiny_world.yaml` is it alone under
+the sun, for the tree scripts).
 
 ## Where the code is
 

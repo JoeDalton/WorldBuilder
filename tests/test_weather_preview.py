@@ -3,18 +3,18 @@ line parsing."""
 
 import numpy as np
 import pytest
-from planets import PRESETS
 
 from world_builder.clouds.synoptic import Scales
 from world_builder.clouds.synoptic.presets import Preset, WeatherPin, parse_pin
 from world_builder.terrain.planet import Planet
+from world_builder.world_file import load_planet
 
 H = 72
 
 
 @pytest.fixture(scope="module")
 def planet():
-    return Planet(PRESETS["earthlike"])
+    return Planet(load_planet("earthlike"))
 
 
 @pytest.fixture(scope="module")

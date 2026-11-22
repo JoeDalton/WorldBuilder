@@ -8,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from planets import PRESETS
 
 import world_builder
 from world_builder.terrain import materials
@@ -23,7 +22,7 @@ from world_builder.terrain.planet import Planet
 from world_builder.terrain.pngio import read_image, write_png
 from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.stamps import Paint, Placement, Stamp
-from world_builder.world_file import parse_world
+from world_builder.world_file import load_planet, parse_world
 
 #: The demo level's reference point: a coast, with a range to the south.
 REFERENCE = (20.91, 30.4)
@@ -40,7 +39,7 @@ def home_spec():
 @pytest.fixture(scope="module")
 def planet():
     spec = replace(
-        PRESETS["earthlike"],
+        load_planet("earthlike"),
         seed=19,
         reference_lat=REFERENCE[0],
         reference_lon=REFERENCE[1],

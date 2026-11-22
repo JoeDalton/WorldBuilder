@@ -8,8 +8,6 @@ from dataclasses import replace
 
 import pytest
 import yaml
-from fields import PRESETS as FIELDS
-from planets import PRESETS
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.spec import Annulus, FieldSpec
@@ -27,8 +25,21 @@ from world_builder.config import (
 )
 from world_builder.terrain.stamps import Paint, Placement, Stamp
 from world_builder.world import CloudLook, OceanLook, SkyLook
+from world_builder.world_file import load_field, load_planet
 
-PLANET = PRESETS["earthlike"]
+#: Every planet and field file of the shipped worlds folder.
+PLANET_FILES = (
+    "kerbin",
+    "earthlike",
+    "earth",
+    "desert",
+    "forest",
+    "moon",
+    "ice",
+    "tiny",
+)
+FIELD_FILES = ("asteroid_cube", "asteroid_icy_ball", "ring")
+PLANET = load_planet("earthlike")
 PLACE = {"lat": 0, "lon": 0, "width": 1, "height": 1}
 
 
@@ -38,15 +49,16 @@ def through_yaml(cls, obj, **kwargs):
     return from_config(cls, yaml.safe_load(text), **kwargs)
 
 
-@pytest.mark.parametrize("name", sorted(PRESETS))
-def test_every_planet_preset_round_trips(name):
-    spec = PRESETS[name]
-    assert through_yaml(type(spec), spec) == spec.resolved()
+@pytest.mark.parametrize("name", PLANET_FILES)
+def test_every_shipped_planet_round_trips(name):
+    spec = load_planet(name)
+    assert through_yaml(type(spec), spec) == spec
 
 
-@pytest.mark.parametrize("name", sorted(FIELDS))
-def test_every_field_preset_round_trips(name):
-    assert through_yaml(FieldSpec, FIELDS[name]) == FIELDS[name]
+@pytest.mark.parametrize("name", FIELD_FILES)
+def test_every_shipped_field_round_trips(name):
+    spec = load_field(name)
+    assert through_yaml(FieldSpec, spec) == spec
 
 
 @pytest.mark.parametrize("obj", [AtmosphereParams(), OceanLook(), SkyLook()])
@@ -89,7 +101,7 @@ def test_stamps_and_paints_keep_their_images_relative_to_the_file(tmp_path):
     )
     config = to_config(spec, tmp_path)
     assert config["stamps"][0]["heightmap"] == "s/a.png"
-    assert from_config(PLANET.__class__, config, tmp_path) == spec.resolved()
+    assert from_config(PLANET.__class__, config, tmp_path) == spec
 
 
 def test_numbers_may_be_written_as_yaml_reads_them_as_text():

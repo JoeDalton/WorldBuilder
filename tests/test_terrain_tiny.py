@@ -1,26 +1,25 @@
-"""The tiny test planet (PRESETS["tiny"])."""
+"""The tiny test planet (load_planet("tiny"))."""
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import numpy as np
-from planets import PRESETS
 
 from world_builder.terrain import biomes
 from world_builder.terrain.chart import dirs_from_latlon
 from world_builder.terrain.cubesphere import grid_for
 from world_builder.terrain.planet import Planet
+from world_builder.world_file import load_planet
 
 #: The tiny planet over its test forest, grass and desert.
-TINY = replace(PRESETS["tiny"], reference_lat=33.3, reference_lon=-147.0).resolved()
+TINY = load_planet("tiny")
 
 
 def test_tiny_is_a_cloudless_20_km_planet():
     """The test planet is small and drawn without clouds; the others keep theirs."""
     spec = TINY
     assert spec.name == "tiny" and spec.radius == 20e3 and not spec.has_clouds
-    assert all(s.has_clouds for n, s in PRESETS.items() if n != "tiny")
+    for name in ("earthlike", "earth", "desert", "forest", "moon"):
+        assert load_planet(name).has_clouds or name == "moon"
     assert grid_for(spec.radius).max_level == 8
 
 

@@ -10,16 +10,16 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from planets import PRESETS
 
 from world_builder.datafiles import TREES_PATH, tree_assets
 from world_builder.terrain import forest
 from world_builder.terrain.biomes import BIOMES, DESERT, FOREST, GRASS, SNOW
 from world_builder.terrain.cubesphere import UV_PERIOD, VERTS, face_dirs, grid_for
+from world_builder.world_file import load_planet
 
 
 def _chunk(biome: int, key=(1, 2, 300, 400)):
-    spec = PRESETS["tiny"].resolved()
+    spec = load_planet("tiny").resolved()
     grid = grid_for(spec.radius)
     weights = np.zeros((VERTS * VERTS, len(BIOMES)), dtype=np.uint8)
     weights[:, biome] = 255
@@ -190,12 +190,13 @@ def test_a_barren_planet_grows_nothing():
 
 
 def test_a_chunk_carries_the_far_forest_in_its_vertices():
-    from planets import PRESETS
-
     from world_builder.terrain.chunkgen import VERTEX_DTYPE, generate_chunk
+    from world_builder.world_file import load_planet
 
     assert VERTEX_DTYPE.itemsize == 40
-    spec = replace(PRESETS["tiny"], reference_lat=33.3, reference_lon=-147.0).resolved()
+    spec = replace(
+        load_planet("tiny"), reference_lat=33.3, reference_lon=-147.0
+    ).resolved()
     grid = grid_for(spec.radius)
     from world_builder.terrain.chart import dirs_from_latlon
 

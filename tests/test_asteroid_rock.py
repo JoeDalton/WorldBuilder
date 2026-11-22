@@ -9,7 +9,6 @@ import time
 
 import numpy as np
 import pytest
-from planets import PRESETS
 
 from world_builder.asteroids.rock import ROCK_UV_PERIOD, RockSpec
 from world_builder.asteroids.shape import (
@@ -26,6 +25,7 @@ from world_builder.terrain.cubesphere import UV_PERIOD, grid_for
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, Planet
 from world_builder.terrain.quadtree import LodSelector, NativeLodSelector
 from world_builder.terrain.workers import ChunkExecutor
+from world_builder.world_file import load_planet
 
 SHAPES = ShapeSpec(prototypes=4)
 
@@ -35,7 +35,7 @@ def _rock(radius: float = 200.0, **kwargs) -> RockSpec:
 
 
 def test_a_planet_is_its_own_body():
-    spec = PRESETS["moon"]
+    spec = load_planet("moon")
     planet = spec.evaluator()
     assert isinstance(planet, Planet)
     assert planet.height_bounds == PLANET_HEIGHT_BOUNDS

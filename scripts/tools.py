@@ -27,9 +27,8 @@ from world_builder.terrain.chart import TangentFrame, dirs_from_latlon, latlon
 from world_builder.terrain.planet import Planet
 
 #: The world the scripts fly by default.
-DEFAULT_WORLD = (
-    Path(__file__).resolve().parents[1] / "src/world_builder/worlds/three_planets.yaml"
-)
+WORLDS_PATH = Path(__file__).resolve().parents[1] / "src/world_builder/worlds"
+DEFAULT_WORLD = WORLDS_PATH / "three_planets.yaml"
 #: Height of a start above the ground there, metres.
 START_CLEARANCE = 400.0
 #: Shortest wavelength of the coarse ground a start also clears, metres:

@@ -8,13 +8,13 @@ import os
 
 import numpy as np
 import pytest
-from planets import PRESETS
 
 from world_builder import utils
 from world_builder.atmosphere import MAX_ATMOSPHERES, AtmosphereParams, Atmospheres
 from world_builder.terrain import workers
 from world_builder.terrain.pngio import read_image, write_png
 from world_builder.terrain.workers import ChunkExecutor
+from world_builder.world_file import load_planet
 
 # ── utils ──────────────────────────────────────────────────────────────────────
 
@@ -84,7 +84,7 @@ def test_unknown_backend_is_refused():
 def test_thread_backend_generates_chunks():
     executor = ChunkExecutor(backend="thread", workers=2)
     try:
-        version = executor.set_spec(PRESETS["moon"])
+        version = executor.set_spec(load_planet("moon"))
         assert executor.version == version
         assert executor.version_of("elsewhere") == 0
         key = (8, 0, 0, 0)

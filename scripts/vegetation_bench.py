@@ -2,7 +2,7 @@
 The vegetation's benchmark and visual check, on the tiny test planet.
 
 Renders the tiny planet (20 km, no clouds:
-scripts/worlds/tiny.yaml) from fixed
+worlds/tiny_world.yaml) from fixed
 poses over its forest, grassland and desert, and times each settled view
 as ``terrain_shots.py`` does (every timed frame waits for the GPU, the
 median is reported). Saves a PNG per pose, and optionally the timings as
@@ -53,9 +53,8 @@ from world_builder.terrain.chart import (  # noqa: E402
 )
 from world_builder.terrain.planet import Planet  # noqa: E402
 
-#: The tiny test planet's world file (generated from the tiny planet with
-#: world_builder.world_file.world_to_yaml): no clouds, no stamps.
-TINY_WORLD = Path(__file__).resolve().parent / "worlds" / "tiny.yaml"
+#: The tiny test planet's world file: no clouds, no stamps.
+TINY_WORLD = tools.WORLDS_PATH / "tiny_world.yaml"
 
 #: name -> (lat, lon, metres above the ground, heading, pitch, (sun azimuth,
 #: elevation)); heading counter-clockwise from north (-90 = east)

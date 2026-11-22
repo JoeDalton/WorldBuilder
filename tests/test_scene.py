@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 from panda3d.core import NodePath, Texture
-from planets import PRESETS
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
 from world_builder.clouds.cloud import CloudSettings
@@ -27,6 +26,7 @@ from world_builder.ocean import OceanSettings, aces_tonemap
 from world_builder.sky import Sky
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.workers import ChunkExecutor
+from world_builder.world_file import load_planet
 
 R = 600e3
 
@@ -137,7 +137,7 @@ def sea(window):
     executor = ChunkExecutor(backend="inline", inline_budget=64)
     terrain = Terrain(
         window.render,
-        PRESETS["earthlike"],
+        load_planet("earthlike"),
         executor=executor,
         settings=TerrainSettings(min_level=7),
     )
@@ -456,7 +456,7 @@ def terrain(showbase):
     executor = ChunkExecutor(backend="inline", inline_budget=16)
     made = Terrain(
         showbase.render,
-        PRESETS["moon"],
+        load_planet("moon"),
         executor=executor,
         settings=TerrainSettings(min_level=7),
     )
@@ -578,7 +578,7 @@ def clouds(showbase):
         executor,
         altitude=2200.0,
         settings=CloudSettings(octave_bands=2),
-        planet=PRESETS["forest"],
+        planet=load_planet("forest"),
     )
     yield made, executor
     made.remove()

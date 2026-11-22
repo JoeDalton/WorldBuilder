@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.5.0] 2026-11-22
+
 ### Added
 
 - World files: a whole world (bodies, asteroid fields and rings, sun, sky) in
@@ -49,16 +52,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_ringlets`: `worlds/asteroid_cube.yaml`, `asteroid_icy_ball.yaml` and
   `ring.yaml` define the fields in full; `world_builder.load_field("ring")`
   reads one. `asteroids.preview --field` and `asteroid_bench.py --field` take
-  a file or a shipped name (they took a preset name). The tests keep their
-  specs in `tests/fields.py`.
+  a file or a shipped name (they took a preset name). The tests read the
+  files.
 - `world_builder.terrain.planet.PRESETS` (`earthlike`, `earth`, `desert`,
   `forest`, `moon`, `ice`, `tiny`, `jupiter_rocky`): the library keeps no
   planet presets. `worlds/earth.yaml`, `desert.yaml` and `forest.yaml` (and
   the existing `kerbin`, `moon`, `ice`) define the planets in full;
   `world_builder.load_planet("desert")` reads one for the tools that draw a
   planet alone (`terrain.preview --planet`, `terrain_metrics.py --planet`,
-  `weather_report.py --planet`, `find_landforms.py --planet`). The tests keep
-  the specs they were written around in `tests/planets.py`.
+  `weather_report.py --planet`, `find_landforms.py --planet`). The tests read
+  the files too (`earthlike.yaml`, `tiny.yaml` and the others), through
+  `load_planet` and `load_field`; a loaded planet is no longer resolved
+  (`sea_bias` is computed by `Planet`), so `dataclasses.replace` on one is safe.
 - `world_builder.terrain.level` (`load_level`, `level_for`, the level YAML
   format) and `terrain/levels/` (`demo`, `tiny`, `earth`, `jupiter_rocky`):
   a world file's `planet` block replaces them. The sample stamp images moved

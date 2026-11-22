@@ -13,7 +13,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from planets import PRESETS as PLANETS
 
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.field_setup import _noise
@@ -51,6 +50,7 @@ from world_builder.clouds.planet import PlanetClouds
 from world_builder.clouds.weather import coverage_to_shift, shift_table
 from world_builder.quality import QualityLevel
 from world_builder.terrain.workers import ChunkExecutor
+from world_builder.world_file import load_planet
 
 R = 600e3
 SLAB = (2200.0, 1000.0)
@@ -444,7 +444,7 @@ def _clouds(showbase, executor):
         executor,
         altitude=2200.0,
         settings=CloudSettings(octave_bands=2),
-        planet=PLANETS["forest"],
+        planet=load_planet("forest"),
     )
 
 

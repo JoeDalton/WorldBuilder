@@ -8,7 +8,6 @@ import pickle
 
 import numpy as np
 import pytest
-from fields import PRESETS
 from scipy.spatial import cKDTree
 
 from world_builder.asteroids.distributions import Distribution
@@ -27,6 +26,9 @@ from world_builder.asteroids.spec import (
     Tumble,
 )
 from world_builder.terrain import noise
+from world_builder.world_file import load_field
+
+FIELD_FILES = ("asteroid_cube", "asteroid_icy_ball", "ring")
 
 
 @pytest.fixture
@@ -71,7 +73,7 @@ def test_the_record_matches_the_native_struct():
 
 
 def test_the_same_spec_gives_the_same_rocks_whatever_is_asked():
-    scatter = Scatter(PRESETS["cube"])
+    scatter = Scatter(load_field("asteroid_cube"))
     whole = scatter.rocks_in_box([-3000.0] * 3, [3000.0] * 3)
     halves = np.concatenate(
         [
@@ -91,7 +93,7 @@ def test_the_same_spec_gives_the_same_rocks_whatever_is_asked():
     b = scatter.rocks_in_cells(0, shuffled)
     assert sorted(a["id"].tolist()) == sorted(b["id"].tolist())
     # another seed, another field
-    other = Scatter(FieldSpec(**{**PRESETS["cube"].__dict__, "seed": 1}))
+    other = Scatter(FieldSpec(**{**load_field("asteroid_cube").__dict__, "seed": 1}))
     again = other.rocks_in_box([-3000.0] * 3, [3000.0] * 3)
     assert not set(again["id"].tolist()) & set(whole["id"].tolist())
 
@@ -285,13 +287,14 @@ def test_rocks_near_and_find_clear():
 
 
 def test_too_many_cells_are_refused():
-    scatter = Scatter(PRESETS["cube"])
+    scatter = Scatter(load_field("asteroid_cube"))
     with pytest.raises(ValueError):
         scatter.cells_in_box(0, [-7500.0] * 3, [7500.0] * 3, limit=1000)
 
 
 def test_specs_pickle():
-    for spec in PRESETS.values():
+    for name in FIELD_FILES:
+        spec = load_field(name)
         assert pickle.loads(pickle.dumps(spec)) == spec
 
 
@@ -310,7 +313,9 @@ def test_invalid_specs_are_refused():
 # ── native against numpy ────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("name", ["cube", "icy_ball", "dense", "keep_outs"])
+@pytest.mark.parametrize(
+    "name", ["asteroid_cube", "asteroid_icy_ball", "dense", "keep_outs"]
+)
 def test_the_native_scatter_gives_numpys_rocks(native, name):
     spec = {
         "dense": _dense_field(),
@@ -318,7 +323,7 @@ def test_the_native_scatter_gives_numpys_rocks(native, name):
             count_per_km3=20.0,
             keep_outs=(KeepOut((0.0, 0.0, 0.0), 900.0, end=(2000.0, 0.0, 0.0)),),
         ),
-    }.get(name) or PRESETS[name]
+    }.get(name) or load_field(name)
     fast = Scatter(spec, native=True)
     slow = Scatter(spec, native=False)
     # small rocks, small cells: a smaller region
@@ -339,7 +344,7 @@ def test_the_native_scatter_gives_numpys_rocks(native, name):
 def test_numpy_noise_gives_nearly_the_same_field(native, monkeypatch):
     """Without the native noise, the clumping's last bits differ: a rock on
     the very edge of existing may differ, no more."""
-    spec = PRESETS["cube"]
+    spec = load_field("asteroid_cube")
     lo, hi = [-4000.0] * 3, [4000.0] * 3
     with_native = Scatter(spec, native=False).rocks_in_box(lo, hi)
     monkeypatch.setattr(noise, "_native", lambda: None)
@@ -401,11 +406,12 @@ def test_a_ring_holds_its_density():
 
 
 def test_the_native_scatter_gives_numpys_ring(native):
-    spec = PRESETS["ring"]
+    spec = load_field("ring")
     fast = Scatter(spec, native=True)
     slow = Scatter(spec, native=False)
     # within the ring, across its dense band's edge
-    centre = np.array([0.0, 9.0e7 + 0.5 * 2.0e7, 0.0])
+    shape = spec.shape
+    centre = np.array([0.0, 0.5 * (shape.inner + shape.outer), 0.0])
     reach = np.array([2500.0, 2500.0, 1000.0])
     for cls in range(len(fast.classes)):
         cells = fast.cells_in_box(cls, centre - reach, centre + reach)

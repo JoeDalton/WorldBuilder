@@ -13,7 +13,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 from panda3d.core import ShaderAttrib
-from planets import PRESETS as PLANETS
 
 from world_builder.clouds.cloud import PRESETS, CloudType
 from world_builder.clouds.field_setup import _noise
@@ -55,6 +54,7 @@ from world_builder.clouds.noise import (
 from world_builder.clouds.weather import WeatherSpec
 from world_builder.sky.starfield import cube_directions
 from world_builder.terrain.chart import TangentFrame
+from world_builder.world_file import load_planet
 
 R = 600e3
 SHADERS = Path(__file__).parent.parent / "src/world_builder/clouds/shaders"
@@ -326,7 +326,7 @@ def test_a_deeper_column_needs_less_shift(convective):
 
 @pytest.fixture(scope="module")
 def genera():
-    return GeneraSpec(WeatherSpec(PLANETS["earthlike"]), focus=(20.0, 30.0))
+    return GeneraSpec(WeatherSpec(load_planet("earthlike")), focus=(20.0, 30.0))
 
 
 def _at(genera, feature: Feature, east=0.0, north=0.0):

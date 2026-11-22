@@ -411,8 +411,6 @@ def _build_dataclass(cls: type, value: Any, ctx: Context, path: str) -> Any:
         obj = cls(**kwargs)
     except (ValueError, TypeError) as error:
         raise ConfigError(f"{path}: {error}") from None
-    if name == "PlanetSpec":
-        obj = obj.resolved()
     return obj
 
 

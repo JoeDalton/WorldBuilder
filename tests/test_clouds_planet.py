@@ -7,7 +7,6 @@ itself: test_clouds_march.py; the high layer: test_clouds_high.py.
 
 import numpy as np
 import pytest
-from planets import PRESETS as PLANETS
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
 from world_builder.clouds.cloud import CloudSettings, CloudType
@@ -16,6 +15,7 @@ from world_builder.clouds.march import HIGH_MASK_SHIFT, CloudMarch
 from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.workers import ChunkExecutor
+from world_builder.world_file import load_planet
 
 R = 600e3
 
@@ -54,7 +54,7 @@ def _clouds(showbase, executor, **kwargs):
         executor,
         altitude=2200.0,
         settings=CloudSettings(octave_bands=2),
-        planet=PLANETS["forest"],
+        planet=load_planet("forest"),
         **kwargs,
     )
 
