@@ -1,5 +1,12 @@
 # Performance notes
 
+> **A note on the command lines below.** They are the ones used when each
+> measurement was made. The hand-built terrain demo and its flags (`--genera`,
+> `--showcase`, `--ring`, `--start`, `--planet`, `--cirrus`, the test balls and
+> their poses) have since been replaced by world files (`scripts/demo_world.py`,
+> [World files](world_file.md)), so some of these commands no longer run as
+> written; the measurements and what they showed stand.
+
 Known computational costs and open concerns for `world_builder.terrain` and,
 in §13, the atmosphere, sky and clouds drawn with it, with the measurements
 behind them. Frame rate in the demo is currently high (GTX 1070, i7-6700K: 4

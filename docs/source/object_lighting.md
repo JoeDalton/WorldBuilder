@@ -12,7 +12,7 @@ lighting) and compare.
 
 The terrain, sky, ocean and clouds compute their lighting in physical units,
 where 1.0 is display white and a surface can be much brighter than that:
-noon sunlight in the demo is about 2.6 (`SUN_COLOR`), so a white surface
+noon sunlight in the shipped worlds is about 2.6 (`sun.color`), so a white surface
 facing the sun reflects about 2.6 plus the sky's light. Before a pixel is
 written, every one of them applies the same three steps:
 
@@ -40,7 +40,7 @@ A model the world does not draw has no shader. OpenGL's built-in lighting comput
 `AmbientLight` on `render`, set each frame from the light at the camera), or,
 for a model tracked with `World.track_light(node)`, its own pair, set each
 frame from the light where the model is (`world_builder.lights.TrackedLights`;
-the demos track the test ball). Nothing else is applied, which shows on the
+a game tracks its models). Nothing else is applied, which shows on the
 test ball:
 
 - **Clipping**: with sunlight at about 2.4, every part of a white object facing
@@ -128,13 +128,12 @@ for open space); every `update`, `World` gives each shaded node the
 a part swaps in (a new mountain bake) reaches it, and a model flying from
 the planet to the moon changes body. The node's own shader state is set
 aside, and put back by `untrack_light` or `track_light(node,
-shader=False)`. By hand (the terrain demo): make a `ModelLighting` per
+shader=False)`. Without a `World`: make a `ModelLighting` per
 body, bind its parts to `lighting.inputs`, track the node with
 `TrackedLights.track(node, shader=True)` and call `lighting.update` and
 `lighting.apply(node)` every frame.
 
-On the test balls (`terrain_shots.py`'s `ball_*` poses, with
-`--panda-lights` for Panda3D's lighting): at noon the lit side has a
+On a test ball (the white ball, with Panda3D's lighting for comparison): at noon the lit side has a
 gradient instead of a flat white disc, at sunset it is a graded warm light
 instead of a saturated yellow one, and the shadow side takes the sky's
 blue as the ground does.
@@ -225,10 +224,8 @@ Ultra.
   diffuse from below (`0.5 - 0.5 N.up`) and in the environment a
   downward reflection sees. None in open space.
 
-To look at them: `terrain_shots.py --model .../scene.gltf --pose ship
-ship_fill --models-quality low|mid|high|ultra` (the model whole, and the
-camera inside its bounds); F8 in the terrain demo cycles the test balls'
-tier.
+To look at a model under them, track it with `World.track_light(node,
+shader=True)` and fly to it in `demo_world.py` (F8 cycles the models' preset).
 
 Cost, the worst case: SpaceFlight's a-wing cockpit (metal-roughness,
 normal map and emission) covering about 95% of a 2560 x 1440 frame
@@ -255,10 +252,6 @@ nothing measurable at a ship's usual size (the tie-interceptor whole, the
 `ship` pose, within the same noise). Most of the model shader's time is
 still its world shadows (`modelSunlight`), at every tier.
 
-The terrain demo hangs the tie-interceptor beside the white test ball
-(`--test-ship`, SpaceFlight's when it is checked out next to this
-repository; `--no-test-ship`), lit by the model shader: F8 cycles its tier.
-
 A model tracked with `cast=True` also casts shadows (part H of
 [Shadows](shadows.md)): on the terrain and the sea, on the other shaded
-models and on itself. The test balls cast theirs.
+models and on itself.

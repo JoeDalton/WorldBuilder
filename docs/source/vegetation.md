@@ -20,7 +20,7 @@ grid and rules [SS4 s.22, s.29]).
 
 **The density.** Each vertex has a vegetation density in [0, 1] (`ChunkData.density`): the planet's own
 procedural field (fbm of a 2.4 km first wavelength, three octaves, its own seed, through a smoothstep: mostly
-dense, with wide thinner stretches and clearings, never below 0.15), then the level's density paints. A
+dense, with wide thinner stretches and clearings, never below 0.15), then the planet's density paints. A
 density paint (`stamps.DensityPaint`, a level's `density:` entries) is a grayscale image, black bare and white
 full, its alpha (if any) saying where it paints: Serious Sam 4's "spray-painting" of forests, as an override,
 never required.

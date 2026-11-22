@@ -73,7 +73,7 @@ class ChunkData:
         rocks standing on it (:func:`world_builder.terrain.forest.place`), or
         None
     :ivar density: (VERTS, VERTS) float32 the vegetation density (procedural,
-        then the level's density paints), or None (no vegetation)
+        then the planet's density paints), or None (no vegetation)
     :ivar convexity: (VERTS, VERTS) float32 minus the elevation's Laplacian,
         1/m (> 0 on crests), or None (no vegetation)
     """
@@ -320,7 +320,7 @@ def generate_chunk(spec: PlanetSpec, key: Key, version: int = 0) -> ChunkData:
 def vegetation_density(spec: PlanetSpec, dirs: np.ndarray) -> np.ndarray:
     """The vegetation density at (N, 3) directions: the planet's procedural
     field (low-frequency fbm, its own seed: :func:`forest.density_from_noise`),
-    then the level's density paints [SS4 s.22].
+    then the planet's density paints [SS4 s.22].
 
     :returns: (N,) in [0, 1]
     """

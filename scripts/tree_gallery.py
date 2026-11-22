@@ -56,7 +56,7 @@ SITE = (33.6, -146.2)
 #: The camera: this far south of the first row and above the ground, metres.
 CAMERA_BACK = 45.0
 CAMERA_UP = 6.0
-#: The models sink this far into the ground (the drawn ground is the level's
+#: The models sink this far into the ground (the drawn ground is the world's
 #: grid, a little off the exact one), metres.
 SINK = 0.3
 

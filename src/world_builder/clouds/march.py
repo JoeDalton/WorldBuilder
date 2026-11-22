@@ -2828,8 +2828,7 @@ class CloudMarch:
         return [genus.name or "clouds" for genus in self._genera]
 
     def set_genus_visible(self, genus: int | str, visible: bool) -> None:
-        """Draw a genus or not, live (a look-development toggle: the
-        showcase's keys, the demo's C key for the cirrus). Only the view
+        """Draw a genus or not, live (a look-development toggle). Only the view
         hides it: it still shades the others, and the ground.
 
         :param genus: its index or its name (:attr:`genus_names`), or a high

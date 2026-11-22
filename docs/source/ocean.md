@@ -225,7 +225,7 @@ Every cost/quality trade is a field of `OceanSettings`, with LOW / MID / HIGH
 - the reflection's resolution and field-of-view margin.
 
 All are live; `reflection_scale` remakes the buffer on the same camera. The
-terrain demo cycles the presets with F5; `terrain_shots.py` and
+`demo_world.py` cycles the presets with F5; `terrain_shots.py` and
 `flight_bench.py` take `--ocean-quality`.
 
 ## Debug

@@ -30,7 +30,7 @@ read back after each step, as terrain_shots.py times them):
   samples less at 2 (``AtmosphereSettings.steps``), scaled to all of them
   (``* steps / (steps - 2)``): a linear estimate of the whole march.
 
-With --scene, a bench scene (BENCH_SCENES): the level's planet simple (no
+With --scene, a bench scene (BENCH_SCENES): the first planet simple (no
 vegetation, mountains 600 m), with its reflective sea or without, at the
 ground, 1.5 km and 10 km up over the start.
 

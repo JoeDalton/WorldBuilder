@@ -22,7 +22,7 @@ terrain root is, and :meth:`ModelLighting.apply` gives a model that state.
 ``World.track_light(node, shader=True)`` does it every frame for the body
 nearest the node.
 
-Usage, by hand (``World`` does all of it)::
+Usage without a ``World`` (it does all of this)::
 
     lighting = ModelLighting(exposure=0.9, atmosphere=0, terrain=terrain)
     atmospheres.bind(lighting.inputs)

@@ -25,7 +25,6 @@ python scripts/demo_world.py src/world_builder/worlds/deep_space.yaml   # astero
 python scripts/terrain_shots.py           # fixed poses, to PNG, with frame times
 python scripts/flight_bench.py            # frame times in scripted fast flights
 python -m world_builder.terrain.preview   # globe and top-down terrain maps, to PNG
-python scripts/demo_clouds.py             # the flat cloud field around a smiley
 ```
 
 The controls are listed at the top of each demo.

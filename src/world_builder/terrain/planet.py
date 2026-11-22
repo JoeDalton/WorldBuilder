@@ -267,8 +267,8 @@ class PlanetSpec:
         surface, and the sea counted as solid by queries. Without one the
         lowlands are dry basins
     :ivar has_vegetation: False for a barren world (no grass, no forest)
-    :ivar has_clouds: False for a world drawn without clouds (the demos and
-        benchmarks leave them out; a game's :class:`World` decides its own)
+    :ivar has_clouds: False for a world drawn without clouds (the tiny planet; a game's
+        :class:`World` decides its own)
     :ivar day_length_h: sidereal rotation period, hours: with the radius it
         sets the weather's scales (:class:`clouds.synoptic.Scales`)
     :ivar stratification: buoyancy frequency times tropopause height N*H,

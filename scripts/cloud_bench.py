@@ -49,8 +49,8 @@ sky and the clouds, so the clouds are most of the frame.
                        degrees a frame; --stability frames, default 30):
                        against the same flight at full resolution (below)
 
-The planet is the demo level's (its radius and climate drive the weather),
-with no terrain drawn: below the horizon is the sky's own ground. As
+The planet is the first of three_planets.yaml (its radius and climate drive
+the weather), with no terrain drawn: below the horizon is the sky's own ground. As
 terrain_shots.py does, each timed frame waits for the GPU (a one-pixel read
 back), so a frame is CPU and GPU in series. Each pose is timed with the
 clouds shown, then hidden; the difference is the clouds' cost.
@@ -58,7 +58,7 @@ clouds shown, then hidden; the difference is the clouds' cost.
 On WSL, Mesa picks its CPU rasteriser (llvmpipe) unless told to use the
 GPU: run with ``GALLIUM_DRIVER=d3d12``. The renderer is printed first.
 
-Poses, over the level's reference point, with the clouds' base at 2.2 km and
+Poses, over the planet's reference point, with the clouds' base at 2.2 km and
 the sun at azimuth 210, elevation 35: below (300 m, the horizon), start
 (1.3 km, looking a little up), inside (2.7 km, in the slab), above (4.5 km,
 looking down at the deck), high (20 km), orbit (3 radii up, looking down),
@@ -184,7 +184,7 @@ def sun_lighting(azimuth: float, elevation: float) -> tuple[np.ndarray, tuple, t
     return direction, tuple(sun), tuple(sky)
 
 
-#: name -> (altitude, heading, pitch), over the level's reference point
+#: name -> (altitude, heading, pitch), over the planet's reference point
 POSES = {
     "below": (300.0, 0.0, 5.0),
     "start": (1300.0, 0.0, 10.0),
@@ -386,7 +386,7 @@ class CloudBench(ShowBase):
         east: float = 0.0,
         north: float = 0.0,
     ) -> None:
-        """Over the level's reference point (moved *east* and *north*
+        """Over the planet's reference point (moved *east* and *north*
         metres along the ground): *altitude* metres up, heading and pitch in
         the local frame (degrees), the sun at (azimuth, elevation) as seen
         there."""

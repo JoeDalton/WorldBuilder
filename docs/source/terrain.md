@@ -33,7 +33,7 @@ The demo, the shots, the preview and the bench take `--radius` (metres).
 
 ### Planet scale
 
-The radius is the one knob (`PlanetSpec.radius`, `planet.radius` in a level,
+The radius is the one knob (`PlanetSpec.radius`, `planet.radius` in a world file,
 `--radius` on the tools). It defaults to 600 km, a Kerbin-sized world.
 
 - **Planetary features scale with the radius.** The warp, continents, mountain

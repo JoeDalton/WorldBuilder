@@ -1,5 +1,12 @@
 # Backlog
 
+> **A note on the command lines below.** They are the ones used when each
+> measurement was made. The hand-built terrain demo and its flags (`--genera`,
+> `--showcase`, `--ring`, `--start`, `--planet`, `--cirrus`, the test balls and
+> their poses) have since been replaced by world files (`scripts/demo_world.py`,
+> [World files](docs/source/world_file.md)), so some of these commands no longer run as
+> written; the measurements and what they showed stand.
+
 Features found missing but not made, so the work could move on. Each item
 says where it came from. Performance work has its own ranked list,
 [docs/source/performance_backlog.md](docs/source/performance_backlog.md);

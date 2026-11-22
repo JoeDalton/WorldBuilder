@@ -66,7 +66,7 @@ CPU step (3.5-4.0 ms): **at 2560 x 1440 the frame is GPU-bound** by 3-4 ms, at
 
 In flight (the low flight, 2560 x 1440): mean 6.8 ms, median 6.3, p95 11.3, max
 31.5. In the slowest 5 % of frames `renderFrame` takes 7.7 ms (3.5 median) and
-`Terrain._select` 1.3 (0.24 median); `TerrainDemo._fly` 0.7, a gen-1 GC 0.3,
+`Terrain._select` 1.3 (0.24 median); the demo's `_fly` 0.7, a gen-1 GC 0.3,
 `Terrain._upload` 0.5.
 
 ## The culprits, ranked

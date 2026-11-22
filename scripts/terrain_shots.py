@@ -47,8 +47,8 @@ Without the wait, an offscreen frame is not held back by the GPU at all. Each
 pose prints whether it settled, the body's chunk count and finest level, the
 LOD pass and the median frame time.
 
-Poses (the lat/lon ones are those of the home planet of the shipped worlds,
-the demo level's earthlike planet): ground (the start), ground_up (the same,
+Poses (the lat/lon ones are those of the home planet of the shipped worlds):
+ground (the start), ground_up (the same,
 11 degrees up), coast (2 km up over the reference point), high (20 km up),
 swell / sea_surface (13 and 17 km up, inside the sea's 12-18 km fade from its
 near look to its flat far one), stratosphere (200 km up), orbit (3 radii up,
@@ -84,7 +84,7 @@ mountains_low (clouds_grazing's view, the sun 6 degrees up in the
 south-east), mountains_orbit (1 radius up, the sun 8 degrees up),
 moon_terminator (1 moon radius up over its craters, the sun 4 degrees up),
 mesas_low (the ground view, the sun 8 degrees up in the west: the mesas'
-shadows, near and far), mesa_above (straight down on the level's mesa from
+shadows, near and far), mesa_above (straight down on a mesa from
 6 km, the same sun). The clouds' long shadows: dusk_in_clouds and
 dusk_above_clouds (2.7 km, in the deck, and 4.5 km, over it, looking north,
 the sun 4 degrees up in the west). A world with a field (a ring) also has
@@ -236,7 +236,7 @@ def _poses(demo: WorldDemo) -> dict:
     # The start view's mesas (750 m) in a low western sun: their shadows
     # nearer than the global map's reach are the local map's.
     poses["mesas_low"] = poses["ground"]
-    # And straight down on the level's mesa (its stamp), 6 km up.
+    # And straight down on a mesa (its stamp), 6 km up.
     poses["mesa_above"] = (39.0879, -125.2894, 6000.0, 0.0, -89.9, 0, 0)
     # Dusk in and over the cloud deck, the sun low in the west across the
     # view: the clouds' long shadows on each other.

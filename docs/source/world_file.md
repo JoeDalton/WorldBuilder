@@ -118,15 +118,15 @@ Links nest; a circle is an error.
 - `sky.yaml` (the sky, linked by both worlds), `stamps/` (the images
   `kerbin.yaml` places).
 - `three_planets.yaml`: `kerbin.yaml` (a 600 km earthlike planet: air, cumulus
-  and cirrus, a sea, the demo level's stamps), `moon.yaml` (an airless 200 km
+  and cirrus, a sea, four hand-made stamps and three paints), `moon.yaml` (an airless 200 km
   moon 21,000 km away), `ice.yaml` (a cold dry planet 3000 km across, with air
   and clouds) and `ring.yaml` (a ring of ice rocks, ringlets and a gap, from 5,000
   to 10,000 km, tilted, around the ice planet).
 - `deep_space.yaml`: `asteroid_cube.yaml`, a 15 km cube of rocks in open space,
   with a clear corridor to fly through.
 
-They are the library's former presets and demo level written out in full (the
-library keeps no presets: every planet and field is defined in a file), and
+They are written out in full (the library keeps no presets: every planet and
+field is defined in a file), and
 `earth.yaml`, `desert.yaml` and `forest.yaml` are further planets to link from
 a world of your own. `world_builder.load_planet("desert")` reads one planet and
 `load_field("ring")` one field (a name of this folder, or a path; each file is

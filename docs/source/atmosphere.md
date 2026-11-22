@@ -297,8 +297,7 @@ Its shader shows:
     density, palette coordinate) that the shader colours. The colours are
     live uniforms: a `NebulaStyle` (a three-stop `palette`, `intensity`, the
     Milky Way's colour; `NEBULA_PALETTES` has a few) set with
-    `Sky.set_nebula`. The demo's F6 cycles the palettes, F7 / F8 dim and
-    brighten. The nebulae's size and coverage are generation parameters
+    `Sky.set_nebula`. The nebulae's size and coverage are generation parameters
     (`nebula_scale`, `nebula_coverage`).
 - or **a painted cube map**: `load_cube_map(pattern, loader)` (SpaceFlight's
   `models/skyboxes/purple_#.png`), its full white at `star_intensity`

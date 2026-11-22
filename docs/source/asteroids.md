@@ -493,8 +493,8 @@ approaching, rocks appear out of it while it thins by as much.
   the sky's bin, after the stars, before the clouds (the cirrus's far side
   included); what lies before it after them, as before. Along a ray a ring and the clouds
   never overlap, so the split is exact. No cost seen (`ring_ground` 13.09
-  / 13.12 ms, `ring_orbit` 5.93 / 5.58); `terrain_shots.py --ring` gains
-  `ring_behind_clouds`.
+  / 13.12 ms, `ring_orbit` 5.93 / 5.58); `terrain_shots.py` has a
+  `ring_behind_clouds` pose in a world with a ring.
 - `AsteroidField(haze=False)` leaves it out. In a 15 km field it costs
   nothing seen: nothing is missing nearer than about 57 km.
 

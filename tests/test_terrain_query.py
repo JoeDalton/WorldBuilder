@@ -24,7 +24,7 @@ from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.stamps import Paint, Placement, Stamp
 from world_builder.world_file import load_planet, parse_world
 
-#: The demo level's reference point: a coast, with a range to the south.
+#: The home planet's reference point: a coast, with a range to the south.
 REFERENCE = (20.91, 30.4)
 
 

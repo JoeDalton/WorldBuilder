@@ -24,7 +24,7 @@ def test_tiny_is_a_cloudless_20_km_planet():
 
 
 def test_forest_grass_and_desert_meet_near_the_start():
-    """Within ~1.5 km of the level's reference, all three biomes are dominant
+    """Within ~1.5 km of the planet's reference, all three biomes are dominant
     somewhere, on low, gentle land."""
     spec = TINY
     planet = Planet(spec)
