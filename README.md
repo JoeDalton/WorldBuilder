@@ -20,14 +20,24 @@ planet's centre.
 ## Try it
 
 ```
-python scripts/demo_terrain.py            # planet, moon, atmosphere, clouds, ocean: orbit to ground
-python scripts/terrain_shots.py           # the same from fixed poses, to PNG, with frame times
+python scripts/demo_world.py              # a world file: planet, moon, ice planet and ring, orbit to ground
+python scripts/demo_world.py src/world_builder/worlds/deep_space.yaml   # asteroids in open space
+python scripts/terrain_shots.py           # fixed poses, to PNG, with frame times
 python scripts/flight_bench.py            # frame times in scripted fast flights
 python -m world_builder.terrain.preview   # globe and top-down terrain maps, to PNG
-python scripts/demo_clouds.py             # the flat cloud field around a smiley
 ```
 
 The controls are listed at the top of each demo.
+
+A game loads a whole world, defined in a YAML file (every knob of every
+object; see [World files](docs/source/world_file.md)), in one line:
+
+```python
+from world_builder import load_world
+
+world = load_world(app, "my_world.yaml")    # once
+world.update(camera_position_in_the_world)  # every frame
+```
 
 ## Install
 

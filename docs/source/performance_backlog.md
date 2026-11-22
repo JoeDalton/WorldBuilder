@@ -1,12 +1,19 @@
 # Performance backlog
 
+> **A note on the command lines below.** They are the ones used when each
+> measurement was made. The hand-built terrain demo and its flags (`--genera`,
+> `--showcase`, `--ring`, `--start`, `--planet`, `--cirrus`, the test balls and
+> their poses) have since been replaced by world files (`scripts/demo_world.py`,
+> [World files](world_file.md)), so some of these commands no longer run as
+> written; the measurements and what they showed stand.
+
 Frame-time savings found but not yet made (October 2026). Read this before
 optimising again: the measurements, the candidates and what each would cost
 are here. The history of what was done is in [performance](performance.md).
 
 ## How it was measured
 
-- The terrain demo offscreen at 1600×900, no MSAA, on a GTX 1070, with the
+- The demo offscreen at 1600×900, no MSAA, on a GTX 1070, with the
   machine idle (load below 1). Other load moves the numbers by 1–2 ms.
 - Each timed frame waits for the GPU (a one-pixel read back after
   `taskMgr.step()`, as `scripts/terrain_shots.py` does). Without it an
@@ -108,7 +115,7 @@ median frames and in the slowest 5 %:
 |---|---|---|
 | Panda's `renderFrame` (cull 1.5, draw 3.0) | 4.0 ms | 6.9 ms |
 | `Terrain._select` | 0.7 ms | 1.6 ms |
-| The demo's altimeter (`TerrainDemo._fly`) | 0.8 ms | 1.4 ms |
+| The demo's altimeter (`WorldDemo._fly`) | 0.8 ms | 1.4 ms |
 | `CloudVolume._resort` | 0.7 ms | 1.1 ms |
 | `Terrain._upload` | 0.7 ms | 1.0 ms |
 | `ChunkExecutor.collect` | 0.1 ms | 0.6 ms |
@@ -121,7 +128,7 @@ median frames and in the slowest 5 %:
 Ranked by what they would take off the slow frames. None is made yet.
 
 - **The demo's altimeter** (0.8 ms a frame, +0.6 in slow frames, spikes
-  to 3.9 ms). `TerrainDemo._fly` asks `TerrainQuery.height_at` for one
+  to 3.9 ms). `WorldDemo._fly` asks `TerrainQuery.height_at` for one
   point every frame: ~100 numpy calls (`locate`, `_in_chunk`,
   `_triangle_intersect`, a new ctypes struct for the swell per call). When
   no stored chunk covers the point it evaluates the planet itself
@@ -278,8 +285,7 @@ breakdown above predates them: frames are 1–3 ms shorter now.
   plain one the old code, should take it back.
 - **The CPU light at objects** (Part B): ~0.2 ms of the demos' update per
   frame (the light at the camera, the ball and the sea, ~70 µs each in
-  numpy). One batched call does it in `World`; the hand-built demo still
-  calls per point.
+  numpy). One batched call does it in `World`.
 - **Cheaper terrain in the reflection:** a lighter shader for the reflection
   camera (camera tag states), without detail normals and with fewer texture
   fetches. That saves up to ~1 ms; the difference is hard to see at half

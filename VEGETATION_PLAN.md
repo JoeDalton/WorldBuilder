@@ -8,7 +8,7 @@ Serious Sam 4's rocks, grass, flowers and fields are in scope.
 
 Rules: never commit unless asked; stop for the user's visual check after each part; every cost measured with
 `scripts/vegetation_bench.py --ab` (each pose timed with the vegetation off and on in turn, in one run) on the
-tiny planet (`--planet tiny`), plus the 600 km demo level before a part closes; RTX 3070, 2560 x 1440, HIGH,
+tiny planet (`worlds/tiny_world.yaml`, the bench's default), plus the 600 km home planet (`worlds/three_planets.yaml`) before a part closes; RTX 3070, 2560 x 1440, HIGH,
 the machine idle. Numbers go to docs/source/performance.md and a new docs/source/vegetation.md; the CHANGELOG
 as parts close.
 
@@ -100,7 +100,7 @@ For WorldBuilder:
    elevation, slope) stand for it. Add **convexity** (the elevation's Laplacian at a few metres, computed in
    `chunkgen` beside the slope) and a **per-planet density modulation** at low frequency (procedural
    value noise). **Decided (2026-11-12): density is procedural, with optional stamps, as the biomes**: a
-   level file may paint density over the procedural field the way it paints biomes today
+   world file may paint density over the procedural field the way it paints biomes today
    (`terrain.stamps.Paint`, applied after the weights in `chunkgen`), Serious Sam 4's "spray-painting"
    [SS4 s.22] as an override, never required. Output per vertex: forest
    density in [0, 1] (a new byte in the chunk's weights, or replacing the forest weight's meaning).
@@ -337,9 +337,9 @@ Serious Sam 4 [SS4 s.37-38]: splines (roads, rivers, trails) and patches (fields
 vegetation map out over a transition border, force their own material, level or smooth the elevation, add a
 custom height texture (wheel ruts, crop rows), and place doodads at their edges.
 
-For WorldBuilder: patches as level-file entries beside the existing stamps and paints (`terrain.stamps`): a
+For WorldBuilder: patches as world-file entries beside the existing stamps and paints (`terrain.stamps`): a
 mask that clears or sets vegetation density and a material, crop rows as a height texture; roads later. This is
-data work more than rendering; it waits for a level that needs it.
+data work more than rendering; it waits for a world that needs it.
 
 ## Part V10. Shadows and the other passes
 
@@ -358,7 +358,7 @@ each of V5-V8. The far material first: it is what a flight game shows most, and 
 
 ## Decisions on data (2026-11-12)
 
-1. **Density:** procedural, with optional stamps (paints) in level files, as the biomes (V1).
+1. **Density:** procedural, with optional stamps (paints) in world files, as the biomes (V1).
 2. **Assets:** start with the current packs (forest, birch, snowy pines); better models come later as a
    data swap. To keep that swap cheap, everything that depends on a model is baked or declared, never tuned in
    code:

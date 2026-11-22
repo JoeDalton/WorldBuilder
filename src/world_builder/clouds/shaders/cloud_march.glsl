@@ -683,7 +683,7 @@ void highCrossing(vec2 seg, vec3 dir, inout float transmittance,
     }
     vec3 q = camPos + dir * ts;
     vec3 cover = texture(genusCoverB, q).gba;
-    // Hidden (CloudMarch.set_genus_visible: the demo's C key), their bits
+    // Hidden (CloudMarch.set_genus_visible), their bits
     // past the low genera's (march.HIGH_MASK_SHIFT)
     cover *= vec3((ivec3(uGenusMask) >> ivec3(MAX_GENERA, MAX_GENERA + 1, MAX_GENERA + 2)) & 1);
     if (cover.r + cover.g + cover.b <= 0.0) {

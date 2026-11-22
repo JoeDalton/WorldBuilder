@@ -43,8 +43,8 @@ from world_builder.clouds.weather import (
 from world_builder.sky.starfield import cube_directions
 from world_builder.terrain.chart import TangentFrame, dirs_from_latlon
 from world_builder.terrain.cubesphere import face_dirs
-from world_builder.terrain.planet import PRESETS as PLANETS
 from world_builder.terrain.planet import Planet, PlanetSpec
+from world_builder.world_file import load_planet
 
 R = 600e3
 
@@ -69,7 +69,7 @@ def table(peaks, field):
 
 @pytest.fixture(scope="module")
 def weather():
-    return WeatherSpec(PLANETS["earthlike"])
+    return WeatherSpec(load_planet("earthlike"))
 
 
 @pytest.fixture(scope="module")
@@ -371,12 +371,12 @@ def test_tropical_cyclones_form_over_the_sea(weather):
         elevation, _, _ = planet.sample_dirs(genesis, min_wavelength=60e3)
         assert np.all(elevation < 0.0)
     assert seen > 0
-    dry = synoptic_state(WeatherSpec(PLANETS["desert"]))
+    dry = synoptic_state(WeatherSpec(load_planet("desert")))
     assert not any(o.kind is Kind.TROPICAL for o in dry.systems)
 
 
 def test_a_desert_planet_is_clearer(earth_map):
-    desert = coverage_map(WeatherSpec(PLANETS["desert"]), 64)
+    desert = coverage_map(WeatherSpec(load_planet("desert")), 64)
     assert desert.mean() < 0.6 * earth_map.mean()
 
 

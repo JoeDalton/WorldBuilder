@@ -32,7 +32,7 @@ from world_builder.clouds.light_volume import (
 )
 from world_builder.clouds.weather import sample_cube
 from world_builder.terrain.chart import TangentFrame
-from world_builder.terrain.planet import PRESETS as PLANETS
+from world_builder.world_file import load_planet
 
 R = 600e3
 
@@ -125,7 +125,7 @@ def test_the_bake_is_the_cpus_march_from_each_voxel(window):
         executor,
         altitude=2200.0,
         settings=CloudSettings(octave_bands=2),
-        planet=PLANETS["forest"],
+        planet=load_planet("forest"),
     )
     tile, steps = 64, 16
     volumes = CloudLightVolumes(

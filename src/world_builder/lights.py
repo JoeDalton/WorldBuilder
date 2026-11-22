@@ -8,8 +8,8 @@ a model elsewhere: a ship inside an eclipse while the camera is outside it,
 or on the night side of a terminator the camera has not crossed. A tracked
 node gets its own ``DirectionalLight`` and ``AmbientLight``, and the
 world's are switched off on it (and its children); whoever owns the lights
-(:meth:`World.update <world_builder.world.World.update>`, or a hand-built
-demo) sets them every frame from the light at each node, in one vectorised
+(:meth:`World.update <world_builder.world.World.update>`, or the game)
+sets them every frame from the light at each node, in one vectorised
 call.
 
 Usage::

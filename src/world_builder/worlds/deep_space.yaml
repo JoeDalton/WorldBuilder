@@ -1,0 +1,11 @@
+# Deep space: a 15 km cube of asteroids and nothing else (no body, so no air:
+# the sky is stars and sun).
+sun:
+  direction: [-0.45, -0.85, 0.3]
+  color: [2.6, 2.5, 2.35]
+  angular_radius: 0.009599310885968814
+sky: {file: sky.yaml}
+space_ambient: [0.03, 0.03, 0.04]
+bodies: []
+fields:
+  - {name: cube, file: asteroid_cube.yaml, position: [0.0, 0.0, 0.0], axis: [0.0, 0.0, 1.0]}

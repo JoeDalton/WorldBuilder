@@ -34,20 +34,20 @@ from world_builder.terrain.planet import (
     LOW_CONTINENT,
     LOW_RANGE,
     PLANET_HEIGHT_BOUNDS,
-    PRESETS,
     REFERENCE_RADIUS_M,
     Planet,
     scaled_params,
 )
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS, LodSelector
 from world_builder.terrain.workers import ChunkExecutor
+from world_builder.world_file import load_planet
 
 R = 600e3
 
 
 @pytest.fixture(scope="module")
 def spec():
-    return replace(PRESETS["earthlike"], seed=19).resolved()
+    return replace(load_planet("earthlike"), seed=19).resolved()
 
 
 @pytest.fixture(scope="module")
@@ -84,7 +84,7 @@ def test_sea_bias_sets_the_ocean_fraction(spec, planet):
 def test_interpolated_low_band_matches_direct(radius, tolerance):
     """The lattice interpolation is invisible: centimetres of elevation, at a
     face centre and right at a face edge (where the lattice runs past it)."""
-    planet = Planet(replace(PRESETS["earthlike"], seed=19, radius=radius))
+    planet = Planet(replace(load_planet("earthlike"), seed=19, radius=radius))
     n0 = planet.grid.n0
     for ka0 in (n0 // 2 + 12345, n0 - 40):
         ka = ka0 + 3 * np.arange(60)
@@ -118,10 +118,12 @@ def _random_dirs(n, seed=0):
 
 
 @pytest.mark.parametrize("radius", [600e3, 2400e3])
-@pytest.mark.parametrize("preset", sorted(PRESETS))
+@pytest.mark.parametrize(
+    "preset", ["earthlike", "earth", "desert", "forest", "moon", "ice", "tiny"]
+)
 def test_heights_stay_within_the_bounds(preset, radius):
     """The LOD pass assumes ungenerated ground lies within these."""
-    planet = Planet(replace(PRESETS[preset], seed=3, radius=radius))
+    planet = Planet(replace(load_planet(preset), seed=3, radius=radius))
     elevation, _, _ = planet.sample_dirs(_random_dirs(60000), 400.0)
     lo, hi = PLANET_HEIGHT_BOUNDS
     assert lo < elevation.min() and elevation.max() < hi
@@ -155,7 +157,7 @@ def test_plains_are_flat_and_ranges_rough(planet):
 def test_dunes_cover_the_desert_plains_only():
     """Sand seas cover most plains of the desert planet, at any height, and
     only otherwise flat ground: no range, no tablelands."""
-    planet = Planet(replace(PRESETS["desert"], seed=19))
+    planet = Planet(replace(load_planet("desert"), seed=19))
     dirs = _random_dirs(40000, seed=7)
     masks = planet.landform_masks(dirs)
     low = planet.low_band(dirs)
@@ -177,7 +179,7 @@ def test_dunes_cover_the_desert_plains_only():
 def test_landforms_and_plates_can_be_turned_off():
     """Every optional landform off: the elevation is still a sane, repeatable
     function, and arid land loses its dunes."""
-    desert = replace(PRESETS["desert"], seed=4)
+    desert = replace(load_planet("desert"), seed=4)
     off = replace(
         desert,
         elevation=replace(desert.elevation, plates=0, dunes=False, tablelands=False),
@@ -192,7 +194,7 @@ def test_landforms_and_plates_can_be_turned_off():
 
 
 def test_planetary_features_scale_with_the_radius():
-    base = PRESETS["earthlike"]
+    base = load_planet("earthlike")
     e600, c600 = scaled_params(base)
     assert e600.feature_scale == 1.0
     assert e600.continent_wavelength == base.elevation.continent_wavelength
@@ -220,7 +222,7 @@ def test_planetary_features_scale_with_the_radius():
     [("desert", biomes.DESERT), ("forest", biomes.FOREST), ("ice", biomes.SNOW)],
 )
 def test_presets_bias_the_biomes(preset, expected):
-    planet = Planet(replace(PRESETS[preset], seed=2))
+    planet = Planet(replace(load_planet(preset), seed=2))
     spacing, n = 1500.0, 101
     coords = spacing * (np.arange(n) - n // 2)
     gx, gy = np.meshgrid(coords, coords)
@@ -294,7 +296,7 @@ def _positions(chunk):
 def test_vertices_carry_five_weights_and_the_strata_mask():
     """Beach travels as the rest of the weights; the sixth byte is where the
     strata tint the ground (a canyon of the desert planet, seed 19)."""
-    desert = replace(PRESETS["desert"], seed=19).resolved()
+    desert = replace(load_planet("desert"), seed=19).resolved()
     planet = Planet(desert)
     face, i, j, _, _ = planet.grid.locate(dirs_from_latlon(-0.423, 11.1071), 4)
     chunk = generate_chunk(desert, (4, int(face[0]), int(i[0]), int(j[0])), 0)

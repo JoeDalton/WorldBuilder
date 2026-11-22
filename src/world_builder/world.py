@@ -2,15 +2,18 @@
 A world: every WorldBuilder part a game draws around its camera, built and
 updated as one.
 
-A game describes its world (what bodies there are, where, and how they look)
-and :class:`World` builds and wires the parts: each body's terrain, its air,
+A game describes its world in a world file
+(:mod:`world_builder.world_file`) and loads it in one line,
+``world_builder.load_world(app, "my_world.yaml")``, which builds this
+:class:`World` and its split depth cameras. :class:`World` builds and wires the
+parts: each body's terrain, its air,
 its planet clouds (and their cirrus) and its sea, the asteroid fields and
 rings, the sky, the sun, and Panda3D lights for everything else (the game's
-own models). Every frame, :meth:`World.update` does what
-scripts/demo_terrain.py does by hand: the terrain, the fields, the air, the
-sky, the clouds, the lights and the sea's frame.
+own models). Every frame, :meth:`World.update` does the terrain, the fields,
+the air, the sky, the clouds, the lights and the sea's frame.
 
-Usage::
+Usage, for code that builds its world itself (``load_world`` does this from
+a file)::
 
     from world_builder.world import BodyLook, CloudLook, OceanLook, SunLook, World
 
@@ -212,8 +215,8 @@ class BodyLook:
     """One planet or moon.
 
     :ivar name: what :meth:`World.body` finds it by
-    :ivar spec: its planet (a preset, or a level file's, see
-        :func:`world_builder.terrain.level.load_level`)
+    :ivar spec: its planet (a preset, or one read from a
+        world file: :mod:`world_builder.world_file`)
     :ivar position: its centre, world frame, metres
     :ivar mass: its mass, in the units of the gravity constant given to
         :meth:`World.gravity_field` (keyword only: it has no default)

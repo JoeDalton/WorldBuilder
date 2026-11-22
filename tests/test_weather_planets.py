@@ -1,32 +1,37 @@
 """The Earth-scale and rocky Jupiter-scale planets, and the weather on them."""
 
+from __future__ import annotations
+
 import os
 import time
+from dataclasses import replace
 
 import pytest
 
 from world_builder.clouds.synoptic import Scales
 from world_builder.terrain.cubesphere import grid_for
-from world_builder.terrain.planet import PRESETS
+from world_builder.world_file import load_planet
+
+#: A rocky world of Jupiter's radius and spin (no gas giant: the same terrain,
+#: much larger).
+JUPITER_ROCKY = replace(load_planet("earthlike"), radius=69.911e6, day_length_h=9.925)
 
 
-def test_presets_exist():
-    earth = PRESETS["earth"]
+def test_earth_exists():
+    earth = load_planet("earth")
     assert earth.radius == 6.371e6 and earth.day_length_h == 23.934
     assert earth.has_ocean
-    jupiter = PRESETS["jupiter_rocky"]
-    assert jupiter.radius == 69.911e6 and jupiter.day_length_h == 9.925
 
 
 def test_earth_preset_has_earths_scales():
-    s = Scales.from_planet(PRESETS["earth"])
+    s = Scales.from_planet(load_planet("earth"))
     assert 27.0 < s.hadley_edge < 33.0
     assert 800e3 < s.deformation_radius < 1200e3
 
 
-@pytest.mark.parametrize("name", ["earth", "jupiter_rocky"])
-def test_grid_levels(name):
-    grid = grid_for(PRESETS[name].radius)
+@pytest.mark.parametrize("spec", [load_planet("earth"), JUPITER_ROCKY])
+def test_grid_levels(spec):
+    grid = grid_for(spec.radius)
     assert 1.0 <= grid.spacing0 <= 4.0, grid.spacing0
 
 
@@ -38,20 +43,9 @@ def test_jupiter_bake_bounded():
     from world_builder.clouds.weather import WeatherSpec, coverage_map
 
     start = time.perf_counter()
-    coverage_map(WeatherSpec(PRESETS["earthlike"]))
+    coverage_map(WeatherSpec(load_planet("earthlike")))
     kerbin = time.perf_counter() - start
     start = time.perf_counter()
-    coverage_map(WeatherSpec(PRESETS["jupiter_rocky"]))
+    coverage_map(WeatherSpec(JUPITER_ROCKY))
     jupiter = time.perf_counter() - start
     assert jupiter < 4.0 * kerbin, (kerbin, jupiter)
-
-
-@pytest.mark.parametrize("name", ["earth", "jupiter_rocky"])
-def test_the_demo_level_keeps_the_presets_radius(name):
-    """The demo level's 600 km radius must not override these presets'."""
-    from world_builder.terrain.level import DEMO_LEVEL, level_for, load_level
-
-    spec, pose = load_level(level_for(DEMO_LEVEL, name), name)
-    assert spec.radius == PRESETS[name].radius
-    assert spec.day_length_h == PRESETS[name].day_length_h
-    assert pose is not None

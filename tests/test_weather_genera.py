@@ -37,7 +37,7 @@ from world_builder.clouds.weather import (
 )
 from world_builder.quality import RESTART, QualityLevel
 from world_builder.sky.starfield import cube_directions
-from world_builder.terrain.planet import PRESETS
+from world_builder.world_file import load_planet
 
 SHADERS = Path(__file__).parents[1] / "src/world_builder/clouds/shaders"
 SIZE = 32
@@ -46,7 +46,7 @@ SHARE = noise.FAMILY_SHARE_CHANNEL
 
 @pytest.fixture(scope="module")
 def weather():
-    return WeatherSpec(PRESETS["earthlike"])
+    return WeatherSpec(load_planet("earthlike"))
 
 
 @pytest.fixture(scope="module")
@@ -105,7 +105,7 @@ def test_the_family_slab_stays_under_the_convective_band():
     each, the march's fast loop for both."""
     slabs = [(2200.0, 8300.0)]
     for name, _, base, thickness, _ in genus_specs(
-        GeneraSpec(WeatherSpec(PRESETS["earthlike"]), features=()), 2200.0
+        GeneraSpec(WeatherSpec(load_planet("earthlike")), features=()), 2200.0
     ):
         if name == "stratus":
             slabs.append((base, thickness))

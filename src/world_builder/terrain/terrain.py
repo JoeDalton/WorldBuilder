@@ -3,7 +3,7 @@ Runtime terrain: LOD selection, background generation, upload, and drawing.
 
 Usage::
 
-    terrain = Terrain(parent=render, spec=PRESETS["earthlike"])
+    terrain = Terrain(parent=render, spec=PlanetSpec(name="earthlike"))
     # every frame, with the camera's float64 position in the world frame
     # (metres; the planet's centre is at terrain.position, the origin by
     # default):

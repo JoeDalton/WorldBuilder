@@ -121,8 +121,7 @@ only, so it lines up with the clouds drawn, and it moves with the sun.
   "no clouds overhead". `PlanetClouds.bind_shadow_inputs` binds its volume's
   (and binds a new volume again on a change of renderer; a raymarched one
   ([`CloudMarch`](clouds.md#the-raymarch)) casts a shadow too, through its
-  far layer's field). `World` binds each body's clouds to its terrain; the
-  hand-built demo does the same.
+  far layer's field). `World` binds each body's clouds to its terrain.
 - **The weather** is fetched where the chord enters the slab, as the
   clouds' own march fetches it where it starts: the coverage's shift, and
   with genera ([Clouds](clouds.md#genera)) the convective depth, the cell
@@ -391,7 +390,7 @@ texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
 - **Knob.** `ShadowSettings.cloud_map_size` (off at LOW, 512, 1024, 2048):
   the near map's size, the far one half of it (at least 256). `World`
   makes them for a body with clouds and binds them to its terrain
-  (`Body.cloud_maps`); the hand-built demo the same.
+  (`Body.cloud_maps`).
 
 ## The clouds' shadow on the view's ground (one pass)
 
@@ -568,7 +567,7 @@ tracked model where it is:
   `untrack_light` puts back the node's own lights. `cast` is kept for the
   caster map (part H).
 
-The demos track the test balls. Their light only differs from the
+A tracked model's light only differs from the
 camera's over the scale of a shadow's edge: the moon's penumbra is ~400 km
 wide, so from 150 m away it looks the same. `tests/test_world.py` checks a
 ball in an umbra goes dark while the camera outside it keeps the sun.
@@ -595,10 +594,6 @@ tests (`tests/test_objects.py`) draw the sunlight over a turned planet
 with air, in a moon's penumbra, under a hand-made ceiling map, and over an
 airless moon's terminator, against the CPU; and the whole shader on a card
 against the CPU's tonemap.
-
-Poses: `ball_noon`, `ball_sunset`, `ball_eclipse`, `ball_cloud_edge`,
-`ball_mountain_edge` (see [Demo and shots](#demo-and-shots));
-`--panda-lights` draws the balls by Panda3D's lighting, to compare.
 
 ## Objects' shadows (part H)
 
@@ -672,7 +667,7 @@ ringlets and gaps in it); and its planet's shadow falls across it.
   (rims, ringlets), times its thickness less the faces' fade. The demo's
   ring: 0.13-0.19 normal to it, about 0.6 of the sun through it with the
   sun 20° off its plane. `World` adds every ring field's
-  (`FieldLook` with an `Annulus`); the hand-built demo its `--ring`.
+  (`FieldLook` with an `Annulus`).
 - **Receivers.** The terrain (land, far water, the near sea), the models,
   the clouds (per billboard, the cirrus per vertex, and the deck per
   fragment), and the air: the
@@ -697,14 +692,14 @@ slant's floor edge-on), `ring_depth` against the haze model, and
 `ringVisibility` read back over a planet under a tilted ring against the
 CPU.
 
-Cost (median frame ms, `terrain_shots.py --ring`, Part H then Part I):
+Cost (median frame ms, `terrain_shots.py` over a ring, Part H then Part I):
 ground 17.33 / 17.59, in_clouds 17.02 / 17.64, ring_ground 13.25 /
-13.11, ring_orbit 5.48 / 5.41: within run-to-run noise. Without `--ring`
+13.11, ring_orbit 5.48 / 5.41: within run-to-run noise. Without a ring
 the terms cost nothing (no ring: `uRingCount` 0).
 
 ## Demo and shots
 
-F7 in the terrain demos cycles the shadows' preset (`--shadows-quality` at
+F7 in `demo_world.py` cycles the shadows' preset (`--shadows-quality` at
 start): LOW leaves the clouds' shadows out and makes a coarse mountain map.
 
 Mountain shadow poses: `mountains_low` (clouds_grazing's peaks, the sun 6°
@@ -715,35 +710,20 @@ prints the last bake's time.
 Long cloud shadows: `dusk_in_clouds` (2.7 km, in the deck, looking north)
 and `dusk_above_clouds` (4.5 km, over it), the sun 4° up in the west.
 
-The test balls (part G): `ball_noon` (the ground view, the sun 75° up),
-`ball_sunset` and `ball_eclipse` (3.7 km up, over the cloud deck, out of
-its shadow: the sun 3° up in the west, and 0.4° off the moon's centre),
-`ball_cloud_edge` and `ball_mountain_edge` (the balls moved onto the
-nearest edge of a cloud's or a mesa's shadow around the start, where the
-CPU twin leaves half the sun, seen from 150 m across the sun). A cloud's
-shadow edge is hundreds of metres wide: a ball on it is dimmed evenly.
+Models in the shadows (parts G and H) are looked at by tracking a model with
+`World.track_light(node, cast=True, shader=True)` in `demo_world.py`: a ball in
+a penumbra or on a cloud's or a mesa's shadow edge is dimmed evenly, since an
+edge is hundreds of metres wide.
 
-The rings (part I, with `--ring`): `ring_shadow_ground` (20 km over the
-band's northern edge, latitude -10.6, looking west along it: the band on
-the left), `ring_shadow_orbit` (3 radii over latitude 5, just north of the
-ring's plane: the ring a thin line, the band south of it, its ringlets in
-it), both with the sun 20° north of the ring's plane at noon, and
-`ring_planet_shadow` (`ring_orbit`'s view, the sun low in the east: the
-planet's shadow across the ring).
+The rings: with a world that has a ring, `terrain_shots.py`'s `ring_orbit` pose
+(3 radii over latitude 35, looking down); the shadows of the ring and of the
+planet on it are seen from orbit with the sun at a low angle to the ring's
+plane.
 
-The objects' shadows (part H; the balls cast theirs): `caster_pad` (the
-white ball resting on the ground, the textured one 60 m up beside it, both
-shadows on the ground), `caster_ship_on_ship` (the textured ball 26 m
-sunward of the white one and 9 m above its line: the white one's upper
-part in its shadow), `caster_self` (a teapot on the ground, its handle
-toward the sun, turned 40°: the handle's shadow on the pot), and
-`caster_altitude` (the textured ball 300 m up: its shadow on the hillside
-where its ray meets the ground).
-
-`scripts/demo_terrain.py` puts the moon 21,000 km out: from the planet's
+The shipped `three_planets.yaml` puts the moon 21,000 km out: from the planet's
 ground it looks 0.56° wide, as wide as the sun, so a total eclipse has an
-umbra a few km across inside a penumbra some 400 km wide. Swing the sun
-behind the moon with J / K and I / U: the shadow slides.
+umbra a few km across inside a penumbra some 400 km wide. Give the world a
+sun behind the moon (or `World.set_sun`) and the shadow slides.
 
 `scripts/terrain_shots.py` can aim a pose's sun at a body (`AimedSun`: the
 direction from the point under the camera to the body, turned some degrees

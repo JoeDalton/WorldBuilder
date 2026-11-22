@@ -49,8 +49,8 @@ sky and the clouds, so the clouds are most of the frame.
                        degrees a frame; --stability frames, default 30):
                        against the same flight at full resolution (below)
 
-The planet is the demo level's (its radius and climate drive the weather),
-with no terrain drawn: below the horizon is the sky's own ground. As
+The planet is the first of three_planets.yaml (its radius and climate drive
+the weather), with no terrain drawn: below the horizon is the sky's own ground. As
 terrain_shots.py does, each timed frame waits for the GPU (a one-pixel read
 back), so a frame is CPU and GPU in series. Each pose is timed with the
 clouds shown, then hidden; the difference is the clouds' cost.
@@ -58,7 +58,7 @@ clouds shown, then hidden; the difference is the clouds' cost.
 On WSL, Mesa picks its CPU rasteriser (llvmpipe) unless told to use the
 GPU: run with ``GALLIUM_DRIVER=d3d12``. The renderer is printed first.
 
-Poses, over the level's reference point, with the clouds' base at 2.2 km and
+Poses, over the planet's reference point, with the clouds' base at 2.2 km and
 the sun at azimuth 210, elevation 35: below (300 m, the horizon), start
 (1.3 km, looking a little up), inside (2.7 km, in the slab), above (4.5 km,
 looking down at the deck), high (20 km), orbit (3 radii up, looking down),
@@ -132,15 +132,9 @@ from panda3d.core import ClockObject, Filename, LQuaternionf, LVector3f, TextNod
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_terrain import (  # noqa: E402
-    CLOUD_BASE,
-    CLOUD_SKY_LIGHT,
-    INITIAL_FAR_M,
-    _quat_from_axes,
-    describe_window,
-    sun_lighting,
-    window_config,
-)
+import tools  # noqa: E402
+from tools import describe_window, window_config  # noqa: E402
+from tools import quat_from_axes as _quat_from_axes
 from world_builder.atmosphere import AtmosphereParams, Atmospheres  # noqa: E402
 from world_builder.clouds.cloud import CloudSettings  # noqa: E402
 from world_builder.clouds.field_setup import _noise  # noqa: E402
@@ -158,10 +152,39 @@ from world_builder.quality import QualityLevel  # noqa: E402
 from world_builder.settings import WorldSettings  # noqa: E402
 from world_builder.sky import Sky, Starfield  # noqa: E402
 from world_builder.terrain.chart import TangentFrame, latlon  # noqa: E402
-from world_builder.terrain.level import DEMO_LEVEL, load_level  # noqa: E402
 from world_builder.terrain.workers import ChunkExecutor  # noqa: E402
+from world_builder.world_file import parse_world  # noqa: E402
 
-#: name -> (altitude, heading, pitch), over the level's reference point
+CLOUD_SKY_LIGHT = 0.35  # the clouds' sky-light share
+CLOUD_BASE = 2200.0  # metres above sea level
+INITIAL_FAR_M = 600000.0  # the far plane the sea's reflection camera copies
+
+
+def sun_lighting(azimuth: float, elevation: float) -> tuple[np.ndarray, tuple, tuple]:
+    """Sun direction (local east/north/up) and colours; a hand-made ramp.
+
+    :param azimuth: degrees, 0 = north, increasing toward east
+    :param elevation: degrees above the horizon
+    :returns: (direction (3,) in east, north, up, sun colour, ambient colour),
+        linear
+    """
+    az, el = math.radians(azimuth), math.radians(elevation)
+    direction = np.array(
+        [math.cos(el) * math.sin(az), math.cos(el) * math.cos(az), math.sin(el)]
+    )
+    height = max(0.0, min(1.0, elevation / 40.0))
+    ramp = height * height * (3.0 - 2.0 * height)
+    low_sun, high_sun = np.array([2.2, 1.3, 0.6]), np.array([2.6, 2.45, 2.2])
+    low_sky, high_sky = np.array([0.30, 0.30, 0.42]), np.array([0.38, 0.48, 0.70])
+    sun = low_sun + (high_sun - low_sun) * ramp
+    sky = low_sky + (high_sky - low_sky) * ramp
+    if elevation < 0.0:
+        dim = max(0.05, 1.0 + elevation / 10.0)
+        sun, sky = sun * dim, sky * dim
+    return direction, tuple(sun), tuple(sky)
+
+
+#: name -> (altitude, heading, pitch), over the planet's reference point
 POSES = {
     "below": (300.0, 0.0, 5.0),
     "start": (1300.0, 0.0, 10.0),
@@ -294,7 +317,7 @@ class CloudBench(ShowBase):
         self.set_background_color(0.0, 0.0, 0.0, 1.0)
         self.settings = settings
 
-        self.spec, _ = load_level(str(DEMO_LEVEL))
+        self.spec = parse_world(tools.DEFAULT_WORLD).bodies[0].spec
         self.radius = float(self.spec.radius)
         self.cam_world = np.array([0.0, 0.0, self.radius + 1000.0])
         self._orientation = LQuaternionf()
@@ -363,7 +386,7 @@ class CloudBench(ShowBase):
         east: float = 0.0,
         north: float = 0.0,
     ) -> None:
-        """Over the level's reference point (moved *east* and *north*
+        """Over the planet's reference point (moved *east* and *north*
         metres along the ground): *altitude* metres up, heading and pitch in
         the local frame (degrees), the sun at (azimuth, elevation) as seen
         there."""

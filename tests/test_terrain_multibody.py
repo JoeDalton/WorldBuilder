@@ -14,18 +14,18 @@ from timing import TIME_SCALE, unbudgeted, wait_until
 from world_builder.terrain import biomes, workers
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.chunkgen import generate_chunk
-from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.workers import ChunkExecutor
+from world_builder.world_file import load_planet
 
 
 @pytest.fixture(scope="module")
 def planet_spec():
-    return replace(PRESETS["earthlike"], seed=19).resolved()
+    return replace(load_planet("earthlike"), seed=19).resolved()
 
 
 @pytest.fixture(scope="module")
 def moon_spec():
-    return replace(PRESETS["moon"], seed=7).resolved()
+    return replace(load_planet("moon"), seed=7).resolved()
 
 
 # ── shared executor ────────────────────────────────────────────────────────────

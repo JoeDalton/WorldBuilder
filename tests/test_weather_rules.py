@@ -143,9 +143,9 @@ def test_interfaces_unchanged():
         sample_cube,
         weather_cube,
     )
-    from world_builder.terrain.planet import PRESETS
+    from world_builder.world_file import load_planet
 
-    weather = WeatherSpec(PRESETS["earthlike"])
+    weather = WeatherSpec(load_planet("earthlike"))
     table = np.linspace(-1.0, 1.0, SHIFT_TABLE_SIZE)
     assert weather_cube(weather, table, 32).shape == (6, 32, 32, 2)
     genera = GeneraSpec(weather, focus=(29.7, 29.8))
@@ -195,9 +195,9 @@ def test_system_layers_carry_the_mesoscale_texture():
         synoptic_cube,
     )
     from world_builder.terrain.chart import TangentFrame
-    from world_builder.terrain.planet import PRESETS
+    from world_builder.world_file import load_planet
 
-    weather = WeatherSpec(PRESETS["earthlike"])
+    weather = WeatherSpec(load_planet("earthlike"))
     state = synoptic_state(weather)
     cube = synoptic_cube(weather)[..., SYNOPTIC_CHANNELS.index("altocumulus")]
     spreads = []

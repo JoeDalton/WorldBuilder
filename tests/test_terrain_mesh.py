@@ -33,7 +33,7 @@ from world_builder.terrain.mesh import (
     shared_triangles,
     vertex_format,
 )
-from world_builder.terrain.planet import PRESETS
+from world_builder.world_file import load_planet
 
 
 def test_vertex_format_matches_the_packed_records():
@@ -44,7 +44,7 @@ def test_vertex_format_matches_the_packed_records():
 
 
 def test_chunk_node_holds_the_bytes_and_shared_indices():
-    spec = replace(PRESETS["desert"], seed=3).resolved()
+    spec = replace(load_planet("desert"), seed=3).resolved()
     chunk = generate_chunk(spec, (2, 4, 1, 1))
     node = build_chunk_node(chunk)
     fine, coarse = (child.node() for child in NodePath(node).get_children())
@@ -77,7 +77,7 @@ def test_the_coarse_passes_draw_the_coarse_mesh_alone():
     """The clouds' depth passes and the sea's reflection draw every other
     vertex (a quarter of the triangles: performance.md §34); the view's
     cameras the fine mesh alone."""
-    spec = replace(PRESETS["desert"], seed=3).resolved()
+    spec = replace(load_planet("desert"), seed=3).resolved()
     node = build_chunk_node(generate_chunk(spec, (2, 4, 1, 1)))
     fine, coarse = (child.node() for child in NodePath(node).get_children())
     for camera in (NEAR_CAMERA_MASK, FAR_CAMERA_MASK):
@@ -112,25 +112,3 @@ def test_the_coarse_indices_take_every_other_vertex():
 
 def test_vertex_format_carries_the_height_column():
     assert vertex_format().get_array(0).has_column("height")
-
-
-def test_the_demo_names_every_terrain_debug_view():
-    """The demo's HUD names the view by index (``_DEBUG_VIEWS``): a view the
-    terrain's shader has (``uDebugMode == N``) and the HUD does not name
-    crashed it (the clouds' shadow, 6)."""
-    import ast
-    import re
-    from pathlib import Path
-
-    root = Path(__file__).parent.parent
-    shader = (root / "src/world_builder/terrain/shaders/terrain_frag.glsl").read_text()
-    modes = {int(n) for n in re.findall(r"uDebugMode == (\d+)", shader)}
-    demo = ast.parse((root / "scripts/demo_terrain.py").read_text())
-    (names,) = [
-        node.value
-        for node in demo.body
-        if isinstance(node, ast.Assign)
-        and any(getattr(t, "id", None) == "_DEBUG_VIEWS" for t in node.targets)
-    ]
-    assert len(names.elts) == max(modes) + 1
-    assert 6 in modes  # the clouds' shadow alone

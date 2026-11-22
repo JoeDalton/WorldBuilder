@@ -256,8 +256,7 @@ field where it is and has no shells to crossfade.
 middle genera (stratus, stratocumulus, nimbostratus, altostratus and
 altocumulus) and the convective continuum from fair-weather cumulus through
 congestus to cumulonimbus (`PlanetClouds(genera=GeneraSpec(...))`, `CloudLook.genera`,
-`--genera` in the demo and the scripts sharing its options, on by default
-there, `--no-genera` for the plain field; opt-in in `cloud_bench.py`). Its maps are
+a world file's `clouds.genera`; opt-in in `cloud_bench.py --genera`). Its maps are
 the weather's (`weather.synoptic_cube`, see [the weather](atmosphere.md)): the
 convective coverage, depth and anvil shelf from its fronts, lows, highs and
 tropical cyclones, and two genera's coverage (`genera.WEATHER_GENERA`,
@@ -321,8 +320,8 @@ keeps (no weather there); a spec holding both raises
 (`genera.coverage_cube`). A genus without coverage where a band's chord
 starts no longer sets the band's cut top (`skyBandChord`): an empty deep
 slab stretched every cumulus shadow's steps over its height. `GeneraSpec.features` adds hand-placed
-features around one point over them, a showcase (the demo leaves them out
-when `--pin` asks for the weather there). One `CloudMarch` draws them all,
+features around one point over them, a showcase (leave `features` out where
+`weather.pins` asks for the weather). One `CloudMarch` draws them all,
 as one union of genera.
 
 **The genera and their sky bands.** A genus is one field (one cloud type)
@@ -371,7 +370,7 @@ entry, its own weather (once per `uWeatherStretch` of ray, per genus), its
 own footprint fades, billows and far mean, and adds its extinction
 `σ_g`; the sample's alpha is that of `Σσ_g`, its light `Σ (σ_g / σ)` of
 each genus's `cloudRadianceAt(genus, ...)` (one lighting path, its far table
-the genus's). A band of one genus (the demo's: the convective clouds, the
+the genus's). A band of one genus (the default features': the convective clouds, the
 stratus) takes its samples in a loop of its own, without the genus loop:
 through the genus loop the same light cost 0.4-0.6 ms more between the
 towers (`cloud_bench.py --genera`, 2560 × 1440), its lighting inside a second
@@ -445,7 +444,7 @@ by default):
   top (6.85 km; cloud in 2 % of the samples at 5.3 km, none above 5.8 km)
   and what rose was scattered (53 % of the cloud above 4 km stood over
   cloud at 3 km): the congestus read as cumulus mediocris
-  (`tests/test_clouds_congestus.py`). The demo's congestus features are at
+  (`tests/test_clouds_congestus.py`). The default congestus features are at
   coverage 0.65: at 0.45 they were detached blobs, as the cumulonimbus was
   (below);
 - a **cell octave**, four times coarser than the first (8 km features),
@@ -535,9 +534,8 @@ towers it was 2-2.4 times cheaper than the billboards' overdraw (7.6-8.8 ms
 at HIGH on an RTX 3070 at 2560 × 1440; performance §23, "The raymarch with
 genera"); §37 is the genera's baseline from the user's start.
 
-**The showcase.** [`scripts/demo_genera.py`](../../scripts/demo_genera.py)
-(the terrain demo with `--showcase`) shows every genus alone, for look
-development: `genera.showcase_features` lays out one feature per genus and
+**The showcase.** `genera.showcase_features` shows every genus alone, for look development
+(a world file's `clouds.genera.features` holds its output): it lays out one feature per genus and
 cumulus species, the cumulus in a row along the northern horizon
 (`SHOWCASE_ROW`: humilis, mediocris, congestus, cumulonimbus, west to east,
 35-45 km from the start), the stratiform and mid-level genera along the
@@ -554,11 +552,11 @@ glass"), the altocumulus beyond it. A stratiform feature fills its own genus's c
 (`genera.genus_coverage`), and
 `GeneraSpec(background=False)` removes the fair-weather cumulus between
 them. The cumulus species are convective depths (`GENUS_DEPTHS`: humilis 0,
-mediocris 0.2, congestus 0.5). Keys 1-9 hide or show each genus of the march
-(`CloudMarch.set_genus_visible`, a bit of `uGenusMask` the view's samples
+mediocris 0.2, congestus 0.5). `CloudMarch.set_genus_visible` hides or shows
+each genus of the march ( a bit of `uGenusMask` the view's samples
 test before any noise); a hidden genus still shades the others and the
 ground, and the cumulus species, one genus, go together.
-`terrain_shots.py --showcase` has a `genus_<name>` pose per feature: a
+A good view of each feature: a
 cumulus from 1 km over the start, along its bearing; a low sheet (St, Sc,
 Ns) from 60 m over the ground under its centre, looking along its bearing 6
 degrees over its far edge (its underside the ceiling, its outline in the
@@ -799,9 +797,9 @@ sun.
 planet may have; the march takes those holding cloud somewhere
 (`genera.genus_specs(covered=True)`, `has_coverage`: the primary genus
 always, another where a feature is its). The default's stratocumulus,
-nimbostratus, altostratus and altocumulus have no feature, so the demo marches the
+nimbostratus, altostratus and altocumulus have no feature, so the march covers the
 convective clouds and the stratus alone. An empty stratocumulus sharing the
-stratus's band cost the demo 0.65 ms at 2560 x 1440: a band of two genera
+stratus's band cost 0.65 ms at 2560 x 1440: a band of two genera
 takes the generic genus loop, not the band's own (performance §37).
 `planet.check_layers` still counts them all.
 
@@ -1065,23 +1063,22 @@ Its poses stand under its near edge, 55 km north
 `genus_cirrus_overhead` (under its centre, straight up: its pattern
 top-down), `genus_cirrus_grazing` (10° up).
 
-**The weather's cirrus** (`--cirrus`, on by default; `--no-cirrus`): the
+**The weather's cirrus** (`CloudLook.cirrus`): the
 planet's cirrus, from `weather.cirrus_cover_map` and the upper wind, is
 the march's (`PlanetClouds(cirrus=True)`, `CloudLook(cirrus=True)`). With
 the genera it sets `GeneraSpec.cirrus_weather`: the cover map fills cube
 B's channel 1, under the features, and compiles the high layer. Without
-genera (one cloud type: the demo without `--genera`, `demo_world.py`,
-`cloud_bench.py`) the march takes a high layer of the weather's cirrus
+genera (one cloud type: a `CloudLook` without `genera`, `cloud_bench.py`) the march takes a high layer of the weather's cirrus
 alone (`genera.weather_cirrus`: a `GeneraSpec` with no genus and no
 feature, only its high layer read), over its one type, on the clouds' own
-weather. With `--showcase` the default is off: the showcase has a cirrus
-feature of its own, which the weather's would bury.
+weather. It is left off in the showcase, which has a cirrus feature of its
+own, which the weather's would bury.
 
-The **C key** shows or hides the march's cirrus, the weather's and the
-features' (`PlanetClouds.set_genus_visible("cirrus", ...)`: the high
+`PlanetClouds.set_genus_visible("cirrus", ...)` shows or hides the march's cirrus, the weather's and the
+features' (the high
 genera have bits of `uGenusMask` past the low genera's,
 `march.HIGH_MASK_SHIFT`, and `highCrossing` drops a hidden one's
-coverage); the HUD's "march cirrus on/off". It replaced the old cirrus
+coverage). It replaced the old cirrus
 sheet (baked stamps on a sphere at 11-12 km), deleted with
 its atlas, its bake and preview scripts and its shaders in Task 24: the
 march's draws the same cover, in less time (performance §37, "Task
@@ -1125,11 +1122,6 @@ ms; the weather's cirrus by the march 0.2 ms, against the old sheet's
 0.35-0.55 ms (Task 24's comparison: performance §37). (Tasks 21-22 measured about 1.0 and 0.8 ms in a session
 that drifted by 1 ms; the crossings sorted among the segments cost
 0.1-0.2 ms of the difference.)
-
-With `--genera`, the `high_cb`, `high_overhead`, `high_grazing` and
-`high_above` poses show the weather's cirrus toward the cumulonimbus:
-behind the anvil, overhead, at a grazing angle and from 14 km up through
-it.
 
 #### Not yet, for the high layer
 
@@ -1200,7 +1192,7 @@ takes along a ray by the log of its far/near distance ratio (about 19 from
 2 to 300 km at 1.3×), however much cloud a grazing ray crosses: a fixed
 distance would have taken one every few kilometres of it. The quality
 presets go from 2× (low) through 1.6×, 1.4× (high) to 1.25× (ultra); 0 is
-once a pixel; the demo's L cycles them. The high layer's crossing takes
+once a pixel. The high layer's crossing takes
 the light too. The world binds
 the inputs to every pass (`World`: `Shadows.bind` and `ShadowMap.bind`
 through `PlanetClouds.bind_maps`). Before, the march took none of them, since
@@ -1485,15 +1477,9 @@ grid: see the script), and each pose's frame comes with its 95th percentile
 ([performance §23](performance.md)). On WSL, run it with
 `GALLIUM_DRIVER=d3d12`, or Mesa draws on the CPU.
 
-In the terrain demo, `-` and `+` step the march's block live (1/16, 1/9, 1/8,
-1/4 of the pixels a frame, or all; the HUD shows the share), and `B` saves a
-**burst**: the next 12 frames into `--capture-dir` (default `captures/`), a
-folder each, with per frame the screen and, per march depth range, the raw
-march and the resolve's output, and the poses, blocks and debug bits in
-`meta.json`. The clock is held at the frame rate before it, so the camera
-moves as far a frame as in play while the readbacks slow the frames. A
-burst's second difference in time (each frame against the mean of its
-neighbours) measures the shimmer in motion, where the eye sees it: the
-light volume's jitter and the 1x1 grain were found that way
-([performance §37](performance.md)). `tests/test_demo_tools.py` covers the
-burst's image helpers, the block keys and `frame_profile.py`'s bench scenes.
+A burst of frames kept (the screen, and per march depth range the raw march and
+the resolve's output) and its second difference in time (each frame against the
+mean of its neighbours) measures the shimmer in motion, where the eye sees it:
+the light volume's jitter and the 1x1 grain were found that way
+([performance §37](performance.md)).
+

@@ -1,30 +1,30 @@
 """
-Tests for the command-line tools and level files: the terrain preview, the
-generation benchmark, level loading and the sample stamps. Each tool runs end
+Tests for the command-line tools: the terrain preview, the generation
+benchmark and the sample stamps. Each tool runs end
 to end at a tiny size.
 """
 
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from world_builder.terrain import bench, preview
-from world_builder.terrain.level import (
-    _camera_pose,
-    cliff_lake,
-    load_level,
-    write_sample_stamps,
-)
-from world_builder.terrain.planet import PRESETS, Planet
+from world_builder.terrain.planet import Planet
 from world_builder.terrain.pngio import read_image as read_png
+from world_builder.world_file import load_planet
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+
+from make_sample_stamps import cliff_lake, write_sample_stamps  # noqa: E402
 
 # ── preview ────────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture(scope="module")
 def planet():
-    return Planet(PRESETS["earthlike"])
+    return Planet(load_planet("earthlike"))
 
 
 def test_preview_maps_are_images(planet):
@@ -47,14 +47,14 @@ def test_preview_weather_shows_the_globe_its_genera_and_a_chart(planet):
 
 
 def test_preview_command_writes_sheets(tmp_path, monkeypatch):
-    argv = ["preview", "--out", str(tmp_path), "--size", "8", "--preset", "desert"]
+    argv = ["preview", "--out", str(tmp_path), "--size", "8", "--planet", "desert"]
     monkeypatch.setattr(sys, "argv", argv)
     preview.main()
     sheet = read_png(tmp_path / "preview_seed1_r600km.png")
     assert sheet.shape[0] == 8 and sheet.shape[2] == 3  # one preset, one row
     # The weather sheet skips airless presets.
     argv = ["preview", "--out", str(tmp_path), "--size", "8", "--weather"]
-    monkeypatch.setattr(sys, "argv", [*argv, "--preset", "moon", "desert"])
+    monkeypatch.setattr(sys, "argv", [*argv, "--planet", "moon", "desert"])
     preview.main()
     weather = read_png(tmp_path / "weather_seed1.png")
     assert weather.shape[0] == 8  # one row: the moon has no weather
@@ -79,7 +79,7 @@ def test_bench_runs_end_to_end(monkeypatch, capsys):
     assert "chunk generation" in out and "chunks/s" in out
 
 
-# ── levels ─────────────────────────────────────────────────────────────────────
+# ── sample stamps ─────────────────────────────────────────────────────────────────────
 
 
 def test_sample_stamps_are_written(tmp_path):
@@ -98,48 +98,16 @@ def test_cliff_lake_has_its_waterline_and_cliff():
     assert paint.shape == (128, 128, 3)
 
 
-def test_level_poses_and_stamps_in_either_coordinates(tmp_path):
-    write_sample_stamps(tmp_path)
-    level = tmp_path / "level.yaml"
-    level.write_text(
-        """
-planet: {preset: desert, seed: 4, reference: {lat: 10, lon: 20}, has_ocean: true}
-stamps:
-  - heightmap: crater.png
-    center: {lat: 10.01, lon: 20.02}
-    size: 3000
-paints:
-  - mask: crater_paint.png
-    center: {x: 0, y: 0}
-    size: [3000, 2000]
-    colors: {"#808080": rock}
-camera: {x: 1000, y: -2000, z: 450, heading: 30}
-"""
-    )
-    spec, pose = load_level(level)
-    assert spec.has_ocean and spec.seed == 4
-    assert spec.stamps[0].placement.lat == pytest.approx(10.01)
-    assert spec.stamps[0].placement.width == spec.stamps[0].placement.height == 3000
-    assert spec.paints[0].placement.height == 2000
-    assert pose["alt"] == 450 and pose["heading"] == 30
-    assert pose["lat"] < 10.0  # 2 km south of the reference
+def test_find_landforms_finds_places_on_the_desert():
+    """find_landforms.py runs against the current terrain: each landform gets
+    places, with a rise measured for the cliffs."""
+    import find_landforms
 
+    from world_builder.world_file import load_planet
 
-def test_camera_pose_by_latitude_and_none():
-    assert _camera_pose(None, None) is None
-    pose = _camera_pose({"lat": 1.5, "lon": -2.0, "pitch": -10}, None)
-    assert pose == {
-        "lat": 1.5,
-        "lon": -2.0,
-        "alt": 800.0,
-        "heading": 0.0,
-        "pitch": -10.0,
-    }
-
-
-def test_empty_level_is_the_preset(tmp_path):
-    level = tmp_path / "empty.yaml"
-    level.write_text("")
-    spec, pose = load_level(level, preset="forest", seed=5)
-    assert spec.name == "forest" and spec.seed == 5
-    assert pose is None and spec.stamps == ()
+    planet = Planet(load_planet("desert"))
+    found = find_landforms.find(planet, 400, 1)
+    assert {"dunes", "mesas", "canyons"} <= set(found)
+    for name in ("mesas", "canyons"):
+        lat, lon, ground, score = found[name][0]
+        assert -90.0 <= lat <= 90.0 and score > 0.0

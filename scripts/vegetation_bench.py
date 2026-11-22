@@ -1,7 +1,8 @@
 """
 The vegetation's benchmark and visual check, on the tiny test planet.
 
-Renders the tiny planet (``PRESETS["tiny"]``, 20 km, no clouds) from fixed
+Renders the tiny planet (20 km, no clouds:
+worlds/tiny_world.yaml) from fixed
 poses over its forest, grassland and desert, and times each settled view
 as ``terrain_shots.py`` does (every timed frame waits for the GPU, the
 median is reported). Saves a PNG per pose, and optionally the timings as
@@ -45,17 +46,15 @@ from panda3d.core import Filename
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_terrain import (  # noqa: E402
-    TerrainDemo,
-    add_world_arguments,
-    describe_window,
-    settings_from_args,
-    window_config,
+import tools  # noqa: E402
+from demo_world import WorldDemo  # noqa: E402
+from world_builder.terrain.chart import (  # noqa: E402
+    dirs_from_latlon,
 )
-from terrain_shots import _settle  # noqa: E402
-from world_builder.terrain.chart import dirs_from_latlon  # noqa: E402
-from world_builder.terrain.level import TINY_LEVEL  # noqa: E402
 from world_builder.terrain.planet import Planet  # noqa: E402
+
+#: The tiny test planet's world file: no clouds, no stamps.
+TINY_WORLD = tools.WORLDS_PATH / "tiny_world.yaml"
 
 #: name -> (lat, lon, metres above the ground, heading, pitch, (sun azimuth,
 #: elevation)); heading counter-clockwise from north (-90 = east)
@@ -99,38 +98,37 @@ def main() -> None:
         "print the difference (robust to the machine's drift)",
     )
     parser.add_argument("--rounds", type=int, default=4, help="--ab's rounds")
-    add_world_arguments(parser)
+    tools.add_quality_arguments(parser)
     args = parser.parse_args()
 
-    window_config("Vegetation bench", args.size, args.offscreen, vsync=False)
+    tools.window_config("Vegetation bench", args.size, args.offscreen, vsync=False)
     args.out.mkdir(parents=True, exist_ok=True)
-    settings = settings_from_args(args)
+    settings = tools.settings_from_args(args)
     for section, name, value in args.set:
         settings = settings.with_value(section, name, value)
-    demo = TerrainDemo(
-        str(TINY_LEVEL), "process", None, settings=settings, clouds=False
-    )
+    demo = WorldDemo(TINY_WORLD, settings=settings)
     demo.setFrameRateMeter(False)
-    print(describe_window(demo), f"settings {settings.to_dict()}")
+    terrain = demo.body.terrain
+    print(tools.describe_window(demo), f"settings {settings.to_dict()}")
     win = demo.win
     probe = win.make_display_region(0, 1 / win.get_x_size(), 0, 1 / win.get_y_size())
-    planet = Planet(demo.terrain.spec)
+    planet = Planet(demo.body.look.spec)
     baseline = json.loads(args.baseline.read_text()) if args.baseline else {}
     results: dict[str, float] = {}
     for name in args.pose or list(POSES):
         lat, lon, above, heading, pitch, sun = POSES[name]
         ground, _, _ = planet.sample_dirs(dirs_from_latlon(lat, lon), None, True)
         alt = max(float(ground[0]), 0.0) + above
-        demo._place_camera(lat, lon, alt, heading, pitch)
-        demo.set_local_sun(*sun)
-        settled = _settle(demo, args.timeout)
-        vegetation = demo.terrain.vegetation
+        demo.place_camera(lat, lon, alt, heading, pitch)
+        tools.set_local_sun(demo, *sun)
+        settled = tools.settle(demo, args.timeout)
+        vegetation = terrain.vegetation
         on = vegetation.settings
         off = dataclasses.replace(on, enabled=False)
 
         def timed(veg) -> np.ndarray:
             vegetation.set_settings(veg)
-            demo.terrain._select(demo.terrain._camera)  # the trees now
+            terrain._select(terrain._camera)  # the trees now
             for _ in range(3):
                 demo.taskMgr.step()
             times = []
@@ -158,8 +156,8 @@ def main() -> None:
         results[name] = median
         path = args.out / f"{name}.png"
         demo.win.save_screenshot(Filename.from_os_specific(str(path)))
-        s = demo.terrain.stats
-        t = demo.terrain.trees.stats
+        s = terrain.stats
+        t = terrain.trees.stats
         diff = ""
         if args.ab:
             diff = f"  {median - reference:+.2f} ms vs off ({reference:.2f})"
@@ -176,7 +174,7 @@ def main() -> None:
         )
     if args.save is not None:
         args.save.write_text(json.dumps(results, indent=1))
-    demo.destroy_terrain()
+    demo.destroy_world()
 
 
 if __name__ == "__main__":

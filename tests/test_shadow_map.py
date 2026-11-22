@@ -17,7 +17,6 @@ from panda3d.core import NodePath
 from world_builder.clouds.weather import sample_cube
 from world_builder.shadows import SUN_ANGULAR_RADIUS
 from world_builder.sky.starfield import cube_directions
-from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.shadow_map import (
     NO_CEILING,
     ShadowMap,
@@ -29,6 +28,7 @@ from world_builder.terrain.shadow_map import (
     terrain_visibility,
 )
 from world_builder.terrain.workers import ChunkExecutor
+from world_builder.world_file import load_planet
 
 R = 600e3
 SIZE = 512
@@ -137,7 +137,7 @@ def test_a_shadow_map_bakes_in_the_pool_and_again_for_a_new_sun():
     """ShadowMap: heights per face then the ceiling, in the pool; off
     until baked, then current; a new sun is baked again; a new size starts
     over; the CPU twin reads the map."""
-    spec = PRESETS["moon"]
+    spec = load_planet("moon")
     terrain = SimpleNamespace(
         spec=spec,
         radius=spec.radius,
@@ -385,7 +385,7 @@ def test_the_local_map_follows_the_camera_with_hysteresis():
     again; its CPU twin reads it."""
     from world_builder.terrain.shadow_map import LOCAL_MAX_ALTITUDE, LocalShadowMap
 
-    spec = PRESETS["moon"]
+    spec = load_planet("moon")
     executor = ChunkExecutor(backend="inline")
     try:
         local = LocalShadowMap(_stand_in(spec), executor)
@@ -447,7 +447,7 @@ def test_the_shader_local_shadow_is_the_cpus(window):
 
     chart, heights, sun = _ridge_chart()
     baked = local_ceiling(heights, chart, SPACING, sun, 100.0, 2340.0)
-    local = LocalShadowMap(_stand_in(PRESETS["moon"]), None)
+    local = LocalShadowMap(_stand_in(load_planet("moon")), None)
     local.spacing = SPACING
     local.drawn = (chart, baked)
     local._upload(chart, baked)
@@ -662,7 +662,7 @@ def test_a_shadow_map_bakes_on_the_gpu_for_each_sun(window):
     maps (global and local) drawn by the GPU with the next frame; the
     shaders bound to its textures; the CPU twin marches the same maps;
     destroy removes the buffers."""
-    spec = PRESETS["moon"]
+    spec = load_planet("moon")
     executor = ChunkExecutor(backend="inline")
     engine = window.graphicsEngine
     try:
@@ -721,7 +721,7 @@ def test_the_gpu_maps_twins_are_their_texels_filtered(heights):
     shadow._heights = small
     shadow._top = float(small.max())
     shadow._drawn_sun = sun / np.linalg.norm(sun)
-    shadow._terrain = _stand_in(PRESETS["moon"])
+    shadow._terrain = _stand_in(load_planet("moon"))
     shadow._terrain.radius = R
     shadow._texels, shadow._texels_for = {}, None
     whole = march_ceiling(small, R, shadow._drawn_sun, cube_directions(size))
@@ -734,7 +734,7 @@ def test_the_gpu_maps_twins_are_their_texels_filtered(heights):
     assert len(shadow._texels) == marched <= 4 * len(points)  # kept
 
     chart, local_heights, local_sun = _ridge_chart()
-    local = LocalShadowMap(_stand_in(PRESETS["moon"]), None)
+    local = LocalShadowMap(_stand_in(load_planet("moon")), None)
     local.spacing = SPACING
     local.drawn = (chart, local_heights, local_sun, 100.0, 2300.0, 2300.0)
     nodes = chart_nodes(LOCAL, SPACING)

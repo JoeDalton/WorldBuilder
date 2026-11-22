@@ -45,7 +45,7 @@ from world_builder.clouds.weather import (
 )
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.chart import TangentFrame
-from world_builder.terrain.planet import PRESETS as PLANETS
+from world_builder.world_file import load_planet
 
 R = 600e3
 RAW = replace(PRESETS[CloudType.CUMULUS].field, slab=(2200.0, 1000.0))
@@ -288,7 +288,7 @@ def test_the_shader_cloud_shadow_is_the_cpus(window, field, table, convective, g
     )
 
     size = 32
-    cube = weather_cube(WeatherSpec(PLANETS["earthlike"]), table)
+    cube = weather_cube(WeatherSpec(load_planet("earthlike")), table)
     if genus:
         field = convective
         cube = _genus_weather(cube)
@@ -464,7 +464,7 @@ def test_clouds_shade_a_bound_node_once_ready_and_the_cpu_alike(showbase):
         executor,
         altitude=2200.0,
         settings=CloudSettings(octave_bands=2),
-        planet=PLANETS["forest"],
+        planet=load_planet("forest"),
     )
     clouds = march.shadow_caster()
     ground = NodePath("ground")
@@ -536,7 +536,7 @@ def test_a_cloud_shadow_map_is_the_march_from_the_base(window):
         executor,
         altitude=2200.0,
         settings=CloudSettings(octave_bands=2),
-        planet=PLANETS["forest"],
+        planet=load_planet("forest"),
     )
     clouds = march.shadow_caster()
     size, steps = 128, 8
@@ -709,7 +709,7 @@ def test_the_shader_far_segment_is_the_cpus(window, field, table):
     )
 
     size = 32
-    cube = weather_cube(WeatherSpec(PLANETS["earthlike"]), table)
+    cube = weather_cube(WeatherSpec(load_planet("earthlike")), table)
     points, up = _in_slab(field, n=size * size, seed=9, height=0.4)
     points = points.astype(np.float32).astype(np.float64)
     sun = _low_sun(up, 6.0).astype(np.float32)

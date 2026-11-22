@@ -1,0 +1,11 @@
+# The tiny planet alone with its sun: a small ground for looking at trees and
+# rocks (scripts/tree_gallery.py, scripts/vegetation_bench.py).
+sun:
+  direction: [0.887774, 0.045991, -0.457976]
+  color: [2.6, 2.5, 2.35]
+  angular_radius: 0.009599310885968814
+sky: {file: sky.yaml}
+space_ambient: [0.025, 0.025, 0.03]
+bodies:
+  - {name: tiny, file: tiny.yaml, position: [0.0, 0.0, 0.0]}
+fields: []

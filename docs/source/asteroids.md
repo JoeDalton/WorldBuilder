@@ -7,11 +7,11 @@ its spec when asked for, and is the same every time. That is what lets a field
 be as large as a ring, drawn and collided with only around the camera.
 
 ```
-python scripts/demo_asteroids.py            # fly through a field (controls in the script)
-python scripts/demo_asteroids.py --preset ring   # a planet ring; Home for the view from afar
+python scripts/demo_world.py src/world_builder/worlds/deep_space.yaml    # fly through a field (controls in the script)
+python scripts/demo_world.py   # a planet ring, around the ice planet: TAB to go to it, HOME for the view from afar
 python -m world_builder.asteroids.preview   # each preset's rocks from above and the side, and their statistics, to PNG
 python scripts/asteroid_gallery.py          # rock prototypes at each level of detail, to PNG
-python scripts/asteroid_bench.py --field cube --offscreen   # frame times in fixed flights
+python scripts/asteroid_bench.py --field asteroid_cube --offscreen   # frame times in fixed flights
 pytest tests/test_asteroid_*.py
 ```
 
@@ -42,12 +42,13 @@ frame**: the field's own centre and axes.
 the mean spacing and the share of volume filled where densest, and the
 median, mean and largest radius.
 
-`spec.PRESETS` has three examples. `cube` is SpaceFlight's missions 1 and 2
+The library keeps no field presets: a [world file](world_file.md) defines every
+field, and `worlds/` has three examples (`world_builder.load_field("ring")`
+reads one). `asteroid_cube.yaml` is SpaceFlight's missions 1 and 2
 setting: a 15 km cube of rock, power-law sizes from 50 m to 2 km, patchy,
-with a 300 m corridor through it. `icy_ball` is a 10 km ball of rock and ice
-spinning about one axis, some of it tumbling. `ring` is a planet's ring of
-icy rocks, 90,000 to 110,000 km from its axis and 4 km thick, about
-3 × 10¹⁰ rocks.
+with a 300 m corridor through it. `asteroid_icy_ball.yaml` is a 10 km ball of rock and ice
+spinning about one axis, some of it tumbling. `ring.yaml` is a planet's ring of
+icy rocks, 5,000 to 10,000 km from its axis and 4 km thick.
 
 ### Sizes and other variables
 
@@ -424,7 +425,7 @@ around the camera. Two things scale with it:
   core compares every candidate with its neighbours' (cost per rock: 5 µs at
   8, 111 µs at 32): keep the default.
 
-`python -m world_builder.asteroids.preview --preset ring` maps a 40 km patch
+`python -m world_builder.asteroids.preview --field ring` maps a 40 km patch
 of a field too big to scatter whole, beside the density of the whole ring.
 
 ## Haze
@@ -492,8 +493,8 @@ approaching, rocks appear out of it while it thins by as much.
   the sky's bin, after the stars, before the clouds (the cirrus's far side
   included); what lies before it after them, as before. Along a ray a ring and the clouds
   never overlap, so the split is exact. No cost seen (`ring_ground` 13.09
-  / 13.12 ms, `ring_orbit` 5.93 / 5.58); `terrain_shots.py --ring` gains
-  `ring_behind_clouds`.
+  / 13.12 ms, `ring_orbit` 5.93 / 5.58); `terrain_shots.py` has a
+  `ring_behind_clouds` pose in a world with a ring.
 - `AsteroidField(haze=False)` leaves it out. In a 15 km field it costs
   nothing seen: nothing is missing nearer than about 57 km.
 
@@ -504,8 +505,8 @@ builds fields beside the bodies: on the world's worker pool, with its
 `asteroids` settings, its sun and clock (the rocks turn with the game's
 time), and the bodies' textures. They are part of `World.loading`,
 `update`, `set_sun`, `set_settings` and `destroy`; `World.field(name)`
-finds one (to make it solid, find clear spots...). `scripts/demo_asteroids.py`
-is built this way.
+finds one (to make it solid, find clear spots...). a world file's `fields:` builds them this way
+([World files](world_file.md); `worlds/ring.yaml`, `worlds/asteroid_cube.yaml`).
 
 **The far plane.** `World.depth_ranges` reaches every field's
 `AsteroidField.reach`: its largest rock at the settings' `min_pixels`

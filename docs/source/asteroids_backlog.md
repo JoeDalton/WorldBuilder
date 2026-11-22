@@ -143,7 +143,7 @@ Ways to make them better:
   way.
 - **What terrain rocks cost.** The detail they add up close is modest for
   scattered rocks; they stay mostly for hero rocks. Measured with
-  `scripts/asteroid_bench.py --field cube --flight approach --offscreen
+  `scripts/asteroid_bench.py --field asteroid_cube --flight approach --offscreen
   --terrain-rocks N` (HIGH, 1600×900, two runs each, frame ms):
 
   | `max_terrain_rocks` | Mean | Median | p95 | Max |

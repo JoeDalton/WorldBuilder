@@ -1,5 +1,12 @@
 # Backlog
 
+> **A note on the command lines below.** They are the ones used when each
+> measurement was made. The hand-built terrain demo and its flags (`--genera`,
+> `--showcase`, `--ring`, `--start`, `--planet`, `--cirrus`, the test balls and
+> their poses) have since been replaced by world files (`scripts/demo_world.py`,
+> [World files](docs/source/world_file.md)), so some of these commands no longer run as
+> written; the measurements and what they showed stand.
+
 Features found missing but not made, so the work could move on. Each item
 says where it came from. Performance work has its own ranked list,
 [docs/source/performance_backlog.md](docs/source/performance_backlog.md);
@@ -147,21 +154,6 @@ then the default) is measured, not built. What is left:
   motion (`MIN_WEIGHT`, the clamp's width without `uStill`); tracing more
   pixels a frame while the view moves (a half while turning, an eighth when
   still: the march's cost is in its traced pixels).
-- ~~**The clouds lag behind the camera against terrain, when it flies fast.**~~
-  **Fixed** (2026-11-08, performance.md §28): the composite's depth was the
-  resolved distance, which lags the samples; flying forward it put the clouds
-  behind the ground and the depth test cut them. Now no farther than the
-  scene's; the history's distance held within the fresh samples'.
-  Seen at the demo's camera `{lat: 20.18986, lon: 29.12635, alt: 2769,
-  heading: 157.2, pitch: -5.4}`, roll 5.1 (`terrain_shots.py --pose at --at
-  20.18986 29.12635 2769 157.2 -5.4`), advancing toward a mountain: the
-  cloud's update lag is very visible against it. The same when descending
-  fast from orbit. Not looked at yet. Suspects: the history's reprojection by
-  the cloud's own distance (`cloud_resolve.frag`) against a near, hard
-  edge (the terrain's depth is not part of it), the composite's depth test
-  at the view's resolution, and `uStill` (clamp floor in motion). Measure
-  with a `cloud_bench.py --move` flight over a terrain pose, the last moving
-  frame against the converged one.
 
 ### Look
 
@@ -178,50 +170,12 @@ then the default) is measured, not built. What is left:
   step only (done 2026-11-07: the step deepened in a cloud and cut at a
   segment's end drew contours on towers), or only beyond about 5 km, or a
   variance-driven fade in the resolve.
-- ~~**The field's own octaves carry the value noise's lattice planes**~~ Done
-  (2026-11-07): the two finest are turned (`noise.OCTAVE_TURNS`, the shader's
-  `OCTAVE_n_TURN`), twins and placement with them: they drew interference lines
-  on towers seen at a grazing angle.
-- ~~**Faint horizontal bands in towers** lit from the maps' 4 levels~~ Gone
-  with the light volume (C.3), which holds the depth at every voxel. (The
-  stacked bands on a tower seen level that remain are the march's steps, not
-  its light: RENDERING_PLAN.md "After C".)
-- **The map-lit sun depth counts out to the sun march's reach only**
-  (`cloudMapSunDepth`'s window): counting a tower's whole 10 km chord left
-  it black, and the levels are too coarse for an anvil. `--cloud-debug 64`
-  takes the lighting from the sun march alone, to compare. A longer reach
-  needs more levels or another representation. With the light volume (C.3)
-  the window is kept, from the volume; its whole chord (`--cloud-debug 1024`)
-  still blackens towers: a longer reach needs the light scattered more than
-  once in the towers, not more resolution.
+
 - **Low sun (about 4 degrees):** the stratus under the convective clouds is
   shaded by the ones sunward (`cloudSunDepthOther`) with hard-looking
   edges (`terrain_shots.py --pose at --at 24.48163 33.77925 5019 -49.1 8.3
   --sun 270 4 --genera`). Not investigated.
-- **The sea's reflection shows the convective family's deck only** (the
-  stratus is missing), and no clouds' detail: accepted for now. The fix is a
-  cheap mirror march (clouds.md "The raymarch": a third march layer from the
-  reflection camera, a quarter of its resolution, about 24 steps, no history,
-  about 0.3-0.6 ms while the sea is in view; not built).
-- **Artifacts in the sea's reflection of the deck** (seen with the march as
-  the default, HIGH, `terrain_shots.py --pose at --at 24.49453 35.64275 2029
-  19.4 -32.1`, 2 km up over the sea; not reproduced exactly: the weather
-  differs). Not investigated, only read from the code:
-  - *Stone-like contour lines* inside the light patches: the deck's density
-    is the mean of two field samples (at 30 % and 70 % of the slab,
-    `cloud.frag` `uDeck == 1`), so a column holding cloud at one height only
-    gets half the density and its outline shows. Fix idea: a smoother
-    density (one sample, or a smoothed mean) for the deck.
-  - *A straight diagonal step in brightness* with a darker triangle behind
-    it: probably the terrain shadow on the deck's sunlight (`terrainShadow`
-    in `cloud.frag`: the local shadow map is a square around the camera, and
-    the reflection views the deck from below). Alternatives: a cube-face seam
-    of the weather map, the reflection camera's culling margin. To confirm:
-    the same pose with `--shadows-quality low`. Fix idea: the deck takes the global
-    terrain shadow only.
-  - *Fine diagonal hatching* at the bottom: the ripples undersampled by the
-    half-resolution reflection buffer (`reflection_scale`, 0.5 at HIGH); the
-    billboards' reflection has it too.
+
 - **With genera the march keeps at most 3 distance bands per family**
   (`MAX_LAYERS` is shared by the two); HIGH asks for more. An octaves-per-band
   table in a small uniform would free layers.
@@ -431,6 +385,3 @@ genera at LOW most (p99 6-8 levels still); the user judged it acceptable.
   offscreen harness that renders a march pass on a fixed weather and reads it
   back (clear sky -> alpha 0, a dense cloud -> alpha 1, the billows' column
   equal to `cloudDensityAt`) would close it.
-- The hand-built demo (`scripts/demo_terrain.py`) wires the clouds' shadows
-  and maps itself beside `World`'s (`bind_shadow_inputs`, `bind_maps`): keep
-  the two in step.

@@ -356,9 +356,11 @@ def test_a_rings_depth_is_its_rocks_and_dust_across_it():
     from dataclasses import replace
 
     from world_builder.asteroids.haze import HazeModel, ring_depth
-    from world_builder.asteroids.spec import PRESETS, Annulus, Sphere
+    from world_builder.asteroids.spec import Annulus, Sphere
+    from world_builder.world_file import load_field
 
-    spec = next(s for s in PRESETS.values() if isinstance(s.shape, Annulus))
+    spec = load_field("ring")
+    assert isinstance(spec.shape, Annulus)
     shape = spec.shape
     depth = ring_depth(spec, samples=33)
     model = HazeModel(spec)

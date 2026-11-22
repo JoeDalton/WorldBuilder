@@ -6,7 +6,11 @@ updates every WorldBuilder part a game draws around its camera:
 - the sky and the sun;
 - Panda3D lights for everything else.
 
-It does the wiring that `scripts/demo_terrain.py` does by hand.
+A game does not build it by hand: it writes its world in a
+[world file](world_file.md) and loads it with `world_builder.load_world`, which
+builds this `World` and its split depth cameras in one line. This page is what
+that builds, for code that needs to reach into it (`GameWorld.world`), or that
+builds a world itself, for instance one varied from its own settings.
 
 The split is between what the world looks like and how it works:
 - **The game decides the look:** which bodies there are and where, the sun,
@@ -14,6 +18,8 @@ The split is between what the world looks like and how it works:
   dataclasses.
 - **`World` does the work:** building the parts, binding them to the air,
   sharing one worker pool, and updating them every frame.
+
+The same world, built in code instead of read from a file:
 
 ```python
 world = World(
@@ -42,7 +48,7 @@ world.update(origin_world, far=depth.far)
 world.destroy()
 ```
 
-`scripts/demo_world.py` is the terrain demo rebuilt this way.
+`scripts/demo_world.py` flies a world file's world.
 
 **Open space.** A world may have no body: `World(app, [], sun=..., sky=...,
 space_ambient=...)` is the sky, the sun and the Panda3D lights alone, for a
@@ -61,7 +67,7 @@ parts.
 
 - **`BodyLook`**: one planet or moon.
   - `name`: what `World.body(name)` finds it by.
-  - `spec`: a preset, or a level file's.
+  - `spec`: a planet (a preset, or built from a world file's `planet` block).
   - `position`: its centre, in the world frame.
   - `atmosphere`: `AtmosphereParams`, or None for an airless body.
   - `clouds`: a `CloudLook`, or None. Clouds need air.
@@ -106,7 +112,7 @@ Quality is not part of the look. It comes in as `settings=`, a
   game knows it:
   - a game that keeps its player at the origin passes the player's world
     position;
-  - the demo, whose camera sits at the origin, passes the camera's.
+  - `demo_world.py`, whose camera sits at the origin, passes the camera's.
 
   `World` adds the camera's own render position, read from `app.camera`, to
   get the camera's world position. Everything is placed around that.
@@ -161,7 +167,7 @@ window). The world moves around the camera, so every drawn node's net
 transform is new every frame and Panda's cache of composed transforms only
 fills up for its garbage collection to empty: about 1 ms a frame in low
 flight (see [performance](performance.md) §19). The library sets no PRC of
-its own; the demos do.
+its own; `scripts/tools.window_config` does.
 
 A game's own translucent volumes, such as shield bubbles, go to
 `depth.update(split, far, translucent=...)`. The split then never cuts one:

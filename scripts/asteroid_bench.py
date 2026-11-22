@@ -1,21 +1,21 @@
 """
 Frame-time benchmark of asteroid fields, flown along fixed paths (issue #14).
 
-``--field PRESET`` flies a field of ``world_builder.asteroids`` (a
-``spec.PRESETS`` name: ``cube`` is the same 15 km cube) drawn by instancing,
-lit by the same sun, its rocks turning with the flight's time. ``--legacy
-PATH`` instead builds SpaceFlight's field as its missions 1 and 2 have it
-(``space_flight.scenes.asteroid_field``, scene "asteroids"): PATH is the
+``--field FILE`` flies a field of ``world_builder.asteroids`` (a field or
+world file, or a shipped field's name: ``asteroid_cube`` is the 15 km cube)
+drawn by instancing, lit by the same sun, its rocks turning with the flight's
+time. ``--legacy PATH`` instead builds SpaceFlight's field as its missions 1
+and 2 have it (``space_flight.scenes.asteroid_field``, scene "asteroids"): PATH is the
 rock's glTF (SpaceFlight's ``models/asteroids/54509_asteroid/scene.gltf``),
 instanced on one node per rock with a collision sphere each, lit by Panda's
 fixed-function lights as the game does::
 
-    python scripts/asteroid_bench.py (--field PRESET | --legacy PATH)
+    python scripts/asteroid_bench.py (--field FILE | --legacy PATH)
         [--flight cruise sweep outside] [--quality LEVEL]
         [--seconds S] [--size "1600 900"] [--offscreen] [--fov DEG] [--profile]
         [--shots DIR] [--collision] [--terrain-rocks N] [--setting NAME=VALUE ...]
 
-    --field     the field preset drawn
+    --field     the field drawn: a file, or asteroid_cube, ring, ...
     --legacy    the rock model of SpaceFlight's field
     --quality   the field's AsteroidSettings preset (default high)
     --terrain-rocks  override the preset's max_terrain_rocks (0: no rock
@@ -86,7 +86,7 @@ from panda3d.core import (
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_terrain import describe_window, window_config  # noqa: E402
+from tools import describe_window, window_config  # noqa: E402
 
 #: SpaceFlight's scene "asteroids" (scenes.py SceneAsteroids.build_upfront):
 #: (asteroids, field size m, scale factor, rotating, seed).
@@ -166,9 +166,10 @@ class LegacyField:
             node.set_quat(Quat(*row))
 
 
-#: Where a preset's flights happen, field frame (the field is placed so that
-#: this point is at the world's origin); the field's centre otherwise.
-ORIGINS = {"ring": (0.0, 1.01e8, 0.0)}
+#: Where a field's flights happen (by the field file's name), field frame
+#: (the field is placed so that this point is at the world's origin); the
+#: field's centre otherwise.
+ORIGINS = {"ring": (0.0, 7.575e6, 0.0)}
 
 
 class InstancedField:
@@ -179,7 +180,7 @@ class InstancedField:
     ):
         from world_builder.asteroids.field import AsteroidField
         from world_builder.asteroids.settings import AsteroidSettings
-        from world_builder.asteroids.spec import PRESETS
+        from world_builder.world_file import load_field
 
         self.base = base
         self.t = 0.0
@@ -192,12 +193,12 @@ class InstancedField:
             settings = replace(settings, **{name: kind(float(value))})
         self.field = AsteroidField(
             base,
-            PRESETS[preset],
+            load_field(preset),
             clock=lambda: self.t,
             settings=settings,
             sun_direction=-np.array(_SUN_TOWARD),
             far=CAMERA_FAR_M,
-            position=-np.array(ORIGINS.get(preset, (0.0, 0.0, 0.0))),
+            position=-np.array(ORIGINS.get(Path(preset).stem, (0.0, 0.0, 0.0))),
         )
         self.updates: list[float] = []
         self.in_range: list[int] = []

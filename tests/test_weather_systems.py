@@ -22,7 +22,8 @@ from world_builder.clouds.synoptic.systems import (
     storm_sectors,
 )
 from world_builder.clouds.weather import WeatherSpec, _sampler
-from world_builder.terrain.planet import PRESETS, Planet, PlanetSpec
+from world_builder.terrain.planet import Planet, PlanetSpec
+from world_builder.world_file import load_planet
 
 EARTH = PlanetSpec("e", radius=6.371e6, day_length_h=23.934)
 DAY = 86400.0
@@ -46,7 +47,7 @@ def earth():
 
 @pytest.fixture(scope="module")
 def kerbin():
-    planet_spec = PRESETS["earthlike"]
+    planet_spec = load_planet("earthlike")
     spec = WeatherSpec(planet_spec)
     scales = Scales.from_planet(planet_spec)
     return spec, scales, jet_waves(scales, spec.seed), Planet(planet_spec)
@@ -152,7 +153,7 @@ def test_tc_over_warm_sea_only(kerbin):
 
 
 def test_no_tc_without_ocean():
-    planet_spec = PRESETS["desert"]
+    planet_spec = load_planet("desert")
     spec = WeatherSpec(planet_spec)
     scales = Scales.from_planet(planet_spec)
     jets = jet_waves(scales, spec.seed)

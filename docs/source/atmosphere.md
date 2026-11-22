@@ -8,7 +8,7 @@ Three systems make a planet look like one from the ground to orbit:
 | Sky | `world_builder.sky` | A star field (procedural or painted) and the sun's disc, seen through the atmospheres. |
 | Planet clouds | `world_builder.clouds` | One cloud density field over the whole planet, raymarched from the ground to orbit, with the weather's expected coverage where a pixel spans more than its features: the same pattern at every distance. |
 
-`scripts/demo_terrain.py` wires all three; `scripts/terrain_shots.py` renders
+`world_builder.load_world` wires all three ([World files](world_file.md); `scripts/demo_world.py` flies one); `scripts/terrain_shots.py` renders
 them from fixed poses (`sunset`, `night_orbit`, `in_clouds`, `moonrise`...).
 
 ## Atmospheres
@@ -297,8 +297,7 @@ Its shader shows:
     density, palette coordinate) that the shader colours. The colours are
     live uniforms: a `NebulaStyle` (a three-stop `palette`, `intensity`, the
     Milky Way's colour; `NEBULA_PALETTES` has a few) set with
-    `Sky.set_nebula`. The demo's F6 cycles the palettes, F7 / F8 dim and
-    brighten. The nebulae's size and coverage are generation parameters
+    `Sky.set_nebula`. The nebulae's size and coverage are generation parameters
     (`nebula_scale`, `nebula_coverage`).
 - or **a painted cube map**: `load_cube_map(pattern, loader)` (SpaceFlight's
   `models/skyboxes/purple_#.png`), its full white at `star_intensity`
@@ -391,11 +390,11 @@ field reads the coverage, the near field the shift, and the two agree by
 construction (a test checks the round trip within 3 % at 0.1–0.9).
 
 `python -m world_builder.terrain.preview --weather [--time S] [--pin LAT LON
-PRESET ...]` draws each planet preset's weather three ways, for tuning: the
+PRESET ...]` draws each shipped planet's weather three ways, for tuning: the
 globe under all its cloud, the genera by colour, and a surface chart
 (isobars every 4 hPa, fronts with their symbols, the jets' axes, the
-systems' centres). `scripts/demo_terrain.py` takes the same `--time` and
-`--pin`.
+systems' centres). A world file gives the weather's time and pins
+(`clouds.weather.time_s`, `pins`: [World files](world_file.md)).
 
 ### Near: the raymarch
 

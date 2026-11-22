@@ -10,7 +10,8 @@ import numpy as np
 
 from world_builder.clouds.weather import WeatherSpec, coverage_at
 from world_builder.terrain.chart import TangentFrame
-from world_builder.terrain.planet import PRESETS, Planet
+from world_builder.terrain.planet import Planet
+from world_builder.world_file import load_planet
 
 SHADERS = Path(__file__).parents[1] / "src/world_builder/clouds/shaders"
 
@@ -38,9 +39,9 @@ def test_earths_mesoscale_texture_has_its_physical_size():
     is 160 km, as on the 600 km planet (scaled by the planet's feature
     scale, 10.6, it was 1700 km and the clouds came out as broad brushes from
     orbit: a correlation of 0.72 at 120 km then, 0.45 now)."""
-    a, b = _pairs(WeatherSpec(PRESETS["earth"]), 120e3)
+    a, b = _pairs(WeatherSpec(load_planet("earth")), 120e3)
     assert np.corrcoef(a, b)[0, 1] < 0.6
-    near_a, near_b = _pairs(WeatherSpec(PRESETS["earth"]), 10e3)
+    near_a, near_b = _pairs(WeatherSpec(load_planet("earth")), 10e3)
     assert np.corrcoef(near_a, near_b)[0, 1] > 0.8
 
 

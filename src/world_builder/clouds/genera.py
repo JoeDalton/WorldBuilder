@@ -497,7 +497,7 @@ def showcase_features() -> tuple[Feature, ...]:
     )
 
 
-#: The demo's: within view of the demo's start, a cumulonimbus 40 km north
+#: The default features: a cumulonimbus 40 km north
 #: ringed by congestus, another 70 km north-east, a line of congestus to the
 #: west, and a stratus deck to the south.
 DEFAULT_FEATURES = (
@@ -528,8 +528,8 @@ class GeneraSpec:
     :ivar high_slab: their slab, (base, thickness) above sea level, metres
     :ivar cirrus_weather: the cirrus covers the weather's cirrus cover too
         (:func:`weather.cirrus_cover_map`), not only its features: the march
-        draws the planet's cirrus (``PlanetClouds(cirrus=True)`` sets it, the
-        demo's ``--cirrus``); False = its features alone (the showcase)
+        draws the planet's cirrus (``PlanetClouds(cirrus=True)`` sets it, as
+        ``CloudLook.cirrus``); False = its features alone (the showcase)
     :ivar weather_nimbostratus: the stratus thickens into the weather's
         nimbostratus (:data:`WEATHER_GENERA`); False = the weather's stratus
         and stratocumulus alone (``CloudSettings.weather_nimbostratus``, off

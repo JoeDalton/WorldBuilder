@@ -1132,33 +1132,14 @@ def test_the_shader_blends_the_wind_in_float():
     assert tex.get_z_size() == 6 and tex.get_x_size() == 8
 
 
-def test_the_cirrus_is_on_by_default_but_in_the_showcase():
-    """--cirrus / --no-cirrus: the weather's cirrus in the march, on by
-    default; the showcase's cirrus is a feature of its own, which the
-    weather's would bury (off by default there)."""
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
-    import demo_terrain
-
-    source = Path(demo_terrain.__file__).read_text()
-    assert "self._cirrus = not showcase if cirrus is None else bool(cirrus)" in source
-    assert "sheet" not in source
-    parser = demo_terrain.argparse.ArgumentParser()
-    demo_terrain.add_world_arguments(parser)
-    assert parser.parse_args([]).cirrus is None
-    assert parser.parse_args(["--no-cirrus"]).cirrus is False
-    assert parser.parse_args(["--cirrus"]).cirrus is True
-
-
 # ── What the cirrus follows: the upper wind and the cover (weather.py) ──────
 
 
 @pytest.fixture(scope="module")
 def earth_weather():
-    from world_builder.terrain.planet import PRESETS as PLANETS
+    from world_builder.world_file import load_planet
 
-    return WeatherSpec(PLANETS["earthlike"])
+    return WeatherSpec(load_planet("earthlike"))
 
 
 def test_the_zonal_stream_function_is_the_wind(earth_weather):

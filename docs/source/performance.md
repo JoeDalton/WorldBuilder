@@ -1,5 +1,12 @@
 # Performance notes
 
+> **A note on the command lines below.** They are the ones used when each
+> measurement was made. The hand-built terrain demo and its flags (`--genera`,
+> `--showcase`, `--ring`, `--start`, `--planet`, `--cirrus`, the test balls and
+> their poses) have since been replaced by world files (`scripts/demo_world.py`,
+> [World files](world_file.md)), so some of these commands no longer run as
+> written; the measurements and what they showed stand.
+
 Known computational costs and open concerns for `world_builder.terrain` and,
 in §13, the atmosphere, sky and clouds drawn with it, with the measurements
 behind them. Frame rate in the demo is currently high (GTX 1070, i7-6700K: 4
@@ -437,7 +444,7 @@ of translucent billboards into 16 samples per pixel was most of the clouds'
 cost.
 
 The demo and the scripts now ask for **no multisampling** (`window_config`
-in `demo_terrain.py`). An exact count would need the scene drawn into an
+in `scripts/tools.py`). An exact count would need the scene drawn into an
 offscreen buffer (an FBO gets exactly what it asks for) and shown on a
 full-screen quad; that was tried and works, and was left out for now.
 
@@ -903,7 +910,7 @@ are still views (GPU-synced poses within ±0.3 ms, the bench's noise): a
 still camera is the only case where a composed transform comes back.
 
 It is a process-wide Panda setting, so the library does not set it: the
-demo and the scripts do (`demo_terrain.window_config`), and a game drawing
+demo and the scripts do (`tools.window_config`), and a game drawing
 the world should load it too ([A whole world](world.md)).
 
 ### Evictions that walk past nothing

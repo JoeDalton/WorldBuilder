@@ -1,7 +1,7 @@
 """
 Top-down terrain maps, rendered offline to PNG: tune the look with no 3D.
 
-Each preset gets one row: the whole planet (equirectangular, twice as wide as
+Each planet gets one row: the whole planet (equirectangular, twice as wide as
 tall, the reference point marked), then maps centred on the planet's
 reference point at three scales: 100 km, 20 km and 1 km. The maps are biome
 colour times hillshade, with water drawn blue on planets with an ocean.
@@ -10,12 +10,16 @@ With --weather, each row is instead three maps of the planet's weather
 (clouds.weather, its seed --seed, at --time seconds, with --pin presets): the
 globe under all its cloud (white where the sky is covered), the cloud genera
 by colour, and a surface chart (isobars, fronts, the jets, the systems'
-centres), to tune the weather; airless presets (no humidity) are skipped.
+centres), to tune the weather; airless planets (no humidity) are skipped.
 Sheets are written to --out (``terrain_preview`` by default)::
 
     python -m world_builder.terrain.preview [--seed N] [--radius M] [--out DIR]
-        [--preset NAME ...] [--size PX] [--weather] [--time S]
+        [--planet FILE|NAME ...] [--size PX] [--weather] [--time S]
         [--pin LAT LON PRESET ...]
+
+A planet is a body file or world file (``worlds/desert.yaml``) or the name of
+a shipped one (``desert``, ``earth``, ...: ``world_file.SHIPPED_PLANETS``,
+all of them by default).
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ import numpy as np
 
 from world_builder.terrain import biomes
 from world_builder.terrain.chart import AzimuthalEquidistantChart, dirs_from_latlon
-from world_builder.terrain.planet import PRESETS, Planet, PlanetSpec
+from world_builder.terrain.planet import Planet, PlanetSpec
 from world_builder.terrain.pngio import write_png
 
 SCALES_M = (100e3, 20e3, 1e3)
@@ -245,7 +249,9 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--radius", type=float, default=None, help="metres")
     parser.add_argument("--size", type=int, default=320)
-    parser.add_argument("--preset", nargs="*", default=list(PRESETS))
+    from world_builder.world_file import SHIPPED_PLANETS, load_planet
+
+    parser.add_argument("--planet", nargs="*", default=list(SHIPPED_PLANETS))
     parser.add_argument("--out", type=Path, default=Path("terrain_preview"))
     parser.add_argument(
         "--weather", action="store_true", help="the clouds' weather map instead"
@@ -255,8 +261,8 @@ def main() -> None:
     pins = pins_from_args(parser, args)
     args.out.mkdir(parents=True, exist_ok=True)
     specs = []
-    for name in args.preset:
-        spec = replace(PRESETS[name], seed=args.seed)
+    for name in args.planet:
+        spec = replace(load_planet(name), seed=args.seed)
         if args.radius is not None:
             spec = replace(spec, radius=args.radius)
         specs.append(spec)
