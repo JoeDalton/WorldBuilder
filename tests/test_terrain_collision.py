@@ -20,13 +20,14 @@ from panda3d.core import (
     CollisionTraverser,
     GeomNode,
 )
+from planets import PRESETS
 from timing import unbudgeted
 
 from world_builder.terrain.biomes import BIOMES
 from world_builder.terrain.chart import AzimuthalEquidistantChart, TangentFrame
 from world_builder.terrain.chunkgen import QUADS, VERTS, generate_chunk
 from world_builder.terrain.native import NativeCollisionError, NativeTerrain, _binding
-from world_builder.terrain.planet import PRESETS, Planet
+from world_builder.terrain.planet import Planet
 from world_builder.terrain.query import TerrainQuery
 
 #: The demo level's reference point: a coast, with a range to the south.

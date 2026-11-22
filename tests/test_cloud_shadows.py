@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from panda3d.core import LVecBase4f, NodePath, PTA_LVecBase4f, Vec3
+from planets import PRESETS as PLANETS
 
 from world_builder.atmosphere import bind_defaults
 from world_builder.clouds.cloud import PRESETS, CloudType
@@ -45,7 +46,6 @@ from world_builder.clouds.weather import (
 )
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.chart import TangentFrame
-from world_builder.terrain.planet import PRESETS as PLANETS
 
 R = 600e3
 RAW = replace(PRESETS[CloudType.CUMULUS].field, slab=(2200.0, 1000.0))

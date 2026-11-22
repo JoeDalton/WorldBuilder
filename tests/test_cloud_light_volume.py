@@ -11,6 +11,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from planets import PRESETS as PLANETS
 
 from world_builder.clouds.field_setup import _noise
 from world_builder.clouds.light_volume import (
@@ -32,7 +33,6 @@ from world_builder.clouds.light_volume import (
 )
 from world_builder.clouds.weather import sample_cube
 from world_builder.terrain.chart import TangentFrame
-from world_builder.terrain.planet import PRESETS as PLANETS
 
 R = 600e3
 

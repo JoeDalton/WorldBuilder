@@ -11,6 +11,7 @@ from dataclasses import replace
 
 import numpy as np
 from panda3d.core import BitMask32, NodePath
+from planets import PRESETS
 
 from world_builder.depth import (
     CLOUD_FAR_BIT,
@@ -33,7 +34,6 @@ from world_builder.terrain.mesh import (
     shared_triangles,
     vertex_format,
 )
-from world_builder.terrain.planet import PRESETS
 
 
 def test_vertex_format_matches_the_packed_records():

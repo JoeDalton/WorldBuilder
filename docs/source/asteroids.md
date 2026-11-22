@@ -11,7 +11,7 @@ python scripts/demo_world.py src/world_builder/worlds/deep_space.yaml    # fly t
 python scripts/demo_world.py   # a planet ring, around the ice planet: TAB to go to it, HOME for the view from afar
 python -m world_builder.asteroids.preview   # each preset's rocks from above and the side, and their statistics, to PNG
 python scripts/asteroid_gallery.py          # rock prototypes at each level of detail, to PNG
-python scripts/asteroid_bench.py --field cube --offscreen   # frame times in fixed flights
+python scripts/asteroid_bench.py --field asteroid_cube --offscreen   # frame times in fixed flights
 pytest tests/test_asteroid_*.py
 ```
 
@@ -42,12 +42,13 @@ frame**: the field's own centre and axes.
 the mean spacing and the share of volume filled where densest, and the
 median, mean and largest radius.
 
-`spec.PRESETS` has three examples. `cube` is SpaceFlight's missions 1 and 2
+The library keeps no field presets: a [world file](world_file.md) defines every
+field, and `worlds/` has three examples (`world_builder.load_field("ring")`
+reads one). `asteroid_cube.yaml` is SpaceFlight's missions 1 and 2
 setting: a 15 km cube of rock, power-law sizes from 50 m to 2 km, patchy,
-with a 300 m corridor through it. `icy_ball` is a 10 km ball of rock and ice
-spinning about one axis, some of it tumbling. `ring` is a planet's ring of
-icy rocks, 90,000 to 110,000 km from its axis and 4 km thick, about
-3 × 10¹⁰ rocks.
+with a 300 m corridor through it. `asteroid_icy_ball.yaml` is a 10 km ball of rock and ice
+spinning about one axis, some of it tumbling. `ring.yaml` is a planet's ring of
+icy rocks, 5,000 to 10,000 km from its axis and 4 km thick.
 
 ### Sizes and other variables
 
@@ -424,7 +425,7 @@ around the camera. Two things scale with it:
   core compares every candidate with its neighbours' (cost per rock: 5 µs at
   8, 111 µs at 32): keep the default.
 
-`python -m world_builder.asteroids.preview --preset ring` maps a 40 km patch
+`python -m world_builder.asteroids.preview --field ring` maps a 40 km patch
 of a field too big to scatter whole, beside the density of the whole ring.
 
 ## Haze

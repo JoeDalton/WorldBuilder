@@ -13,11 +13,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from panda3d.core import NodePath
+from planets import PRESETS
 
 from world_builder.clouds.weather import sample_cube
 from world_builder.shadows import SUN_ANGULAR_RADIUS
 from world_builder.sky.starfield import cube_directions
-from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.shadow_map import (
     NO_CEILING,
     ShadowMap,

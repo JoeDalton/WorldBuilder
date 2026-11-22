@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from panda3d.core import NodePath, Texture
+from planets import PRESETS
 
 from world_builder.atmosphere import AtmosphereParams, Atmospheres
 from world_builder.clouds.cloud import CloudSettings
@@ -25,7 +26,6 @@ from world_builder.depth import (
 from world_builder.ocean import OceanSettings, aces_tonemap
 from world_builder.sky import Sky
 from world_builder.terrain.chart import TangentFrame
-from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.workers import ChunkExecutor
 
 R = 600e3

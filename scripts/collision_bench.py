@@ -52,7 +52,7 @@ from panda3d.core import (
 )
 
 from world_builder.terrain.chunkgen import QUADS, VERTS, skirt_ring
-from world_builder.terrain.planet import PRESETS
+from world_builder.terrain.planet import PlanetSpec
 from world_builder.terrain.terrain import Terrain, TerrainSettings
 
 SHIP_MASK = BitMask32.bit(2)  # SpaceFlight's DESTRUCTIBLE
@@ -410,7 +410,9 @@ def main() -> None:
     render = base.render
     rng = np.random.default_rng(args.seed)
     terrain = Terrain(
-        render, PRESETS["earthlike"], settings=TerrainSettings(workers=args.workers)
+        render,
+        PlanetSpec(name="earthlike"),
+        settings=TerrainSettings(workers=args.workers),
     )
     camera = mountain_camera(terrain, rng)
     print(f"camera {terrain.altitude(camera):.0f} m above sea level")

@@ -8,6 +8,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from fields import PRESETS
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.motion import orientation
@@ -17,7 +18,6 @@ from world_builder.asteroids.population import (
 )
 from world_builder.asteroids.scatter import Scatter
 from world_builder.asteroids.spec import (
-    PRESETS,
     Box,
     Density,
     FieldSpec,

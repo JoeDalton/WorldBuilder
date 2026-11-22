@@ -54,7 +54,6 @@ import argparse
 import cProfile
 import gc
 import io
-import math
 import pstats
 import sys
 import time
@@ -67,7 +66,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import tools  # noqa: E402
 from demo_world import DEFAULT_WORLD, WorldDemo  # noqa: E402
-from world_builder.terrain.chart import TangentFrame, latlon  # noqa: E402
 
 #: The main thread's parts that --trace times: (module, class, method).
 TRACED = (
@@ -178,33 +176,6 @@ TURN_POSE: tuple | None = None
 TURN_SUN: tuple = (210.0, 35.0)
 
 
-def _set_local_sun(demo: WorldDemo, azimuth: float, elevation: float) -> None:
-    """Put the sun at an azimuth/elevation (degrees; 0 = north, toward east) as
-    seen from the point under the camera."""
-    up = demo._up()
-    lat, lon = latlon(up[None, :])
-    frame = TangentFrame.at(float(lat[0]), float(lon[0]))
-    az, el = math.radians(azimuth), math.radians(elevation)
-    demo.world.world.set_sun(
-        math.cos(el) * math.sin(az) * frame.east
-        + math.cos(el) * math.cos(az) * frame.north
-        + math.sin(el) * up
-    )
-
-
-def _settle(demo: WorldDemo, timeout: float = 60.0) -> None:
-    """Step frames until nothing is wanted or generating for 10 frames, or
-    *timeout* seconds."""
-    start = time.perf_counter()
-    quiet = 0
-    while time.perf_counter() - start < timeout and quiet < 10:
-        demo.taskMgr.step()
-        busy = demo.world.world.executor.pending or any(
-            body.terrain.stats["wanted"] for body in demo.bodies
-        )
-        quiet = 0 if busy else quiet + 1
-
-
 def _start(demo: WorldDemo, flight: str) -> None:
     """Put the camera at a flight's start, boosted, its keys held."""
     spec = demo.bodies[0].look.spec
@@ -214,7 +185,7 @@ def _start(demo: WorldDemo, flight: str) -> None:
         pose = TURN_POSE or (lat, lon, 3000.0, 0.0, 0.0)
         demo.place_camera(*pose)
         demo._keys["a"] = True
-        _set_local_sun(demo, *TURN_SUN)
+        tools.set_local_sun(demo, *TURN_SUN)
         return
     if flight == "descent":
         # Nose straight down, flying forward: the camera's own "down" would
@@ -229,7 +200,7 @@ def _start(demo: WorldDemo, flight: str) -> None:
         demo.place_camera(lat, lon, ground + altitude, 90.0, 0.0)
         demo._keys["arrow_up"] = True
     demo._keys["shift"] = True
-    _set_local_sun(demo, 210.0, 35.0)
+    tools.set_local_sun(demo, 210.0, 35.0)
 
 
 def _release(demo: WorldDemo) -> None:
@@ -255,7 +226,7 @@ def run(
     _release(demo)
     _start(demo, flight)
     _release(demo)
-    _settle(demo)
+    tools.settle(demo, 60.0)
     _start(demo, flight)
     frames, updates, backlog, finest = [], [], [], []
     generated = sum(body.terrain.stats["generated"] for body in demo.bodies)

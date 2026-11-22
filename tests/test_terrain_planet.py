@@ -9,6 +9,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from planets import PRESETS
 from timing import TIME_SCALE, wait_until
 
 from world_builder.terrain import biomes
@@ -34,7 +35,6 @@ from world_builder.terrain.planet import (
     LOW_CONTINENT,
     LOW_RANGE,
     PLANET_HEIGHT_BOUNDS,
-    PRESETS,
     REFERENCE_RADIUS_M,
     Planet,
     scaled_params,

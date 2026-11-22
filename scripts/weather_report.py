@@ -58,7 +58,8 @@ from world_builder.clouds.weather import (
     synoptic_cube,
 )
 from world_builder.terrain.chart import dirs_from_latlon
-from world_builder.terrain.planet import PRESETS, Planet
+from world_builder.terrain.planet import Planet
+from world_builder.world_file import load_planet
 
 #: The warm front's sequence, far ahead of it to at it.
 SHIELD = ("cirrus", "cirrostratus", "altostratus", "nimbostratus")
@@ -172,7 +173,7 @@ def _front_order(obj, t, scales, cube) -> bool | None:
 
 
 def survey(planet_name: str, seeds: int, times: int, day_step: float) -> Tally:
-    spec = PRESETS[planet_name]
+    spec = load_planet(planet_name)
     planet = Planet(spec)
     tally = Tally()
     for seed in range(seeds):
@@ -302,7 +303,11 @@ def report(tally: Tally) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--planet", default="earth", help="a terrain.planet preset")
+    parser.add_argument(
+        "--planet",
+        default="earth",
+        help="a body file, or a shipped one (earth, desert, ...)",
+    )
     parser.add_argument("--seeds", type=int, default=5, help="weather seeds")
     parser.add_argument("--times", type=int, default=5, help="times a seed")
     parser.add_argument("--day-step", type=float, default=1.0, help="days apart")

@@ -355,8 +355,10 @@ def test_a_ring_dims_the_sun_crossing_it_by_its_slanted_depth():
 def test_a_rings_depth_is_its_rocks_and_dust_across_it():
     from dataclasses import replace
 
+    from fields import PRESETS
+
     from world_builder.asteroids.haze import HazeModel, ring_depth
-    from world_builder.asteroids.spec import PRESETS, Annulus, Sphere
+    from world_builder.asteroids.spec import Annulus, Sphere
 
     spec = next(s for s in PRESETS.values() if isinstance(s.shape, Annulus))
     shape = spec.shape

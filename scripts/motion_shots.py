@@ -36,7 +36,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import tools  # noqa: E402
 from demo_world import DEFAULT_WORLD, WorldDemo  # noqa: E402
-from terrain_shots import _set_local_sun, _settle  # noqa: E402
 
 
 class _FixedClock:
@@ -158,8 +157,8 @@ def main() -> None:
 
     body = next((b for b in demo.bodies if b.name == args.body), demo.bodies[0])
     demo.place_camera(*args.at, body)
-    _set_local_sun(demo, 210.0, 35.0)
-    _settle(demo, 90.0)
+    tools.set_local_sun(demo, 210.0, 35.0)
+    tools.settle(demo, 90.0)
     for _ in range(args.settle):
         demo.taskMgr.step()
 

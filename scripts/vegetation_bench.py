@@ -1,7 +1,7 @@
 """
 The vegetation's benchmark and visual check, on the tiny test planet.
 
-Renders the tiny planet (``PRESETS["tiny"]``, 20 km, no clouds:
+Renders the tiny planet (20 km, no clouds:
 scripts/worlds/tiny.yaml) from fixed
 poses over its forest, grassland and desert, and times each settled view
 as ``terrain_shots.py`` does (every timed frame waits for the GPU, the
@@ -37,7 +37,6 @@ import argparse
 import ast
 import dataclasses
 import json
-import math
 import sys
 import time
 from pathlib import Path
@@ -50,13 +49,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 import tools  # noqa: E402
 from demo_world import WorldDemo  # noqa: E402
 from world_builder.terrain.chart import (  # noqa: E402
-    TangentFrame,
     dirs_from_latlon,
-    latlon,
 )
 from world_builder.terrain.planet import Planet  # noqa: E402
 
-#: The tiny test planet's world file (generated from PRESETS["tiny"] with
+#: The tiny test planet's world file (generated from the tiny planet with
 #: world_builder.world_file.world_to_yaml): no clouds, no stamps.
 TINY_WORLD = Path(__file__).resolve().parent / "worlds" / "tiny.yaml"
 
@@ -82,41 +79,6 @@ def _parse_set(text: str) -> tuple[str, str, object]:
     except (ValueError, SyntaxError):
         parsed = value
     return section, name, parsed
-
-
-def _set_local_sun(demo: WorldDemo, azimuth: float, elevation: float) -> None:
-    """Put the sun at an azimuth/elevation (degrees; 0 = north, toward east) as
-    seen from the point under the camera."""
-    up = demo._up()
-    lat, lon = latlon(up[None, :])
-    frame = TangentFrame.at(float(lat[0]), float(lon[0]))
-    az, el = math.radians(azimuth), math.radians(elevation)
-    demo.world.world.set_sun(
-        math.cos(el) * math.sin(az) * frame.east
-        + math.cos(el) * math.cos(az) * frame.north
-        + math.sin(el) * up
-    )
-
-
-def _settle(demo: WorldDemo, timeout: float) -> bool:
-    """Step frames until nothing is loading for 10 frames.
-
-    :returns: whether that happened before *timeout* seconds
-    """
-    start = time.perf_counter()
-    quiet = 0
-    world = demo.world.world
-    while time.perf_counter() - start < timeout:
-        demo.taskMgr.step()
-        busy = (
-            world.executor.pending
-            or world.loading
-            or not all(body.shadow_map.current for body in demo.bodies)
-        )
-        quiet = 0 if busy else quiet + 1
-        if quiet >= 10:
-            return True
-    return False
 
 
 def main() -> None:
@@ -159,8 +121,8 @@ def main() -> None:
         ground, _, _ = planet.sample_dirs(dirs_from_latlon(lat, lon), None, True)
         alt = max(float(ground[0]), 0.0) + above
         demo.place_camera(lat, lon, alt, heading, pitch)
-        _set_local_sun(demo, *sun)
-        settled = _settle(demo, args.timeout)
+        tools.set_local_sun(demo, *sun)
+        settled = tools.settle(demo, args.timeout)
         vegetation = terrain.vegetation
         on = vegetation.settings
         off = dataclasses.replace(on, enabled=False)

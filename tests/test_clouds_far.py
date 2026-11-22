@@ -7,10 +7,11 @@ import re
 from pathlib import Path
 
 import numpy as np
+from planets import PRESETS
 
 from world_builder.clouds.weather import WeatherSpec, coverage_at
 from world_builder.terrain.chart import TangentFrame
-from world_builder.terrain.planet import PRESETS, Planet
+from world_builder.terrain.planet import Planet
 
 SHADERS = Path(__file__).parents[1] / "src/world_builder/clouds/shaders"
 

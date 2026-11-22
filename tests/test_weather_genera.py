@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from planets import PRESETS
 
 from world_builder.clouds import noise
 from world_builder.clouds.cloud import CloudSettings
@@ -37,7 +38,6 @@ from world_builder.clouds.weather import (
 )
 from world_builder.quality import RESTART, QualityLevel
 from world_builder.sky.starfield import cube_directions
-from world_builder.terrain.planet import PRESETS
 
 SHADERS = Path(__file__).parents[1] / "src/world_builder/clouds/shaders"
 SIZE = 32

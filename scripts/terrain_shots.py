@@ -155,17 +155,6 @@ SUNS = {
 }
 
 
-def local_sun(azimuth: float, elevation: float, frame: TangentFrame) -> np.ndarray:
-    """:returns: the world-frame direction of a sun at an azimuth (degrees,
-    0 = north, increasing toward east) and elevation, in a local frame"""
-    az, el = math.radians(azimuth), math.radians(elevation)
-    return (
-        math.cos(el) * math.sin(az) * frame.east
-        + math.cos(el) * math.cos(az) * frame.north
-        + math.sin(el) * frame.up
-    )
-
-
 def _poses(demo: WorldDemo) -> dict:
     """:returns: name -> (lat, lon, altitude, heading, pitch, debug view,
     body index)"""
@@ -300,15 +289,6 @@ def _aim_sun(demo: WorldDemo, sun: AimedSun) -> None:
     demo.world.world.set_sun(math.cos(angle) * toward + math.sin(angle) * side)
 
 
-def _set_local_sun(demo: WorldDemo, azimuth: float, elevation: float) -> None:
-    """Put the sun at an azimuth/elevation as seen from the nadir on the
-    nearest body."""
-    up = demo._up()
-    lat, lon = latlon(up[None, :])
-    frame = TangentFrame.at(float(lat[0]), float(lon[0]))
-    demo.world.world.set_sun(local_sun(azimuth, elevation, frame))
-
-
 def _beach_pose(home) -> tuple | None:
     """The ocean's shoreline up close: 40 m up, 300 m off the coast nearest
     the reference point, looking at it (its foam, colour by depth and swell).
@@ -350,27 +330,6 @@ def _set_debug_view(demo: WorldDemo, view: int) -> None:
     """0 shaded, 1 LOD, ... (Terrain.set_debug_mode), all bodies."""
     for body in demo.bodies:
         body.terrain.set_debug_mode(view)
-
-
-def _settle(demo: WorldDemo, timeout: float) -> bool:
-    """Step frames until the world is loaded and nothing is wanted or
-    generating for 10 frames.
-
-    :returns: whether that happened before *timeout* seconds
-    """
-    start = time.perf_counter()
-    quiet = 0
-    while time.perf_counter() - start < timeout:
-        demo.taskMgr.step()
-        busy = (
-            demo.world.world.loading
-            or any(body.terrain.stats["wanted"] for body in demo.bodies)
-            or not all(body.shadow_map.current for body in demo.bodies)
-        )
-        quiet = 0 if busy else quiet + 1
-        if quiet >= 10:
-            return True
-    return False
 
 
 def main() -> None:
@@ -471,8 +430,8 @@ def main() -> None:
         if isinstance(sun, AimedSun):
             _aim_sun(demo, sun)
         else:
-            _set_local_sun(demo, *sun)
-        settled = _settle(demo, args.timeout)
+            tools.set_local_sun(demo, *sun)
+        settled = tools.settle(demo, args.timeout)
         for _ in range(3):  # let the last uploads reach the screen
             demo.taskMgr.step()
         times = []

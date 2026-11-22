@@ -11,14 +11,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from fields import PRESETS as FIELDS
+from planets import PRESETS
 
 import world_builder
-from world_builder.asteroids.spec import PRESETS as FIELDS
 from world_builder.config import ConfigError, to_config
-from world_builder.terrain.level import DEMO_LEVEL, load_level
-from world_builder.terrain.planet import PRESETS
 from world_builder.world import SunLook
 from world_builder.world_file import (
+    load_field,
+    load_planet,
     load_world,
     parse_world,
     world_to_yaml,
@@ -41,10 +42,16 @@ def body(world, name):
 # ── the shipped worlds are the code's definitions ───────────────────────────
 
 
-def test_the_home_planet_is_the_demo_level(three):
-    expected, _ = load_level(DEMO_LEVEL)
+def test_the_home_planet_is_the_600_km_demo_planet_with_its_stamps(three):
     planet = body(three, "planet")
-    assert planet.spec == expected
+    spec = planet.spec
+    assert (spec.name, spec.seed, spec.radius) == ("earthlike", 19, 600e3)
+    assert (spec.reference_lat, spec.reference_lon) == (20.91, 30.4)
+    assert [s.blend for s in spec.stamps] == ["add", "max", "flatten", "replace"]
+    assert len(spec.paints) == 3
+    # The images sit beside the world files, and exist
+    for image in [s.heightmap for s in spec.stamps] + [p.mask for p in spec.paints]:
+        assert Path(image).parent == WORLDS / "stamps" and Path(image).exists()
     assert planet.mass == 5.97e24
     assert planet.atmosphere is not None and planet.ocean is not None
     assert planet.clouds.altitude == 2200.0 and planet.clouds.cirrus
@@ -116,6 +123,23 @@ def test_a_world_written_in_full_reads_back():
     world = parse_world(DEEP)
     text = world_to_yaml(world)
     assert parse_world(yaml.safe_load(text)).fields == world.fields
+
+
+def test_the_shipped_planet_files_are_the_planets_the_tests_use():
+    """earth, desert, forest, moon and ice written out in full: a planet read
+    from its file is the catalogue's (the moon's and ice's differ by what the
+    shipped worlds choose: seed 7, radius 1500 km, seed 3)."""
+    for name in ("earth", "desert", "forest"):
+        assert load_planet(name) == PRESETS[name].resolved(), name
+    assert load_planet("moon") == replace(PRESETS["moon"], seed=7).resolved()
+    assert (
+        load_planet("ice") == replace(PRESETS["ice"], radius=1.5e6, seed=3).resolved()
+    )
+    assert load_planet(WORLDS / "earth.yaml").radius == 6.371e6
+    assert load_field("asteroid_cube") == FIELDS["cube"]
+    assert load_field("asteroid_icy_ball") == FIELDS["icy_ball"]
+    assert load_field(THREE).shape.inner == 5.0e6  # a world's first field
+    assert load_planet(THREE).name == "earthlike"  # a world's first body
 
 
 # ── the rules of a file ─────────────────────────────────────────────────────

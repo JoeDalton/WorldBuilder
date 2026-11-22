@@ -58,7 +58,7 @@ from collision_bench import (  # noqa: E402
     tangent_frame,
 )
 
-from world_builder.terrain.planet import PRESETS  # noqa: E402
+from world_builder.terrain.planet import PlanetSpec  # noqa: E402
 from world_builder.terrain.terrain import Terrain  # noqa: E402
 
 LASER_SPEED = 2000.0
@@ -130,7 +130,7 @@ class Viewer:
         self.text.set_scale(0.045)
         self.text.set_pos(-1.3 * base.getAspectRatio() / 1.333, 0, 0.9)
 
-        self.terrain = Terrain(self.render, PRESETS["earthlike"])
+        self.terrain = Terrain(self.render, PlanetSpec(name="earthlike"))
         self.anchor = mountain_camera(self.terrain, self.rng)
         self.up = self.anchor / np.linalg.norm(self.anchor)
         self.east, self.north = tangent_frame(self.up)

@@ -132,6 +132,7 @@ from panda3d.core import ClockObject, Filename, LQuaternionf, LVector3f, TextNod
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import tools  # noqa: E402
 from tools import describe_window, window_config  # noqa: E402
 from tools import quat_from_axes as _quat_from_axes
 from world_builder.atmosphere import AtmosphereParams, Atmospheres  # noqa: E402
@@ -151,8 +152,8 @@ from world_builder.quality import QualityLevel  # noqa: E402
 from world_builder.settings import WorldSettings  # noqa: E402
 from world_builder.sky import Sky, Starfield  # noqa: E402
 from world_builder.terrain.chart import TangentFrame, latlon  # noqa: E402
-from world_builder.terrain.level import DEMO_LEVEL, load_level  # noqa: E402
 from world_builder.terrain.workers import ChunkExecutor  # noqa: E402
+from world_builder.world_file import parse_world  # noqa: E402
 
 CLOUD_SKY_LIGHT = 0.35  # the clouds' sky-light share
 CLOUD_BASE = 2200.0  # metres above sea level
@@ -316,7 +317,7 @@ class CloudBench(ShowBase):
         self.set_background_color(0.0, 0.0, 0.0, 1.0)
         self.settings = settings
 
-        self.spec, _ = load_level(str(DEMO_LEVEL))
+        self.spec = parse_world(tools.DEFAULT_WORLD).bodies[0].spec
         self.radius = float(self.spec.radius)
         self.cam_world = np.array([0.0, 0.0, self.radius + 1000.0])
         self._orientation = LQuaternionf()

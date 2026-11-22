@@ -15,7 +15,7 @@ import numpy as np
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.chunkgen import VERTS, generate_chunk, planet_for
 from world_builder.terrain.noise import simplex3
-from world_builder.terrain.planet import PRESETS
+from world_builder.terrain.planet import PlanetSpec
 from world_builder.terrain.quadtree import LodSelector
 from world_builder.terrain.workers import ChunkExecutor, default_workers
 
@@ -39,7 +39,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=default_workers())
     parser.add_argument("--radius", type=float, default=None, help="metres")
     args = parser.parse_args()
-    spec = replace(PRESETS["earthlike"], seed=19)
+    spec = PlanetSpec(name="earthlike", seed=19)
     if args.radius is not None:
         spec = replace(spec, radius=args.radius)
     spec = spec.resolved()

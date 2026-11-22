@@ -115,6 +115,8 @@ Links nest; a circle is an error.
 
 ## The shipped worlds
 
+- `sky.yaml` (the sky, linked by both worlds), `stamps/` (the images
+  `kerbin.yaml` places).
 - `three_planets.yaml`: `kerbin.yaml` (a 600 km earthlike planet: air, cumulus
   and cirrus, a sea, the demo level's stamps), `moon.yaml` (an airless 200 km
   moon 21,000 km away), `ice.yaml` (a cold dry planet 3000 km across, with air
@@ -123,9 +125,12 @@ Links nest; a circle is an error.
 - `deep_space.yaml`: `asteroid_cube.yaml`, a 15 km cube of rocks in open space,
   with a clear corridor to fly through.
 
-They are the library's former presets (the demo level, the `moon`, `ice`,
-`ring` and `cube` of the code) written out in full; `tests/test_world_file.py`
-checks that they still equal them.
+They are the library's former presets and demo level written out in full (the
+library keeps no presets: every planet and field is defined in a file), and
+`earth.yaml`, `desert.yaml` and `forest.yaml` are further planets to link from
+a world of your own; `tests/test_world_file.py` checks that they still equal the
+specs the tests were written around. `world_builder.load_planet("desert")`
+reads one planet.
 
 ## Where the code is
 

@@ -129,6 +129,8 @@ def test_southern_low_is_mirrored():
 
 
 def test_interfaces_unchanged():
+    from planets import PRESETS
+
     from world_builder.clouds.genera import (
         CONVECTIVE,
         DEPTHS,
@@ -143,7 +145,6 @@ def test_interfaces_unchanged():
         sample_cube,
         weather_cube,
     )
-    from world_builder.terrain.planet import PRESETS
 
     weather = WeatherSpec(PRESETS["earthlike"])
     table = np.linspace(-1.0, 1.0, SHIFT_TABLE_SIZE)
@@ -186,6 +187,8 @@ def test_warm_shield_fades_past_the_fronts_ends(end):
 def test_system_layers_carry_the_mesoscale_texture():
     """A high's altocumulus ring is broken by the mesoscale texture, as the
     cumulus are: no perfect circles."""
+    from planets import PRESETS
+
     from world_builder.clouds.synoptic.state import synoptic_state
     from world_builder.clouds.synoptic.systems import position
     from world_builder.clouds.weather import (
@@ -195,7 +198,6 @@ def test_system_layers_carry_the_mesoscale_texture():
         synoptic_cube,
     )
     from world_builder.terrain.chart import TangentFrame
-    from world_builder.terrain.planet import PRESETS
 
     weather = WeatherSpec(PRESETS["earthlike"])
     state = synoptic_state(weather)

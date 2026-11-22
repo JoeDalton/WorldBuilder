@@ -8,6 +8,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from planets import PRESETS
 
 from world_builder.clouds import weather
 from world_builder.clouds.synoptic import Scales
@@ -21,7 +22,6 @@ from world_builder.clouds.weather import (
     synoptic_cube,
 )
 from world_builder.terrain.chart import latlon
-from world_builder.terrain.planet import PRESETS
 
 _DIRS = np.random.default_rng(1).normal(size=(20000, 3))
 _DIRS /= np.linalg.norm(_DIRS, axis=1, keepdims=True)

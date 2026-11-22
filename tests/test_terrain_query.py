@@ -4,27 +4,37 @@ Unit tests for the terrain prototype's queries, stamps, levels and materials
 """
 
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
+from planets import PRESETS
 
+import world_builder
 from world_builder.terrain import materials
 from world_builder.terrain.biomes import BIOMES, ROCK
 from world_builder.terrain.chart import (
     AzimuthalEquidistantChart,
     TangentFrame,
-    dirs_from_latlon,
 )
 from world_builder.terrain.chunkgen import VERTS, generate_chunk
 from world_builder.terrain.cubesphere import face_dirs
-from world_builder.terrain.level import DEMO_LEVEL, load_level
-from world_builder.terrain.planet import PRESETS, Planet
+from world_builder.terrain.planet import Planet
 from world_builder.terrain.pngio import read_image, write_png
 from world_builder.terrain.query import TerrainQuery
 from world_builder.terrain.stamps import Paint, Placement, Stamp
+from world_builder.world_file import parse_world
 
 #: The demo level's reference point: a coast, with a range to the south.
 REFERENCE = (20.91, 30.4)
+
+
+#: The shipped home planet (a 600 km world with four stamps and three paints).
+HOME_WORLD = Path(world_builder.__file__).parent / "worlds" / "three_planets.yaml"
+
+
+def home_spec():
+    return parse_world(HOME_WORLD).bodies[0].spec
 
 
 @pytest.fixture(scope="module")
@@ -360,10 +370,9 @@ def test_paint_forces_biomes(planet, tmp_path):
     np.testing.assert_allclose(out.sum(axis=1), 1.0, atol=1e-6)
 
 
-def test_demo_level_loads_and_stamps_show():
-    spec, camera = load_level(DEMO_LEVEL)
+def test_the_home_planet_loads_and_its_stamps_show():
+    spec = home_spec()
     assert len(spec.stamps) == 4 and len(spec.paints) == 3
-    assert camera["alt"] > 0 and -90.0 <= camera["lat"] <= 90.0
     assert spec.radius == 600e3
     planet = Planet(spec)
     pad = spec.stamps[2]
@@ -378,21 +387,9 @@ def test_demo_level_loads_and_stamps_show():
     assert np.abs(elevation - (base + 0.5)).max() < 1.0
 
 
-def test_level_radius_override():
-    spec, camera = load_level(DEMO_LEVEL, radius=1200e3)
-    assert spec.radius == 1200e3
-    # Chart metres stay metres: the crater is as far from the reference point.
-    chart = AzimuthalEquidistantChart(
-        spec.reference_lat, spec.reference_lon, spec.radius
-    )
-    crater = spec.stamps[0].placement
-    x, y = chart.from_dirs(dirs_from_latlon(crater.lat, crater.lon))
-    assert (float(x[0]), float(y[0])) == pytest.approx((-4500.0, -2500.0), abs=0.01)
-
-
 def test_cliff_lake():
     """Water at sea level, deep up to a near-vertical cliff on the north shore."""
-    spec, _ = load_level(DEMO_LEVEL)
+    spec = home_spec()
     query = TerrainQuery(Planet(spec), include_ocean=False)
     chart = AzimuthalEquidistantChart(
         spec.reference_lat, spec.reference_lon, spec.radius
@@ -409,13 +406,6 @@ def test_cliff_lake():
     wall = int(np.argmax(np.diff(h)))
     assert query.material_at(at(chart, -4500.0, y[wall] + 1.0, 500.0)) == "rock"
     assert query.material_at(at(chart, -4500.0, 3900.0, 500.0)) == "forest"  # painted
-
-
-def test_level_rejects_unknown_fields(tmp_path):
-    level = tmp_path / "bad.yaml"
-    level.write_text("planet: {preset: desert, elevation: {mountian_height: 3}}\n")
-    with pytest.raises(ValueError, match="mountian_height"):
-        load_level(level)
 
 
 # ── materials ──────────────────────────────────────────────────────────────────

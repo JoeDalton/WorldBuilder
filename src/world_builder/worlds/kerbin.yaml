@@ -1,4 +1,4 @@
-# The home planet: the demo level's 600 km earthlike world, with its air, its
+# The home planet: the former demo level's 600 km earthlike world, with its air, its
 # clouds (cumulus at 2200 m and the weather's cirrus above them) and its sea.
 # Stamps and paints are placed by latitude and longitude; images are relative
 # to this folder. `mass` is in the units of the gravity constant the game
@@ -74,7 +74,7 @@ planet:
     humidity_wavelength: 105000.0
     humidity_octaves: 4
   stamps:
-  - heightmap: ../terrain/levels/stamps/crater.png
+  - heightmap: stamps/crater.png
     placement:
       lat: 20.670655126211866
       lon: 29.940715883578648
@@ -85,7 +85,7 @@ planet:
     height_offset: -245.0
     blend: add
     falloff: 400.0
-  - heightmap: ../terrain/levels/stamps/mesa.png
+  - heightmap: stamps/mesa.png
     placement:
       lat: 21.148358020009354
       lon: 30.75836050540796
@@ -96,7 +96,7 @@ planet:
     height_offset: 0.0
     blend: max
     falloff: 300.0
-  - heightmap: ../terrain/levels/stamps/pad.png
+  - heightmap: stamps/pad.png
     placement:
       lat: 20.766755701874203
       lon: 30.44085118469976
@@ -107,7 +107,7 @@ planet:
     height_offset: 0.5
     blend: flatten
     falloff: 250.0
-  - heightmap: ../terrain/levels/stamps/lake.png
+  - heightmap: stamps/lake.png
     placement:
       lat: 21.148113519050103
       lon: 29.939251284003443
@@ -119,7 +119,7 @@ planet:
     blend: replace
     falloff: 700.0
   paints:
-  - mask: ../terrain/levels/stamps/crater_paint.png
+  - mask: stamps/crater_paint.png
     placement:
       lat: 20.670655126211866
       lon: 29.940715883578648
@@ -132,7 +132,7 @@ planet:
     falloff: 120.0
     strength: 1.0
     tolerance: 0.12
-  - mask: ../terrain/levels/stamps/pad_paint.png
+  - mask: stamps/pad_paint.png
     placement:
       lat: 20.766755701874203
       lon: 30.44085118469976
@@ -144,7 +144,7 @@ planet:
     falloff: 30.0
     strength: 1.0
     tolerance: 0.12
-  - mask: ../terrain/levels/stamps/lake_paint.png
+  - mask: stamps/lake_paint.png
     placement:
       lat: 21.148113519050103
       lon: 29.939251284003443

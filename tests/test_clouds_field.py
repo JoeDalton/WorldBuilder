@@ -10,6 +10,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from planets import PRESETS as PLANETS
 
 from world_builder.clouds.cloud import PRESETS, CloudType
 from world_builder.clouds.field_setup import (
@@ -43,7 +44,6 @@ from world_builder.clouds.weather import (
 from world_builder.sky.starfield import cube_directions
 from world_builder.terrain.chart import TangentFrame, dirs_from_latlon
 from world_builder.terrain.cubesphere import face_dirs
-from world_builder.terrain.planet import PRESETS as PLANETS
 from world_builder.terrain.planet import Planet, PlanetSpec
 
 R = 600e3

@@ -2,7 +2,7 @@
 Numbers for how realistic a planet's relief looks, to compare before and after
 a change to the elevation (issue #9)::
 
-    python scripts/terrain_metrics.py [--preset NAME ...] [--seed N ...]
+    python scripts/terrain_metrics.py [--planet FILE|NAME ...] [--seed N ...]
         [--radius M] [--patches N]
 
 Per preset and seed, on patches picked at random (the same ones every run):
@@ -29,7 +29,8 @@ from scipy import ndimage
 
 from world_builder.terrain import biomes
 from world_builder.terrain.chart import AzimuthalEquidistantChart, latlon
-from world_builder.terrain.planet import PRESETS, Planet
+from world_builder.terrain.planet import Planet
+from world_builder.world_file import SHIPPED_PLANETS, load_planet
 
 #: Slope under which ground counts as flat, degrees.
 FLAT_SLOPE = 3.0
@@ -141,16 +142,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--preset", nargs="*", default=list(PRESETS))
+    parser.add_argument("--planet", nargs="*", default=list(SHIPPED_PLANETS))
     parser.add_argument("--seed", type=int, nargs="*", default=[1, 19])
     parser.add_argument("--radius", type=float, default=None)
     parser.add_argument("--patches", type=int, default=24)
     args = parser.parse_args()
 
-    print(f"{'preset':<10} {'seed':>4} " + " ".join(f"{c:>9}" for c in COLUMNS))
-    for name in args.preset:
+    print(f"{'planet':<10} {'seed':>4} " + " ".join(f"{c:>9}" for c in COLUMNS))
+    for name in args.planet:
         for seed in args.seed:
-            spec = replace(PRESETS[name], seed=seed)
+            spec = replace(load_planet(name), seed=seed)
             if args.radius:
                 spec = replace(spec, radius=args.radius)
             start = time.perf_counter()

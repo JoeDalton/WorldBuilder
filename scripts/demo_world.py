@@ -71,9 +71,7 @@ from world_builder.quality import QualityLevel  # noqa: E402
 from world_builder.settings import SECTIONS, WorldSettings  # noqa: E402
 from world_builder.terrain.chart import TangentFrame, latlon  # noqa: E402
 
-DEFAULT_WORLD = (
-    Path(__file__).resolve().parents[1] / "src/world_builder/worlds/three_planets.yaml"
-)
+DEFAULT_WORLD = tools.DEFAULT_WORLD
 SPEED = 300.0  # metres/second at low altitude
 BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground

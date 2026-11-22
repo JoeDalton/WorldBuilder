@@ -34,7 +34,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import tools  # noqa: E402
 from demo_world import WorldDemo  # noqa: E402
-from terrain_shots import _settle, local_sun  # noqa: E402
 from world_builder.datafiles import tree_assets  # noqa: E402
 from world_builder.terrain.chart import TangentFrame, dirs_from_latlon  # noqa: E402
 from world_builder.terrain.planet import Planet  # noqa: E402
@@ -137,7 +136,7 @@ class TreeGallery:
             "pitch": 8.0,
         }
         demo.reset_camera()
-        demo.world.world.set_sun(local_sun(*SUN, TangentFrame.at(*SITE)))
+        demo.world.world.set_sun(tools.local_sun(*SUN, TangentFrame.at(*SITE)))
         demo.gallery = self
         self.place()
 
@@ -180,7 +179,7 @@ def main() -> None:
 
         demo._hud.hide()
         demo.setFrameRateMeter(False)
-        _settle(demo, 120.0)
+        tools.settle(demo, 120.0)
         for _ in range(5):
             demo.taskMgr.step()
         demo.win.save_screenshot(Filename.from_os_specific(str(args.shot)))

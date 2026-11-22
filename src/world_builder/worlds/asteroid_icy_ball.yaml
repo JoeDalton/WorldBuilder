@@ -1,0 +1,94 @@
+# A ball of ice and rock 20 km across, spinning around one axis (z), tumbling.
+spec:
+  shape:
+    type: sphere
+    radius: 10000.0
+    edge: 2000.0
+  density:
+    count_per_km3: 1.0
+    clumping: null
+    dust: 0.0
+  sizes:
+    kind: lognormal
+    median: 150.0
+    sigma: 0.6
+    lo: 50.0
+    hi: 1000.0
+  spin:
+    rate:
+      kind: lognormal
+      median: 0.05
+      sigma: 0.5
+      lo: 0.005
+      hi: 0.3
+    axis:
+      type: around_axis
+      axis: [0.0, 0.0, 1.0]
+      kappa: 20.0
+    size_exponent: 1.5
+    tumble:
+      fraction: 0.3
+      cone_angle:
+        kind: uniform
+        lo: 0.2
+        hi: 0.8
+      ratio:
+        kind: uniform
+        lo: 0.3
+        hi: 1.5
+  shapes:
+    prototypes: 32
+    elongation:
+      kind: uniform
+      lo: 0.5
+      hi: 0.9
+    lumps: 0.16
+    lump_scale: 1.2
+    ridges: 0.02
+    craters: 10.0
+    crater_size:
+      kind: power_law
+      q: 2.5
+      lo: 0.06
+      hi: 0.5
+    crater_depth: 0.2
+    round_prototypes: 0.4
+    crooked_shares: [0.4, 0.35, 0.25]
+    round_share: [0.15, 0.85]
+    bulges: 0.18
+    crooked_elongation:
+      kind: uniform
+      lo: 0.35
+      hi: 0.6
+    lobe_ratio:
+      kind: uniform
+      lo: 0.45
+      hi: 0.8
+    lobe_overlap:
+      kind: uniform
+      lo: 0.2
+      hi: 0.35
+    bend:
+      kind: uniform
+      lo: 0.3
+      hi: 0.7
+    warp: 0.25
+    facets:
+      kind: uniform
+      lo: 4.0
+      hi: 7.99
+    facet_depth:
+      kind: uniform
+      lo: 0.45
+      hi: 0.75
+  material:
+    ice_fraction:
+      kind: u_shaped
+      a: 0.4
+      lo: 0.0
+      hi: 1.0
+      log: false
+    patch_scale: 1.5
+  keep_outs: []
+  seed: 0
+  cell_factor: 8.0

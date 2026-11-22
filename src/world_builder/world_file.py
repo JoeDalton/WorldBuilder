@@ -48,6 +48,7 @@ from typing import Any
 
 import numpy as np
 
+from world_builder.asteroids.spec import FieldSpec
 from world_builder.config import (
     ConfigError,
     Context,
@@ -72,12 +73,24 @@ from world_builder.world import (
 INITIAL_FAR_M = 600000.0
 
 __all__ = [
+    "SHIPPED_FIELDS",
+    "SHIPPED_PLANETS",
+    "WORLDS_PATH",
     "GameWorld",
     "WorldSpec",
+    "load_field",
+    "load_planet",
     "load_world",
     "parse_world",
     "world_to_yaml",
 ]
+
+#: The shipped world files (and the bodies they link).
+WORLDS_PATH = Path(__file__).parent / "worlds"
+#: The shipped body files, for tools that draw one planet.
+SHIPPED_PLANETS = ("kerbin", "earth", "desert", "forest", "moon", "ice")
+#: The shipped field files, for tools that draw one field.
+SHIPPED_FIELDS = ("asteroid_cube", "asteroid_icy_ball", "ring")
 
 _TOP = {"sun", "sky", "space_ambient", "bodies", "fields"}
 _BODY_ONLY = {"planet", "mass", "density"}
@@ -142,6 +155,44 @@ def parse_world(source: Path | str | dict) -> WorldSpec:
         fields=tuple(_field(f, base, f"fields[{i}]") for i, f in enumerate(fields_)),
         **kwargs,
     )
+
+
+def load_planet(source: Path | str) -> PlanetSpec:
+    """The planet of a body file (``planet:`` block) or of a world file's
+    first body (no window needed).
+
+    :param source: a path, or a shipped body's name (``"desert"``: see
+        :data:`SHIPPED_PLANETS`)
+    :raises ConfigError: if the file has no planet, or it is not valid
+    """
+    path = Path(source)
+    if not path.suffix and not path.exists():
+        path = WORLDS_PATH / f"{source}.yaml"
+    data = load_document(path)
+    if "planet" not in data and data.get("bodies"):
+        data = data["bodies"][0]
+    if "planet" not in data:
+        raise ConfigError(f"{path}: has no planet")
+    return build(PlanetSpec, data["planet"], Context(path.parent), "planet")
+
+
+def load_field(source: Path | str) -> FieldSpec:
+    """The spec of a field file (``spec:`` block) or of a world file's first
+    field (no window needed).
+
+    :param source: a path, or a shipped field's name (``"ring"``: see
+        :data:`SHIPPED_FIELDS`)
+    :raises ConfigError: if the file has no field, or it is not valid
+    """
+    path = Path(source)
+    if not path.suffix and not path.exists():
+        path = WORLDS_PATH / f"{source}.yaml"
+    data = load_document(path)
+    if "spec" not in data and data.get("fields"):
+        data = data["fields"][0]
+    if "spec" not in data:
+        raise ConfigError(f"{path}: has no field")
+    return build(FieldSpec, data["spec"], Context(path.parent), "spec")
 
 
 def _body(data: Any, base: Path, path: str) -> BodyLook:

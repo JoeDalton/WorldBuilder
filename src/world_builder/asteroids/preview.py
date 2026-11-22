@@ -12,10 +12,11 @@ matplotlib installed (a development dependency), a second
 sheet: the rocks' sizes, spin rates, spin axes and ice, each against the
 spec's distribution::
 
-    python -m world_builder.asteroids.preview [--preset NAME ...] [--out DIR]
+    python -m world_builder.asteroids.preview [--field FILE|NAME ...] [--out DIR]
         [--size PX] [--slab M]
 
-    --preset   the fields (spec.PRESETS; default all)
+    --field    the fields: a field or world file, or a shipped field's name
+               (asteroid_cube, asteroid_icy_ball, ring; default all)
     --out      where the sheets go (default ./asteroid_preview)
     --size     each map's side, pixels (default 900)
     --slab     draw only rocks within this distance of the middle plane
@@ -31,7 +32,7 @@ from pathlib import Path
 import numpy as np
 
 from world_builder.asteroids.scatter import Scatter
-from world_builder.asteroids.spec import PRESETS, Annulus, AroundAxis, FieldSpec
+from world_builder.asteroids.spec import Annulus, AroundAxis, FieldSpec
 from world_builder.terrain.pngio import write_png
 
 #: Fields with more rocks than this are mapped on a patch.
@@ -181,14 +182,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--preset", nargs="+", choices=list(PRESETS), default=None)
+    from world_builder.world_file import SHIPPED_FIELDS, load_field
+
+    parser.add_argument("--field", nargs="+", default=list(SHIPPED_FIELDS))
     parser.add_argument("--out", type=Path, default=Path("asteroid_preview"))
     parser.add_argument("--size", type=int, default=900)
     parser.add_argument("--slab", type=float, default=None)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
-    for name in args.preset or list(PRESETS):
-        spec = PRESETS[name]
+    for name in args.field:
+        spec = load_field(name)
         scatter = Scatter(spec)
         start = time.perf_counter()
         region = _region(spec)

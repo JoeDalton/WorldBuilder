@@ -1137,7 +1137,7 @@ def test_the_shader_blends_the_wind_in_float():
 
 @pytest.fixture(scope="module")
 def earth_weather():
-    from world_builder.terrain.planet import PRESETS as PLANETS
+    from planets import PRESETS as PLANETS
 
     return WeatherSpec(PLANETS["earthlike"])
 

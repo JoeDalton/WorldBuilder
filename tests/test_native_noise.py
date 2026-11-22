@@ -11,10 +11,10 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from planets import PRESETS
 
 from world_builder.terrain import noise
 from world_builder.terrain.chunkgen import generate_chunk, planet_for
-from world_builder.terrain.planet import PRESETS
 
 
 @pytest.fixture(scope="module")

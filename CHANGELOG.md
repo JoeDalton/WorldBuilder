@@ -39,11 +39,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The benches and shots (`frame_profile`, `flight_bench`,
   `vegetation_bench`, `terrain_shots`, `motion_shots`, `tree_gallery`,
   `cloud_bench`, the asteroid scripts) take their window settings and quality
-  arguments from the new `scripts/tools.py` and fly `WorldDemo`; the world
+  arguments from the new `scripts/tools.py` (which also holds the shared
+  `local_sun`, `set_local_sun` and `settle`) and fly `WorldDemo`; the world
   they fly is a world file where it is fixed.
 
 ### Removed
 
+- `world_builder.asteroids.spec.PRESETS` (`cube`, `icy_ball`, `ring`) and
+  `_ringlets`: `worlds/asteroid_cube.yaml`, `asteroid_icy_ball.yaml` and
+  `ring.yaml` define the fields in full; `world_builder.load_field("ring")`
+  reads one. `asteroids.preview --field` and `asteroid_bench.py --field` take
+  a file or a shipped name (they took a preset name). The tests keep their
+  specs in `tests/fields.py`.
+- `world_builder.terrain.planet.PRESETS` (`earthlike`, `earth`, `desert`,
+  `forest`, `moon`, `ice`, `tiny`, `jupiter_rocky`): the library keeps no
+  planet presets. `worlds/earth.yaml`, `desert.yaml` and `forest.yaml` (and
+  the existing `kerbin`, `moon`, `ice`) define the planets in full;
+  `world_builder.load_planet("desert")` reads one for the tools that draw a
+  planet alone (`terrain.preview --planet`, `terrain_metrics.py --planet`,
+  `weather_report.py --planet`, `find_landforms.py --planet`). The tests keep
+  the specs they were written around in `tests/planets.py`.
+- `world_builder.terrain.level` (`load_level`, `level_for`, the level YAML
+  format) and `terrain/levels/` (`demo`, `tiny`, `earth`, `jupiter_rocky`):
+  a world file's `planet` block replaces them. The sample stamp images moved
+  to `worlds/stamps/`; `scripts/make_sample_stamps.py` regenerates them.
 - `scripts/demo_terrain.py`, `scripts/demo_asteroids.py` and
   `scripts/demo_genera.py`: the hand-wired demos, replaced by
   `demo_world.py` on world files. With them go the demo's test balls and

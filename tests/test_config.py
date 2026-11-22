@@ -8,9 +8,10 @@ from dataclasses import replace
 
 import pytest
 import yaml
+from fields import PRESETS as FIELDS
+from planets import PRESETS
 
 from world_builder.asteroids.distributions import Distribution
-from world_builder.asteroids.spec import PRESETS as FIELDS
 from world_builder.asteroids.spec import Annulus, FieldSpec
 from world_builder.atmosphere import AtmosphereParams
 from world_builder.clouds.genera import GeneraSpec
@@ -24,7 +25,6 @@ from world_builder.config import (
     from_config,
     to_config,
 )
-from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.stamps import Paint, Placement, Stamp
 from world_builder.world import CloudLook, OceanLook, SkyLook
 

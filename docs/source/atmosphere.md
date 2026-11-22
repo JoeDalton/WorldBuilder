@@ -391,7 +391,7 @@ field reads the coverage, the near field the shift, and the two agree by
 construction (a test checks the round trip within 3 % at 0.1–0.9).
 
 `python -m world_builder.terrain.preview --weather [--time S] [--pin LAT LON
-PRESET ...]` draws each planet preset's weather three ways, for tuning: the
+PRESET ...]` draws each shipped planet's weather three ways, for tuning: the
 globe under all its cloud, the genera by colour, and a surface chart
 (isobars every 4 hPa, fronts with their symbols, the jets' axes, the
 systems' centres). A world file gives the weather's time and pins

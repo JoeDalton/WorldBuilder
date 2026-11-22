@@ -11,11 +11,11 @@ python scripts/demo_world.py              # 3D flight: planet, moon, orbit to gr
 python scripts/demo_world.py my_world.yaml --body planet --lat LAT --lon LON --alt M   # a world file, from another place
 python scripts/find_landforms.py          # places over dunes, mesas and canyons
 python scripts/terrain_shots.py           # fixed poses, to PNG
-python -m world_builder.terrain.preview   # globe and top-down maps of every preset, to PNG
+python -m world_builder.terrain.preview   # globe and top-down maps of every shipped planet, to PNG
 python -m world_builder.terrain.preview --weather   # each globe under its clouds' weather
 python -m world_builder.terrain.bench     # chunk, LOD and worker timings
 python scripts/flight_bench.py            # frame times in scripted fast flights
-python -m world_builder.terrain.level     # regenerate the sample stamp images
+python scripts/make_sample_stamps.py      # regenerate the sample stamp images
 pytest tests/test_terrain_*.py tests/test_depth.py
 ```
 
@@ -127,7 +127,7 @@ the same table, only in the tablelands (a mask in each vertex: the sixth
 biome byte, beach being the rest of the weights): the same bands at the
 same height on every wall, faint on the flat floors and tops.
 
-`scripts/terrain_metrics.py` prints numbers for the look of each preset:
+`scripts/terrain_metrics.py` prints numbers for the look of each shipped planet:
 the share of flat land, slope percentiles, the coastline's box-count
 dimension, peaks per area of mountains, and land heights.
 
@@ -141,7 +141,7 @@ costs under 5 cm of error and saves about half the time.
 
 ### Biomes
 
-Temperature and humidity come from low-frequency noise. Each planet preset sets their mean and spread, which is how you bias a planet (desert, forest, ice, …).
+Temperature and humidity come from low-frequency noise. Each planet's `climate` sets their mean and spread, which is how you bias a planet (`worlds/desert.yaml`, `forest.yaml`, `ice.yaml`, …).
 
 On top of that:
 
@@ -152,23 +152,19 @@ On top of that:
 
 ### Hand-made content
 
-The hand-made pieces are listed in a level YAML. The `world_builder.terrain.level`
-module docstring documents the format, and the package's `levels/demo.yaml` is
-the demo's level.
+The hand-made pieces are listed in the planet's block of a [world file](world_file.md)
+(`planet.stamps`, `paints`, `density_paints`); `worlds/kerbin.yaml` is the
+shipped example, its images in `worlds/stamps/`.
 
 - **Stamps** are 16-bit grayscale PNG heightmaps.
 - **Paints** are colour PNGs that force biomes.
 
-Each stamp or paint is placed by latitude and longitude, or by chart metres
-around the level's reference point, with a size and rotation; a paint can
+Each stamp or paint is placed by latitude and longitude, with a size and
+rotation; a paint can
 reuse a stamp's placement. Stamps blend in one of these modes: `replace`,
 `add`, `max`, `min`, or `flatten` (level to the ground height at the stamp's
 centre), fading in over `falloff` metres from their edges. Coarse chunks read
-a box-filtered mip of the image, so a stamp never aliases. The level also
-holds the demo's start pose, by latitude, longitude and altitude or by chart
-`x`, `y` and `z`.
-
-The demo reloads the level when you press **L**.
+a box-filtered mip of the image, so a stamp never aliases.
 
 ## The cube-sphere
 
@@ -354,7 +350,8 @@ atmospheres = Atmospheres()                     # the planet's air
 atmospheres.add(spec.radius, AtmosphereParams())
 planet = Terrain(render, spec, executor=executor,
                  atmospheres=atmospheres, atmosphere=0)
-moon = Terrain(render, replace(PRESETS["moon"], seed=7), executor=executor,
+spec_moon = load_planet("moon")                 # worlds/moon.yaml's planet
+moon = Terrain(render, spec_moon, executor=executor,
                atmospheres=atmospheres,         # seen through the planet's air
                position=(3.0e6, 9.0e6, 1.0e6), materials=planet.materials)
 for terrain in (planet, moon):                  # every frame
@@ -387,7 +384,7 @@ atmospheres.update(camera_world)
   such a body bare sunlight and almost no ambient light (`set_sun`); it is
   still seen through the other bodies' air when a sight line crosses it.
 - **Barren worlds:** `PlanetSpec.has_vegetation=False` removes grass and
-  forest, and desert takes whatever snow leaves. The `moon` preset is a
+  forest, and desert takes whatever snow leaves. The `moon` planet (`worlds/moon.yaml`) is a
   200 km airless ball of sand, with rock only on cliffs.
 
 A body seen through another's air is dimmed and tinted by it: from the
@@ -450,13 +447,13 @@ The solid answers for every drawn chunk within `max_distance` of the camera. Chu
 
 **Where the node goes:** it hangs beside `Terrain.root`, not under it, and copies the root's transform each frame. Under the root, its collide mask would send the traverser through every chunk node for every collider.
 
-**Cost:** on the earthlike preset, with 64 ships, 33 active sensors and 300 lasers within 5 km of the camera, the terrain adds about 0.6 ms to a traverse, and 1.1 ms with every ship and laser hugging the ground (`scripts/collision_bench.py`). `scripts/collision_viewer.py` shows the same load live in a window: contacts, normals and the traverse time.
+**Cost:** on the earthlike planet, with 64 ships, 33 active sensors and 300 lasers within 5 km of the camera, the terrain adds about 0.6 ms to a traverse, and 1.1 ms with every ship and laser hugging the ground (`scripts/collision_bench.py`). `scripts/collision_viewer.py` shows the same load live in a window: contacts, normals and the traverse time.
 
 The library ships in the Linux (x86_64, aarch64), Windows x64 and macOS (universal2: Intel and Apple silicon) wheels, built against Panda3D 1.10.16 (the version world_builder pins). From a source checkout, `invoke native` builds it, and `invoke develop` does so too (see [the native library](native_build.md)). `enable_collision` raises `NativeCollisionError` when it is missing or built for another Panda3D series.
 
 `include_ocean=False` makes the seabed solid instead of the sea surface. The drawn chunk meshes themselves are never collision targets: their into-mask is off.
 
-**Loading:** only drawn ground is solid, and the ground around a new camera position takes seconds to load (about 10 s from nothing on the earthlike preset). `Terrain.loading` is True while the last LOD pass still wanted chunks it needs. A game's loading phase should wait for it to stay False for a moment: in flight it turns on briefly whenever detail refines.
+**Loading:** only drawn ground is solid, and the ground around a new camera position takes seconds to load (about 10 s from nothing on the earthlike planet). `Terrain.loading` is True while the last LOD pass still wanted chunks it needs. A game's loading phase should wait for it to stay False for a moment: in flight it turns on briefly whenever detail refines.
 
 `TerrainQuery` stays the pure-numpy path for one-off queries (`altitude`, `height_at`, and so on).
 

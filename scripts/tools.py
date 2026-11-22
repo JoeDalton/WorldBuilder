@@ -7,7 +7,11 @@ camera maths. Nothing here draws a world: that is
 from __future__ import annotations
 
 import argparse
+import math
+import time
+from pathlib import Path
 
+import numpy as np
 from direct.showbase.ShowBase import ShowBase
 from panda3d.core import (
     GraphicsWindow,
@@ -19,9 +23,13 @@ from panda3d.core import (
 
 from world_builder.quality import QualityLevel
 from world_builder.settings import SECTIONS, WorldSettings
-from world_builder.terrain.chart import dirs_from_latlon
+from world_builder.terrain.chart import TangentFrame, dirs_from_latlon, latlon
 from world_builder.terrain.planet import Planet
 
+#: The world the scripts fly by default.
+DEFAULT_WORLD = (
+    Path(__file__).resolve().parents[1] / "src/world_builder/worlds/three_planets.yaml"
+)
 #: Height of a start above the ground there, metres.
 START_CLEARANCE = 400.0
 #: Shortest wavelength of the coarse ground a start also clears, metres:
@@ -134,3 +142,49 @@ def ground_height(spec, lat: float, lon: float) -> float:
     fine, _, _ = planet.sample_dirs(dirs, None, apply_stamps=True)
     coarse, _, _ = planet.sample_dirs(dirs, START_COARSE_M, apply_stamps=True)
     return max(float(fine[0]), float(coarse[0]), 0.0)
+
+
+def local_sun(azimuth: float, elevation: float, frame: TangentFrame) -> np.ndarray:
+    """:returns: the world-frame direction of a sun at an azimuth (degrees,
+    0 = north, increasing toward east) and elevation, in a local frame"""
+    az, el = math.radians(azimuth), math.radians(elevation)
+    return (
+        math.cos(el) * math.sin(az) * frame.east
+        + math.cos(el) * math.cos(az) * frame.north
+        + math.sin(el) * frame.up
+    )
+
+
+def set_local_sun(demo, azimuth: float, elevation: float) -> None:
+    """Put the world's sun at an azimuth/elevation (degrees; 0 = north, toward
+    east) as seen from the point under the camera.
+
+    :param demo: a ``demo_world.WorldDemo``
+    """
+    lat, lon = latlon(demo._up()[None, :])
+    frame = TangentFrame.at(float(lat[0]), float(lon[0]))
+    demo.world.world.set_sun(local_sun(azimuth, elevation, frame))
+
+
+def settle(demo, timeout: float) -> bool:
+    """Step frames until the world is loaded and nothing is wanted or
+    generating for 10 frames.
+
+    :param demo: a ``demo_world.WorldDemo``
+    :returns: whether that happened before *timeout* seconds
+    """
+    start = time.perf_counter()
+    quiet = 0
+    world = demo.world.world
+    while time.perf_counter() - start < timeout:
+        demo.taskMgr.step()
+        busy = (
+            world.executor.pending
+            or world.loading
+            or any(body.terrain.stats["wanted"] for body in demo.bodies)
+            or not all(body.shadow_map.current for body in demo.bodies)
+        )
+        quiet = 0 if busy else quiet + 1
+        if quiet >= 10:
+            return True
+    return False

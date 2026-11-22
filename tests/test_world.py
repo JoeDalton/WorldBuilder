@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 from panda3d.core import LPoint3f, NodePath, Shader, ShaderAttrib
+from planets import PRESETS
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
@@ -33,7 +34,7 @@ from world_builder.settings import WorldSettings
 from world_builder.shadows import ECLIPSE_SKY_FLOOR, SUN_ANGULAR_RADIUS, Shadows
 from world_builder.sky import Sky
 from world_builder.terrain.chart import TangentFrame
-from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS, PRESETS
+from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.world import (
     Body,

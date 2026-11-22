@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from planets import PRESETS as PLANETS
 
 from world_builder.clouds.cloud import PRESETS, CloudSettings, CloudType
 from world_builder.clouds.field_setup import _noise
@@ -49,7 +50,6 @@ from world_builder.clouds.noise import (
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.clouds.weather import coverage_to_shift, shift_table
 from world_builder.quality import QualityLevel
-from world_builder.terrain.planet import PRESETS as PLANETS
 from world_builder.terrain.workers import ChunkExecutor
 
 R = 600e3

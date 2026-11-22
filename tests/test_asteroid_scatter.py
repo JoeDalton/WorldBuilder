@@ -8,13 +8,13 @@ import pickle
 
 import numpy as np
 import pytest
+from fields import PRESETS
 from scipy.spatial import cKDTree
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.motion import rotate
 from world_builder.asteroids.scatter import ROCK_DTYPE, Scatter, fbm_quantile
 from world_builder.asteroids.spec import (
-    PRESETS,
     Annulus,
     AroundAxis,
     Box,

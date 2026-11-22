@@ -211,8 +211,8 @@ class BodyLook:
     """One planet or moon.
 
     :ivar name: what :meth:`World.body` finds it by
-    :ivar spec: its planet (a preset, or a level file's, see
-        :func:`world_builder.terrain.level.load_level`)
+    :ivar spec: its planet (a preset, or one read from a
+        world file: :mod:`world_builder.world_file`)
     :ivar position: its centre, world frame, metres
     :ivar mass: its mass, in the units of the gravity constant given to
         :meth:`World.gravity_field` (keyword only: it has no default)

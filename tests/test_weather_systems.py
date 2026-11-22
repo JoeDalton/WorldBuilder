@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from planets import PRESETS
 
 from world_builder.clouds.synoptic import Scales
 from world_builder.clouds.synoptic.fields import pressure, wind
@@ -22,7 +23,7 @@ from world_builder.clouds.synoptic.systems import (
     storm_sectors,
 )
 from world_builder.clouds.weather import WeatherSpec, _sampler
-from world_builder.terrain.planet import PRESETS, Planet, PlanetSpec
+from world_builder.terrain.planet import Planet, PlanetSpec
 
 EARTH = PlanetSpec("e", radius=6.371e6, day_length_h=23.934)
 DAY = 86400.0

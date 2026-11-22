@@ -43,7 +43,7 @@ SHALLOW_WATER_DEPTH_M = 8.0
 def __getattr__(name: str):
     """``world_builder.load_world`` and ``parse_world``, imported when first
     used (the world pulls in every part)."""
-    if name in ("load_world", "parse_world"):
+    if name in ("load_world", "parse_world", "load_planet", "load_field"):
         from world_builder import world_file
 
         return getattr(world_file, name)

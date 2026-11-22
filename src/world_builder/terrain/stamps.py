@@ -111,7 +111,7 @@ class Stamp:
     """A heightmap stamp. See the module docstring for the blend modes.
 
     :ivar heightmap: image path (absolute, or relative to the working dir;
-        level files resolve theirs against the level's folder). Any image
+        world files resolve theirs against the world file's folder). Any image
         Panda reads; a 16-bit grayscale PNG keeps the full precision
     :ivar placement: where it lies
     :ivar height_scale: metres per full-white pixel

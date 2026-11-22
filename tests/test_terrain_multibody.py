@@ -9,12 +9,12 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from planets import PRESETS
 from timing import TIME_SCALE, unbudgeted, wait_until
 
 from world_builder.terrain import biomes, workers
 from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.chunkgen import generate_chunk
-from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.workers import ChunkExecutor
 
 

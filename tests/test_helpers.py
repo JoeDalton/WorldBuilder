@@ -8,11 +8,11 @@ import os
 
 import numpy as np
 import pytest
+from planets import PRESETS
 
 from world_builder import utils
 from world_builder.atmosphere import MAX_ATMOSPHERES, AtmosphereParams, Atmospheres
 from world_builder.terrain import workers
-from world_builder.terrain.planet import PRESETS
 from world_builder.terrain.pngio import read_image, write_png
 from world_builder.terrain.workers import ChunkExecutor
 

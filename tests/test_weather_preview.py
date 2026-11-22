@@ -3,10 +3,11 @@ line parsing."""
 
 import numpy as np
 import pytest
+from planets import PRESETS
 
 from world_builder.clouds.synoptic import Scales
 from world_builder.clouds.synoptic.presets import Preset, WeatherPin, parse_pin
-from world_builder.terrain.planet import PRESETS, Planet
+from world_builder.terrain.planet import Planet
 
 H = 72
 

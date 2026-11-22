@@ -43,7 +43,6 @@ than the display's refresh are held to it in a window even with vsync off
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 import tempfile
 import time
@@ -56,7 +55,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import tools  # noqa: E402
 from demo_world import DEFAULT_WORLD, WorldDemo  # noqa: E402
-from world_builder.terrain.chart import TangentFrame, latlon  # noqa: E402
 from world_builder.world_file import WorldSpec, parse_world, world_to_yaml  # noqa: E402
 
 #: The bench scenes (--scene): the first body's planet, simple: no vegetation,
@@ -109,20 +107,6 @@ def _poses(demo: WorldDemo) -> dict:
     }
 
 
-def _set_local_sun(demo: WorldDemo, azimuth: float, elevation: float) -> None:
-    """Put the sun at an azimuth/elevation (degrees; 0 = north, toward east) as
-    seen from the point under the camera."""
-    up = demo._up()
-    lat, lon = latlon(up[None, :])
-    frame = TangentFrame.at(float(lat[0]), float(lon[0]))
-    az, el = math.radians(azimuth), math.radians(elevation)
-    demo.world.world.set_sun(
-        math.cos(el) * math.sin(az) * frame.east
-        + math.cos(el) * math.cos(az) * frame.north
-        + math.sin(el) * up
-    )
-
-
 def _bench_world(path: str, ocean: bool) -> str:
     """:returns: a temporary world file: *path*'s with the first body simple
     (no vegetation, mountains 600 m, a sea or none)"""
@@ -148,27 +132,6 @@ def _bench_world(path: str, ocean: bool) -> str:
     out.write(world_to_yaml(simple))
     out.close()
     return out.name
-
-
-def _settle(demo: WorldDemo, timeout: float) -> bool:
-    """Step frames until nothing is loading for 10 frames.
-
-    :returns: whether that happened before *timeout* seconds
-    """
-    start = time.perf_counter()
-    quiet = 0
-    world = demo.world.world
-    while time.perf_counter() - start < timeout:
-        demo.taskMgr.step()
-        busy = (
-            world.executor.pending
-            or world.loading
-            or not all(body.shadow_map.current for body in demo.bodies)
-        )
-        quiet = 0 if busy else quiet + 1
-        if quiet >= 10:
-            return True
-    return False
 
 
 def _time(demo: WorldDemo, probe, frames: int) -> tuple[float, float, float]:
@@ -301,8 +264,8 @@ def main() -> None:
         for name in (args.pose or default) + extra:
             lat, lon, alt, heading, pitch, body = poses[name]
             demo.place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])
-            _set_local_sun(demo, *SUNS.get(name, DEFAULT_SUN))
-            settled = _settle(demo, args.timeout)
+            tools.set_local_sun(demo, *SUNS.get(name, DEFAULT_SUN))
+            settled = tools.settle(demo, args.timeout)
             frame, p95, step = _time(demo, probe, args.frames)
             row = {"frame": frame, "p95": p95, "step": step}
             for part, (off, on) in _parts(demo).items():

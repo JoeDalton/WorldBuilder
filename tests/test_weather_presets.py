@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from planets import PRESETS
 
 from world_builder.clouds.synoptic import Scales
 from world_builder.clouds.synoptic.jets import troughs
@@ -26,7 +27,7 @@ from world_builder.clouds.weather import (
     genus_fields,
 )
 from world_builder.terrain.chart import dirs_from_latlon
-from world_builder.terrain.planet import PRESETS, Planet
+from world_builder.terrain.planet import Planet
 
 PLANET = PRESETS["earthlike"]
 SCALES = Scales.from_planet(PLANET)

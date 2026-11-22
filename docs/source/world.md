@@ -64,7 +64,7 @@ parts.
 
 - **`BodyLook`**: one planet or moon.
   - `name`: what `World.body(name)` finds it by.
-  - `spec`: a preset, or a level file's.
+  - `spec`: a planet (a preset, or built from a world file's `planet` block).
   - `position`: its centre, in the world frame.
   - `atmosphere`: `AtmosphereParams`, or None for an airless body.
   - `clouds`: a `CloudLook`, or None. Clouds need air.
