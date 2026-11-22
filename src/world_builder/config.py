@@ -528,7 +528,8 @@ def _dump_dataclass(obj: Any, ctx: Context, path: str) -> dict:
 def _relative(value: str, ctx: Context) -> str:
     if ctx.base_dir is None:
         return value
-    return os.path.relpath(value, ctx.base_dir)
+    # Forward slashes whatever the platform: a world file reads the same on all
+    return Path(os.path.relpath(value, ctx.base_dir)).as_posix()
 
 
 # ── printing ─────────────────────────────────────────────────────────────────
