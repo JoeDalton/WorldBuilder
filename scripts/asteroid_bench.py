@@ -86,7 +86,7 @@ from panda3d.core import (
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_terrain import describe_window, window_config  # noqa: E402
+from tools import describe_window, window_config  # noqa: E402
 
 #: SpaceFlight's scene "asteroids" (scenes.py SceneAsteroids.build_upfront):
 #: (asteroids, field size m, scale factor, rotating, seed).

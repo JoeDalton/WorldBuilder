@@ -7,8 +7,8 @@ its spec when asked for, and is the same every time. That is what lets a field
 be as large as a ring, drawn and collided with only around the camera.
 
 ```
-python scripts/demo_asteroids.py            # fly through a field (controls in the script)
-python scripts/demo_asteroids.py --preset ring   # a planet ring; Home for the view from afar
+python scripts/demo_world.py src/world_builder/worlds/deep_space.yaml    # fly through a field (controls in the script)
+python scripts/demo_world.py   # a planet ring, around the ice planet: TAB to go to it, HOME for the view from afar
 python -m world_builder.asteroids.preview   # each preset's rocks from above and the side, and their statistics, to PNG
 python scripts/asteroid_gallery.py          # rock prototypes at each level of detail, to PNG
 python scripts/asteroid_bench.py --field cube --offscreen   # frame times in fixed flights
@@ -504,8 +504,8 @@ builds fields beside the bodies: on the world's worker pool, with its
 `asteroids` settings, its sun and clock (the rocks turn with the game's
 time), and the bodies' textures. They are part of `World.loading`,
 `update`, `set_sun`, `set_settings` and `destroy`; `World.field(name)`
-finds one (to make it solid, find clear spots...). `scripts/demo_asteroids.py`
-is built this way.
+finds one (to make it solid, find clear spots...). a world file's `fields:` builds them this way
+([World files](world_file.md); `worlds/ring.yaml`, `worlds/asteroid_cube.yaml`).
 
 **The far plane.** `World.depth_ranges` reaches every field's
 `AsteroidField.reach`: its largest rock at the settings' `min_pixels`

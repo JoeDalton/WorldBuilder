@@ -8,7 +8,7 @@ Three systems make a planet look like one from the ground to orbit:
 | Sky | `world_builder.sky` | A star field (procedural or painted) and the sun's disc, seen through the atmospheres. |
 | Planet clouds | `world_builder.clouds` | One cloud density field over the whole planet, raymarched from the ground to orbit, with the weather's expected coverage where a pixel spans more than its features: the same pattern at every distance. |
 
-`scripts/demo_terrain.py` wires all three; `scripts/terrain_shots.py` renders
+`world_builder.load_world` wires all three ([World files](world_file.md); `scripts/demo_world.py` flies one); `scripts/terrain_shots.py` renders
 them from fixed poses (`sunset`, `night_orbit`, `in_clouds`, `moonrise`...).
 
 ## Atmospheres
@@ -394,8 +394,8 @@ construction (a test checks the round trip within 3 % at 0.1–0.9).
 PRESET ...]` draws each planet preset's weather three ways, for tuning: the
 globe under all its cloud, the genera by colour, and a surface chart
 (isobars every 4 hPa, fronts with their symbols, the jets' axes, the
-systems' centres). `scripts/demo_terrain.py` takes the same `--time` and
-`--pin`.
+systems' centres). A world file gives the weather's time and pins
+(`clouds.weather.time_s`, `pins`: [World files](world_file.md)).
 
 ### Near: the raymarch
 

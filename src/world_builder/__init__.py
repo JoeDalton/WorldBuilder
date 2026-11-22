@@ -19,6 +19,8 @@ WorldBuilder: procedural worlds for Panda3D.
     world    every part a game draws around its camera (bodies, air,
              clouds, ocean, sky, sun, lights), built from the game's looks
              and updated as one
+    world_file  a whole world in a YAML file, loaded in one line:
+             ``world_builder.load_world(app, "my_world.yaml")``
     utils    small numeric helpers
 
 Every part is real geometry around its body's centre, of the body's own
@@ -36,3 +38,13 @@ __version__ = _version.__version__
 #: colour is the sea's ``water_color``.
 SHALLOW_WATER_COLOR = (0.03, 0.16, 0.15)
 SHALLOW_WATER_DEPTH_M = 8.0
+
+
+def __getattr__(name: str):
+    """``world_builder.load_world`` and ``parse_world``, imported when first
+    used (the world pulls in every part)."""
+    if name in ("load_world", "parse_world"):
+        from world_builder import world_file
+
+        return getattr(world_file, name)
+    raise AttributeError(f"module 'world_builder' has no attribute {name!r}")

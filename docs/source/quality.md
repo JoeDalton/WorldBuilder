@@ -285,7 +285,7 @@ stop at 1.5 km, and the ground is three levels coarser.
 
 ## The demo
 
-`scripts/demo_terrain.py --quality low|mid|high|ultra` (or a
+`scripts/demo_world.py --quality low|mid|high|ultra` (or a
 `--<section>-quality` override per part) starts at a preset. In flight:
 
 - F1–F5 cycle one part's preset: terrain, air, sky, clouds, ocean.

@@ -437,7 +437,7 @@ of translucent billboards into 16 samples per pixel was most of the clouds'
 cost.
 
 The demo and the scripts now ask for **no multisampling** (`window_config`
-in `demo_terrain.py`). An exact count would need the scene drawn into an
+in `scripts/tools.py`). An exact count would need the scene drawn into an
 offscreen buffer (an FBO gets exactly what it asks for) and shown on a
 full-screen quad; that was tried and works, and was left out for now.
 
@@ -903,7 +903,7 @@ are still views (GPU-synced poses within ±0.3 ms, the bench's noise): a
 still camera is the only case where a composed transform comes back.
 
 It is a process-wide Panda setting, so the library does not set it: the
-demo and the scripts do (`demo_terrain.window_config`), and a game drawing
+demo and the scripts do (`tools.window_config`), and a game drawing
 the world should load it too ([A whole world](world.md)).
 
 ### Evictions that walk past nothing

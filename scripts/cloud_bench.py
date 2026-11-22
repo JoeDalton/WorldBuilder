@@ -132,15 +132,8 @@ from panda3d.core import ClockObject, Filename, LQuaternionf, LVector3f, TextNod
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_terrain import (  # noqa: E402
-    CLOUD_BASE,
-    CLOUD_SKY_LIGHT,
-    INITIAL_FAR_M,
-    _quat_from_axes,
-    describe_window,
-    sun_lighting,
-    window_config,
-)
+from tools import describe_window, window_config  # noqa: E402
+from tools import quat_from_axes as _quat_from_axes
 from world_builder.atmosphere import AtmosphereParams, Atmospheres  # noqa: E402
 from world_builder.clouds.cloud import CloudSettings  # noqa: E402
 from world_builder.clouds.field_setup import _noise  # noqa: E402
@@ -160,6 +153,35 @@ from world_builder.sky import Sky, Starfield  # noqa: E402
 from world_builder.terrain.chart import TangentFrame, latlon  # noqa: E402
 from world_builder.terrain.level import DEMO_LEVEL, load_level  # noqa: E402
 from world_builder.terrain.workers import ChunkExecutor  # noqa: E402
+
+CLOUD_SKY_LIGHT = 0.35  # the clouds' sky-light share
+CLOUD_BASE = 2200.0  # metres above sea level
+INITIAL_FAR_M = 600000.0  # the far plane the sea's reflection camera copies
+
+
+def sun_lighting(azimuth: float, elevation: float) -> tuple[np.ndarray, tuple, tuple]:
+    """Sun direction (local east/north/up) and colours; a hand-made ramp.
+
+    :param azimuth: degrees, 0 = north, increasing toward east
+    :param elevation: degrees above the horizon
+    :returns: (direction (3,) in east, north, up, sun colour, ambient colour),
+        linear
+    """
+    az, el = math.radians(azimuth), math.radians(elevation)
+    direction = np.array(
+        [math.cos(el) * math.sin(az), math.cos(el) * math.cos(az), math.sin(el)]
+    )
+    height = max(0.0, min(1.0, elevation / 40.0))
+    ramp = height * height * (3.0 - 2.0 * height)
+    low_sun, high_sun = np.array([2.2, 1.3, 0.6]), np.array([2.6, 2.45, 2.2])
+    low_sky, high_sky = np.array([0.30, 0.30, 0.42]), np.array([0.38, 0.48, 0.70])
+    sun = low_sun + (high_sun - low_sun) * ramp
+    sky = low_sky + (high_sky - low_sky) * ramp
+    if elevation < 0.0:
+        dim = max(0.05, 1.0 + elevation / 10.0)
+        sun, sky = sun * dim, sky * dim
+    return direction, tuple(sun), tuple(sky)
+
 
 #: name -> (altitude, heading, pitch), over the level's reference point
 POSES = {

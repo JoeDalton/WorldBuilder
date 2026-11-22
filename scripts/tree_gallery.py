@@ -1,8 +1,8 @@
 """
 The tree assets (world_builder.datafiles) on the ground of the tiny test
-planet, for a look at them: the terrain demo (its controls, its light, the
-world's model shader) with every asset set out in rows near the start, each
-labelled with its name, kind and triangles.
+planet (scripts/worlds/tiny.yaml), for a look at them: the world demo (its
+controls, its light, the world's model shader) with every asset set out in
+rows near the start, each labelled with its name, kind and triangles.
 
 Run it from an environment where world_builder is importable::
 
@@ -17,7 +17,7 @@ Run it from an environment where world_builder is importable::
 The rows, from the camera's side: rocks, plants, birches, the near conifers
 (trunk and branch cards), the background conifers (crossed cards). The
 camera starts south of them, looking north. END or R comes back there; the
-demo's controls otherwise (I / U and J / K move the sun).
+world demo's controls otherwise (see demo_world.py).
 """
 
 from __future__ import annotations
@@ -32,17 +32,17 @@ from panda3d.core import TextNode
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_terrain import (  # noqa: E402
-    TerrainDemo,
-    _quat_from_axes,
-    add_world_arguments,
-    settings_from_args,
-    window_config,
-)
+import tools  # noqa: E402
+from demo_world import WorldDemo  # noqa: E402
+from terrain_shots import _settle, local_sun  # noqa: E402
 from world_builder.datafiles import tree_assets  # noqa: E402
 from world_builder.terrain.chart import TangentFrame, dirs_from_latlon  # noqa: E402
-from world_builder.terrain.level import TINY_LEVEL  # noqa: E402
 from world_builder.terrain.planet import Planet  # noqa: E402
+
+#: The world: the tiny planet alone (no clouds), the gallery's ground.
+WORLD = Path(__file__).resolve().parent / "worlds" / "tiny.yaml"
+#: The sun, as seen at the site: azimuth and elevation, degrees.
+SUN = (210.0, 35.0)
 
 #: The rows, nearest the camera first: (kinds, metres north of the first).
 ROWS = (
@@ -62,17 +62,31 @@ CAMERA_UP = 6.0
 SINK = 0.3
 
 
-class TreeGallery:
-    """The assets set out on the ground, placed and lit with the demo's test
-    balls (their positions each frame, their lights where they stand), and
-    their labels above them."""
+class GalleryDemo(WorldDemo):
+    """The world demo, placing the gallery's models each frame, after the
+    camera has moved and before the world is drawn."""
 
-    def __init__(self, demo: TerrainDemo, spacing: float):
+    gallery: "TreeGallery | None" = None
+
+    def _fly(self, dt: float) -> None:
+        super()._fly(dt)
+        if self.gallery is not None:
+            self.gallery.place()
+
+
+class TreeGallery:
+    """The assets set out on the ground, placed (their positions each frame)
+    and lit by the world's model shader where they stand, and their labels
+    above them."""
+
+    def __init__(self, demo: GalleryDemo, spacing: float):
         self.demo = demo
-        planet = Planet(demo.terrain.spec)
+        self.body = demo.bodies[0]
+        self.models: list[tuple] = []
+        planet = Planet(self.body.look.spec)
         frame = TangentFrame.at(*SITE)
         self.frame = frame
-        radius = demo.terrain.radius
+        radius = self.body.radius
         centre = dirs_from_latlon(*SITE)[0]
         self.labels: list[tuple] = []
         assets = tree_assets()
@@ -92,10 +106,10 @@ class TreeGallery:
                 n = np.cross(up, e)
                 node = asset.load()
                 node.reparent_to(demo.render)
-                node.set_quat(_quat_from_axes(e, n, up))
+                node.set_quat(tools.quat_from_axes(e, n, up))
                 point = d * (radius + ground)
-                demo._test_balls.append((node, point))
-                demo.tracked.track(node, cast=True, shader=demo._model_shader)
+                self.models.append((node, point))
+                demo.world.world.track_light(node, cast=True, shader=True)
                 text = TextNode(asset.name)
                 text.set_text(f"{asset.name}\n{asset.kind}, {asset.triangles} tris")
                 text.set_align(TextNode.ACenter)
@@ -114,21 +128,27 @@ class TreeGallery:
         ground, _, _ = planet.sample_dirs(start[None], None, True)
         lat = math.degrees(math.asin(start[2]))
         lon = math.degrees(math.atan2(start[1], start[0]))
-        demo.start_pose = {
+        demo.start = {
+            "body": self.body.name,
             "lat": lat,
             "lon": lon,
             "alt": max(float(ground[0]), 0.0) + CAMERA_UP,
             "heading": 0.0,
             "pitch": 8.0,
         }
-        demo._reset_camera()
-        demo.taskMgr.add(self._place_labels, "tree_gallery_labels", sort=1)
+        demo.reset_camera()
+        demo.world.world.set_sun(local_sun(*SUN, TangentFrame.at(*SITE)))
+        demo.gallery = self
+        self.place()
 
-    def _place_labels(self, task):
+    def place(self) -> None:
+        """Put the models and labels where they are in render's frame (the
+        camera is at its origin, the world moves around it)."""
         demo = self.demo
+        for node, point in self.models:
+            node.set_pos(*(self.body.position + point - demo.cam_world))
         for label, point in self.labels:
-            label.set_pos(*(demo.home.position + point - demo.cam_world))
-        return task.cont
+            label.set_pos(*(self.body.position + point - demo.cam_world))
 
 
 def main() -> None:
@@ -142,31 +162,29 @@ def main() -> None:
         default=None,
         help="render offscreen, save this PNG once the ground is loaded, quit",
     )
-    add_world_arguments(parser)
+    tools.add_quality_arguments(parser)
     args = parser.parse_args()
-    window_config(
+    tools.window_config(
         "Tree gallery",
         args.size,
         offscreen=args.shot is not None,
         vsync=args.shot is None,
     )
-    settings = settings_from_args(args)
+    settings = tools.settings_from_args(args)
     if not args.vegetation:
         settings = settings.with_value("vegetation", "enabled", False)
-    demo = TerrainDemo(
-        str(TINY_LEVEL), "process", None, settings=settings, clouds=False
-    )
+    demo = GalleryDemo(WORLD, settings=settings)
     TreeGallery(demo, args.spacing)
     if args.shot is not None:
         from panda3d.core import Filename
 
-        from terrain_shots import _settle
-
+        demo._hud.hide()
+        demo.setFrameRateMeter(False)
         _settle(demo, 120.0)
         for _ in range(5):
             demo.taskMgr.step()
         demo.win.save_screenshot(Filename.from_os_specific(str(args.shot)))
-        demo.destroy_terrain()
+        demo.destroy_world()
         return
     demo.run()
 

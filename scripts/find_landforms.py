@@ -1,11 +1,11 @@
 """
 Find places to start the demo over each desert landform: a sand sea, mesas,
-a canyon. Prints a ``--start LAT LON`` for each::
+a canyon. Prints a ``--lat LAT --lon LON`` for each::
 
     python scripts/find_landforms.py [--planet desert] [--seed 19]
         [--radius METRES] [--samples N] [--count N]
 
-    python scripts/demo_terrain.py --planet desert --start LAT LON
+    python scripts/demo_world.py my_desert_world.yaml --body planet --lat LAT --lon LON
 
 Candidates are random directions, scored by the landform's weight there
 (:meth:`Planet.landform_masks`) averaged over a ring 3 km around them, so a
@@ -145,7 +145,7 @@ def main() -> None:
             if name == "canyons":
                 depth = _canyon_depth(planet, dirs_from_latlon(lat, lon))[0]
                 note += f", about {depth:.0f} m deep"
-            print(f"{name:<8} --start {lat:.4f} {lon:.4f}   ({note})")
+            print(f"{name:<8} --lat {lat:.4f} --lon {lon:.4f}   ({note})")
 
 
 if __name__ == "__main__":

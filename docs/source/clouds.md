@@ -535,9 +535,9 @@ towers it was 2-2.4 times cheaper than the billboards' overdraw (7.6-8.8 ms
 at HIGH on an RTX 3070 at 2560 × 1440; performance §23, "The raymarch with
 genera"); §37 is the genera's baseline from the user's start.
 
-**The showcase.** [`scripts/demo_genera.py`](../../scripts/demo_genera.py)
-(the terrain demo with `--showcase`) shows every genus alone, for look
-development: `genera.showcase_features` lays out one feature per genus and
+**The showcase.** `genera.showcase_features` (the former `demo_genera.py` flew it; a world
+file's `clouds.genera.features` can lay out the same) shows every genus alone,
+for look development: `genera.showcase_features` lays out one feature per genus and
 cumulus species, the cumulus in a row along the northern horizon
 (`SHOWCASE_ROW`: humilis, mediocris, congestus, cumulonimbus, west to east,
 35-45 km from the start), the stratiform and mid-level genera along the

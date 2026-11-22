@@ -740,10 +740,10 @@ toward the sun, turned 40°: the handle's shadow on the pot), and
 `caster_altitude` (the textured ball 300 m up: its shadow on the hillside
 where its ray meets the ground).
 
-`scripts/demo_terrain.py` puts the moon 21,000 km out: from the planet's
+The shipped `three_planets.yaml` puts the moon 21,000 km out: from the planet's
 ground it looks 0.56° wide, as wide as the sun, so a total eclipse has an
-umbra a few km across inside a penumbra some 400 km wide. Swing the sun
-behind the moon with J / K and I / U: the shadow slides.
+umbra a few km across inside a penumbra some 400 km wide. Give the world a
+sun behind the moon (or `World.set_sun`) and the shadow slides.
 
 `scripts/terrain_shots.py` can aim a pose's sun at a body (`AimedSun`: the
 direction from the point under the camera to the body, turned some degrees

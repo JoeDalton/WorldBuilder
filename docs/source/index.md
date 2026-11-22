@@ -11,6 +11,9 @@ ocean and clouds.
 These pages are developer documentation: how each system is organised and how
 it works.
 
+- [World files](world_file.md): a whole world in a YAML file, loaded in one
+  line: `load_world(app, "my_world.yaml")`; every knob of every object, no
+  presets, links between files.
 - [A whole world](world.md): `World` builds every part a game draws around
   its camera (bodies, air, clouds, ocean, sky, sun, lights) from the game's
   looks, and updates them all every frame.
@@ -47,6 +50,7 @@ The per-class API is in the auto-generated [code reference](apidocs/index.rst).
 :maxdepth: 2
 :caption: Contents
 
+world_file
 world
 terrain
 vegetation

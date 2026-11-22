@@ -378,6 +378,3 @@ genera at LOW most (p99 6-8 levels still); the user judged it acceptable.
   offscreen harness that renders a march pass on a fixed weather and reads it
   back (clear sky -> alpha 0, a dense cloud -> alpha 1, the billows' column
   equal to `cloudDensityAt`) would close it.
-- The hand-built demo (`scripts/demo_terrain.py`) wires the clouds' shadows
-  and maps itself beside `World`'s (`bind_shadow_inputs`, `bind_maps`): keep
-  the two in step.

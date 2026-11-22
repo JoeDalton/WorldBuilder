@@ -4,10 +4,9 @@ How models (ships, props, anything loaded with `loader.load_model`) are lit
 compared with the world, and the shader that makes them match: a model
 tracked with `World.track_light(node, shader=True)` is drawn by
 `world_builder.objects` (see [The model shader](#the-model-shader) below,
-part G of [Shadows](shadows.md)). The terrain demo's test balls (the white
-one, `TEST_BALL_DIAMETER` in `scripts/demo_terrain.py`, 150 m ahead of the
-start pose, and the textured smiley beside it) are there to judge it; M
-switches them between the shader and Panda3D's own lighting.
+part G of [Shadows](shadows.md)). A game's models are the way to judge it: track one with
+`World.track_light(node, shader=True)` and with `shader=False` (Panda3D's own
+lighting) and compare.
 
 ## What the world's shaders do
 

@@ -59,12 +59,3 @@ def test_the_shader_takes_the_light_again_in_both_loops():
     assert "max(uLightRefresh.y * litAt, litAt + uLightRefresh.x)" in stale
     assert march.count("if (!lit || lightStale(t, litAt))") == 2
     assert march.count("litAt = t;") == 2
-
-
-def test_the_demo_cycles_the_light_choices():
-    from demo_terrain import LIGHT_REFRESH_CHOICES, _light_refresh_label
-
-    choices = set(dict(CloudSettings.knobs())["light_refresh_growth"].choices.values())
-    assert set(LIGHT_REFRESH_CHOICES) == choices
-    assert _light_refresh_label(CloudSettings(light_refresh_growth=0.0)) == "once"
-    assert _light_refresh_label(CloudSettings()) == "1.4x"

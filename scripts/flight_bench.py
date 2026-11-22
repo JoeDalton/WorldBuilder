@@ -1,18 +1,17 @@
 """
-Frame-time benchmark of the terrain demo in fast, scripted flights.
+Frame-time benchmark of a world file in fast, scripted flights.
 
-Runs the real demo (window, workers, both cameras, atmosphere, clouds,
-ocean, sky) with no multisampling and vsync off, and flies fixed paths,
-reporting frame times and where the main thread spends them::
+Runs the real demo (demo_world.py: window, workers, both cameras, atmosphere,
+clouds, ocean, sky) with no multisampling and vsync off, and flies fixed
+paths, reporting frame times and where the main thread spends them::
 
-    python scripts/flight_bench.py [--demo terrain|world]
+    python scripts/flight_bench.py [WORLD.yaml]
         [--flight low cruise descent] [--seconds S]
         [--profile] [--trace] [--no-hud] [--size "1600 900"] [--workers N]
         [--offscreen] [--quality low|mid|high|ultra] [--<part>-quality LEVEL]
-        [--no-clouds] [--cloud-debug BITS]
 
-    --demo           which demo flies: demo_terrain.py's hand-built world
-                     (default) or demo_world.py's, built by World
+    WORLD.yaml       the world file (default: three_planets.yaml); the flights
+                     are over its first body
     --flight         the flights to run, in order (default: all three);
                      "turn" turns on the spot at --at (A held)
     --at             the turn's pose: LAT LON ALT HEADING PITCH
@@ -33,11 +32,8 @@ reporting frame times and where the main thread spends them::
     --quality        every part's preset (WorldSettings), default high
     --<part>-quality one part's preset over it: terrain, atmosphere, sky,
                      clouds, ocean
-    --no-clouds      no clouds at all
-    --cloud-debug    PlanetClouds.set_debug bits (default 0)
 
-Flights (boosted, along the coast of the demo level from its reference
-point, heading west):
+Flights (boosted, from the first body's reference point, heading west):
     low      camera level, 300 m above the ground, ~1,500 m/s
     cruise   camera level, 3 km up, ~15 km/s
     descent  nose straight down from 3 planet radii, until 400 m above the
@@ -58,6 +54,7 @@ import argparse
 import cProfile
 import gc
 import io
+import math
 import pstats
 import sys
 import time
@@ -68,18 +65,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_world import WorldDemo  # noqa: E402
-
-from demo_terrain import (  # noqa: E402
-    TerrainDemo,
-    add_world_arguments,
-    describe_window,
-    settings_from_args,
-    window_config,
-)
-from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
-
-DEMOS = {"terrain": TerrainDemo, "world": WorldDemo}
+import tools  # noqa: E402
+from demo_world import DEFAULT_WORLD, WorldDemo  # noqa: E402
+from world_builder.terrain.chart import TangentFrame, latlon  # noqa: E402
 
 #: The main thread's parts that --trace times: (module, class, method).
 TRACED = (
@@ -91,7 +79,7 @@ TRACED = (
     ("world_builder.terrain.terrain", "Terrain", "_evict_nodes"),
     ("world_builder.terrain.workers", "ChunkExecutor", "collect"),
     ("world_builder.ocean.sea", "Sea", "update"),
-    ("demo_terrain", "TerrainDemo", "_fly"),
+    ("demo_world", "WorldDemo", "_fly"),
     ("world_builder.clouds.light_volume", "CloudLightVolumes", "update"),
     ("world_builder.clouds.shadow_map", "CloudShadowMaps", "update"),
     ("world_builder.clouds.planet", "PlanetClouds", "update"),
@@ -190,54 +178,68 @@ TURN_POSE: tuple | None = None
 TURN_SUN: tuple = (210.0, 35.0)
 
 
-def _settle(demo: TerrainDemo, timeout: float = 60.0) -> None:
+def _set_local_sun(demo: WorldDemo, azimuth: float, elevation: float) -> None:
+    """Put the sun at an azimuth/elevation (degrees; 0 = north, toward east) as
+    seen from the point under the camera."""
+    up = demo._up()
+    lat, lon = latlon(up[None, :])
+    frame = TangentFrame.at(float(lat[0]), float(lon[0]))
+    az, el = math.radians(azimuth), math.radians(elevation)
+    demo.world.world.set_sun(
+        math.cos(el) * math.sin(az) * frame.east
+        + math.cos(el) * math.cos(az) * frame.north
+        + math.sin(el) * up
+    )
+
+
+def _settle(demo: WorldDemo, timeout: float = 60.0) -> None:
     """Step frames until nothing is wanted or generating for 10 frames, or
     *timeout* seconds."""
     start = time.perf_counter()
     quiet = 0
     while time.perf_counter() - start < timeout and quiet < 10:
         demo.taskMgr.step()
-        busy = demo.executor.pending or any(
+        busy = demo.world.world.executor.pending or any(
             body.terrain.stats["wanted"] for body in demo.bodies
         )
         quiet = 0 if busy else quiet + 1
 
 
-def _start(demo: TerrainDemo, flight: str) -> None:
+def _start(demo: WorldDemo, flight: str) -> None:
     """Put the camera at a flight's start, boosted, its keys held."""
-    spec = demo.terrain.spec
+    spec = demo.bodies[0].look.spec
     lat, lon = spec.reference_lat, spec.reference_lon
     if flight == "turn":
         # Turning on the spot (A held: yaw at the demo's rate), no move.
         pose = TURN_POSE or (lat, lon, 3000.0, 0.0, 0.0)
-        demo._place_camera(*pose)
+        demo.place_camera(*pose)
         demo._keys["a"] = True
-        demo.set_local_sun(*TURN_SUN)
+        _set_local_sun(demo, *TURN_SUN)
         return
     if flight == "descent":
         # Nose straight down, flying forward: the camera's own "down" would
         # point backwards at any other pitch, and climb away.
-        demo._place_camera(lat, lon, 3.0 * demo.radius, 0.0, -89.9)
+        demo.place_camera(lat, lon, 3.0 * demo.bodies[0].radius, 0.0, -89.9)
         demo._keys["arrow_up"] = True
     else:
         altitude = 300.0 if flight == "low" else 3000.0
         # Over the start first: the ground is sampled under the camera.
-        demo._place_camera(lat, lon, altitude, 90.0, 0.0)
-        ground = float(demo.terrain.planet.sample_dirs(demo._up()[None, :])[0][0])
-        demo._place_camera(lat, lon, max(ground, 0.0) + altitude, 90.0, 0.0)
+        demo.place_camera(lat, lon, altitude, 90.0, 0.0)
+        ground = tools.ground_height(spec, lat, lon)
+        demo.place_camera(lat, lon, ground + altitude, 90.0, 0.0)
         demo._keys["arrow_up"] = True
     demo._keys["shift"] = True
-    demo.set_local_sun(210.0, 35.0)
+    _set_local_sun(demo, 210.0, 35.0)
 
 
-def _release(demo: TerrainDemo) -> None:
+def _release(demo: WorldDemo) -> None:
     """Let go of every key."""
     for key in demo._keys:
         demo._keys[key] = False
 
 
 def run(
-    demo: TerrainDemo,
+    demo: WorldDemo,
     flight: str,
     seconds: float,
     profile: bool,
@@ -267,8 +269,8 @@ def run(
         updates.append(time.perf_counter() - start)
         return result
 
-    demo.taskMgr.remove("terrain_demo_update")
-    demo.taskMgr.add(timed, "terrain_demo_update")
+    demo.taskMgr.remove("world_demo_update")
+    demo.taskMgr.add(timed, "world_demo_update")
     profiler = cProfile.Profile() if profile else None
     start = last = time.perf_counter()
     if profiler:
@@ -295,8 +297,8 @@ def run(
         profiler.disable()
     if trace:
         trace.active = False
-    demo.taskMgr.remove("terrain_demo_update")
-    demo.taskMgr.add(original, "terrain_demo_update")
+    demo.taskMgr.remove("world_demo_update")
+    demo.taskMgr.add(original, "world_demo_update")
     _release(demo)
 
     elapsed = time.perf_counter() - start
@@ -329,7 +331,7 @@ def run(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
-        "--demo", default="terrain", choices=tuple(DEMOS), help="which demo flies"
+        "world", nargs="?", default=str(DEFAULT_WORLD), help="the world file"
     )
     parser.add_argument(
         "--flight",
@@ -369,39 +371,32 @@ def main() -> None:
         action="store_true",
         help="render to an offscreen buffer: no display refresh cap or throttling",
     )
-    add_world_arguments(parser)
+    tools.add_quality_arguments(parser)
     parser.set_defaults(frame_cap=0)  # timings: never capped (--frame-cap N)
-    parser.add_argument(
-        "--cloud-debug", type=int, default=0, help="PlanetClouds.set_debug bits"
-    )
     args = parser.parse_args()
     global TURN_POSE
     TURN_POSE = tuple(args.at) if args.at else None
     global TURN_SUN
     if args.sun:
         TURN_SUN = tuple(args.sun)
-    window_config("Flight benchmark", args.size, args.offscreen, vsync=False)
-    settings = settings_from_args(args)
+    tools.window_config("Flight benchmark", args.size, args.offscreen, vsync=False)
+    settings = tools.settings_from_args(args)
     trace = Trace() if args.trace else None  # before the demo: see Trace
-    demo = DEMOS[args.demo](
-        str(DEMO_LEVEL),
-        "process",
-        None,
-        settings=settings,
-        clouds=not args.no_clouds,
-        ring=args.ring,
-        genera=args.genera,
-        cloud_debug=args.cloud_debug,
-    )
+    demo = WorldDemo(args.world, settings=settings)
     demo.setFrameRateMeter(False)
     if args.no_hud:
         demo._update_hud = lambda: None
-    print(f"{args.demo} demo,", describe_window(demo), f"settings {settings.to_dict()}")
+    print(
+        Path(args.world).stem,
+        "world,",
+        tools.describe_window(demo),
+        f"settings {settings.to_dict()}",
+    )
     try:
         for flight in args.flight:
             run(demo, flight, args.seconds, args.profile, trace)
     finally:
-        demo.destroy_terrain()
+        demo.destroy_world()
 
 
 if __name__ == "__main__":

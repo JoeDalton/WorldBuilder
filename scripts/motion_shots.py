@@ -1,5 +1,5 @@
 """
-The clouds in motion against the clouds converged: the demo flown from a
+The clouds in motion against the clouds converged: a world file flown from a
 pose, forward or backward, with its own keys and speed rule (so a frame's
 move is the user's), frames saved along the way; then each saved position
 revisited, held still until the clouds' history converges, and shot again
@@ -7,9 +7,10 @@ revisited, held still until the clouds' history converges, and shot again
 frame against its converged twin, over the clouds (where the converged shot
 with clouds differs from the one without) and over the whole image::
 
-    python scripts/motion_shots.py --at LAT LON ALT HEADING PITCH
-        [--backward] [--boost] [--frames N] [--every K] [--settle F]
-        [--out DIR] [--size "W H"] [--offscreen] [--genera] [--cloud-debug B]
+    python scripts/motion_shots.py [WORLD.yaml] --at LAT LON ALT HEADING PITCH
+        [--body NAME] [--backward] [--boost] [--frames N] [--every K]
+        [--settle F] [--out DIR] [--size "W H"] [--offscreen] [--cloud-debug B]
+        [--no-clouds] [--quality L]
 
 Prints per sample frame: the altitude, the mean error over the clouds and
 over the image (8-bit levels), the share of cloud pixels lost (in the
@@ -33,17 +34,9 @@ from panda3d.core import LQuaternionf as LQuat
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from demo_terrain import (  # noqa: E402
-    TerrainDemo,
-    add_planet_arguments,
-    add_world_arguments,
-    describe_window,
-    settings_from_args,
-    start_sun,
-    window_config,
-)
-from terrain_shots import _settle  # noqa: E402
-from world_builder.terrain.level import DEMO_LEVEL  # noqa: E402
+import tools  # noqa: E402
+from demo_world import DEFAULT_WORLD, WorldDemo  # noqa: E402
+from terrain_shots import _set_local_sun, _settle  # noqa: E402
 
 
 class _FixedClock:
@@ -69,7 +62,7 @@ SPECK_LEVELS = 10.0
 CLOUD_LEVELS = 6.0
 
 
-def _grab(demo: TerrainDemo) -> np.ndarray:
+def _grab(demo: WorldDemo) -> np.ndarray:
     tex = demo.win.get_screenshot()
     w, h = tex.get_x_size(), tex.get_y_size()
     ram = np.frombuffer(bytes(tex.get_ram_image_as("RGB")), np.uint8)
@@ -100,8 +93,12 @@ def _save(path: Path, images: list[np.ndarray]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    add_planet_arguments(parser)
-    add_world_arguments(parser)
+    parser.add_argument("world", nargs="?", default=str(DEFAULT_WORLD))
+    tools.add_quality_arguments(parser)
+    parser.add_argument("--no-clouds", action="store_true", help="hide the clouds")
+    parser.add_argument(
+        "--body", default=None, help="the body --at is over (default: the first)"
+    )
     parser.set_defaults(frame_cap=0)
     parser.add_argument(
         "--at",
@@ -146,28 +143,22 @@ def main() -> None:
         "difference in time, which smooth motion cancels and blinking does not)",
     )
     args = parser.parse_args()
-    window_config("Motion shots", args.size, args.offscreen, vsync=False)
-    demo = TerrainDemo(
-        str(DEMO_LEVEL),
-        "process",
-        None,
-        settings=settings_from_args(args),
-        clouds=not args.no_clouds,
-        genera=args.genera,
-        ring=args.ring,
-        preset=args.planet,
-        seed=args.seed,
-        start=args.start,
-        cloud_debug=args.cloud_debug,
-    )
+    tools.window_config("Motion shots", args.size, args.offscreen, vsync=False)
+    demo = WorldDemo(args.world, settings=tools.settings_from_args(args))
     demo.setFrameRateMeter(False)
+    demo._hud.hide()
     demo._update_hud = lambda: None
-    print(describe_window(demo))
+    clouds = [b.clouds for b in demo.bodies if b.clouds is not None]
+    for layer in clouds:
+        layer.set_debug(args.cloud_debug)
+        layer.set_visible(not args.no_clouds)
+    print(tools.describe_window(demo))
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    demo._place_camera(*args.at)
-    demo._sun = start_sun(demo.terrain.spec, demo.start_pose)
+    body = next((b for b in demo.bodies if b.name == args.body), demo.bodies[0])
+    demo.place_camera(*args.at, body)
+    _set_local_sun(demo, 210.0, 35.0)
     _settle(demo, 90.0)
     for _ in range(args.settle):
         demo.taskMgr.step()
@@ -218,11 +209,13 @@ def main() -> None:
         for _ in range(args.settle):
             demo.taskMgr.step()
         converged = _grab(demo)
-        demo.clouds.set_visible(False)
+        for layer in clouds:
+            layer.set_visible(False)
         demo.taskMgr.step()
         demo.taskMgr.step()
         bare = _grab(demo)
-        demo.clouds.set_visible(True)
+        for layer in clouds:
+            layer.set_visible(not args.no_clouds)
         # A window may change by a pixel between shots (its manager).
         h = min(i.shape[0] for i in (moving, converged, bare))
         w = min(i.shape[1] for i in (moving, converged, bare))
@@ -267,7 +260,7 @@ def main() -> None:
         f"{r[:, 3].mean() * 100:7.1f} {r[:, 4].mean() * 100:8.1f} {'':8} "
         f"{r[:, 6].mean():6.2f} {r[:, 7].mean() * 100:8.2f}"
     )
-    demo.destroy_terrain()
+    demo.destroy_world()
 
 
 if __name__ == "__main__":

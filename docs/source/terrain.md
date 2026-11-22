@@ -7,10 +7,10 @@ cube-sphere quadtree LOD and collision queries. SpaceFlight does not use it
 yet.
 
 ```
-python scripts/demo_terrain.py            # 3D flight: planet, moon, orbit to ground (controls in the script)
-python scripts/demo_terrain.py --planet desert --start LAT LON   # another preset, from another place
-python scripts/find_landforms.py          # --start places over dunes, mesas and canyons
-python scripts/terrain_shots.py           # the demo from fixed poses, to PNG
+python scripts/demo_world.py              # 3D flight: planet, moon, orbit to ground (controls in the script)
+python scripts/demo_world.py my_world.yaml --body planet --lat LAT --lon LON --alt M   # a world file, from another place
+python scripts/find_landforms.py          # places over dunes, mesas and canyons
+python scripts/terrain_shots.py           # fixed poses, to PNG
 python -m world_builder.terrain.preview   # globe and top-down maps of every preset, to PNG
 python -m world_builder.terrain.preview --weather   # each globe under its clouds' weather
 python -m world_builder.terrain.bench     # chunk, LOD and worker timings

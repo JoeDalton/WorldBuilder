@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- World files: a whole world (bodies, asteroid fields and rings, sun, sky) in
+  YAML, loaded in one line, `world_builder.load_world(app, "my_world.yaml")`,
+  then `world.update(camera_in_the_world)` each frame
+  (`world_builder.world_file`, [World files](docs/source/world_file.md)).
+  A file is a definition only (no quality, camera or clock: those are
+  arguments of `load_world`) with every knob of every object, no presets:
+  planets (elevation, climate, stamps, paints), atmospheres, clouds with
+  their global and pinned weather and genera, seas, the sky, fields (shape,
+  density, sizes, spins, rock shapes, keep-outs, axis), mass or density per
+  body. Any block may be `{file: other.yaml}`, a file of the world file's
+  own folder, with sibling keys overriding it. `parse_world` reads a file
+  without a window; `world_to_yaml` writes one.
+- `world_builder.config`: the strict, reflective reader and writer behind
+  it (`from_config`, `to_config`, `dump_yaml`), for any of the library's
+  frozen dataclasses; errors name the key's place.
+- Shipped worlds in `src/world_builder/worlds/`: `three_planets.yaml` (the
+  home planet and its moon, an ice planet 3000 km across with air and
+  clouds, and a ring from 5,000 to 10,000 km around it) and
+  `deep_space.yaml` (the 15 km asteroid cube). They are the former presets
+  written out in full, and a test keeps them equal.
+
+### Changed
+
+- `scripts/demo_world.py` is the one demo: it flies any world file
+  (`--body --lat --lon --alt` or `--position`, `--quality`, `--frames
+  N --shot FILE`). It was broken (it inherited from the terrain demo
+  without running its constructor).
+- The benches and shots (`frame_profile`, `flight_bench`,
+  `vegetation_bench`, `terrain_shots`, `motion_shots`, `tree_gallery`,
+  `cloud_bench`, the asteroid scripts) take their window settings and quality
+  arguments from the new `scripts/tools.py` and fly `WorldDemo`; the world
+  they fly is a world file where it is fixed.
+
+### Removed
+
+- `scripts/demo_terrain.py`, `scripts/demo_asteroids.py` and
+  `scripts/demo_genera.py`: the hand-wired demos, replaced by
+  `demo_world.py` on world files. With them go the demo's test balls and
+  ship, burst capture, march-block keys, genus toggles and sun keys.
+
 
 ## [0.4.2] 2026-11-21
 

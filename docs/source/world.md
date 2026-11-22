@@ -6,7 +6,10 @@ updates every WorldBuilder part a game draws around its camera:
 - the sky and the sun;
 - Panda3D lights for everything else.
 
-It does the wiring that `scripts/demo_terrain.py` does by hand.
+It does the wiring a game would otherwise do by hand. A game that does not
+need to vary its world in code writes it in a [world file](world_file.md) and
+loads it with `world_builder.load_world`, which builds this `World` and its
+split depth cameras in one line; this page is what that builds.
 
 The split is between what the world looks like and how it works:
 - **The game decides the look:** which bodies there are and where, the sun,
@@ -42,7 +45,7 @@ world.update(origin_world, far=depth.far)
 world.destroy()
 ```
 
-`scripts/demo_world.py` is the terrain demo rebuilt this way.
+`scripts/demo_world.py` flies a world file's world.
 
 **Open space.** A world may have no body: `World(app, [], sun=..., sky=...,
 space_ambient=...)` is the sky, the sun and the Panda3D lights alone, for a

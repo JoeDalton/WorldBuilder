@@ -6,9 +6,8 @@ A game describes its world (what bodies there are, where, and how they look)
 and :class:`World` builds and wires the parts: each body's terrain, its air,
 its planet clouds (and their cirrus) and its sea, the asteroid fields and
 rings, the sky, the sun, and Panda3D lights for everything else (the game's
-own models). Every frame, :meth:`World.update` does what
-scripts/demo_terrain.py does by hand: the terrain, the fields, the air, the
-sky, the clouds, the lights and the sea's frame.
+own models). Every frame, :meth:`World.update` does the terrain, the fields,
+the air, the sky, the clouds, the lights and the sea's frame.
 
 Usage::
 
