@@ -938,7 +938,7 @@ ripples without shading, regularly arranged, each under 1° wide):
   fill their 1. A far patch is then a faint veil of the same optical depth
   (`march.cirrocumulus_grains`, its test).
 
-#### The cirrus
+### The cirrus
 
 The cirrus (`cover.r`; `cirrusStreaks` in `cloud_march.glsl`, its CPU
 mirror `march.cirrus_streaks`) replaced the old cirrus sheet's baked
@@ -1083,7 +1083,7 @@ its atlas, its bake and preview scripts and its shaders in Task 24: the
 march's draws the same cover, in less time (performance §37, "Task
 24").
 
-#### The light, the shadows, the cost
+### The light, the shadows, the cost
 
 **The light** is a thin slab's (`thinSlabRadiance` in
 `cloud_shading.glsl`, moved there from the old cirrus sheet's shader):
@@ -1122,7 +1122,7 @@ ms; the weather's cirrus by the march 0.2 ms, against the old sheet's
 that drifted by 1 ms; the crossings sorted among the segments cost
 0.1-0.2 ms of the difference.)
 
-#### Not yet, for the high layer
+### Not yet, for the high layer
 
 - **The cirrus in the sea's reflection**: the reflection draws the low and
   middle genera's decks alone, so the weather's cirrus, which the old sheet
