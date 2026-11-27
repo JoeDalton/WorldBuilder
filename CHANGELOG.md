@@ -45,6 +45,10 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Changed
 
+- The air's march (`atmosphere.glsl`'s `atmoSegment`) runs its samples
+  (`atmoStep`) in one of two loops: with the gathered eclipses, or with none,
+  the eclipses' array then untouched (it cost 0.2-0.5 ms with no eclipse in
+  view).
 - Per-chunk Python in a terrain selection made one numpy pass: the
   collision's reach (`TerrainCollision.update`) and the trees' box distances
   (`Trees.update`), most of a selection's ~2 ms in SpaceFlight's Mission 3.

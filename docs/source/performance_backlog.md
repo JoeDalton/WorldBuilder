@@ -77,10 +77,6 @@ Ranked by what they would take off a game's frame.
   reads release it); if it is over ~0.3 ms a frame, hand the vertex buffers
   over through shared memory (`workers.SharedArray`, the other way),
   released on eviction and `set_spec`, orphans cleaned up.
-- **The eclipse in the air's march** (Part A): 0.2-0.5 ms with no eclipse in
-  view (measured: ground 10.22 → 10.78 ms, orbit 2.25 → 2.44), from the
-  gather loop's array in every segment. Two loop variants chosen per
-  segment, the plain one the old code, should take it back.
 - **The mountain map's CPU twins** (~0.2 ms a frame in flight, the local
   map's new nodes every ~50 m): reading back the few texels a twin needs
   from the GPU's map (asynchronously, a frame late) would replace their
@@ -93,9 +89,14 @@ Made 2026-11-27, not yet benchmarked (another agent loaded the machine):
   collision's reach (a `numpy.linalg.norm` per chunk) and the trees' box
   distances. Both are one numpy pass now (`TerrainCollision.update`,
   `Trees.update`). The selection itself was ~0.17 ms.
+- **The eclipse in the air's march** (Part A; measured 0.2-0.5 ms with no
+  eclipse in view: ground 10.22 → 10.78 ms, orbit 2.25 → 2.44): the march's
+  sample is a function (`atmoStep`) called from two loops, one reading the
+  gathered eclipses, one with none; the eclipses' array only in the first.
 
-To measure: `flight_bench.py --flight low --trace` for `_select`, and
-Mission 3 (`bench_mission3.py`).
+To measure: `flight_bench.py --flight low --trace` for `_select`, the demo's
+`frame_profile.py --offscreen --pipelined` (`ground`, `orbit` for the
+eclipse), and Mission 3 (`bench_mission3.py`).
 
 Demo only (every benchmark runs the demo, no game pays them):
 

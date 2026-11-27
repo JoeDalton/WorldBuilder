@@ -232,6 +232,73 @@ bool atmoThroughGround = false;
 float atmoGodRays(int i, vec3 p, vec3 sunDir);
 #endif
 
+// One sample k of atmoSegment's march, its sun dimmed by *eclipse* (the
+// other bodies' shadow there): its depths and sums carried on. A function
+// of its own so that the march is two loops, one reading the gathered
+// eclipses and one with none: one loop reading an array every sample cost
+// 0.2-0.5 ms a frame with no eclipse in view.
+void atmoStep(int i, int k, vec3 o, vec3 dir, vec3 sunDir, float t0, float t1,
+              float ds, vec2 shadow, float R, float Hr, float Hm, vec3 betaR,
+              float betaM, float betaMExt, vec3 betaO, float multiple,
+              float ringNear, float ringFar, float eclipse,
+              inout float depthR, inout float depthM, inout float depthO,
+              inout vec3 sumR, inout vec3 sumM, inout vec3 sumMultiple) {
+    float ta = t0 + float(k) * ds;
+    float tc = ta + 0.5 * ds;
+    vec3 p = o + dir * tc;
+    // Through the ground (the aerial cells' bake), the air at the ground's.
+    float r = atmoThroughGround ? max(length(p), R) : length(p);
+    float densityR = exp(-(r - R) / Hr) * ds;
+    float densityM = exp(-(r - R) / Hm) * ds;
+    float densityO = atmoOzone(i, r) * ds;
+    depthR += 0.5 * densityR;
+    depthM += 0.5 * densityM;
+    depthO += 0.5 * densityO;
+    // The lit share of this sample's stretch, and a lit point in it to
+    // take the sun's depth at (just outside the shadow if the centre is
+    // in it: there the sunlight grazes the ground, deep red, finite).
+    float shaded = max(0.0, min(ta + ds, shadow.y) - max(ta, shadow.x));
+    float lit = 1.0 - shaded / ds;
+    float ts = tc;
+    if (tc > shadow.x && tc < shadow.y) {
+        ts = tc - shadow.x < shadow.y - tc ? shadow.x - 50.0 : shadow.y + 50.0;
+    }
+    vec3 ps = o + dir * ts;
+    float rs = length(ps);
+    float cosSun = dot(ps, sunDir) / rs;
+    // The rings dim the direct sun, not the lit sky's fill.
+    float ring = mix(ringNear, ringFar,
+                     clamp(2.0 * (tc - t0) / (t1 - t0) - 0.5, 0.0, 1.0));
+    // Back to the camera through the air.
+    vec3 view = exp(-(betaR * depthR + betaMExt * depthM + betaO * depthO));
+    vec3 direct = vec3(0.0);
+    if (lit > 0.0) {
+#ifdef ATMO_ANALYTIC_SUN
+        float curve = max(uAtmoExtra[i].y, 1.0);
+        vec2 sun = atmoDepthToward(rs, cosSun, R, vec2(Hr, Hm), curve);
+        vec3 toSun = exp(-(betaR * sun.x + betaMExt * sun.y));
+#else
+        vec3 toSun = atmoTransmittance(i, rs, cosSun);
+#endif
+        direct = view * toSun * (lit * eclipse * ring);
+#ifdef ATMO_GOD_RAYS
+        direct *= atmoGodRays(i, ps, sunDir);
+#endif
+    }
+    // Light scattered more than once (its table, lit by the sky above
+    // through twilight and the planet's shadow; dimmed in an eclipse as
+    // the sky's light is), isotropic, seen through the air back to the
+    // camera.
+    vec3 psi = atmoMultiple(i, r, dot(p, sunDir) / r)
+             * (multiple * mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse));
+    sumMultiple += view * psi * (betaR * densityR + betaM * densityM);
+    sumR += direct * densityR;
+    sumM += direct * densityM;
+    depthR += 0.5 * densityR;
+    depthM += 0.5 * densityM;
+    depthO += 0.5 * densityO;
+}
+
 // One atmosphere's effect on the segment [0, tmax] of a view ray: what the
 // background is multiplied by, and the light scattered toward the eye, from
 // steps samples. near is where the segment starts (for ordering several
@@ -279,18 +346,9 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
     float ds = (t1 - t0) / float(steps);
     vec2 shadow = atmoShadow(o, dir, sunDir, R);
     float multiple = uAtmoExtra[i].x;
-    // Other bodies hiding the sun from each sample (at its centre, relative
-    // to the camera), gathered first, and only where a shadow can reach
-    // this air: inside the loop below the eclipse's code cost every pixel
-    // ~0.5 ms a frame, eclipsed or not.
+    // Other bodies hiding the sun from each sample: only where a shadow can
+    // reach this air (see the march below).
     bool eclipsable = eclipseCanReach(uAtmoBody[i]);
-    float eclipses[ATMO_MAX_STEPS];
-    if (eclipsable) {
-        for (int k = 0; k < steps && k < ATMO_MAX_STEPS; ++k) {
-            eclipses[k] = eclipseVisibility(dir * (t0 + (float(k) + 0.5) * ds), sunDir,
-                                            uAtmoBody[i]);
-        }
-    }
     // The rings' shadow on the air: at a quarter and three quarters of the
     // segment, linear between (its edges are kilometres wide, the air's
     // light a smooth integral). Per sample it cost ~2.5 ms a frame with a
@@ -309,62 +367,27 @@ void atmoSegment(int i, vec3 dir, float tmax, vec3 sunDir, int steps,
     vec3 sumR = vec3(0.0);
     vec3 sumM = vec3(0.0);
     vec3 sumMultiple = vec3(0.0);
-    for (int k = 0; k < steps; ++k) {
-        float ta = t0 + float(k) * ds;
-        float tc = ta + 0.5 * ds;
-        vec3 p = o + dir * tc;
-        // Through the ground (the aerial cells' bake), the air at the ground's.
-        float r = atmoThroughGround ? max(length(p), R) : length(p);
-        float densityR = exp(-(r - R) / Hr) * ds;
-        float densityM = exp(-(r - R) / Hm) * ds;
-        float densityO = atmoOzone(i, r) * ds;
-        depthR += 0.5 * densityR;
-        depthM += 0.5 * densityM;
-        depthO += 0.5 * densityO;
-        // The lit share of this sample's stretch, and a lit point in it to
-        // take the sun's depth at (just outside the shadow if the centre is
-        // in it: there the sunlight grazes the ground, deep red, finite).
-        float shaded = max(0.0, min(ta + ds, shadow.y) - max(ta, shadow.x));
-        float lit = 1.0 - shaded / ds;
-        float ts = tc;
-        if (tc > shadow.x && tc < shadow.y) {
-            ts = tc - shadow.x < shadow.y - tc ? shadow.x - 50.0 : shadow.y + 50.0;
+    if (eclipsable) {
+        // Gathered first (at each sample's centre, relative to the camera):
+        // inside the march the eclipse's code cost every pixel ~0.5 ms a
+        // frame, eclipsed or not.
+        float eclipses[ATMO_MAX_STEPS];
+        for (int k = 0; k < steps && k < ATMO_MAX_STEPS; ++k) {
+            eclipses[k] = eclipseVisibility(dir * (t0 + (float(k) + 0.5) * ds), sunDir,
+                                            uAtmoBody[i]);
         }
-        vec3 ps = o + dir * ts;
-        float rs = length(ps);
-        float cosSun = dot(ps, sunDir) / rs;
-        float eclipse = eclipsable ? eclipses[min(k, ATMO_MAX_STEPS - 1)] : 1.0;
-        // The rings dim the direct sun, not the lit sky's fill.
-        float ring = mix(ringNear, ringFar,
-                         clamp(2.0 * (tc - t0) / (t1 - t0) - 0.5, 0.0, 1.0));
-        // Back to the camera through the air.
-        vec3 view = exp(-(betaR * depthR + betaMExt * depthM + betaO * depthO));
-        vec3 direct = vec3(0.0);
-        if (lit > 0.0) {
-#ifdef ATMO_ANALYTIC_SUN
-            float curve = max(uAtmoExtra[i].y, 1.0);
-            vec2 sun = atmoDepthToward(rs, cosSun, R, vec2(Hr, Hm), curve);
-            vec3 toSun = exp(-(betaR * sun.x + betaMExt * sun.y));
-#else
-            vec3 toSun = atmoTransmittance(i, rs, cosSun);
-#endif
-            direct = view * toSun * (lit * eclipse * ring);
-#ifdef ATMO_GOD_RAYS
-            direct *= atmoGodRays(i, ps, sunDir);
-#endif
+        for (int k = 0; k < steps; ++k) {
+            atmoStep(i, k, o, dir, sunDir, t0, t1, ds, shadow, R, Hr, Hm, betaR,
+                     betaM, betaMExt, betaO, multiple, ringNear, ringFar,
+                     eclipses[min(k, ATMO_MAX_STEPS - 1)],
+                     depthR, depthM, depthO, sumR, sumM, sumMultiple);
         }
-        // Light scattered more than once (its table, lit by the sky above
-        // through twilight and the planet's shadow; dimmed in an eclipse as
-        // the sky's light is), isotropic, seen through the air back to the
-        // camera.
-        vec3 psi = atmoMultiple(i, r, dot(p, sunDir) / r)
-                 * (multiple * mix(ECLIPSE_SKY_FLOOR, 1.0, eclipse));
-        sumMultiple += view * psi * (betaR * densityR + betaM * densityM);
-        sumR += direct * densityR;
-        sumM += direct * densityM;
-        depthR += 0.5 * densityR;
-        depthM += 0.5 * densityM;
-        depthO += 0.5 * densityO;
+    } else {
+        for (int k = 0; k < steps; ++k) {
+            atmoStep(i, k, o, dir, sunDir, t0, t1, ds, shadow, R, Hr, Hm, betaR,
+                     betaM, betaMExt, betaO, multiple, ringNear, ringFar, 1.0,
+                     depthR, depthM, depthO, sumR, sumM, sumMultiple);
+        }
     }
     float mu = dot(dir, sunDir);
     float phaseR = 3.0 / (16.0 * ATMO_PI) * (1.0 + mu * mu);
