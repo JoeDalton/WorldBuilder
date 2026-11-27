@@ -397,3 +397,135 @@ def test_the_scene_buffer_keeps_the_outputs_multisampling(samples):
     assert props.get_multisamples() == samples
     assert props.get_float_depth() and props.get_depth_bits() == 32
     assert (props.get_red_bits(), props.get_alpha_bits()) == (8, 8)
+
+
+# ── the render settings: scale, MSAA, the post chain (#68) ───────────────
+
+
+def _windows(app) -> list:
+    engine = app.graphicsEngine
+    engine.render_frame()  # outputs made or removed count from a frame on
+    return [engine.get_window(i) for i in range(engine.get_num_windows())]
+
+
+def test_the_scene_buffer_takes_the_render_scale_and_the_chain_shows_it(window):
+    """At half scale with FSR 1 the view is drawn at half the region's size
+    (its depth copy too: what the clouds read) and the chain's EASU pass
+    brings it back to the region's; the view still shows in the window."""
+    from world_builder.depth import ReversedDepthCamera
+    from world_builder.post import FSR1, RenderSettings
+
+    app = window
+    app.camera.set_pos_hpr(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    maker = CardMaker("card")
+    maker.set_frame(-50.0, 50.0, -50.0, 50.0)
+    card = app.render.attach_new_node(maker.generate())
+    card.set_pos(0.0, 10.0, 0.0)
+    card.set_color(0.0, 0.8, 0.0, 1.0)
+    card.set_light_off()
+    card.set_shader_off()
+    full = (app.win.get_x_size(), app.win.get_y_size())
+    half = (full[0] // 2, full[1] // 2)
+    camera = ReversedDepthCamera(
+        app, near=1.0, render=RenderSettings(scale=0.5, upscaler=FSR1)
+    )
+    try:
+        camera.update(far=100.0)
+        assert (camera.output.get_x_size(), camera.output.get_y_size()) == half
+        assert camera.render_size == half
+        app.graphicsEngine.render_frame()
+        app.graphicsEngine.render_frame()
+        texture = camera.depth_texture
+        assert (texture.get_x_size(), texture.get_y_size()) == half
+        assert camera.chain.passes == 2  # FXAA (forced) and EASU
+        easu = camera.chain.buffers()[-1]
+        assert (easu.get_x_size(), easu.get_y_size()) == full
+        assert camera.present == camera.chain.region
+        assert camera.describe() == (
+            f"{half[0]}x{half[1]} -> {full[0]}x{full[1]} | no MSAA | "
+            "FXAA (forced) -> EASU -> RCAS 0.10"
+        )
+        shot = app.win.get_screenshot()
+        data = np.frombuffer(shot.get_ram_image_as("RGB"), dtype=np.uint8)
+        pixels = data.reshape(shot.get_y_size(), shot.get_x_size(), 3)
+        centre = pixels[full[1] // 2, full[0] // 2]
+        assert centre[1] > 180 and centre[0] < 30 and centre[2] < 30, centre
+    finally:
+        camera.destroy()
+        card.remove_node()
+
+
+def test_a_float_window_draws_through_a_scene_buffer_when_the_chain_needs_one(
+    window,
+):
+    """scene_buffer=False draws into the window, unless the render settings
+    need the post chain (a scale, AA, FSR 1)."""
+    from world_builder.depth import ReversedDepthCamera
+    from world_builder.post import RenderSettings
+
+    camera = ReversedDepthCamera(
+        window, near=1.0, scene_buffer=False, render=RenderSettings(scale=0.75)
+    )
+    try:
+        assert camera.output != window.win and camera.chain is not None
+        assert camera.set_settings(RenderSettings())  # back to the window
+        assert camera.output == window.win and camera.chain is None
+        assert camera.describe().endswith("| into the window")
+    finally:
+        camera.destroy()
+
+
+def test_set_settings_rebuilds_only_what_changed(window):
+    """Sharpness live (the same chain); the scale and the passes a new
+    chain over the same scene buffer; the multisamples a new scene buffer
+    (reported: the clouds attach again), with nothing left behind."""
+    from dataclasses import replace
+
+    from world_builder.depth import ReversedDepthCamera
+    from world_builder.post import FSR1, RenderSettings
+
+    app = window
+    before = _windows(app)
+    regions = app.win.get_num_display_regions()
+    settings = RenderSettings(scale=0.75, upscaler=FSR1)
+    camera = ReversedDepthCamera(app, near=1.0, render=settings)
+    try:
+        output, chain = camera.output, camera.chain
+        assert not camera.set_settings(settings)  # no change
+        assert not camera.set_settings(replace(settings, sharpness=1.0))
+        assert camera.chain is chain and camera.output is output
+        assert camera.chain.settings.sharpness == 1.0
+        settings = replace(settings, scale=0.5, sharpness=1.0)
+        assert not camera.set_settings(settings)
+        assert camera.chain is not chain and camera.output is output
+        camera.update(1.0e5)
+        assert camera.render_size == (
+            app.win.get_x_size() // 2,
+            app.win.get_y_size() // 2,
+        )
+        settings = replace(settings, msaa=4)
+        assert camera.set_settings(settings)
+        assert camera.output is not output
+        assert camera.chain.passes == 1  # MSAA: no forced FXAA
+        assert app.win.get_num_display_regions() == regions + 1
+        assert output not in _windows(app)
+        depth = camera.depth_texture
+        assert any(
+            camera.output.get_texture(i) == depth
+            for i in range(camera.output.count_textures())
+        )
+    finally:
+        camera.destroy()
+    assert _windows(app) == before
+    assert app.win.get_num_display_regions() == regions
+
+
+def test_the_msaa_setting_asks_the_scene_buffer_for_its_samples():
+    from panda3d.core import FrameBufferProperties
+
+    from world_builder.depth import scene_buffer_props
+
+    host = FrameBufferProperties()
+    host.set_multisamples(2)
+    assert scene_buffer_props(host, 8).get_multisamples() == 8
+    assert scene_buffer_props(host, 0).get_multisamples() == 2  # the host's

@@ -215,6 +215,7 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world._field_looks = []
     world.light_period = 1
     world._light_age = 0
+    world.settings = WorldSettings()
     world._light_key = None
     world._light_job = None
     world._body_centres = world._body_radii = None
@@ -982,10 +983,59 @@ def test_the_depth_camera_reaches_every_part_that_pins_or_reads_depth():
     moon = _body("moon", MOON, position=(0.0, 1e7, 0.0))
     world = _world(planet, moon)
     field = _field(world)
-    depth = NS(mode=DEPTH_REVERSED_01)
+    depth = NS(mode=DEPTH_REVERSED_01, set_settings=MagicMock(return_value=False))
     world.use_depth_camera(depth)
     assert world.depth is depth
+    depth.set_settings.assert_called_once_with(world.settings.render)
     world.sky.set_depth_mode.assert_called_once_with(DEPTH_REVERSED_01)
     planet.ocean.set_depth_mode.assert_called_once_with(DEPTH_REVERSED_01)
     planet.clouds.use_depth_camera.assert_called_once_with(world.app, depth)
     field.haze.set_depth_mode.assert_called_once_with(DEPTH_REVERSED_01)
+
+
+def test_the_world_gives_its_render_settings_to_the_depth_camera(window):
+    """use_depth_camera hands the camera the world's ``render`` section;
+    set_settings changes it, and a new scene buffer (new multisamples)
+    attaches the clouds' march again, nothing else does."""
+    from world_builder.post import FSR1, RenderSettings
+
+    window.camLens.set_near_far(1.0, 600e3)
+    render = RenderSettings(scale=0.75, upscaler=FSR1)
+    settings = replace(WorldSettings.preset("low"), render=render)
+    world = World(
+        window,
+        bodies=[
+            BodyLook(
+                "planet",
+                EARTHLIKE,
+                atmosphere=AtmosphereParams(),
+                clouds=CloudLook(altitude=2200.0),
+                mass=5.97e24,
+            )
+        ],
+        sun=SunLook(direction=(0.3, -0.8, 0.5)),
+        settings=settings,
+        backend="inline",
+        clock=lambda: 2.0,
+    )
+    depth = ReversedDepthCamera(window)
+    try:
+        world.use_depth_camera(depth)
+        assert depth.render == render and depth.chain.settings.fsr
+        clouds = world.body("planet").clouds
+        attached = []
+        original = clouds.use_depth_camera
+        clouds.use_depth_camera = lambda app, camera: (
+            attached.append(camera),
+            original(app, camera),
+        )
+        world.set_settings(settings.with_value("render", "sharpness", 1.0))
+        world.set_settings(world.settings.with_value("render", "scale", 0.5))
+        assert attached == []
+        output = depth.output
+        world.set_settings(world.settings.with_value("render", "msaa", "2x"))
+        assert attached == [depth] and depth.output is not output
+        assert depth.render.msaa == 2 and depth.render.sharpness == 1.0
+    finally:
+        depth.destroy()
+        world.destroy()

@@ -1041,6 +1041,11 @@ class World:
         parts += self.fields
         parts += self._model_lightings()
         settings.apply(*parts)
+        if self.depth is not None and self.depth.set_settings(settings.render):
+            # A new scene buffer (new multisamples): the march draws over it.
+            for body in self.bodies:
+                if body.clouds is not None:
+                    body.clouds.use_depth_camera(self.app, self.depth)
         for body in self.bodies:
             if body.shadow_map is not None:
                 body.shadow_map.set_size(settings.shadows.terrain_map_size)
@@ -1083,8 +1088,10 @@ class World:
         depth take its convention (the sky, the seas' reflections, the
         fields' haze), the clouds' raymarch draws its passes with it. Call
         ``depth.update(world.far_distance(origin))`` before :meth:`update`
-        every frame."""
+        every frame. It takes the world's ``render`` settings
+        (``WorldSettings.render``: render scale, MSAA, FSR 1)."""
         self.depth = depth
+        depth.set_settings(self.settings.render)
         if self.sky is not None:
             self.sky.set_depth_mode(depth.mode)
         for body in self.bodies:

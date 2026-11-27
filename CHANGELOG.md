@@ -33,6 +33,28 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
   FSR 1 without MSAA forces FXAA (`fxaa_forced`). `FSR_MODES` holds AMD's
   ultra quality to performance scales (0.77 to 0.5).
+- The depth camera draws with the `render` settings (#68):
+  `ReversedDepthCamera(render=...)`, `World.use_depth_camera`, `load_world`.
+  - Its scene buffer is drawn at `scale` of the game's region, with `msaa`
+    samples (0 keeps the window's).
+  - A `PostChain` now shows the buffer in the window, where the card was. At
+    the defaults it is a plain copy, as before.
+  - The clouds' march and the depth copy follow the view's size, so a lower
+    scale also costs fewer cloud pixels.
+  - Games no longer need a post-process buffer of their own over the
+    camera's (SpaceFlight's `FilterManager`), which was a second full-screen
+    multisampled buffer and copy.
+
+  `set_settings(render)` changes:
+  - the sharpness live;
+  - the scale or the passes with a new chain;
+  - the multisamples with a new scene buffer. `World.set_settings` then
+    attaches the clouds again.
+
+  `describe()` gives a one-line summary for a log or HUD, with the samples
+  the driver actually granted. With `scene_buffer=False` (a window with float
+  depth), the camera still uses a scene buffer when the settings need the
+  chain.
 - `world_builder.depth.ReversedDepthCamera` (#57): one camera over the whole
   view, reversed and infinite (near at 1, infinity at 0), with a float depth
   buffer's precision (about 1e-7 of the distance at every range): one cull
