@@ -320,6 +320,16 @@ class PostChain:
             card.set_shader_input("texScale", (sx, sy))
             card.set_shader_input("rcpFrame", (sx / width, sy / height))
 
+    def set_active(self, active: bool) -> None:
+        """Draw the passes, or not (a hidden mirror's): every buffer, and the
+        window's region."""
+        for p in self._passes:
+            p.buffer.set_active(active)
+        if self._out is not None:
+            self._out.buffer.set_active(active)
+        if self.region is not None:
+            self.region.set_active(active)
+
     def set_sharpness(self, sharpness: float) -> None:
         """FSR 1's sharpening, live (:attr:`RenderSettings.sharpness`)."""
         from dataclasses import replace

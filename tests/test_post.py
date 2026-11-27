@@ -369,3 +369,29 @@ def test_a_chain_can_end_in_a_texture(window, name):
         chain.destroy()
     engine.render_frame()
     assert engine.get_num_windows() == windows
+
+
+def test_set_active_stops_and_restarts_every_pass(window):
+    """A hidden view (a game's mirror): no buffer of the chain draws."""
+    engine = window.graphicsEngine
+    settings = CHAINS["fsr_forced_fxaa"]
+    width, height = settings.render_size(OUT)
+    chain = PostChain(
+        engine,
+        window.win,
+        _view(np.full((height, width), 0.5)),
+        settings,
+        (width, height),
+        buffer_sort=-50,
+        output_size=OUT,
+    )
+    try:
+        engine.render_frame()
+        buffers = [*chain.buffers(), chain._out.buffer]
+        assert len(buffers) == 3 and all(b.is_active() for b in buffers)
+        chain.set_active(False)
+        assert not any(b.is_active() for b in buffers)
+        chain.set_active(True)
+        assert all(b.is_active() for b in buffers)
+    finally:
+        chain.destroy()

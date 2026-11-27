@@ -61,7 +61,8 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
   (`chain.texture`) instead of a window region. This is for a view shown on a
   card, such as SpaceFlight's rear-view mirror: drawn small, upscaled by
   FSR 1 to the card's size on screen. `resize(render_size, output_size)`
-  follows a new size.
+  follows a new size. `set_active(False)` stops every pass (a hidden
+  mirror).
 - `depth.view_size(app)`: the view's size in pixels, which is the live
   reversed camera's render size, else the app camera's region. The parts
   that size a pass or pick detail per pixel follow it (see Changed).
