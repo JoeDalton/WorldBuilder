@@ -164,6 +164,7 @@ def test_the_reversed_camera_draws_instead_of_the_app_camera_and_gives_it_back(w
     from panda3d.core import DepthTestAttrib
 
     from world_builder.depth import (
+        DEPTH_REVERSED_11,
         DEPTH_STANDARD,
         ReversedDepthCamera,
         depth_mode_input,
@@ -202,9 +203,12 @@ def test_the_reversed_camera_draws_instead_of_the_app_camera_and_gives_it_back(w
         app.camLens.set_fov(70.0)
         camera.update(far=5.0e4, height_above_ground=1.0e4)
         assert math.isinf(camera.lens.get_near())
-        assert camera.lens.get_far() == pytest.approx(100.0)
+        assert camera.lens.get_far() == pytest.approx(camera.near)
         assert camera.lens.get_fov()[0] == pytest.approx(70.0)
-        assert camera.near == pytest.approx(100.0) and camera.far == 5.0e4
+        # under clip control the near plane stays put: a float depth needs
+        # no more, and a growing one cut a game's cockpit and close ships
+        near = 100.0 if camera.mode == DEPTH_REVERSED_11 else 1.0
+        assert camera.near == pytest.approx(near) and camera.far == 5.0e4
         assert app.camLens.get_near() == pytest.approx(app_near)  # standard
         bounds = node.get_cull_bounds()
         reach = max(Point3(bounds.get_point(i)).length() for i in range(8))
@@ -354,3 +358,20 @@ def test_drawing_into_the_window_leaves_its_other_render_textures(window):
         assert ours not in textures and theirs in textures
     finally:
         output.clear_render_textures()
+
+
+@pytest.mark.parametrize("samples", [0, 4])
+def test_the_scene_buffer_keeps_the_outputs_multisampling(samples):
+    """A game's anti-aliasing pipeline (MSAA on the buffer the view drew
+    into): the scene buffer that now holds the view asks for the same
+    samples, its float depth besides."""
+    from panda3d.core import FrameBufferProperties
+
+    from world_builder.depth import scene_buffer_props
+
+    host = FrameBufferProperties()
+    host.set_multisamples(samples)
+    props = scene_buffer_props(host)
+    assert props.get_multisamples() == samples
+    assert props.get_float_depth() and props.get_depth_bits() == 32
+    assert (props.get_red_bits(), props.get_alpha_bits()) == (8, 8)

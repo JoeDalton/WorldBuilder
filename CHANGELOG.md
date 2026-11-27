@@ -19,12 +19,14 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
   buffer's precision (about 1e-7 of the distance at every range): one cull
   and one draw of the scene. Its own camera under `app.camera` (the app's
   lens stays standard, for picking), a "greater" depth test, culling cut at
-  the world's far distance, a near plane at 1 % of the height over the
-  ground (1 m to 1 km). A window's framebuffer has no float depth, so it
+  the world's far distance, a fixed near plane (1 m: a float depth's
+  precision does not depend on it; without clip control, macOS, it follows
+  1 % of the height over the ground, up to 1 km). A window's framebuffer has no float depth, so it
   draws into a scene buffer of its own (presented in the window, or in a
   game's post-process buffer, under the other regions; `scene_buffer=False`
-  for an output with float depth already: `depth.float_depth_fbprops`). It
-  copies its depth into `depth_texture` after each frame.
+  for an output with float depth already: `depth.float_depth_fbprops`). The
+  scene buffer keeps its output's multisampling (`depth.scene_buffer_props`).
+  It copies its depth into `depth_texture` after each frame.
 - The depth convention's one source: `shaders/depth_convention.glsl` and
   `depth.depth_mode_input()` (`uDepthMode`, `DEPTH_STANDARD`,
   `DEPTH_REVERSED_01` with `gl-depth-zero-to-one`, `DEPTH_REVERSED_11`

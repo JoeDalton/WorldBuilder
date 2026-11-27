@@ -14,8 +14,11 @@ split).
 The convention: OpenGL's 0-1 depth through clip control
 (``gl-depth-zero-to-one``, read when the GL context is made: set it before
 the window opens), or, without it (macOS), its [-1, 1], which keeps about a
-24-bit range's precision; the near plane follows the height above the ground
-(:meth:`ReversedDepthCamera.near_for`) so that bodies stay apart from orbit.
+24-bit range's precision: there the near plane follows the height above the
+ground (:meth:`ReversedDepthCamera.near_for`) so that bodies stay apart from
+orbit. Under clip control it stays put: a float depth's precision does not
+depend on it, and a growing one cut whatever came near (a game's cockpit, a
+wingman tens of metres off at altitude).
 Shaders that pin or read depth go through ``shaders/depth_convention.glsl``
 and the shared ``uDepthMode`` (:func:`depth_mode_input`).
 
@@ -191,6 +194,19 @@ def float_depth_fbprops() -> FrameBufferProperties:
     return props
 
 
+def scene_buffer_props(host: FrameBufferProperties) -> FrameBufferProperties:
+    """:returns: the properties of :class:`ReversedDepthCamera`'s scene buffer
+    for a view that drew into an output of *host*'s: an FBO's (fresh: the
+    defaults' back buffers refuse it), 8-bit colour, 32-bit float depth, and
+    *host*'s multisamples (a game's anti-aliasing pipeline keeps its MSAA)"""
+    props = FrameBufferProperties()
+    props.set_rgba_bits(8, 8, 8, 8)
+    props.set_depth_bits(32)
+    props.set_float_depth(True)
+    props.set_multisamples(host.get_multisamples())
+    return props
+
+
 def view_test(mode: int) -> int:
     """:returns: the ``DepthTestAttrib`` mode of the view's own cameras in
     depth *mode*: "less" (standard), "greater" (reversed)"""
@@ -240,14 +256,16 @@ class ReversedDepthCamera:
     :ivar present: the window's region showing the scene buffer (None
         without one)
     :ivar app_region: the app camera's, switched off meanwhile
-    :ivar near: the current near plane, metres (:meth:`near_for`)
+    :ivar near: the current near plane, metres: the constructor's, or
+        :meth:`near_for` the height without clip control
     :ivar far: the cull distance, metres (0 before :meth:`update`)
     :ivar mode: ``uDepthMode``
     :ivar depth_texture: the view's depth, copied after each frame (the
         clouds read last frame's)
     """
 
-    #: The near plane follows this share of the height above the ground ...
+    #: Without clip control the near plane follows this share of the height
+    #: above the ground ...
     NEAR_SHARE = 0.01
     #: ... up to this, metres: from orbit [-1, 1] depth keeps bodies apart.
     MAX_NEAR = 1000.0
@@ -258,7 +276,8 @@ class ReversedDepthCamera:
         """
         :param app: the ShowBase (``camera``, ``cam``, ``camLens``, ``render``,
             ``graphicsEngine``)
-        :param near: the nearest the near plane comes, metres
+        :param near: the near plane, metres (the nearest it comes without
+            clip control)
         :param scene_buffer: draw into a float-depth buffer presented in the
             window; None = unless the app camera's output has float depth
         """
@@ -322,11 +341,7 @@ class ReversedDepthCamera:
             WindowProperties,
         )
 
-        # Fresh properties: an FBO's (the defaults' back buffers refuse it).
-        props = FrameBufferProperties()
-        props.set_rgba_bits(8, 8, 8, 8)
-        props.set_depth_bits(32)
-        props.set_float_depth(True)
+        props = scene_buffer_props(window.get_fb_properties())
         self._texture = Texture("reversed_scene")
         buffer = self.app.graphicsEngine.make_output(
             window.get_pipe(),
@@ -380,7 +395,8 @@ class ReversedDepthCamera:
         view, the culling cut at *far* (the lens itself reaches infinity), the
         scene buffer at the window's size."""
         source = self.app.camLens
-        self.near = self.near_for(height_above_ground, self.min_near)
+        if self.mode == DEPTH_REVERSED_11:
+            self.near = self.near_for(height_above_ground, self.min_near)
         self.far = max(far, 2.0 * self.near)
         for lens in (self.lens, self._cull_lens):
             lens.set_fov(source.get_fov())
