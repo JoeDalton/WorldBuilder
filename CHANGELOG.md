@@ -45,6 +45,9 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Changed
 
+- `CasterMap.update` tests every caster's shadow size in one numpy pass
+  (it made a few small arrays per caster): 197 to 129 µs an update with 16
+  ships.
 - `performance_backlog.md` cleaned up: the items about the billboard clouds,
   the split cameras and the clouds' depth passes (all gone) and the done ones
   removed; where the frame stands now (the demo, SpaceFlight's Mission 3: 11.7

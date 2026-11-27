@@ -235,17 +235,25 @@ class CasterMap:
         sun = np.asarray(sun_direction, dtype=np.float64)
         sun = sun / np.linalg.norm(sun)
         camera = np.asarray(camera_render, dtype=np.float64)
-        drawn, spheres = [], []
+        # Every caster's sphere, then one pass over them all (a numpy pass a
+        # caster was most of this update's time with a score of ships).
+        found, spheres = [], []
         for node in casters:
             if node.is_empty():
                 continue
             sphere = _sphere(node, self._render)
-            if sphere is None or not _in_sight(sphere, sun, camera, pixel_angle):
-                continue
-            drawn.append(node)
-            spheres.append(sphere)
+            if sphere is not None:
+                found.append(node)
+                spheres.append(sphere)
+        drawn: list[NodePath] = []
+        if spheres:
+            centres = np.array([sphere[:3] for sphere in spheres])
+            radii = np.array([sphere[3] for sphere in spheres])
+            keep = _in_sight(centres, radii, sun, camera, pixel_angle)
+            drawn = [node for node, kept in zip(found, keep, strict=True) if kept]
+            centres, radii = centres[keep], radii[keep]
         self._show(drawn)
-        if self.buffer is None or not spheres:
+        if self.buffer is None or not drawn:
             self._on[0] = 0
             if self.buffer is not None:
                 self.buffer.set_active(False)
@@ -258,8 +266,6 @@ class CasterMap:
         right = np.array(quat.get_right())
         forward = np.array(quat.get_forward())
         up = np.array(quat.get_up())
-        centres = np.array([centre for centre, _ in spheres])
-        radii = np.array([radius for _, radius in spheres])
         across = centres @ right, centres @ up
         low = [float(np.min(c - radii)) - MARGIN for c in across]
         high = [float(np.max(c + radii)) + MARGIN for c in across]
@@ -318,24 +324,33 @@ class CasterMap:
 
 
 def _in_sight(
-    sphere: tuple[np.ndarray, float],
+    centres: np.ndarray,
+    radii: np.ndarray,
     sun: np.ndarray,
     camera: np.ndarray,
     pixel_angle: float | None,
-) -> bool:
-    """Whether a caster's shadow can be MIN_SHADOW_PIXELS across or more
+) -> np.ndarray:
+    """Whether each caster's shadow can be MIN_SHADOW_PIXELS across or more
     from the camera: the nearest point of the cylinder its sphere sweeps
-    down the sun's rays is near enough."""
+    down the sun's rays is near enough.
+
+    :param centres: the spheres' centres, (n, 3), render frame
+    :param radii: their radii, (n,)
+    :returns: (n,) bools
+    """
     if pixel_angle is None:
-        return True
-    centre, radius = sphere
-    along = max(float((centre - camera) @ sun), 0.0)
-    nearest = float(np.linalg.norm(camera - (centre - sun * along))) - radius
-    return nearest * pixel_angle * MIN_SHADOW_PIXELS <= 2.0 * radius
+        return np.ones(len(radii), dtype=bool)
+    along = np.maximum((centres - camera) @ sun, 0.0)
+    axis = centres - sun * along[:, None]
+    nearest = np.linalg.norm(camera - axis, axis=1) - radii
+    return nearest * pixel_angle * MIN_SHADOW_PIXELS <= 2.0 * radii
 
 
-def _sphere(node: NodePath, render: NodePath) -> tuple[np.ndarray, float] | None:
-    """A node's bounding sphere in render's frame, or None (empty)."""
+def _sphere(
+    node: NodePath, render: NodePath
+) -> tuple[float, float, float, float] | None:
+    """A node's bounding sphere in render's frame, (x, y, z, radius), or
+    None (empty)."""
     bounds = node.get_bounds()
     if bounds.is_empty() or bounds.is_infinite():
         return None
@@ -345,11 +360,12 @@ def _sphere(node: NodePath, render: NodePath) -> tuple[np.ndarray, float] | None
     if not parent.is_empty():
         bounds.xform(parent.get_mat(render))
     if hasattr(bounds, "get_radius"):
-        centre = np.array(bounds.get_center(), dtype=np.float64)
-        return centre, float(bounds.get_radius())
+        x, y, z = bounds.get_center()
+        return x, y, z, bounds.get_radius()
     # A box: the sphere around it.
-    low, high = np.array(bounds.get_min()), np.array(bounds.get_max())
-    return (low + high) / 2.0, float(np.linalg.norm(high - low)) / 2.0
+    low, high = bounds.get_min(), bounds.get_max()
+    x, y, z = (low + high) * 0.5
+    return x, y, z, (high - low).length() * 0.5
 
 
 _SHADER: Shader | None = None

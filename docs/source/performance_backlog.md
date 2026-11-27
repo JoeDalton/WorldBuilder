@@ -62,10 +62,10 @@ Ranked by what they would take off a game's frame.
   `set_inputs`, the low-pass filters; many small numpy arrays). One
   vectorised integration of every ship's state per frame (an (n, 10) array)
   is the lever; see SpaceFlight's docs/source/performance.md.
-- **The caster map's fit** (`CasterMap.update`, ~0.44 ms with 16 tracked
-  ships): every caster's bounds copied and carried into render's frame every
-  frame (`casters._sphere`). A model's own sphere does not change: kept per
-  caster in its own frame, only its centre moved by the net transform.
+- **The caster map's fit** (`CasterMap.update`): its numpy work per caster
+  is now one pass over them all (197 to 129 µs an update with 16 ships,
+  2026-11-27). What is left is Panda's bounds per caster (~2 µs each) and the
+  fit's fixed cost: little to gain.
 - **The light at the tracked nodes on every third frame** (`World._light`,
   0.47 ms averaged, so ~1.4 ms on those frames with `light_period=3`): one
   frame in three is that much longer. Lighting a third of the nodes each

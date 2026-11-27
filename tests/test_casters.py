@@ -97,6 +97,31 @@ def test_a_caster_whose_shadow_is_too_small_to_see_is_left_out(window):
     assert not scene.is_hidden(CASTER_CAMERA_MASK)
 
 
+def test_the_casters_kept_and_left_out_together(window):
+    """Several casters at once, near and far ones mixed (and an empty one):
+    each kept or left out as it would be alone, and the map fitted to the
+    kept ones only."""
+    scene = NodePath("scene")
+    casters = CasterMap(window.win, scene, 256)
+    try:
+        near_a = _ball(window, scene, 10.0, (0.0, 100.0, 0.0))
+        far_a = _ball(window, scene, 10.0, (0.0, 50e3, 0.0))
+        near_b = _ball(window, scene, 5.0, (40.0, 120.0, 10.0))
+        far_b = _ball(window, scene, 10.0, (-30e3, 40e3, 0.0))
+        empty = scene.attach_new_node("empty")
+        sun, pixel = (0.0, 0.0, 1.0), 1e-3
+        casters.update([far_a, near_a, empty, far_b, near_b], sun, (0, 0, 0), pixel)
+        assert casters.casters == [near_a, near_b] and casters._on[0] == 1
+        assert _shows_through(near_a) and _shows_through(near_b)
+        assert not _shows_through(far_a) and not _shows_through(far_b)
+        # The map's square spans the kept ones (x from -10 to 45 m with the
+        # margin), not the far ones tens of km off.
+        side = casters.camera.node().get_lens().get_film_size()[0]
+        assert 55.0 <= side < 200.0
+    finally:
+        casters.destroy()
+
+
 def _read_back(window, casters, rel, normals, sun):
     """casterShadow at each point (from the camera), its normal given."""
     vdata = GeomVertexData("points", GeomVertexFormat.get_v3n3(), Geom.UH_static)
