@@ -307,7 +307,7 @@ class GameWorld:
         if getattr(app, "win", None) is None:
             LOGGER.info("no window: the world is built without its depth camera")
             return
-        self.depth = ReversedDepthCamera(app, near=1.0)
+        self.depth = ReversedDepthCamera(app, near=1.0, render=world.settings.render)
         if not self.depth.float_depth:
             LOGGER.warning(
                 "the window has no float depth buffer: depth precision is a "

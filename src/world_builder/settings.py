@@ -43,6 +43,7 @@ from world_builder.clouds.cloud import CloudSettings
 from world_builder.display import DisplaySettings
 from world_builder.objects import ModelSettings
 from world_builder.ocean.ocean import OceanSettings
+from world_builder.post.settings import RenderSettings
 from world_builder.quality import Knob, QualityLevel, QualitySettings
 from world_builder.shadows import ShadowSettings
 from world_builder.sky.sky import SkySettings
@@ -68,6 +69,7 @@ SECTIONS: dict[str, type[QualitySettings]] = {
     "models": ModelSettings,
     "shadows": ShadowSettings,
     "display": DisplaySettings,
+    "render": RenderSettings,
 }
 
 
@@ -90,6 +92,7 @@ class WorldSettings:
     models: ModelSettings = field(default_factory=ModelSettings)
     shadows: ShadowSettings = field(default_factory=ShadowSettings)
     display: DisplaySettings = field(default_factory=DisplaySettings)
+    render: RenderSettings = field(default_factory=RenderSettings)
 
     @classmethod
     def preset(cls, level: QualityLevel | str) -> WorldSettings:

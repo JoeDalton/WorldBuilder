@@ -89,7 +89,7 @@ from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
-from world_builder.depth import ReversedDepthCamera, system_far
+from world_builder.depth import ReversedDepthCamera, system_far, view_size
 from world_builder.display import FrameCap
 from world_builder.gravity import Gravity
 from world_builder.lights import TrackedLights
@@ -1041,6 +1041,11 @@ class World:
         parts += self.fields
         parts += self._model_lightings()
         settings.apply(*parts)
+        if self.depth is not None and self.depth.set_settings(settings.render):
+            # A new scene buffer (new multisamples): the march draws over it.
+            for body in self.bodies:
+                if body.clouds is not None:
+                    body.clouds.use_depth_camera(self.app, self.depth)
         for body in self.bodies:
             if body.shadow_map is not None:
                 body.shadow_map.set_size(settings.shadows.terrain_map_size)
@@ -1083,8 +1088,10 @@ class World:
         depth take its convention (the sky, the seas' reflections, the
         fields' haze), the clouds' raymarch draws its passes with it. Call
         ``depth.update(world.far_distance(origin))`` before :meth:`update`
-        every frame."""
+        every frame. It takes the world's ``render`` settings
+        (``WorldSettings.render``: render scale, MSAA, FSR 1)."""
         self.depth = depth
+        depth.set_settings(self.settings.render)
         if self.sky is not None:
             self.sky.set_depth_mode(depth.mode)
         for body in self.bodies:
@@ -1201,13 +1208,14 @@ class World:
                 return
 
     def _pixel_angle(self) -> float | None:
-        """:returns: the angle one pixel of the camera's output spans
-        (vertical fov / its height), or None without a camera"""
+        """:returns: the angle one pixel of the view spans (vertical fov /
+        its height: :func:`depth.view_size`, the render scale's), or None
+        without a camera"""
         lens = getattr(self.app, "camLens", None)
         cam = getattr(self.app, "cam", None)
         if lens is None or cam is None or cam.node().get_num_display_regions() == 0:
             return None
-        height = cam.node().get_display_region(0).get_pixel_height()
+        height = view_size(self.app)[1]
         return math.radians(lens.get_fov()[1]) / max(height, 1)
 
     def _light(self, camera: np.ndarray, tracked: np.ndarray) -> None:

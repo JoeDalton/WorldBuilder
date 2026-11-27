@@ -16,7 +16,9 @@ The whole of loading it is two lines (see :class:`WorldDemo`)::
 and the rest of this script is a camera, a HUD and the keys.
 
 Options: ``--quality`` (and ``--terrain-quality`` etc.: a preset per part),
-``--backend``, ``--size "W H"``, ``--frame-cap``. The camera starts above the
+``--backend``, ``--size "W H"``, ``--frame-cap``, the view's way to the
+screen (``--render-scale``, ``--msaa``, ``--fxaa``, ``--fsr``,
+``--sharpness``). The camera starts above the
 first body's reference point (or at the first asteroid field's clear corridor
 or edge); place it elsewhere with ``--body NAME --lat LAT --lon LON --alt M
 [--heading DEG --pitch DEG]`` or ``--position X Y Z [--heading --pitch]`` (world
@@ -35,6 +37,11 @@ Controls (AZERTY; the keys are where they are for the left hand)::
     R / END    back to the start
     F1 - F5, F7, F8   cycle terrain, atmosphere, sky, clouds, ocean, shadows,
                models quality;  F6 all
+    F9         cycle the render scale: native, then FSR 1's modes (0.77 to 0.5)
+    F10        FSR 1 on / off (else bilinear)
+    F11        cycle MSAA (off, 2, 4, 8, 16)     F12   FXAA on / off
+    U / I      FSR 1 sharper / softer (RCAS, 0.1 stop steps)
+    N          native (scale 1, no AA, no FSR) and back
     F          print the camera pose in the --lat/--lon/--alt form
     ESC        quit
 
@@ -48,6 +55,7 @@ import argparse
 import math
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -67,6 +75,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 import tools  # noqa: E402
 from world_builder import load_world  # noqa: E402
 from world_builder.asteroids.spec import Annulus, Box, Sphere  # noqa: E402
+from world_builder.post import (  # noqa: E402
+    BILINEAR,
+    FSR1,
+    FSR_MODES,
+    RenderSettings,
+)
 from world_builder.quality import QualityLevel  # noqa: E402
 from world_builder.settings import SECTIONS, WorldSettings  # noqa: E402
 from world_builder.terrain.chart import TangentFrame, latlon  # noqa: E402
@@ -106,6 +120,10 @@ QUALITY_KEYS = (
     ("f8", "models"),
 )
 QUALITY_ALL_KEY = "f6"
+#: F9 cycles these render scales: native, then FSR 1's modes.
+RENDER_SCALES = (1.0, *FSR_MODES.values())
+#: F11 cycles these.
+MSAA_STEPS = (0, 2, 4, 8, 16)
 
 
 def _level_name(settings: WorldSettings, section: str) -> str:
@@ -165,6 +183,7 @@ class WorldDemo(ShowBase):
         self.body = self.bodies[0] if self.bodies else None
         self.start = start or self.default_start()
         self._keys = dict.fromkeys(_CONTROLS, False)
+        self._native_saved: RenderSettings | None = None
         self._bind_keys()
         # One text per line, set only when its text changed.
         self._hud: list[OnscreenText] = []
@@ -380,6 +399,7 @@ class WorldDemo(ShowBase):
             if others:
                 lines.append(others)
         lines.append(f"quality: {quality}")
+        lines.append(f"render: {depth.describe()}")
         self._show_hud(lines)
 
     def hide_hud(self) -> None:
@@ -428,6 +448,15 @@ class WorldDemo(ShowBase):
             (QUALITY_ALL_KEY, self._cycle_all_quality, []),
         ]
         presses += [(k, self._cycle_quality, [n]) for k, n in QUALITY_KEYS]
+        presses += [
+            ("f9", self._cycle_render, ["scale", RENDER_SCALES]),
+            ("f10", self._toggle_fsr, []),
+            ("f11", self._cycle_render, ["msaa", MSAA_STEPS]),
+            ("f12", self._toggle_fxaa, []),
+            ("u", self._sharpen, [-0.1]),
+            ("i", self._sharpen, [0.1]),
+            ("n", self._toggle_native, []),
+        ]
         for key, method, args in presses:
             self.accept(key, method, extraArgs=args)
         if isinstance(self.win, GraphicsWindow):
@@ -502,6 +531,45 @@ class WorldDemo(ShowBase):
         level = _next_level(self.settings.level)
         self._set_settings(self.settings.with_level(level))
         print(f"quality: {level.value}")
+
+    def _set_render(self, render: RenderSettings, keep: bool = False) -> None:
+        """The view's ``render`` settings (*keep*: as N's saved ones)."""
+        if not keep:
+            self._native_saved = None
+        self._set_settings(replace(self.settings, render=render))
+        print(f"render: {self.world.depth.describe()}")
+
+    def _cycle_render(self, name: str, steps: tuple) -> None:
+        """One ``render`` knob to the step after the one it is nearest."""
+        render = self.settings.render
+        value = getattr(render, name)
+        here = min(range(len(steps)), key=lambda i: abs(steps[i] - value))
+        following = steps[(here + 1) % len(steps)]
+        self._set_render(replace(render, **{name: following}))
+
+    def _toggle_fsr(self) -> None:
+        render = self.settings.render
+        upscaler = BILINEAR if render.fsr else FSR1
+        self._set_render(replace(render, upscaler=upscaler))
+
+    def _toggle_fxaa(self) -> None:
+        render = self.settings.render
+        self._set_render(replace(render, fxaa=not render.fxaa))
+
+    def _sharpen(self, stops: float) -> None:
+        render = self.settings.render
+        sharpness = round(min(2.0, max(0.0, render.sharpness + stops)), 2)
+        self._set_render(replace(render, sharpness=sharpness), keep=True)
+
+    def _toggle_native(self) -> None:
+        """Native (scale 1, no AA, no FSR), and back to what it was."""
+        saved = self._native_saved
+        if saved is None:
+            render = self.settings.render
+            self._set_render(RenderSettings(sharpness=render.sharpness))
+            self._native_saved = render
+        else:
+            self._set_render(replace(saved, sharpness=self.settings.render.sharpness))
 
     def _set_settings(self, settings: WorldSettings) -> None:
         self.settings = settings

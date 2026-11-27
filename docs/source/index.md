@@ -37,6 +37,9 @@ it works.
   literature draws them with.
 - [Shadows](shadows.md): what hides the sun from a point (eclipses so far),
   on every receiver, with a CPU twin for what the CPU lights.
+- [Render scale, anti-aliasing and FSR 1](render_pipeline.md): the
+  view's resolution, MSAA, FXAA and AMD's FSR 1 upscaler, and what follows
+  the view's size.
 - [Quality settings](quality.md): every cost/quality knob, the LOW to ULTRA
   presets, and how a game's settings menu reads and saves them.
 - [Performance](performance.md): where the time goes, measured, and what was
@@ -62,6 +65,7 @@ asteroids_backlog
 clouds
 cloud_genera_research
 shadows
+render_pipeline
 quality
 performance
 performance_backlog

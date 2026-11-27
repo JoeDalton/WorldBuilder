@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, ClassVar
 
 from panda3d.core import (
     BitMask32,
@@ -49,10 +49,11 @@ from panda3d.core import (
     IntersectionBoundingVolume,
     Lens,
     LPlane,
-    NodePath,
     PTA_int,
     RenderState,
 )
+
+from world_builder.post import PostChain, RenderSettings, target_texture
 
 #: Camera bit of the objects' shadow map's camera
 #: (:class:`world_builder.shadows.casters.CasterMap`): render is hidden from
@@ -148,6 +149,11 @@ def system_far(bodies: Iterable[tuple[float, ...]]) -> float:
 
 # ── one reversed-Z camera (FRAME_COST_PLAN.md, Phase 2; issue #57) ───────────
 
+#: The scene buffer's sort, from its window's: before the post chain's
+#: passes (the next two), after the clouds' (-60) and the games' auxiliary
+#: buffers (SpaceFlight's mirror: -100).
+SCENE_SORT = -3
+
 #: ``uDepthMode``: standard depth, near at 0 and far at 1 (no depth camera:
 #: the app's own).
 DEPTH_STANDARD = 0
@@ -204,16 +210,19 @@ def float_depth_fbprops() -> FrameBufferProperties:
     return props
 
 
-def scene_buffer_props(host: FrameBufferProperties) -> FrameBufferProperties:
+def scene_buffer_props(
+    host: FrameBufferProperties, multisamples: int = 0
+) -> FrameBufferProperties:
     """:returns: the properties of :class:`ReversedDepthCamera`'s scene buffer
     for a view that drew into an output of *host*'s: an FBO's (fresh: the
     defaults' back buffers refuse it), 8-bit colour, 32-bit float depth, and
-    *host*'s multisamples (a game's anti-aliasing pipeline keeps its MSAA)"""
+    *multisamples* (``RenderSettings.msaa``), or *host*'s with 0 (a game's
+    anti-aliasing pipeline keeps its MSAA)"""
     props = FrameBufferProperties()
     props.set_rgba_bits(8, 8, 8, 8)
     props.set_depth_bits(32)
     props.set_float_depth(True)
-    props.set_multisamples(host.get_multisamples())
+    props.set_multisamples(multisamples or host.get_multisamples())
     return props
 
 
@@ -236,6 +245,33 @@ def reversed_lens(lens: Lens, near: float) -> Lens:
     return lens
 
 
+#: The live reversed cameras (:func:`view_size`), the latest last.
+_ACTIVE: list = []
+
+
+def view_size(app: Any) -> tuple[int, int]:
+    """The view's size in pixels, what the parts that size passes or pick
+    detail per pixel follow (the sea's reflection, the trees', clouds' and
+    asteroids' pixel angle): a :class:`ReversedDepthCamera`'s
+    (``RenderSettings.scale`` of its region), else the app camera's region,
+    else the window.
+
+    :param app: the ShowBase
+    :returns: (width, height), at least a pixel each
+    """
+    for camera in reversed(_ACTIVE):
+        if camera.app is app:
+            width, height = camera.render_size
+            return max(1, width), max(1, height)
+    cam = getattr(app, "cam", None)
+    if cam is not None and cam.node().get_num_display_regions():
+        region = cam.node().get_display_region(0)
+        if region.get_pixel_width() > 0:
+            return region.get_pixel_width(), region.get_pixel_height()
+    win = app.win
+    return max(1, win.get_x_size()), max(1, win.get_y_size())
+
+
 class ReversedDepthCamera:
     """One camera over the whole depth range, reversed (#57): one cull and one
     draw of the scene (the split cameras it replaced made two).
@@ -253,39 +289,56 @@ class ReversedDepthCamera:
 
     Full precision needs a float depth buffer, which a window's framebuffer
     does not have: the view is drawn into a scene buffer of its own (32-bit
-    float depth, the window's size) and a card in the window presents it,
-    under the window's other regions (the HUD). A game whose window or scene
-    output already has float depth (:func:`float_depth_fbprops`) can pass
-    ``scene_buffer=False``.
+    float depth) and the window shows it where the app camera's region was,
+    under the window's other regions (the HUD), through a
+    :class:`~world_builder.post.PostChain`. The ``render`` settings
+    (:class:`~world_builder.post.RenderSettings`, #68) set that buffer's size
+    (``scale`` of the region's) and multisamples, and the chain's passes
+    (FXAA, FSR 1). A game whose window already has float depth
+    (:func:`float_depth_fbprops`) can pass ``scene_buffer=False`` and draw
+    straight into it, unless its ``render`` settings need the chain.
 
     :ivar camera: its NodePath (a child of ``app.camera``)
     :ivar lens: its lens
     :ivar region: its display region (in :attr:`output`)
     :ivar output: what it draws into: the scene buffer, or the app camera's
-        output
-    :ivar present: the window's region showing the scene buffer (None
-        without one)
+        output; a new one after a change of multisamples
+        (:meth:`set_settings`)
+    :ivar chain: the passes to the window (None without a scene buffer)
+    :ivar present: the window's region showing the view (the chain's; None
+        without a scene buffer)
     :ivar app_region: the app camera's, switched off meanwhile
+    :ivar render: the ``render`` settings it draws with
     :ivar near: the near plane, metres
     :ivar far: the cull distance, metres (0 before :meth:`update`)
     :ivar mode: ``uDepthMode``
     :ivar depth_texture: the view's depth, copied after each frame (the
-        clouds read last frame's)
+        clouds read last frame's), at the view's size
     """
 
+    SETTINGS_TYPE: ClassVar = RenderSettings
+
     def __init__(
-        self, app: Any, near: float = 1.0, scene_buffer: bool | None = None
+        self,
+        app: Any,
+        near: float = 1.0,
+        scene_buffer: bool | None = None,
+        render: RenderSettings | None = None,
     ) -> None:
         """
         :param app: the ShowBase (``camera``, ``cam``, ``camLens``, ``render``,
             ``graphicsEngine``)
         :param near: the near plane, metres
         :param scene_buffer: draw into a float-depth buffer presented in the
-            window; None = unless the app camera's output has float depth
+            window; None = unless the app camera's output has float depth.
+            A *render* that needs the chain always has one.
+        :param render: the render scale, MSAA and post passes; None = the
+            defaults (the view at the region's size, as it is)
         """
         self.app = app
         self.near = near
         self.far = 0.0
+        self.render = render or RenderSettings()
         self.mode = reversed_depth_mode()
         self.lens = reversed_lens(app.camLens.make_copy(), near)
         self._cull_lens = app.camLens.make_copy()
@@ -296,18 +349,49 @@ class ReversedDepthCamera:
         )
         self.camera = app.camera.attach_new_node(node)
         self.app_region = app.cam.node().get_display_region(0)
-        window = self.app_region.get_window()
-        if scene_buffer is None:
-            scene_buffer = not window.get_fb_properties().get_float_depth()
+        self._window = self.app_region.get_window()
+        self._scene_buffer = scene_buffer
+        self.chain: PostChain | None = None
         self.present = None
-        self._window = window
-        self._scene: NodePath | None = None
         self._texture = None
-        self._card: NodePath | None = None
-        if scene_buffer:
-            self.output = self._make_scene_buffer(window)
+        # The view's depth, copied after each frame (not bound: the clouds'
+        # composite reads it while the view draws): the clouds read it the
+        # next frame instead of drawing the scene's depth again. The same
+        # texture across a new output.
+        from panda3d.core import Texture
+
+        self.depth_texture = Texture("view_depth")
+        self._build_output()
+        self.app_region.set_active(False)
+        _ACTIVE.append(self)
+        _DEPTH_MODE[0] = self.mode
+        app.render.set_shader_input("uDepthMode", _DEPTH_MODE)
+
+    def _wants_scene_buffer(self) -> bool:
+        if self.render.needs_chain:
+            return True
+        if self._scene_buffer is None:
+            return not self._window.get_fb_properties().get_float_depth()
+        return self._scene_buffer
+
+    def _region_size(self) -> tuple[int, int]:
+        """:returns: the app camera's region's size, pixels: the view's
+        output"""
+        return (
+            max(1, self.app_region.get_pixel_width()),
+            max(1, self.app_region.get_pixel_height()),
+        )
+
+    def _build_output(self) -> None:
+        """The view's output (a scene buffer and its chain, or the window),
+        its region and the depth copy."""
+        from panda3d.core import GraphicsOutput
+
+        if self._wants_scene_buffer():
+            self.output = self._make_scene_buffer()
             self.region = self.output.make_display_region()
         else:
+            window = self._window
             self.output = window
             left, right, bottom, top = self.app_region.get_dimensions()
             self.region = window.make_display_region(left, right, bottom, top)
@@ -315,41 +399,31 @@ class ReversedDepthCamera:
         self.region.set_camera(self.camera)
         self.region.set_clear_depth_active(True)
         self.region.set_clear_depth(0.0)
-        # The view's depth, copied after each frame (not bound: the clouds'
-        # composite reads it while the view draws): the clouds read it the
-        # next frame instead of drawing the scene's depth again.
-        from panda3d.core import GraphicsOutput, Texture
-
-        self.depth_texture = Texture("view_depth")
         self.output.add_render_texture(
             self.depth_texture,
             GraphicsOutput.RTM_copy_texture,
             GraphicsOutput.RTP_depth,
         )
-        self.app_region.set_active(False)
-        _DEPTH_MODE[0] = self.mode
-        app.render.set_shader_input("uDepthMode", _DEPTH_MODE)
 
-    def _make_scene_buffer(self, window: Any) -> Any:
-        """The view's float-depth buffer at the window's size, and the
-        window's card that presents it where the app camera's region was."""
+    def _make_scene_buffer(self) -> Any:
+        """The view's float-depth buffer at the render size, and the chain
+        that shows it where the app camera's region was."""
         from panda3d.core import (
-            CardMaker,
             GraphicsOutput,
             GraphicsPipe,
-            OrthographicLens,
-            Texture,
             WindowProperties,
         )
 
-        props = scene_buffer_props(window.get_fb_properties())
-        self._texture = Texture("reversed_scene")
+        window = self._window
+        props = scene_buffer_props(window.get_fb_properties(), self.render.msaa)
+        self._texture = target_texture("reversed_scene")
+        size = self.render.render_size(self._region_size())
         buffer = self.app.graphicsEngine.make_output(
             window.get_pipe(),
             "reversed_scene",
-            window.get_sort() - 1,
+            window.get_sort() + SCENE_SORT,
             props,
-            WindowProperties.size(window.get_x_size(), window.get_y_size()),
+            WindowProperties.size(*size),
             GraphicsPipe.BF_refuse_window | GraphicsPipe.BF_resizeable,
             window.get_gsg(),
             window,
@@ -361,33 +435,76 @@ class ReversedDepthCamera:
         )
         buffer.set_clear_color_active(True)
         buffer.set_clear_color(window.get_clear_color())
-        self._scene = NodePath("reversed_present")
-        lens = OrthographicLens()
-        lens.set_film_size(2.0, 2.0)
-        lens.set_near_far(-1.0, 1.0)
-        camera = self._scene.attach_new_node(Camera("reversed_present", lens))
-        maker = CardMaker("reversed_present")
-        maker.set_frame(-1.0, 1.0, -1.0, 1.0)
-        self._card = self._scene.attach_new_node(maker.generate())
-        self._card.set_texture(self._texture)
-        self._card.set_depth_test(False)
-        self._card.set_depth_write(False)
-        self._card.set_light_off()
-        left, right, bottom, top = self.app_region.get_dimensions()
-        self.present = window.make_display_region(left, right, bottom, top)
-        self.present.set_sort(self.app_region.get_sort())
-        self.present.set_camera(camera)
+        self.output = buffer
+        self._make_chain(size)
         return buffer
+
+    def _make_chain(self, size: tuple[int, int]) -> None:
+        window = self._window
+        self.chain = PostChain(
+            self.app.graphicsEngine,
+            window,
+            self._texture,
+            self.render,
+            size,
+            dimensions=tuple(self.app_region.get_dimensions()),
+            sort=self.app_region.get_sort(),
+            buffer_sort=window.get_sort() + SCENE_SORT + 1,
+        )
+        self.present = self.chain.region
+
+    def _destroy_output(self) -> None:
+        if self.chain is not None:
+            self.chain.destroy()
+            self.chain = None
+            self.present = None
+            self.output.clear_render_textures()
+            self.app.graphicsEngine.remove_window(self.output)
+            self._texture = None
+        else:
+            self.output.remove_display_region(self.region)
+            _remove_render_texture(self.output, self.depth_texture)
 
     @property
     def float_depth(self) -> bool:
         """Whether the output's depth buffer is a float one."""
         return bool(self.output.get_fb_properties().get_float_depth())
 
+    @property
+    def render_size(self) -> tuple[int, int]:
+        """The view's size, pixels (the region's size times ``scale``)."""
+        return self.region.get_pixel_width(), self.region.get_pixel_height()
+
+    def set_settings(self, render: RenderSettings) -> bool:
+        """Change the ``render`` settings: the sharpness at once, the scale
+        and the passes by rebuilding the chain, the multisamples by a new
+        scene buffer (a new :attr:`output`: whatever draws over the view's
+        output, the clouds' march, must be attached again).
+
+        :returns: whether :attr:`output` is a new one
+        """
+        changes = self.render.changes(render)
+        if not changes:
+            return False
+        self.render = render
+        had_chain = self.chain is not None
+        if "msaa" in changes or self._wants_scene_buffer() != had_chain:
+            self._destroy_output()
+            self._build_output()
+            return True
+        if set(changes) - {"sharpness"}:
+            self.chain.destroy()
+            size = render.render_size(self._region_size())
+            self.output.set_size(*size)
+            self._make_chain(size)
+        elif had_chain:
+            self.chain.set_sharpness(render.sharpness)
+        return False
+
     def update(self, far: float) -> None:
         """Per frame: the app lens's field of view, the culling cut at *far*
-        (the lens itself reaches infinity), the scene buffer at the window's
-        size."""
+        (the lens itself reaches infinity), the scene buffer at the render
+        size of the window's region."""
         source = self.app.camLens
         self.far = max(far, 2.0 * self.near)
         for lens in (self.lens, self._cull_lens):
@@ -395,29 +512,43 @@ class ReversedDepthCamera:
             lens.set_aspect_ratio(source.get_aspect_ratio())
         self._cull_lens.set_near_far(self.near, self.far)
         self.camera.node().set_cull_bounds(frustum_bounds(self._cull_lens))
-        if self.present is not None:
-            from panda3d.core import TextureStage
-
-            size = (self._window.get_x_size(), self._window.get_y_size())
+        if self.chain is not None:
+            size = self.render.render_size(self._region_size())
             if size != (self.output.get_x_size(), self.output.get_y_size()):
                 self.output.set_size(*size)
-            # The texture may be padded to powers of two.
-            self._card.set_tex_scale(
-                TextureStage.get_default(), self._texture.get_tex_scale()
-            )
+            if (
+                size != self.chain.render_size
+                or self._region_size() != self.chain.output_size
+            ):
+                self.chain.resize(size)
+            self.chain.update()
+
+    def describe(self) -> str:
+        """:returns: the view's way to the screen in a line, for a log or a
+        HUD, e.g. ``1072x603 -> 1600x900 | MSAA 4 | FXAA -> EASU -> RCAS
+        0.10`` (MSAA as the driver granted it)"""
+        if self.chain is None:
+            width, height = self.render_size
+            return f"{width}x{height} | into the window"
+        got = self.output.get_fb_properties().get_multisamples()
+        asked = self.render.msaa
+        if not got and not asked:
+            msaa = "no MSAA"
+        elif not asked or got == asked:
+            msaa = f"MSAA {got}"
+        else:
+            msaa = f"MSAA {asked} (got {got})"
+        head, _, tail = self.chain.describe().partition(" | ")
+        return f"{head} | {msaa} | {tail}"
 
     def destroy(self) -> None:
         """Remove the camera, its region and scene buffer; the app camera
         draws again and ``uDepthMode`` is standard."""
-        if self.present is not None:
-            self._window.remove_display_region(self.present)
-            self.app.graphicsEngine.remove_window(self.output)
-            self._scene.remove_node()
-        else:
-            self.output.remove_display_region(self.region)
-            _remove_render_texture(self.output, self.depth_texture)
+        self._destroy_output()
         self.camera.remove_node()
         self.app_region.set_active(True)
+        if self in _ACTIVE:
+            _ACTIVE.remove(self)
         _DEPTH_MODE[0] = DEPTH_STANDARD
 
 
