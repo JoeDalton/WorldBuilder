@@ -158,7 +158,7 @@ class WorldDemo(ShowBase):
         self._orientation = LQuaternionf()
         self._ground = 0.0
         print("starting terrain workers ...")
-        # The one line: lens, bodies, fields, sky, sun, lights, split depth.
+        # The one line: lens, bodies, fields, sky, sun, lights, depth camera.
         self.world = load_world(self, path, settings=self.settings, backend=backend)
         self.bodies = list(self.world.world.bodies)
         self.body = self.bodies[0] if self.bodies else None

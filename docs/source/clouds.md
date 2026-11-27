@@ -1208,8 +1208,8 @@ cloud). Here each pixel steps along its own ray:
 
 - **Through the slab**, between the spheres at its base and top, less the
   planet: up to two segments (a ray skimming under the slab leaves it and
-  comes back), from the near plane to the **scene's depth** (the near
-  range's surface where it has one, else the far range's). With genera, the
+  comes back), from the near plane to the **scene's depth** (the view's,
+  last frame's). With genera, the
   slab is each **sky band** (`uSkyBands`, the genera's slabs merged): up to
   two segments a band, eight in all, sorted along the ray (insertion sort),
   and inside a segment a **genus loop** per sample over the band's genera
@@ -1467,8 +1467,8 @@ grid: see the script), and each pose's frame comes with its 95th percentile
 ([performance §23](performance.md)). On WSL, run it with
 `GALLIUM_DRIVER=d3d12`, or Mesa draws on the CPU.
 
-A burst of frames kept (the screen, and per march depth range the raw march and
-the resolve's output) and its second difference in time (each frame against the
+A burst of frames kept (the screen, and the raw march and the resolve's
+output) and its second difference in time (each frame against the
 mean of its neighbours) measures the shimmer in motion, where the eye sees it:
 the light volume's jitter and the 1x1 grain were found that way
 ([performance §37](performance.md)).

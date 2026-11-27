@@ -5,9 +5,9 @@ The vertex bytes arrive pre-packed from the worker in :data:`VERTEX_DTYPE`
 layout, so building a chunk is one memory copy. All chunks share one index
 buffer, and a coarse one over the same vertices (every other one: a quarter
 of the triangles) that the passes wanting the ground's shape but not its
-detail draw instead (the clouds' depth passes, the sea's reflection:
-:data:`COARSE_PASSES`). Each node gets the chunk's precomputed bounding box,
-so Panda never walks the vertices to compute one.
+detail draw instead (the sea's reflection: :data:`COARSE_PASSES`). Each node
+gets the chunk's precomputed bounding box, so Panda never walks the vertices
+to compute one.
 
 Chunk nodes are not collision targets: Panda would otherwise collide
 colliders whose from-mask has GeomNode's default bit with every drawn

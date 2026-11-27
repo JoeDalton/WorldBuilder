@@ -92,11 +92,10 @@ def point_format() -> GeomVertexFormat:
 
 
 def _main_cameras() -> BitMask32:
-    """The cameras the trees are drawn for: the view's, and the clouds'
-    depth passes (world_builder.clouds.march: the clouds are laid over the
-    view at the distance their march stopped at; a tree missing from those
-    passes stood in front of a cloud it was inside, unfogged). Not the sea's
-    reflection nor the objects' shadow map."""
+    """The cameras the trees are drawn for: the view's (whose depth the
+    clouds also read: a tree missing from it stood in front of a cloud it was
+    inside, unfogged). Not the sea's reflection nor the objects' shadow
+    map."""
     from world_builder.depth import CASTER_BIT, REFLECTION_CAMERA_MASK
 
     mask = BitMask32.all_on()

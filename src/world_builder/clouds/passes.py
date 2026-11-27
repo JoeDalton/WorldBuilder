@@ -1,10 +1,8 @@
 """
-The clouds' passes' shared pieces: the render states a pass camera starts
-from (everything but the clouds into depth only), a camera sharing a split
-camera's lens, and a fullscreen card laying a premultiplied texture over one
-depth range in the clouds' slot. The raymarch (:mod:`march`) draws its depth
-passes and its composite with them. (They were the half-resolution
-billboards' pass's, :mod:`half_res`, removed with the billboards.)
+The clouds' composite card: a fullscreen card laying a premultiplied
+texture over the view in the clouds' slot (the raymarch's, :mod:`march`).
+Its depth passes' cameras and states went when the clouds took the view's
+own depth (FRAME_COST_PLAN.md, Task 7).
 """
 
 from __future__ import annotations

@@ -506,7 +506,8 @@ finds one (to make it solid, find clear spots...). a world file's `fields:` buil
 `ring` preset at 1600×900), at most the field's far side. Short of it the
 far plane cut the biggest rocks while they were still a few pixels wide,
 a line where they met the haze (open space's fixed 1,000 km). The far
-plane costs nothing in depth precision: that is the split's. The world
+distance costs nothing in depth precision: the reversed camera's float depth
+keeps about 1e-7 of the distance at every range. The world
 passes the far on to the fields (`World.update(far=)`), and they fade
 their rocks out over its last fifth.
 

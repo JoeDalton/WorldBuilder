@@ -395,9 +395,9 @@ texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
 ## The clouds' shadow on the view's ground (one pass)
 
 `clouds.march._GroundShadow`, `PlanetClouds.bind_ground_shadow`: with the
-raymarch, the ground's lookup above runs once per texel of a pass at the
-depth passes' resolution (half the view's), not per pixel of the terrain and
-the sea.
+raymarch, the ground's lookup above runs once per texel of a pass at half
+the view's resolution (on the view's own depth, last frame's), not per pixel
+of the terrain and the sea.
 
 - **Why.** Far off, the ground's triangles are a pixel or two; the GPU shades
   2 x 2 quads, so every pixel's work ran for up to four, and the lookup (then

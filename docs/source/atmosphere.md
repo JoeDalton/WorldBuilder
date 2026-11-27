@@ -332,8 +332,8 @@ shells near the camera and the deck beyond; until Task 24 of the cloud
 genera, the cirrus was a sheet of baked stamps of its own. Both were
 removed.)
 
-The part drives the march (sun, sky light, settings, pixel angle, the split
-cameras, update, removal) and holds the rule the layers must keep: the high
+The part drives the march (sun, sky light, settings, pixel angle, the depth
+camera, update, removal) and holds the rule the layers must keep: the high
 layer's slab must clear the low clouds' slabs and its top stay inside the
 air (`planet.check_layers`).
 

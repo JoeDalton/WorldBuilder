@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
 import frame_profile  # noqa: E402
@@ -52,3 +54,18 @@ def test_the_pipelined_summary_is_median_and_p95_in_ms():
     frame, p95 = frame_profile._summary([0.004] * 19 + [0.010])
     assert frame == 4.0
     assert abs(p95 - 4.3) < 1e-9
+
+
+@pytest.mark.parametrize("platform, clip_control", [("linux", True), ("darwin", False)])
+def test_the_window_asks_for_clip_control_but_on_macos(
+    monkeypatch, platform, clip_control
+):
+    """The reversed camera's 0-1 depth (gl-depth-zero-to-one): every platform
+    but macOS, whose OpenGL has none."""
+    import tools
+
+    loaded = []
+    monkeypatch.setattr(tools, "loadPrcFileData", lambda _, text: loaded.append(text))
+    monkeypatch.setattr(tools.sys, "platform", platform)
+    tools.window_config("t", "64 64", True, vsync=False)
+    assert ("gl-depth-zero-to-one #t" in loaded[0]) is clip_control

@@ -1,10 +1,10 @@
-// A planet's low clouds, raymarched (clouds.march): both depth ranges of the
-// view (the split cameras') in one march, at a fraction of its resolution. The
+// A planet's low clouds, raymarched (clouds.march): the view (the reversed
+// camera's whole range) in one march, at a fraction of its resolution. The
 // density field, its lighting and the far field are the billboards' and the
 // deck's (cloud_field.glsl, cloud_shading.glsl); the march replaces their
 // overdraw: each pixel steps along its own ray through the slab, from the near
-// range's near plane to the scene (the near range's depth where it holds
-// something, else the far range's), and stops once the cloud is opaque: a
+// plane to the scene (the view's depth, last frame's), and stops once the
+// cloud is opaque: a
 // cloud near the camera spares the march the clouds behind it.
 //
 // Each frame it traces one pixel of every uBlock.x x uBlock.y block of the view
@@ -35,9 +35,9 @@ const float KM = 1000.0;                // the distance's unit out
 
 // The scene's depth, at the view's resolution over uDepthScale.
 uniform sampler2D uSceneDepth;
-uniform int   uDepthScale;       // view pixels per depth pixel, per axis (march.DEPTH_SCALE)
+uniform int   uDepthScale;       // view pixels per depth texel, per axis (1: the view's)
 uniform mat4  uClipToRender;     // the view's clip space -> the render frame
-uniform float uSplit;            // metres: where the near range ends (its step budget)
+uniform float uSplit;            // metres: where the near step budget ends (0: one range)
 uniform vec3  uCamRender;        // camera, render frame
 uniform vec3  camPos;            // camera, planet frame
 uniform float exposure;
@@ -865,10 +865,8 @@ void main() {
         farPoint = nearPoint + dir * 1e10;
     }
     float tStart = max(dot(nearPoint - uCamRender, dir), 0.0);
-    // The scene: the near range's surface where it has one, else the far
-    // range's, else the far plane (EVE's distance buffer of both cameras).
-    // The depth passes are drawn at half resolution (march.DEPTH_SCALE): a
-    // pixel reads its 2 x 2 block's depth.
+    // The scene: the view's surface where it drew one (its depth, last
+    // frame's, one texel a view pixel: uDepthScale 1), else the far end.
     ivec2 depthPixel = pixel / uDepthScale;
     float sceneDepth = texelFetch(uSceneDepth, depthPixel, 0).r;
     bool drawn = depthDrawn(sceneDepth);
@@ -963,9 +961,11 @@ void main() {
     // Steps uMinStep long near the camera, a share of the distance farther,
     // all lengthened alike when the ray would need more than the budget. The
     // near range (to uSplit) and the far range each have the budget (as when
-    // each range had a march of its own): one budget for the whole ray would
-    // stretch the near steps for far stretches the march seldom reaches (an
-    // opaque cloud near the camera stops it first).
+    // the split cameras' ranges had a march each): one budget for the whole
+    // ray would stretch the near steps for far stretches the march seldom
+    // reaches. Since the one reversed camera (#57) uSplit is 0: the far
+    // budget covers the whole ray, as measured then; a near budget again is
+    // a look and cost change of its own.
     float dtMin = uMinStep;
     float growth = uStepGrowth;
     vec2 needed = vec2(0.0);  // near, far

@@ -288,7 +288,7 @@ def world_to_yaml(spec: WorldSpec) -> str:
 
 
 class GameWorld:
-    """A world loaded from a file: the :class:`World` and its split cameras,
+    """A world loaded from a file: the :class:`World` and its depth camera,
     updated in one call.
 
     :ivar spec: what the file defined

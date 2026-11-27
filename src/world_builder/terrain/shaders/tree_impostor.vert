@@ -22,8 +22,8 @@ uniform float uPlanetRadius;
 uniform float uMeshRange;         // the impostors start over its dithered band
 uniform float uTreeRange;         // and end here (another band)
 uniform float uPixelScale[1];     // pixels per radian
-uniform float uPointScale;        // the target's pixels per view pixel (1 in
-                                  // the view; the clouds' depth passes: theirs)
+uniform float uPointScale;        // the target's pixels per view pixel (1: the
+                                  // view; no coarser target since Task 7)
 uniform vec4 uImpostors[32];      // per asset: layer (-1 none), diameter, centre z
 uniform int uFrames;
 
@@ -75,7 +75,7 @@ void main() {
     if (info.x < 0.0 || dist < 0.85 * uMeshRange || dist > uTreeRange) {
         gl_Position = vec4(0.0, 0.0, 0.0, -1.0);  // the meshes' or none
     }
-    // In a coarser target (the clouds' depth passes) one pixel wider: it
+    // In a coarser target (none since Task 7: dormant) one pixel wider: it
     // covers every view pixel the tree does (the clouds' near and far cards
     // are told apart by it: a tree it missed stood unfogged over the far
     // card), and at most a pixel more (more, a halo of the tree's depth).

@@ -43,7 +43,7 @@ const float GROUND_SHADOW_AGREE = 0.08;
 
 // The ground shadow pass's shade at this pixel: its four texels around it,
 // bilinear, those of another surface left out. False where none agrees (a
-// silhouette's edge, the near range when its depth pass is off).
+// silhouette's edge, a surface that moved since last frame's depth).
 // TERRAIN_LIGHT_VERTEX: included by a vertex stage (no pixel: never).
 bool groundShadowAt(float dist, out float shade) {
 #ifdef TERRAIN_LIGHT_VERTEX

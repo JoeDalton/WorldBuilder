@@ -1,8 +1,8 @@
 #version 330
-// The clouds' shadow on the scene, once a frame at the depth passes'
+// The clouds' shadow on the scene, once a frame at half the view's
 // resolution (clouds.march.GroundShadow): what the terrain's and the sea's
 // pixels took per pixel (terrain_frag.glsl's cloudShade, planetCloudShadow),
-// for the scene the march's depth passes drew. There each pixel's work ran
+// for the scene in the view's depth (last frame's). There each pixel's work ran
 // for every pixel of the 2 x 2 quads of the ground's small triangles (0.8-0.9
 // ms a frame at 2560 x 1440, performance.md §33); here it runs once per
 // texel, and the ground reads it back by its distance (cloudShadeAt).
@@ -22,7 +22,7 @@ uniform mat4  uClipToRender;     // the view's clip space -> the render frame
 uniform vec3  uCamRender;        // camera, render frame
 uniform vec3  camPos;            // camera, planet frame
 uniform int   uOwnAtmosphere;    // the planet's atmosphere, -1 none: no shadow
-uniform vec2  uViewSize;         // this pass's size, pixels (the depth passes')
+uniform vec2  uViewSize;         // this pass's size, pixels (half the view's)
 uniform int   uDepthScale;       // view pixels per texel, per axis
 
 const float KM = 1000.0;

@@ -93,12 +93,11 @@ class SkySettings(QualitySettings):
 class Sky:
     """A sky sphere around the camera.
 
-    Draw it with the far camera only (``hide(depth.HIDE_FROM_NEAR)``):
-    it draws first, without depth, over whatever is there, so the near pass
-    would paint it over the far one. Recentre it every frame
-    (:meth:`update`). ``sky.vert`` puts it on the far plane whatever its
-    scale, so any camera that draws it (the ocean's reflection, with a range
-    of its own) sees it whole.
+    Drawn after the ground on the far plane (``sky.vert``:
+    ``depth_convention.glsl``'s ``depthFarZ``) with the camera's depth test
+    and equality (:meth:`set_depth_mode`): it shows where nothing nearer was,
+    its stars too. Recentre it every frame (:meth:`update`); any camera that
+    draws it (the ocean's reflection, with a range of its own) sees it whole.
 
     With a :class:`starfield.Starfield`, the point stars are a child node,
     :attr:`stars`, drawn just after the sphere and added to it.
@@ -309,11 +308,11 @@ class Sky:
         self._sun[0] = LVecBase3f(*Vec3(*direction).normalized())
 
     def update(self, camera_render: ArrayLike, far: float) -> None:
-        """Per frame: around the camera, inside the far camera's range (the
-        scale is a margin only: ``sky.vert`` draws it on the far plane).
+        """Per frame: around the camera, inside the view's range (the scale
+        is a margin only: ``sky.vert`` draws it on the far plane).
 
         :param camera_render: the camera's position in the render frame
-        :param far: the far camera's far distance
+        :param far: the view's far distance (``ReversedDepthCamera.far``)
         """
         self.node.set_pos(*camera_render)
         self.node.set_scale(0.9 * far)

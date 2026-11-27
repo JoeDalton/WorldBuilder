@@ -10,8 +10,8 @@
 uniform sampler2D uClouds;     // premultiplied
 uniform sampler2D uDistance;   // the cloud's distance from the camera, km, 0 none
 uniform vec2 uDownscale;       // the view's pixels per pixel of theirs, across and up
-uniform int uDepthScale;       // view pixels per pixel of the depth pass, per axis
-// The scene's depth pass (the view's lens: the same depth space as
+uniform int uDepthScale;       // view pixels per texel of the scene's depth (1)
+// The scene's depth (the view's own, last frame's: the same depth space as
 // gl_FragDepth here), and 1 to cut the cloud's depth at it.
 uniform sampler2D uSceneDepth;
 uniform int uSceneDepthCut;

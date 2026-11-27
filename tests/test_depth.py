@@ -303,3 +303,54 @@ def test_the_reversed_camera_copies_the_views_depth_for_the_next_frame(window):
         )
     finally:
         camera.destroy()
+
+
+def test_the_view_test_is_less_in_standard_depth_and_greater_reversed():
+    from panda3d.core import DepthTestAttrib
+
+    from world_builder import depth
+
+    assert depth.view_test(depth.DEPTH_STANDARD) == DepthTestAttrib.M_less
+    for mode in (depth.DEPTH_REVERSED_01, depth.DEPTH_REVERSED_11):
+        assert depth.view_test(mode) == DepthTestAttrib.M_greater
+
+
+def test_the_scene_buffer_follows_the_windows_size(window):
+    """A window resized: the next update makes the scene buffer its size
+    again (the march and its passes follow the region's size)."""
+    from world_builder.depth import ReversedDepthCamera
+
+    camera = ReversedDepthCamera(window, near=1.0)
+    try:
+        size = (window.win.get_x_size(), window.win.get_y_size())
+        camera.output.set_size(size[0] // 2, size[1] // 2)
+        assert (camera.output.get_x_size(), camera.output.get_y_size()) != size
+        camera.update(1.0e5, 100.0)
+        assert (camera.output.get_x_size(), camera.output.get_y_size()) == size
+    finally:
+        camera.destroy()
+
+
+def test_drawing_into_the_window_leaves_its_other_render_textures(window):
+    """Without a scene buffer the depth copy is added to the app's own
+    output: destroy takes it off and nothing else (a game's own render
+    textures stay)."""
+    from panda3d.core import GraphicsOutput, Texture
+
+    from world_builder.depth import ReversedDepthCamera
+
+    output = window.win
+    theirs = Texture("theirs")
+    output.add_render_texture(
+        theirs, GraphicsOutput.RTM_copy_ram, GraphicsOutput.RTP_color
+    )
+    try:
+        camera = ReversedDepthCamera(window, near=1.0, scene_buffer=False)
+        ours = camera.depth_texture
+        textures = [output.get_texture(i) for i in range(output.count_textures())]
+        assert ours in textures and theirs in textures
+        camera.destroy()
+        textures = [output.get_texture(i) for i in range(output.count_textures())]
+        assert ours not in textures and theirs in textures
+    finally:
+        output.clear_render_textures()

@@ -534,7 +534,7 @@ class Sea:
         lens.set_fov(fov.x * scale, fov.y * scale)
         lens.set_far(self.app.camLens.get_far() * 4.0)
         self.refl_cam_node.set_lens(lens)
-        # Its range in the split's standard depth, and a finite copy to cull
+        # Its range in standard depth, and a finite copy to cull
         # by (set_depth_mode can make the lens itself reversed and infinite).
         self._refl_near_far = (lens.get_near(), lens.get_far())
         self._cull_lens = lens.make_copy()

@@ -15,7 +15,7 @@ WorldBuilder: procedural worlds for Panda3D.
              spec, the same every time, stored nowhere
     gravity  the bodies' summed point-mass gravity at many points (native or
              numpy)
-    depth    near/far camera split, for views from the ground to orbit
+    depth    one reversed-Z camera, for views from the ground to orbit
     world    every part a game draws around its camera (bodies, air,
              clouds, ocean, sky, sun, lights), built from the game's looks
              and updated as one

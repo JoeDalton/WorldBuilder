@@ -252,14 +252,13 @@ DETAIL_EROSION = 0.5
 #: two billows across). 0 = straight billows.
 CURL_STRENGTH = 2.0
 CURL_FREQUENCY = 2.0
-#: The view's pixels per pixel of the depth passes, per axis: 2 draws the
-#: scene's depth for the march at half resolution (the march reads it at
-#: the pixels it traces, the composites to tell the near range's pixels).
+#: The view's pixels per texel of the ground shadow pass, per axis: it runs at
+#: half the view's resolution (the scene's depth itself is the view's own).
 DEPTH_SCALE = 2
 
 
 def depth_size(view: tuple[int, int], scale: int = DEPTH_SCALE) -> tuple[int, int]:
-    """:returns: the depth passes' size for a view of *view* pixels"""
+    """:returns: the ground shadow pass's size for a view of *view* pixels"""
     return tuple(max(1, math.ceil(v / scale)) for v in view)
 
 
@@ -988,7 +987,8 @@ def step_scales(
     segments: ArrayLike, min_step: float, growth: float, budget: int, split: float
 ) -> tuple[float, float]:
     """:func:`step_scale` for the near range (to *split* metres) and the far
-    range apart: each has the budget (``cloud_march.frag``'s ``stretch``).
+    range apart: each has the budget (``cloud_march.frag``'s ``stretch``;
+    the march runs with *split* 0 since the one reversed camera).
 
     :returns: (near, far), 1 when their steps fit
     """
@@ -1513,7 +1513,7 @@ _ZERO_TO_ONE = LMatrix4f(
 
 
 class _GroundShadow:
-    """The clouds' shadow on the view's scene, at the depth passes'
+    """The clouds' shadow on the view's scene, at half the view's
     resolution (ground_shadow.frag): what the terrain and the sea read back
     by their distance instead of shading it per pixel, where the ground's
     small triangles had every 2 x 2 quad run it (0.8-0.9 ms a frame at 2560
@@ -1814,10 +1814,9 @@ class _MarchLayer:
     def update(
         self, app: Any, frame: int, camera: np.ndarray, slab_distance: float = 0.0
     ) -> None:
-        """Per frame: this frame's pixel of each block, the ranges' clip
-        spaces to the render frame (the march) and the near range's to the
-        camera's surroundings now and a frame ago (the reprojection: both
-        lenses look the same way), and which result is written.
+        """Per frame: this frame's pixel of each block, the view's clip space
+        to the render frame (the march) and to the camera's surroundings now
+        and a frame ago (the reprojection), and which result is written.
 
         :param frame: the march's frame count
         :param camera: the camera in the planet frame, float64

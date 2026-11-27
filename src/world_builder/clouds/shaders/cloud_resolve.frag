@@ -18,7 +18,7 @@
 //
 // Depth-aware: each sample weighs by how near its scene (where its march
 // stopped: cloud_march.frag keeps its distance in the distance's g) is to
-// this pixel's own (the depth passes here, the same measure). A
+// this pixel's own (the view's depth here, the same measure). A
 // sample that stopped at a thin thing in front (a tree, a ridge's rim) holds
 // only the air before it: blended into the pixels around, it showed as a halo
 // of sky round the tree in a cloud; those pixels now take the samples that
@@ -91,8 +91,7 @@ const float DEPTH_FLOOR = 1e-3;
 const float SKY_DISTANCE = 1.0e9;
 
 // The distance of the scene at a view pixel, metres, as the march stopped at
-// it (the near range's surface, else the far range's, else none): from the
-// near range's near plane, the same for both ranges (cloud_march.frag's
+// it (the view's surface, else none): from the near plane (cloud_march.frag's
 // sceneKm, there for each sample).
 float sceneDistance(ivec2 viewPixel) {
     ivec2 depthPixel = viewPixel / uDepthScale;

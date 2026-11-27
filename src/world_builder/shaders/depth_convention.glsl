@@ -1,7 +1,7 @@
 // The depth convention (world_builder.depth): uDepthMode is the shared input
 // every node that pins or reads depth binds (depth.depth_mode_input()); a
 // ReversedDepthCamera sets it. Include once per shader with #pragma include.
-//   DEPTH_STANDARD     the split cameras' depth: near 0, far 1 in each range
+//   DEPTH_STANDARD     standard depth (no depth camera): near 0, far 1
 //   DEPTH_REVERSED_01  one reversed camera, OpenGL's 0-1 (clip control):
 //                      near 1, infinity 0, a float buffer's full precision
 //   DEPTH_REVERSED_11  the same in OpenGL's [-1, 1] (macOS): near 1, infinity

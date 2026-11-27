@@ -52,7 +52,8 @@ void main() {
     }
     vec2 offset = (vec2(gl_PointCoord.x, 1.0 - gl_PointCoord.y) - 0.5) / vSpriteScale;
     if (vHalfTexel > 0.0) {
-        // A coarser target (the clouds' depth passes): its pixel stands for
+        // A coarser target (none since the clouds read the view's depth, Task
+        // 7: uPointScale is 1 and this branch dormant): its pixel stands for
         // several of the view's, kept if the tree covers any of them (the
         // clouds' cards are told apart, and cut, by these passes: a view
         // pixel of the tree they missed stood unfogged in front of a cloud).

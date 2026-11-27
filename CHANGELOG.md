@@ -7,124 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Frame time at 2560 x 1440, HIGH, as a game runs it (CPU and GPU overlapping,
+`frame_profile.py --pipelined`), on an RTX 3070 / Ryzen 5600X: `ground` 6.20 to
+3.44 ms, `coast` 6.02 to 3.46, `sunset` 6.30 to 3.57, 20 km 3.85 to 2.10 (the
+steps below; FRAME_COST_PLAN.md, performance.md §38-40).
+
 ### Added
 
-- `world_builder.depth.ReversedDepthCamera`: one camera over the whole depth
-  range, reversed and infinite (#57), to replace `SplitDepthCameras`: its own
-  camera under `app.camera` with both of the split's bits, a "greater" depth
-  test, depth cleared to 0, culling cut at the world's far distance, and a
-  near plane at 1 % of the height above the ground (1 m to 1 km); it sets
-  `uDepthMode` on render (`DEPTH_REVERSED_01` with `gl-depth-zero-to-one`,
-  `DEPTH_REVERSED_11` without: macOS). Not used by `World` yet (the
-  renderers move to it first). The tests run under either convention:
-  `WB_DEPTH_ZERO_TO_ONE=1` for desktop's 0-1 depth.
-- `shaders/depth_convention.glsl` and `depth.depth_mode_input()`: the one
-  source of the depth convention (`uDepthMode`, shared by every node that
-  pins or reads depth, set by the reversed camera). The sky and its stars
-  pin the far plane through it (`depthFarZ`) and take its far-plane test
-  (`Sky.set_depth_mode`, `depth.far_plane_test`): unchanged with the split
-  cameras.
-- `Sea.set_depth_mode`: the sea's reflection camera follows the view's depth
-  convention (with the reversed camera: a reversed, infinite lens, "greater",
-  depth cleared to 0; left standard, the far sea reflects nothing). Its
-  culling now always reaches its own standard range through explicit bounds
-  (`depth.frustum_bounds`), whatever its lens.
-- Models, trees and the objects' caster map need no change for the reversed
-  camera (they draw through Panda's projection; the caster map keeps its own
-  orthographic standard depth): tested under both conventions.
-- The asteroid fields' haze follows the depth convention
-  (`FieldHaze.set_depth_mode`): its hull's far clamp only where there is a far
-  plane, its rays starting at the near plane wherever the convention puts it
-  (`depthNearZ`), its depth test the camera's with equality.
-- The raymarched clouds run on the reversed camera too
-  (`PlanetClouds.use_split_depth` takes either camera): one range, the far
-  one's passes through its lens, the near range never on; the depth pass
-  reversed (float depth, cleared to 0, "greater"), the composite and the
-  sea-reflection decks testing "greater". Every cloud shader reads depth
-  through `depth_convention.glsl` (`depthDrawn`, `depthNdc`, `depthNearZ`,
-  `depthFarNdc`, `depthWindow`); under clip control the march's matrices take
-  the GSG's 0-1 remap, so reversed float depth decodes exactly (the scene at
-  1,000 km within 1 %).
-- `scripts/frame_profile.py --pipelined`: frames timed as a game runs them,
-  the CPU and the GPU overlapping (the frame is the slower of the two),
-  with the CPU's step still GPU-synced beside it. The default mode's frame
-  is the CPU and the GPU added together (11 ms at `ground` where the game
-  takes 6.2). `--terrain-passes` adds the terrain's cost per camera pass
-  (the main view's near and far cameras, the sea's reflection, the clouds'
-  two depth passes); a new part, `asteroids`, is the fields' per-frame
-  update (CPU only).
+- `world_builder.depth.ReversedDepthCamera` (#57): one camera over the whole
+  view, reversed and infinite (near at 1, infinity at 0), with a float depth
+  buffer's precision (about 1e-7 of the distance at every range): one cull
+  and one draw of the scene. Its own camera under `app.camera` (the app's
+  lens stays standard, for picking), a "greater" depth test, culling cut at
+  the world's far distance, a near plane at 1 % of the height over the
+  ground (1 m to 1 km). A window's framebuffer has no float depth, so it
+  draws into a scene buffer of its own (presented in the window, or in a
+  game's post-process buffer, under the other regions; `scene_buffer=False`
+  for an output with float depth already: `depth.float_depth_fbprops`). It
+  copies its depth into `depth_texture` after each frame.
+- The depth convention's one source: `shaders/depth_convention.glsl` and
+  `depth.depth_mode_input()` (`uDepthMode`, `DEPTH_STANDARD`,
+  `DEPTH_REVERSED_01` with `gl-depth-zero-to-one`, `DEPTH_REVERSED_11`
+  without: macOS), `depth.far_plane_test`, `depth.view_test`,
+  `depth.reversed_lens`, `depth.zero_to_one`. The renderers that pin or read
+  depth follow it: `Sky.set_depth_mode`, `Sea.set_depth_mode` (its mirror's
+  camera reversed too), `FieldHaze.set_depth_mode`, the clouds.
+- `World.use_depth_camera`, `World.view_ranges` (far distance and height over
+  the ground), `World.far_distance`; `depth.planet_far`, `depth.system_far`.
+- `AsteroidField.out_of_reach`; `MaterialSet.mean_rough_ao`.
+- `scripts/frame_profile.py --pipelined` (frames as a game runs them; the
+  default mode's frame is the CPU and the GPU added) and `--terrain-passes`
+  (the terrain's cost in the view, `t_view`, and the sea's reflection,
+  `t_refl`); a part `asteroids` (the fields' per-frame update).
+- The tests run in either depth convention: desktop's 0-1 by default,
+  `WB_DEPTH_ZERO_TO_ONE=0` for macOS's [-1, 1].
 
 ### Changed
 
-- **The clouds read the view's depth instead of drawing their own** (Task 7,
-  FRAME_COST_PLAN.md): the reversed camera copies its depth into a texture
-  after each frame (`ReversedDepthCamera.depth_texture`), and the march, its
-  resolve, the composite and the ground shadow pass read last frame's. Their
-  depth pass, which drew the scene again (the terrain's cull and draw most of
-  it), is gone: **1.1-1.45 ms less a frame low over the ground** (2560 x
-  1440, HIGH, pipelined: ground 4.62 to 3.44 ms, coast 4.58 to 3.46, sunset
-  5.00 to 3.57, 20 km 2.80 to 2.10). In motion the clouds' edges against a
-  moving silhouette are a frame late (a forward flight: the same error
-  against converged frames as before).
-
-- **One reversed-Z camera instead of the split cameras** (#57,
-  FRAME_COST_PLAN.md Phase 2): `load_world` draws the view with
-  `depth.ReversedDepthCamera`, and `World.use_depth_camera` hands its depth
-  convention to the sky, the seas' reflections, the fields' haze and the
-  clouds (`World.view_ranges` gives it the far distance and the height over
-  the ground). A window's framebuffer has no float depth, so the view is
-  drawn into a float-depth scene buffer of the window's size and presented
-  in the window under its other regions (the HUD); `scene_buffer=False` for
-  an output that already has float depth (`depth.float_depth_fbprops`).
-  Games should set `gl-depth-zero-to-one #t` before opening their window
-  (not on macOS: its OpenGL has no clip control; the world then works with
-  about a 24-bit range's precision). The demo and scripts do
-  (`tools.window_config`).
-
+- **One reversed-Z camera instead of the split cameras** (#57):
+  `load_world` draws the view with a `ReversedDepthCamera` and hands it to the
+  world (`World.use_depth_camera`). Games should set `gl-depth-zero-to-one #t`
+  before opening their window (not on macOS: its OpenGL has no clip control;
+  the world then keeps about a 24-bit range's precision). The demo and
+  scripts do (`tools.window_config`). -0.2 to -0.25 ms low over the ground.
+- **The clouds read the view's depth instead of drawing their own**: the
+  march, its resolve, the composite and the ground shadow pass read last
+  frame's (`ReversedDepthCamera.depth_texture`); their depth pass, which drew
+  the scene again, is gone: -1.1 to -1.45 ms a frame low over the ground. In
+  motion the clouds' edges against a moving silhouette are a frame late (a
+  forward flight: the same error against converged frames as before).
 - An asteroid field or ring out of the camera's reach does no per-frame work
-  for its rocks once it has let them go (`AsteroidField.out_of_reach`; its
-  haze still follows the camera). The demo's ring, around a planet 60,000 km
-  away, took ~1.1 ms of every frame on the home planet: frames 1.0-1.15 ms
-  shorter there (`ground` 6.20 to 5.14 ms, 2560 x 1440, HIGH).
-- A field's haze makes its table of the light of the rocks not drawn only
-  when the pixel scale, the smallest size drawn or the classes' limits
-  change, not every frame: 0.3 ms less a frame inside a field
-  (`asteroid_bench.py --field asteroid_cube`: cruise 2.11 to 1.77 ms).
-- The ground's materials (terrain and rocks drawn with its textures) no
-  longer read their normal, roughness and occlusion texture past 600 m,
-  where the normal map has faded out: each layer's mean roughness and
-  occlusion stand in (`MaterialSet.mean_rough_ao`, `uMeanRoughAO`). 0.17 ms
-  of GPU at `ground`, 0.36 ms at `sunset`; the far ground changes by one
-  level in 255 at most on 15 % of pixels.
+  for its rocks once it has let them go (its haze still follows the camera):
+  the demo's ring, 60,000 km away, took ~1.1 ms of every frame.
+- A field's haze makes its table of the rocks not drawn only when the pixel
+  scale, the smallest size drawn or the classes' limits change: 0.3 ms less a
+  frame inside a field.
+- The ground's materials (terrain, and rocks drawn with its textures) no
+  longer read their normal, roughness and occlusion texture past 600 m, where
+  the normal map has faded out: each layer's mean roughness and occlusion
+  stand in (`uMeanRoughAO`): 0.17-0.36 ms of GPU low over the ground.
+- The sea's reflection culls to its own standard range through explicit
+  bounds (`depth.frustum_bounds`), whatever its lens.
+- `PlanetClouds.use_split_depth` is `use_depth_camera`; the clouds' shaders
+  read one depth texture (`uSceneDepth`) through one matrix (`uClipToRender`).
+- `frame_profile.py --terrain-passes` measures `t_view` and `t_refl`.
 
 ### Removed
 
+- **The split depth cameras** (#57): `depth.SplitDepthCameras`,
+  `split_clear_of`, `camera_span`, `MIN_SPLIT_M`, `planet_ranges` /
+  `system_ranges` (the far distance: `depth.planet_far` / `system_far`),
+  `World.use_split_depth`, `World.depth_ranges`, `SPACE_SPLIT_M`, the haze's
+  split passes (`FieldHaze.set_split`, `uHazeSplit`, `uHazeToFar`), the
+  clouds' near range (its depth pass, card, `set_near`, `uSceneDepthNear`,
+  `uNearDepthOn`, `uClipToRenderFar`). A game building the split cameras
+  itself builds a `depth.ReversedDepthCamera` (or uses `load_world`).
 - The clouds' depth pass and what served only it: `clouds.passes.pass_states`
   and `pass_camera`, the terrain's depth-only stage (`depth_only_shader`,
-  `terrain_depth.frag`, the `PASS_TAG` tags), the trees' `pass_state` and
+  `terrain_depth.frag`, `PASS_TAG`), the trees' `pass_state` and
   `IMPOSTOR_TAG`, `depth.CLOUD_NEAR_BIT`, `CLOUD_FAR_BIT`,
-  `HIDE_FROM_CLOUD_PASS`, `PASS_TAG`; `frame_profile.py --terrain-passes`
-  has no `t_clouds` any more.
-- **The split depth cameras** (#57): `depth.SplitDepthCameras`,
-  `split_clear_of`, `camera_span`, `MIN_SPLIT_M`, the split's
-  `planet_ranges` / `system_ranges` (their far distance is
-  `depth.planet_far` / `depth.system_far`), `World.use_split_depth` and
-  `World.depth_ranges` (`World.use_depth_camera`, `World.far_distance`,
-  `World.view_ranges`), `SPACE_SPLIT_M`, `PlanetClouds.use_split_depth`
-  (`use_depth_camera`), the asteroid haze's split passes
-  (`FieldHaze.set_split`, `uHazeSplit`, `uHazeToFar`) and the clouds' near
-  range (its depth pass, card and `set_near`; one depth texture,
-  `uSceneDepth`, one matrix, `uClipToRender`). A game building the split
-  cameras itself builds a `depth.ReversedDepthCamera` (or uses
-  `load_world`). `frame_profile.py --terrain-passes` measures `t_view`,
-  `t_refl`, `t_clouds`. The tests run in desktop's 0-1 depth by default
-  (`WB_DEPTH_ZERO_TO_ONE=0` for macOS's).
+  `HIDE_FROM_CLOUD_PASS`.
+- `cloud_bench.py --passes` has no `-near` / `-depth` columns.
 
 ### Fixed
 
-- The clouds' ground-shadow pass unprojected clip z = 0 for its footprint,
+- The clouds' ground shadow pass unprojected clip z = 0 for its footprint,
   infinity in reversed 0-1 depth: the cloud shadow's softness on the ground
-  came out wrong with the reversed camera (no test or shot measured it).
+  came out wrong with the reversed camera.
 
 ## [0.5.0] 2026-11-22
 

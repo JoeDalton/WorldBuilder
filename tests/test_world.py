@@ -892,3 +892,25 @@ def test_the_view_ranges_are_the_far_distance_and_the_height_over_the_ground():
     space = _world()
     far, height = space.view_ranges(np.zeros(3))
     assert far == SPACE_FAR_M and height == pytest.approx(SPACE_FAR_M)
+
+
+def test_the_depth_camera_reaches_every_part_that_pins_or_reads_depth():
+    """use_depth_camera: the sky, each sea's mirror and each field's haze take
+    its depth mode; each body's clouds draw their passes with it."""
+    from types import SimpleNamespace as NS
+
+    from world_builder.depth import DEPTH_REVERSED_01
+
+    planet = _body()
+    planet.ocean = MagicMock()
+    planet.clouds = MagicMock()
+    moon = _body("moon", MOON, position=(0.0, 1e7, 0.0))
+    world = _world(planet, moon)
+    field = _field(world)
+    depth = NS(mode=DEPTH_REVERSED_01)
+    world.use_depth_camera(depth)
+    assert world.depth is depth
+    world.sky.set_depth_mode.assert_called_once_with(DEPTH_REVERSED_01)
+    planet.ocean.set_depth_mode.assert_called_once_with(DEPTH_REVERSED_01)
+    planet.clouds.use_depth_camera.assert_called_once_with(world.app, depth)
+    field.haze.set_depth_mode.assert_called_once_with(DEPTH_REVERSED_01)

@@ -3,8 +3,8 @@
 // The hull around a field's shape (world_builder.asteroids.haze): each
 // vertex relative to the camera, field frame, for the fragments' rays.
 // Points beyond the far plane are pulled onto it, as the sky's are, so a
-// ring across the sky is drawn whole (the split's standard depth; the
-// reversed camera's reaches infinity).
+// ring across the sky is drawn whole (in standard depth; the reversed
+// camera's reaches infinity).
 
 #pragma include "../../shaders/depth_convention.glsl"
 
