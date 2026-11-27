@@ -45,6 +45,9 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Changed
 
+- Per-chunk Python in a terrain selection made one numpy pass: the
+  collision's reach (`TerrainCollision.update`) and the trees' box distances
+  (`Trees.update`), most of a selection's ~2 ms in SpaceFlight's Mission 3.
 - `World(light_period=N)` spreads the light's reckoning over its frames:
   `lights_at` runs in `LIGHT_STAGES` (3) stages (the air's light; the
   eclipses and the clouds' shadow; the rings' and the mountains' shadows),

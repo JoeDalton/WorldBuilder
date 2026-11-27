@@ -71,11 +71,6 @@ Ranked by what they would take off a game's frame.
   against 0.98 ms every third frame; most of a `lights_at` call is fixed,
   so lighting a third of the nodes a frame would have cost more). Left to
   measure: the frame's mean and p95 against the old schedule, interleaved.
-- **`Terrain._select`'s Python** (~0.3 ms in the game, more in slow frames in
-  fast flight). The native pass is 0.02 ms; the rest is around it: turning
-  its results into Python keys (returning what changed since the last pass
-  instead would shrink it), the show/hide set operations, the collision
-  update and the executor's request.
 - **Chunk results through the pipe** (spikes ~3 ms in fast flight when
   several land together). The pool's manager thread unpickles ~204 KB a
   chunk (161 KB of vertices). Measure first how much of it holds the GIL (the
@@ -90,6 +85,17 @@ Ranked by what they would take off a game's frame.
   map's new nodes every ~50 m): reading back the few texels a twin needs
   from the GPU's map (asynchronously, a frame late) would replace their
   marches.
+
+Made 2026-11-27, not yet benchmarked (another agent loaded the machine):
+
+- **`Terrain._select`**: in the game it ran one frame in eight at ~2.2 ms
+  (profiled), most of it two per-chunk loops over the ~250 drawn chunks, the
+  collision's reach (a `numpy.linalg.norm` per chunk) and the trees' box
+  distances. Both are one numpy pass now (`TerrainCollision.update`,
+  `Trees.update`). The selection itself was ~0.17 ms.
+
+To measure: `flight_bench.py --flight low --trace` for `_select`, and
+Mission 3 (`bench_mission3.py`).
 
 Demo only (every benchmark runs the demo, no game pays them):
 

@@ -247,22 +247,27 @@ class Trees:
         terrain = self._terrain
         s = self.settings
         near: list[tuple] = []
+        # The chunks with plants, then their boxes' distances in one numpy
+        # pass (per chunk it was most of a terrain selection's time).
+        found = []
         for key in draw:
             chunk = terrain.store.get(key)
-            plants = getattr(chunk, "forest", None)
-            if plants is None or key not in terrain.nodes:
-                continue
-            low = chunk.centre + chunk.aabb_min
-            high = chunk.centre + chunk.aabb_max
+            if getattr(chunk, "forest", None) is not None and key in terrain.nodes:
+                found.append((key, chunk))
+        if found:
+            centres = np.array([chunk.centre for _, chunk in found])
+            low = centres + np.array([chunk.aabb_min for _, chunk in found])
+            high = centres + np.array([chunk.aabb_max for _, chunk in found])
             gap = np.maximum(np.maximum(low - camera, camera - high), 0.0)
-            distance = float(np.sqrt(gap @ gap))
-            if distance < s.mesh_range + MESH_MARGIN:
-                near.append(key)
-            if distance < s.tree_range and key not in self._points:
-                node = self._point_node(key, chunk, plants)
-                made += 1
-                if node is not None:
-                    self._points[key] = node
+            distances = np.sqrt((gap * gap).sum(axis=1))
+            for (key, chunk), distance in zip(found, distances, strict=True):
+                if distance < s.mesh_range + MESH_MARGIN:
+                    near.append(key)
+                if distance < s.tree_range and key not in self._points:
+                    node = self._point_node(key, chunk, chunk.forest)
+                    made += 1
+                    if node is not None:
+                        self._points[key] = node
         for key in [k for k in self._points if k not in draw]:
             self._points.pop(key).remove_node()
         # Every pass: the plants within reach follow the camera (a pass runs
