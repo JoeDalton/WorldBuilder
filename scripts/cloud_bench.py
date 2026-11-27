@@ -144,7 +144,6 @@ from world_builder.clouds.noise import density_on_sphere  # noqa: E402
 from world_builder.clouds.planet import PlanetClouds  # noqa: E402
 from world_builder.clouds.weather import WeatherSpec  # noqa: E402
 from world_builder.depth import (  # noqa: E402
-    HIDE_FROM_CLOUD_PASS,
     ReversedDepthCamera,
     system_far,
 )
@@ -359,7 +358,6 @@ class CloudBench(ShowBase):
         self.clouds.set_debug(cloud_debug)
         self.depth = ReversedDepthCamera(self, near=1.0)
         self.sky.set_depth_mode(self.depth.mode)
-        self.sky.node.hide(HIDE_FROM_CLOUD_PASS)  # hides no cloud
         self.clouds.use_depth_camera(self, self.depth)
         self._clock = ClockObject.get_global_clock()
         # A game's model: opaque, black, writing depth like any.

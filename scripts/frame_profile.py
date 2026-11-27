@@ -39,7 +39,7 @@ frame is the CPU and the GPU added); read --pipelined for what a change does
 to the game's frame and which side bounds it (frame close to step: the CPU;
 frame over step: the GPU). --terrain-passes adds the terrain's cost per
 camera pass: **t_view** (the view's camera), **t_refl** (the sea's
-reflection), **t_clouds** (the clouds' depth pass).
+reflection).
 **asteroids** is the fields' per-frame update skipped (CPU only).
 
 With --scene, a bench scene (BENCH_SCENES): the first planet simple (no
@@ -74,11 +74,10 @@ from world_builder.world_file import WorldSpec, parse_world, world_to_yaml  # no
 
 #: --terrain-passes: the terrain hidden from one camera at a time (its cull
 #: and draw in that pass): the view's camera (both its bits), the sea's
-#: reflection, the clouds' depth pass.
+#: reflection.
 TERRAIN_PASSES = {
     "t_view": BitMask32.bit(depth.NEAR_BIT) | BitMask32.bit(depth.FAR_BIT),
     "t_refl": depth.REFLECTION_CAMERA_MASK,
-    "t_clouds": BitMask32.bit(depth.CLOUD_FAR_BIT),
 }
 
 #: The bench scenes (--scene): the first body's planet, simple: no vegetation,

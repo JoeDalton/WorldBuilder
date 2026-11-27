@@ -106,3 +106,10 @@ def test_no_cloud_shader_unprojects_the_reversed_infinity():
     for name in ("cloud_march.glsl", "cloud_resolve.frag", "ground_shadow.frag"):
         source = (PACKAGE / "clouds" / "shaders" / name).read_text()
         assert "vec3(ndc, 0.0)" not in source and ", 0.0), 0.0)" not in source, name
+
+
+def test_the_ground_pass_reads_the_views_depth_at_its_own_texels():
+    """The ground shadow pass runs at half the view's resolution and reads
+    the view's full-resolution depth (Task 7) at its texels' view pixels."""
+    source = (PACKAGE / "clouds" / "shaders" / "ground_shadow.frag").read_text()
+    assert "texelFetch(uSceneDepth, texel * uDepthScale, 0)" in source

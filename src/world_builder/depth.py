@@ -73,18 +73,6 @@ REFLECTION_CAMERA_MASK = BitMask32(0xFFFFF)
 HIDE_FROM_FAR = BitMask32.bit(FAR_BIT)
 NEAR_CAMERA_MASK = BitMask32.bit(NEAR_BIT)
 FAR_CAMERA_MASK = BitMask32.bit(FAR_BIT)
-#: Camera bits of the clouds' depth pass (CLOUD_FAR_BIT; CLOUD_NEAR_BIT is the
-#: split's near range's, unused).
-CLOUD_NEAR_BIT = 23
-CLOUD_FAR_BIT = 24
-#: ``node.hide(HIDE_FROM_CLOUD_PASS)``: not drawn into the half-resolution
-#: cloud pass (where everything but the clouds only writes depth), e.g. the
-#: sky, which hides nothing.
-HIDE_FROM_CLOUD_PASS = BitMask32.bit(CLOUD_NEAR_BIT) | BitMask32.bit(CLOUD_FAR_BIT)
-#: The tag key the cloud pass's cameras give their own state by
-#: (``Camera.set_tag_state``): ``"terrain"`` on a terrain's root draws it
-#: there with a depth-only fragment stage.
-PASS_TAG = "wb_pass"
 
 
 def frustum_bounds(lens: Lens) -> BoundingHexahedron:
@@ -255,6 +243,8 @@ class ReversedDepthCamera:
     :ivar near: the current near plane, metres (:meth:`near_for`)
     :ivar far: the cull distance, metres (0 before :meth:`update`)
     :ivar mode: ``uDepthMode``
+    :ivar depth_texture: the view's depth, copied after each frame (the
+        clouds read last frame's)
     """
 
     #: The near plane follows this share of the height above the ground ...
@@ -305,6 +295,17 @@ class ReversedDepthCamera:
         self.region.set_camera(self.camera)
         self.region.set_clear_depth_active(True)
         self.region.set_clear_depth(0.0)
+        # The view's depth, copied after each frame (not bound: the clouds'
+        # composite reads it while the view draws): the clouds read it the
+        # next frame instead of drawing the scene's depth again.
+        from panda3d.core import GraphicsOutput, Texture
+
+        self.depth_texture = Texture("view_depth")
+        self.output.add_render_texture(
+            self.depth_texture,
+            GraphicsOutput.RTM_copy_texture,
+            GraphicsOutput.RTP_depth,
+        )
         self.app_region.set_active(False)
         _DEPTH_MODE[0] = self.mode
         app.render.set_shader_input("uDepthMode", _DEPTH_MODE)
@@ -407,6 +408,20 @@ class ReversedDepthCamera:
             self._scene.remove_node()
         else:
             self.output.remove_display_region(self.region)
+            _remove_render_texture(self.output, self.depth_texture)
         self.camera.remove_node()
         self.app_region.set_active(True)
         _DEPTH_MODE[0] = DEPTH_STANDARD
+
+
+def _remove_render_texture(output: Any, texture: Any) -> None:
+    """Take *texture* off *output*'s render textures, keeping the others
+    (Panda only clears them all)."""
+    kept = [
+        (output.get_texture(i), output.get_rtm_mode(i), output.get_texture_plane(i))
+        for i in range(output.count_textures())
+        if output.get_texture(i) != texture
+    ]
+    output.clear_render_textures()
+    for tex, mode, plane in kept:
+        output.add_render_texture(tex, mode, plane)

@@ -404,8 +404,8 @@ the sea.
   both families: the chord, the weather, two maps each; now each genus's
   chord for the far fade and one map pair) cost 0.8-0.9 ms a frame at
   2560 x 1440 (performance.md §32).
-- **The pass** (`ground_shadow.frag`): from the march's own depth pass, each
-  texel's scene point, and `planetCloudShadow` there: the same function as the terrain's,
+- **The pass** (`ground_shadow.frag`): from the view's depth (last frame's,
+  `ReversedDepthCamera.depth_texture`), each texel's scene point, and `planetCloudShadow` there: the same function as the terrain's,
   its footprint from the pass's own derivatives or, across a silhouette, a
   level ground's at that distance. Out: the shade, and the distance (km; -1
   for the sky).

@@ -17,11 +17,7 @@ Two looks, by each plant's distance from the camera:
 
 The two cross over a dithered band, plant by plant. Past ``tree_range`` the
 far forest (``vegetation_far.glsl``) stands for them, faded in over the
-impostors' last band. The trees are drawn into the clouds' depth passes
-too (the clouds are laid over the view at the distance their march stopped
-at: a tree missing there stood unfogged in front of a cloud it was in), at
-their size in those passes' pixels (:func:`pass_state`: the impostors are
-sized in pixels).
+impostors' last band.
 """
 
 from __future__ import annotations
@@ -53,11 +49,9 @@ from panda3d.core import (
     Point3,
     PTA_float,
     PTA_LVecBase4f,
-    RenderState,
     SamplerState,
     Shader,
     ShaderAttrib,
-    ShaderInput,
     TexGenAttrib,
     Texture,
     TexturePool,
@@ -65,7 +59,6 @@ from panda3d.core import (
 )
 
 from world_builder.datafiles import TREES_PATH, tree_assets
-from world_builder.depth import PASS_TAG
 from world_builder.terrain import forest
 
 SHADER_PATH = Path(__file__).parent / "shaders"
@@ -77,9 +70,6 @@ MESH_MARGIN = 60.0
 #: The trees' cull bin: front to back, before the ground's (19).
 TREE_BIN = "trees"
 TREE_BIN_SORT = 18
-#: The impostors' tag (``PASS_TAG``): a pass camera's tag state sizes them
-#: in its own pixels (:func:`pass_state`).
-IMPOSTOR_TAG = "tree_impostor"
 
 
 @functools.cache
@@ -89,23 +79,6 @@ def _shader(name: str) -> Shader:
         vertex=SHADER_PATH / f"{name}.vert",
         fragment=SHADER_PATH / f"{name}.frag",
     )
-
-
-def pass_state(point_scale: float) -> RenderState:
-    """The impostors' state for a camera drawing at another resolution than
-    the view (``world_builder.clouds.passes.pass_camera``, its tag state
-    for :data:`IMPOSTOR_TAG`): their sprites, sized in the view's pixels,
-    scaled to its own and a pixel wider (``tree_impostor.vert``: else twice
-    their size each way at half resolution, a tree's depth spread over the
-    sky around it: a halo round each tree in a cloud).
-
-    :param point_scale: the camera's pixels per view pixel, across
-    """
-    inputs = ShaderAttrib.make().set_shader_input(
-        ShaderInput("uPointScale", float(point_scale), 10)
-    )
-    # Over the impostors' own state (20): composed with it, their shader kept.
-    return RenderState.make(inputs, 30)
 
 
 @functools.cache
@@ -397,7 +370,6 @@ class Trees:
         path.set_attrib(self._point_state, 20)  # the root's inputs
         # Front to back, before the ground: the ground they hide is not shaded.
         path.set_bin(TREE_BIN, 0, 1)
-        path.set_tag(PASS_TAG, IMPOSTOR_TAG)
         # gl_PointCoord (a compatibility context needs point sprites on).
         path.set_tex_gen(TextureStage.get_default(), TexGenAttrib.M_point_sprite)
         return path

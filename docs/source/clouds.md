@@ -40,9 +40,8 @@ by two techniques:
     and the shift tables by depth), the deck's light table, the march's
     distance bands of octaves (`OctaveBand`, `octave_bands`) and
     `sun_visibility`, the clouds' shade on the CPU for what the CPU lights;
-  - [`passes.py`](../../src/world_builder/clouds/passes.py): the march's depth
-    passes' render states and cameras (`pass_states`, `pass_camera`) and the
-    cards that lay its result over the view (`composite_card`);
+  - [`passes.py`](../../src/world_builder/clouds/passes.py): the card that
+    lays the march's result over the view (`composite_card`);
   - [`deck.py`](../../src/world_builder/clouds/deck.py): the **deck**, a
     sphere at mid-slab carrying the far field (`deck_mesh`, `deck_shader`,
     its bin `CLOUD_BIN`), drawn only in the sea's reflection;
@@ -1346,14 +1345,16 @@ cloud). Here each pixel steps along its own ray:
 from `use_depth_camera`; it covered both ranges of the split cameras before
 #57, as EVE-Redux marches once over KSP's two cameras' depths):
 
-1. a camera sharing the view's lens draws the **scene's depth** at half the
-   view's resolution per axis (`march.DEPTH_SCALE`) into a texture (the march
-   reads it at the pixels it traces; static shots differ from full resolution
-   in a few pixels a frame), reversed and float like the view's
-   (`shaders/depth_convention.glsl` reads it). Everything but the clouds and the sky
-   is drawn, the terrain through its depth-only stage
-   (`passes.pass_states`, `passes.pass_camera`; they were the
-   half-resolution billboards' pass's, removed with them);
+1. the **scene's depth** is the view's own, last frame's: the reversed
+   camera copies its depth buffer into a texture after each frame
+   (`ReversedDepthCamera.depth_texture`), and the march, the resolve, the
+   composite and the ground shadow pass read it the next frame (one texel a
+   view pixel; `shaders/depth_convention.glsl` decodes it). Until Task 7
+   (FRAME_COST_PLAN.md) a camera of the march's drew the scene's depth again
+   at half resolution, the terrain through a depth-only stage: 1.1-1.45 ms of
+   a frame low over the ground, nearly all of it the terrain's cull and draw.
+   A frame late, the clouds' edges against a moving silhouette lag by one
+   frame (performance.md §40);
 2. a fullscreen card **marches** one pixel of every block
    (`CloudSettings.march_block`: 2 × 2 at a half resolution, 4 × 2 for an
    eighth of the pixels, 3 × 3 for a ninth, 4 × 4 at a quarter), a different
@@ -1361,7 +1362,7 @@ from `use_depth_camera`; it covered both ranges of the split cameras before
    touching pixels, even across the blocks' edges; 4 × 4 is a Bayer order,
    4 × 2 and 3 × 3 were found by an exhaustive search, as EVE-Redux's own
    sequences for them trace touching pixels in turn), from the near plane to
-   the scene's surface where the depth pass drew one. It stops once the cloud
+   the scene's surface where the view drew one. It stops once the cloud
    is opaque, so a cloud near the camera spares the march the ones behind it. It writes the premultiplied cloud and its distance;
 3. a **resolve** gathers them into the view's resolution over the frames.
    Every pixel blends this frame's samples around it (the four nearest,
@@ -1419,7 +1420,7 @@ from `use_depth_camera`; it covered both ranges of the split cameras before
    (after the sky, before the cirrus). The view's depth test hides the cloud
    pixel by pixel at the view's resolution, behind anything nearer, which
    also drops any stale history a moving model would leave behind it. The
-   depth is **no farther than the scene's** (the depth pass,
+   depth is **no farther than the scene's** (the view's depth,
    `uSceneDepth`): the march stopped there, so all it
    returned lies in front. The resolved distance alone lagged the fresh
    samples, and flying forward it put the clouds behind the ground under them:
@@ -1428,13 +1429,13 @@ from `use_depth_camera`; it covered both ranges of the split cameras before
    `CloudMarch` layers' `scene_cut` switches it off, to compare).
 
 **Their shadow on the ground** comes from one more pass of the march's
-(`_GroundShadow`, `ground_shadow.frag`): from the same depth pass, at its
-resolution, the clouds' shadow at each texel's scene point (all the
+(`_GroundShadow`, `ground_shadow.frag`): from the same depth (the view's,
+last frame's), at half the view's resolution, the clouds' shadow at each texel's scene point (all the
 genera's: `planetCloudShadow`, as the terrain's per pixel), and the distance there.
 The terrain and the sea read it back by their distance (`groundShadowAt`) and
 shade it per pixel only where no texel agrees, and in the sea's reflection
 (shadows.md, "The clouds' shadow on the view's ground"; performance.md §33).
-The depth passes draw the terrain's coarse mesh (terrain.md, "LOD").
+The depth is the view's own: no pass of the clouds draws the scene.
 
 The sea's reflection sees the decks (one a genus; genus 0's far layer is packed for it).
 The textures may be padded to powers of two, so the shaders address them

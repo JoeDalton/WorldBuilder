@@ -36,7 +36,7 @@ from panda3d.core import (
     Point3,
 )
 
-from world_builder.depth import HIDE_FROM_CLOUD_PASS, REFLECTION_CAMERA_MASK
+from world_builder.depth import REFLECTION_CAMERA_MASK
 from world_builder.terrain.chunkgen import (
     COARSE_STRIDE,
     VERTEX_DTYPE,
@@ -46,11 +46,11 @@ from world_builder.terrain.chunkgen import (
 from world_builder.terrain.cubesphere import VERTS
 
 #: The cameras that draw a chunk's coarse mesh, and no other one, its fine
-#: mesh being hidden from them: the clouds' depth passes (half the view's
-#: resolution, the march's stop and the ground shadow's scene) and the sea's
-#: reflection (blurred, at a fraction of the view's resolution). Their share
-#: of the ground's vertices was 0.4-1.3 ms a frame (performance.md §34).
-COARSE_PASSES = HIDE_FROM_CLOUD_PASS | REFLECTION_CAMERA_MASK
+#: mesh being hidden from them: the sea's reflection (blurred, at a fraction
+#: of the view's resolution; the clouds' depth passes too until they went).
+#: Their share of the ground's vertices was 0.4-1.3 ms a frame
+#: (performance.md §34).
+COARSE_PASSES = REFLECTION_CAMERA_MASK
 
 
 @functools.cache

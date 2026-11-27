@@ -56,6 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The clouds read the view's depth instead of drawing their own** (Task 7,
+  FRAME_COST_PLAN.md): the reversed camera copies its depth into a texture
+  after each frame (`ReversedDepthCamera.depth_texture`), and the march, its
+  resolve, the composite and the ground shadow pass read last frame's. Their
+  depth pass, which drew the scene again (the terrain's cull and draw most of
+  it), is gone: **1.1-1.45 ms less a frame low over the ground** (2560 x
+  1440, HIGH, pipelined: ground 4.62 to 3.44 ms, coast 4.58 to 3.46, sunset
+  5.00 to 3.57, 20 km 2.80 to 2.10). In motion the clouds' edges against a
+  moving silhouette are a frame late (a forward flight: the same error
+  against converged frames as before).
+
 - **One reversed-Z camera instead of the split cameras** (#57,
   FRAME_COST_PLAN.md Phase 2): `load_world` draws the view with
   `depth.ReversedDepthCamera`, and `World.use_depth_camera` hands its depth
@@ -88,6 +99,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The clouds' depth pass and what served only it: `clouds.passes.pass_states`
+  and `pass_camera`, the terrain's depth-only stage (`depth_only_shader`,
+  `terrain_depth.frag`, the `PASS_TAG` tags), the trees' `pass_state` and
+  `IMPOSTOR_TAG`, `depth.CLOUD_NEAR_BIT`, `CLOUD_FAR_BIT`,
+  `HIDE_FROM_CLOUD_PASS`, `PASS_TAG`; `frame_profile.py --terrain-passes`
+  has no `t_clouds` any more.
 - **The split depth cameras** (#57): `depth.SplitDepthCameras`,
   `split_clear_of`, `camera_span`, `MIN_SPLIT_M`, the split's
   `planet_ranges` / `system_ranges` (their far distance is

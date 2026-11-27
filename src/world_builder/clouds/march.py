@@ -82,7 +82,6 @@ from panda3d.core import (
     PTA_LVecBase2i,
     PTA_LVecBase3f,
     PTA_LVecBase4f,
-    RenderState,
     SamplerState,
     Shader,
     ShaderAttrib,
@@ -168,7 +167,7 @@ from world_builder.clouds.noise import (
     sample_cells,
     sample_volume,
 )
-from world_builder.clouds.passes import composite_card, pass_camera, pass_states
+from world_builder.clouds.passes import composite_card
 from world_builder.clouds.shadow_defaults import (
     _no_coverage,
     _no_deck_light_array,
@@ -185,11 +184,9 @@ from world_builder.clouds.weather import (
     shift_table,
 )
 from world_builder.depth import (
-    CLOUD_FAR_BIT,
     DEPTH_REVERSED_01,
     DEPTH_STANDARD,
     FAR_BIT,
-    HIDE_FROM_CLOUD_PASS,
     HIDE_FROM_FAR,
     HIDE_FROM_NEAR,
     REFLECTION_CAMERA_MASK,
@@ -1406,12 +1403,10 @@ def _buffer(
     size: tuple[int, int],
     sort: int,
     targets: dict[int, Texture],
-    float_depth: bool = False,
 ) -> GraphicsOutput:
     """An offscreen buffer drawing into *targets* (render texture plane ->
     texture): half-float colour and a half-float aux plane (the cloud's
-    distance, in kilometres), or a depth texture (a float one with
-    *float_depth*: the reversed camera's precision)."""
+    distance, in kilometres), or a depth texture."""
     props = FrameBufferProperties()
     if GraphicsOutput.RTP_color in targets:
         props.set_rgba_bits(16, 16, 16, 16)
@@ -1420,11 +1415,7 @@ def _buffer(
         props.set_rgba_bits(8, 8, 8, 8)
     if GraphicsOutput.RTP_aux_hrgba_0 in targets:
         props.set_aux_hrgba(1)
-    if GraphicsOutput.RTP_depth in targets:
-        props.set_depth_bits(32 if float_depth else 24)
-        props.set_float_depth(float_depth)
-    else:
-        props.set_depth_bits(0)
+    props.set_depth_bits(24 if GraphicsOutput.RTP_depth in targets else 0)
     buffer = app.graphicsEngine.make_output(
         app.pipe,
         name,
@@ -1521,47 +1512,6 @@ _ZERO_TO_ONE = LMatrix4f(
 )
 
 
-class _DepthPass:
-    """The scene's depth in one depth range, at the view's resolution, for
-    the march to stop at (and, the near range's, for the composites to tell
-    whose pixel it is)."""
-
-    def __init__(
-        self,
-        app: Any,
-        output: Any,
-        name: str,
-        lens: Lens,
-        bit: int,
-        view: tuple[int, int],
-        sort: int,
-        states: tuple[RenderState, RenderState],
-        depth_mode: int = DEPTH_STANDARD,
-    ) -> None:
-        self.lens = lens
-        self.depth = _target(f"{name}_depth")
-        reversed_depth = depth_mode != DEPTH_STANDARD
-        self.buffer = _buffer(
-            app,
-            output,
-            f"{name}_depth",
-            view,
-            sort,
-            {GraphicsOutput.RTP_depth: self.depth},
-            float_depth=reversed_depth,
-        )
-        self.buffer.set_clear_color_active(False)
-        self.buffer.set_clear_depth_active(True)
-        self.buffer.set_clear_depth(0.0 if reversed_depth else 1.0)
-        initial, terrain = states
-        if reversed_depth:
-            initial = initial.set_attrib(DepthTestAttrib.make(view_test(depth_mode)))
-        self.camera = pass_camera(
-            app, f"{name}_depth", lens, bit, initial, terrain, 1.0 / DEPTH_SCALE
-        )
-        self.buffer.make_display_region().set_camera(self.camera)
-
-
 class _GroundShadow:
     """The clouds' shadow on the view's scene, at the depth passes'
     resolution (ground_shadow.frag): what the terrain and the sea read back
@@ -1607,10 +1557,11 @@ class _MarchLayer:
         output: Any,
         name: str,
         lens: Lens,
+        camera: NodePath,
+        scene_depth: Texture,
         view: tuple[int, int],
         block: tuple[int, int],
         sort: int,
-        states: tuple[RenderState, RenderState],
         gather: bool = True,
         moving_block: tuple[int, int] | None = None,
         ground: Texture | None = None,
@@ -1631,18 +1582,10 @@ class _MarchLayer:
         self._resolve_block = PTA_LVecBase2i.empty_array(1)
         self._smooth = PTA_float.empty_array(1)
         self._moving_weight = PTA_float.empty_array(1)
-        self.scene_depth = _DepthPass(
-            app,
-            output,
-            name,
-            lens,
-            CLOUD_FAR_BIT,
-            depth_size(view),
-            sort,
-            states,
-            depth_mode,
-        )
-        self.camera = self.scene_depth.camera  # follows the app's camera
+        # The view's depth, last frame's (ReversedDepthCamera.depth_texture):
+        # no pass of its own drawing the scene again (Task 7).
+        self.scene_depth = scene_depth
+        self.camera = camera  # the view's camera
         #: 1: the composite's depth no farther than the scene's (A/B: 0, the
         #: resolved distance's alone; cloud_composite.frag)
         self.scene_cut = PTA_int.empty_array(1)
@@ -1687,8 +1630,8 @@ class _MarchLayer:
             self.buffer.get_num_display_regions() - 1
         )
         self.card.set_shader_inputs(
-            uSceneDepth=self.scene_depth.depth,
-            uDepthScale=DEPTH_SCALE,
+            uSceneDepth=self.scene_depth,
+            uDepthScale=1,  # the view's depth: one texel a view pixel
             uBlueNoise=_blue_noise_texture(),
         )
         # The jitter's index: this layer's visits (visit_of).
@@ -1719,8 +1662,8 @@ class _MarchLayer:
         card.set_shader(_shader("cloud_composite.vert", "cloud_composite.frag"))
         card.set_attrib(DepthTestAttrib.make(view_test(depth_mode)))
         card.set_shader_inputs(
-            uDepthScale=DEPTH_SCALE,
-            uSceneDepth=self.scene_depth.depth,
+            uDepthScale=1,
+            uSceneDepth=self.scene_depth,
             uSceneDepthCut=self.scene_cut,
         )
         self.composites = [card]
@@ -1744,8 +1687,8 @@ class _MarchLayer:
         )
         if self.ground is not None:
             self.ground.card.set_shader_inputs(
-                uSceneDepth=self.scene_depth.depth,
-                uDepthScale=DEPTH_SCALE,
+                uSceneDepth=self.scene_depth,
+                uDepthScale=DEPTH_SCALE,  # its own texels; the depth's are pixels
                 uClipToRender=self._clip_to_render,
             )
         self._resolve_inputs = []
@@ -1760,8 +1703,8 @@ class _MarchLayer:
                 uHistoryValid=inputs.valid,
                 uStill=inputs.still,
                 # Depth-aware: the scene each sample stopped at.
-                uSceneDepth=self.scene_depth.depth,
-                uDepthScale=DEPTH_SCALE,
+                uSceneDepth=self.scene_depth,
+                uDepthScale=1,
                 uClipToRender=self._clip_to_render,
             )
             self._resolve_inputs.append(inputs)
@@ -1838,8 +1781,8 @@ class _MarchLayer:
 
     @property
     def depth_buffers(self) -> list[GraphicsOutput]:
-        """The depth pass's buffer (a list: the loops over the buffers)."""
-        return [self.scene_depth.buffer]
+        """None any more: the view's own depth is read (Task 7)."""
+        return []
 
     def resize(self, view: tuple[int, int]) -> None:
         self._view = view
@@ -1857,8 +1800,7 @@ class _MarchLayer:
         """Run the passes or stop them (and hide the composites); the history
         starts over."""
         self.active = active
-        for buffer in (self.scene_depth.buffer, self.buffer):
-            buffer.set_active(active)
+        self.buffer.set_active(active)
         if self.ground is not None:
             self.ground.buffer.set_active(active)
         for resolve in self.resolves:
@@ -1945,7 +1887,6 @@ class _MarchLayer:
     def destroy(self, app: Any) -> None:
         for card in self.composites:
             card.remove_node()
-        self.scene_depth.camera.remove_node()
         ground = [] if self.ground is None else [self.ground]
         for card in [self.card] + [p.card for p in self.resolves + ground]:
             card.get_top().remove_node()
@@ -2261,7 +2202,7 @@ class CloudMarch:
         # others hang under the first, which follows the camera (update).
         self.root = parent.attach_new_node("cloud_march")
         self.root.stash()  # out of every camera until the set-up is done
-        self.root.hide(HIDE_FROM_NEAR | HIDE_FROM_FAR | HIDE_FROM_CLOUD_PASS)
+        self.root.hide(HIDE_FROM_NEAR | HIDE_FROM_FAR)
         self.root.set_transparency(TransparencyAttrib.M_none)
         self.root.set_depth_test(True)
         self.root.set_depth_write(False)
@@ -2495,10 +2436,11 @@ class CloudMarch:
             depth.output,
             "cloud_march",
             depth.lens,
+            depth.camera,
+            depth.depth_texture,
             self._size,
             block,
             _FIRST_SORT,
-            pass_states(),
             gather=True,
             moving_block=(
                 MOVING_BLOCKS.get(block)
@@ -2856,7 +2798,7 @@ class CloudMarch:
             self.root.show()
         else:
             self.root.hide()
-        self.root.hide(HIDE_FROM_NEAR | HIDE_FROM_FAR | HIDE_FROM_CLOUD_PASS)
+        self.root.hide(HIDE_FROM_NEAR | HIDE_FROM_FAR)
         for layer in self._layers:
             layer.set_active(visible and self.weather is not None)
         if not visible:

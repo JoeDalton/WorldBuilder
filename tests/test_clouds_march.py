@@ -774,11 +774,14 @@ def test_one_march_covers_the_view(window, executor):
         (layer,) = march._layers
         (card,) = layer.composites
         assert layer.lens is depth.lens
-        from world_builder.clouds.march import DEPTH_SCALE, depth_size
-
-        assert DEPTH_SCALE == 2
-        (buffer,) = layer.depth_buffers
-        assert (buffer.get_x_size(), buffer.get_y_size()) == depth_size(march._size)
+        # No depth pass of its own (Task 7: 1.1-1.45 ms of a frame): the
+        # view's depth, copied after each frame, at the view's resolution.
+        assert layer.depth_buffers == []
+        assert layer.scene_depth is depth.depth_texture
+        for reader in (layer.card, card, *(r.card for r in layer.resolves)):
+            assert reader.get_shader_input("uSceneDepth").get_texture() == (
+                depth.depth_texture
+            )
         march._finish()  # the weather in: the passes run
         for _ in range(2):
             depth.update(5.0e6, 3000.0)
@@ -786,15 +789,8 @@ def test_one_march_covers_the_view(window, executor):
             window.graphicsEngine.render_frame()
         assert layer.active and not card.is_hidden(FAR_CAMERA_MASK)
         assert layer._previous is not None  # the history runs
-        scene = layer.scene_depth
-        assert scene.buffer.get_clear_depth() == 0.0
-        assert scene.buffer.get_fb_properties().get_float_depth()
         greater = DepthTestAttrib.M_greater
-        state = scene.camera.node().get_initial_state()
-        assert state.get_attrib(DepthTestAttrib).get_mode() == greater
         assert card.get_attrib(DepthTestAttrib).get_mode() == greater
-        # The card cuts at the scene's depth (the view's lens's depth space)
-        assert card.get_shader_input("uSceneDepth").get_texture() == scene.depth
         assert layer.scene_cut[0] == 1
         # The history survives a jump that is small against the clouds'
         # distance (a fast descent from orbit), not one that is not.
@@ -809,7 +805,7 @@ def test_one_march_covers_the_view(window, executor):
         layer.update(window, frame + 2, here + [0.0, 0.0, 2 * step], 1000.0)
         assert layer._resolve_inputs[(frame + 2) % 2].valid[0] == 0
         layer.set_active(False)
-        assert card.is_hidden() and not scene.buffer.is_active()
+        assert card.is_hidden()
     finally:
         clouds.remove()
         depth.destroy()
@@ -899,7 +895,7 @@ def test_the_ground_reads_the_clouds_shadow_from_a_pass(window, executor):
         assert (buffer.get_x_size(), buffer.get_y_size()) == depth_size(march._size)
         card = layer.ground.card
         assert card.get_shader_input("uSceneDepth").get_texture() == (
-            layer.scene_depth.depth
+            depth.depth_texture
         )
         march._finish()
         depth.update(planet_far(R, R + 3000.0), 3000.0)

@@ -275,3 +275,31 @@ def test_the_reversed_camera_hides_what_is_behind(window, distance):
         camera.destroy()
         for card in cards:
             card.remove_node()
+
+
+def test_the_reversed_camera_copies_the_views_depth_for_the_next_frame(window):
+    """The view's depth, copied into a texture after each frame (not bound:
+    the clouds' composite reads it while the view draws): what the clouds
+    read instead of drawing the scene's depth again (Task 7)."""
+    from panda3d.core import GraphicsOutput
+
+    from world_builder.depth import ReversedDepthCamera
+
+    camera = ReversedDepthCamera(window, near=1.0)
+    try:
+        texture = camera.depth_texture
+        output = camera.output
+        planes = [
+            output.get_rtm_mode(i)
+            for i in range(output.count_textures())
+            if output.get_texture(i) == texture
+        ]
+        assert planes == [GraphicsOutput.RTM_copy_texture]
+        camera.update(1.0e5, 100.0)
+        window.graphicsEngine.render_frame()
+        assert (texture.get_x_size(), texture.get_y_size()) == (
+            output.get_x_size(),
+            output.get_y_size(),
+        )
+    finally:
+        camera.destroy()

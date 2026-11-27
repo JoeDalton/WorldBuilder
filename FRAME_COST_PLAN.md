@@ -526,6 +526,15 @@ Global for these tasks:
 
 ### Task 7: The clouds read the single depth (after Task 6's migration)
 
+**Done (2026-11-27, performance.md §40):** last frame's view depth, copied
+after each frame (`ReversedDepthCamera.depth_texture`, `RTM_copy_texture`);
+the clouds' depth pass and its helpers removed. -1.1 to -1.45 ms low over the
+ground (ground 4.62 to 3.44 ms); motion unchanged against converged frames.
+The ground shadow pass's circularity is settled by last frame's depth (its
+per-pixel fallback where distances disagree). SpaceFlight's post-process:
+the scene buffer is presented into whatever output the app's camera had
+(tested with FilterManager).
+
 With one camera there is one depth buffer. The clouds' far depth pass
 (0.85-0.95 ms of terrain CPU alone, plus its GPU) can go: the main view renders
 into a buffer whose depth is a texture, the depth is shrunk to the march's

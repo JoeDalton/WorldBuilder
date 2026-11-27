@@ -2881,6 +2881,38 @@ the window). Shots against the split's: without clouds at most 0.035 % of
 pixels over 2 levels (two shots of one tree: 0.017-0.06 %); with clouds below
 their own run-to-run difference.
 
+## 40. The clouds on the view's own depth (FRAME_COST_PLAN.md Task 7, 2026-11-27)
+
+With one reversed camera, the clouds' depth pass (a camera of the march's
+drawing the scene's depth again at half resolution, the terrain through a
+depth-only stage) was the dearest pass left: switched off, the pipelined
+frame fell by 1.21 ms at `ground`, 1.11 at `coast`, 1.45 at `sunset`, 0.70 at
+`high`, nearly all of it the terrain's cull and draw in it (`t_clouds`
+1.0-1.4 ms). Now the view's depth is copied into a texture after each frame
+(`RTM_copy_texture`: the composite samples it while the view draws, which a
+bound attachment would not allow) and the clouds read last frame's: the
+march's stop, the resolve's scene distance, the composite's cut, the ground
+shadow pass's scene points (at half resolution, reading the full one). Last
+frame's also settles the ground shadow pass's circularity (the terrain reads
+it while drawing): it already falls back per pixel where a texel's distance
+disagrees with the pixel's.
+
+Pipelined, 2560 x 1440, HIGH, two rounds each, ms (own pass / view's depth):
+
+| pose | before | after |
+|---|---|---|
+| ground | 4.64, 4.61 | 3.42, 3.45 |
+| coast | 4.61, 4.56 | 3.46, 3.46 |
+| sunset | 5.02, 4.97 | 3.58, 3.56 |
+| high | 2.80, 2.79 | 2.11, 2.08 |
+
+In motion (`motion_shots.py --at 20.91 30.40 800 0 0 --boost --frames 60
+--every 15`, 1600 x 900; moving frames against converged ones), mean error
+over the clouds 1.35 levels before, 1.36 after; the clouds lost and found
+the same (0.96 %, 0.10-0.11 %). Still shots: within the clouds' own
+run-to-run difference (the largest, at `sunset`, the sun's glint along the
+far shore, which moves between runs).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

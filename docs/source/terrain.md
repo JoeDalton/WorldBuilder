@@ -201,9 +201,9 @@ Chunk keys are `(level, face, i, j)`.
   other one, a quarter of the triangles (`triangle_indices(COARSE_STRIDE)`,
   the skirt from every other edge vertex). Both index buffers are shared by
   every chunk. The passes that want the ground's shape but not its detail draw
-  the coarse mesh alone (`mesh.COARSE_PASSES`): the clouds' depth pass
-  (half the view's resolution) and the sea's reflection (blurred, at a
-  fraction of it). The view's cameras draw the full one (performance.md §34).
+  the coarse mesh alone (`mesh.COARSE_PASSES`): the sea's reflection
+  (blurred, at a fraction of the view's resolution; the clouds' depth passes
+  did too until they went, FRAME_COST_PLAN.md Task 7). The view's cameras draw the full one (performance.md §34).
 
 ## Other bodies
 

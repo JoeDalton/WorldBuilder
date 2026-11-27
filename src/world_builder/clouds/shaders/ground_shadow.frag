@@ -35,7 +35,8 @@ vec3 unproject(mat4 clipToRender, vec3 ndc) {
 void main() {
     ivec2 texel = ivec2(gl_FragCoord.xy);
     vec2 ndc = gl_FragCoord.xy / uViewSize * 2.0 - 1.0;
-    float sceneDepth = texelFetch(uSceneDepth, texel, 0).r;
+    // The view's depth (last frame's, full resolution) at this texel's pixel
+    float sceneDepth = texelFetch(uSceneDepth, texel * uDepthScale, 0).r;
     vec3 end = unproject(uClipToRender, vec3(ndc, depthNdc(sceneDepth)));
     vec3 rel = end - uCamRender;
     // Taken out of any branch (derivatives): this pass's own footprint.

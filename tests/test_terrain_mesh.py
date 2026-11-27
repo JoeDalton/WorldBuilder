@@ -13,8 +13,6 @@ import numpy as np
 from panda3d.core import BitMask32, NodePath
 
 from world_builder.depth import (
-    CLOUD_FAR_BIT,
-    CLOUD_NEAR_BIT,
     FAR_CAMERA_MASK,
     NEAR_CAMERA_MASK,
     REFLECTION_CAMERA_MASK,
@@ -74,17 +72,13 @@ def _shown_to(node, camera_mask: BitMask32) -> bool:
 
 
 def test_the_coarse_passes_draw_the_coarse_mesh_alone():
-    """The clouds' depth passes and the sea's reflection draw every other
-    vertex (a quarter of the triangles: performance.md §34); the view's
-    cameras the fine mesh alone."""
+    """The sea's reflection draws every other vertex (a quarter of the
+    triangles: performance.md §34); the view's camera the fine mesh alone."""
     spec = replace(load_planet("desert"), seed=3).resolved()
     node = build_chunk_node(generate_chunk(spec, (2, 4, 1, 1)))
     fine, coarse = (child.node() for child in NodePath(node).get_children())
     for camera in (NEAR_CAMERA_MASK, FAR_CAMERA_MASK):
         assert _shown_to(fine, camera) and not _shown_to(coarse, camera)
-    for bit in (CLOUD_NEAR_BIT, CLOUD_FAR_BIT):
-        camera = BitMask32.bit(bit)
-        assert _shown_to(coarse, camera) and not _shown_to(fine, camera)
     assert _shown_to(coarse, REFLECTION_CAMERA_MASK)
     assert not _shown_to(fine, REFLECTION_CAMERA_MASK)
 
