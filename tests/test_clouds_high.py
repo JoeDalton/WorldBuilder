@@ -409,7 +409,7 @@ def test_an_eclipse_darkens_the_marched_clouds(window, weather, high):
                     march.set_genus_visible(genus, False)
             colours = []
             for _ in range(6):
-                depth.update(planet_far(R, R + 13000.0), 13000.0)
+                depth.update(planet_far(R, R + 13000.0))
                 clouds.update(here)
                 window.graphicsEngine.render_frame()
                 (layer,) = march._layers
@@ -478,7 +478,7 @@ def test_the_high_layer_renders_only_when_covered(window, weather, genus):
         gsg = window.win.get_gsg()
         alphas = []
         for _ in range(6):
-            depth.update(planet_far(R, R + 13000.0), 13000.0)
+            depth.update(planet_far(R, R + 13000.0))
             clouds.update(here)
             window.graphicsEngine.render_frame()
             window.graphicsEngine.extract_texture_data(layer.colour, gsg)
@@ -536,7 +536,7 @@ def test_a_one_type_march_draws_the_weather_cirrus(window, weather):
 
         def alpha():
             for _ in range(8):
-                depth.update(planet_far(R, R + 13000.0), 13000.0)
+                depth.update(planet_far(R, R + 13000.0))
                 clouds.update(up * (R + 600.0))
                 window.graphicsEngine.render_frame()
             window.graphicsEngine.extract_texture_data(layer.colour, gsg)

@@ -18,6 +18,9 @@ camera on it and returns a `GameWorld`: `.world` (the `World`), `.depth`,
 `.spec` (what the file defined), `.body(name)`, `.field(name)`, `update` and
 `destroy`. The camera stays the game's: it sits at render's origin, and the
 game gives `update` its position in the world frame (float64, metres).
+An app without a window (`window-type none`: a game's headless runs) gets
+no depth camera (`.depth` is None) and no seas, which both draw through the
+window; the rest is built and updated as usual.
 
 `load_world(app, path, *, settings=None, backend="process", clock=None)`
 takes what is about running the world, not defining it: the quality

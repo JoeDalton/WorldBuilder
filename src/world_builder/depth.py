@@ -14,11 +14,10 @@ split).
 The convention: OpenGL's 0-1 depth through clip control
 (``gl-depth-zero-to-one``, read when the GL context is made: set it before
 the window opens), or, without it (macOS), its [-1, 1], which keeps about a
-24-bit range's precision: there the near plane follows the height above the
-ground (:meth:`ReversedDepthCamera.near_for`) so that bodies stay apart from
-orbit. Under clip control it stays put: a float depth's precision does not
-depend on it, and a growing one cut whatever came near (a game's cockpit, a
-wingman tens of metres off at altitude).
+24-bit range's precision: far bodies' depths may then fight. The near plane
+stays put either way (a float depth's precision does not depend on it, and
+one following the altitude cut whatever came near: a game's cockpit, a
+wingman tens of metres off).
 Shaders that pin or read depth go through ``shaders/depth_convention.glsl``
 and the shared ``uDepthMode`` (:func:`depth_mode_input`).
 
@@ -40,17 +39,17 @@ import math
 from collections.abc import Iterable
 from typing import Any
 
-import numpy as np
 from panda3d.core import (
     BitMask32,
-    BoundingHexahedron,
+    BoundingPlane,
     Camera,
     ConfigVariableBool,
     DepthTestAttrib,
     FrameBufferProperties,
+    IntersectionBoundingVolume,
     Lens,
+    LPlane,
     NodePath,
-    Point3,
     PTA_int,
     RenderState,
 )
@@ -78,29 +77,40 @@ NEAR_CAMERA_MASK = BitMask32.bit(NEAR_BIT)
 FAR_CAMERA_MASK = BitMask32.bit(FAR_BIT)
 
 
-def frustum_bounds(lens: Lens) -> BoundingHexahedron:
-    """A perspective lens's frustum to its true far plane.
+def frustum_bounds(lens: Lens) -> IntersectionBoundingVolume:
+    """A perspective lens's frustum to its true far plane, as six planes.
 
-    What ``lens.make_bounds()`` returns, without its far end cut at
+    What ``lens.make_bounds()`` covers, without its far end cut at
     ``1 / lens-far-limit`` (10,000 km by default). No film offset. For a
     camera's ``set_cull_bounds``, which Panda then culls with instead.
 
+    Planes, not a ``BoundingHexahedron``: Panda carries the cull volume into
+    each node's frame and a hexahedron then rebuilds its planes from its
+    corners, in single precision. With corners 20,000 km out its side planes
+    came out a metre or two off near the camera, and culled a game's cockpit
+    parts at the screen's edge, more or less as the far distance moved: a
+    flickering cockpit. A plane carries over exactly; the side ones go
+    through the camera.
+
     :param lens: a ``PerspectiveLens``
+    :returns: the planes' intersection (each one's normal outward)
     """
     fov = lens.get_fov()
-    half_x = np.tan(np.radians(fov[0]) / 2.0)
-    half_z = np.tan(np.radians(fov[1]) / 2.0)
+    half_x = math.tan(math.radians(fov[0]) / 2.0)
+    half_z = math.tan(math.radians(fov[1]) / 2.0)
+    volume = IntersectionBoundingVolume()
 
-    def corners(distance):
-        x, z = distance * half_x, distance * half_z
-        return [
-            Point3(-x, distance, -z),
-            Point3(x, distance, -z),
-            Point3(x, distance, z),
-            Point3(-x, distance, z),
-        ]
+    def side(x: float, y: float, z: float, d: float = 0.0) -> None:
+        n = math.sqrt(x * x + y * y + z * z)
+        volume.add_component(BoundingPlane(LPlane(x / n, y / n, z / n, d)))
 
-    return BoundingHexahedron(*corners(lens.get_far()), *corners(lens.get_near()))
+    side(0.0, 1.0, 0.0, -lens.get_far())  # far
+    side(0.0, -1.0, 0.0, lens.get_near())  # near
+    side(1.0, -half_x, 0.0)  # right
+    side(-1.0, -half_x, 0.0)  # left
+    side(0.0, -half_z, 1.0)  # top
+    side(0.0, -half_z, -1.0)  # bottom
+    return volume
 
 
 def planet_far(
@@ -256,19 +266,12 @@ class ReversedDepthCamera:
     :ivar present: the window's region showing the scene buffer (None
         without one)
     :ivar app_region: the app camera's, switched off meanwhile
-    :ivar near: the current near plane, metres: the constructor's, or
-        :meth:`near_for` the height without clip control
+    :ivar near: the near plane, metres
     :ivar far: the cull distance, metres (0 before :meth:`update`)
     :ivar mode: ``uDepthMode``
     :ivar depth_texture: the view's depth, copied after each frame (the
         clouds read last frame's)
     """
-
-    #: Without clip control the near plane follows this share of the height
-    #: above the ground ...
-    NEAR_SHARE = 0.01
-    #: ... up to this, metres: from orbit [-1, 1] depth keeps bodies apart.
-    MAX_NEAR = 1000.0
 
     def __init__(
         self, app: Any, near: float = 1.0, scene_buffer: bool | None = None
@@ -276,13 +279,11 @@ class ReversedDepthCamera:
         """
         :param app: the ShowBase (``camera``, ``cam``, ``camLens``, ``render``,
             ``graphicsEngine``)
-        :param near: the near plane, metres (the nearest it comes without
-            clip control)
+        :param near: the near plane, metres
         :param scene_buffer: draw into a float-depth buffer presented in the
             window; None = unless the app camera's output has float depth
         """
         self.app = app
-        self.min_near = near
         self.near = near
         self.far = 0.0
         self.mode = reversed_depth_mode()
@@ -383,25 +384,15 @@ class ReversedDepthCamera:
         """Whether the output's depth buffer is a float one."""
         return bool(self.output.get_fb_properties().get_float_depth())
 
-    @classmethod
-    def near_for(cls, height_above_ground: float, near: float) -> float:
-        """:returns: the near plane for a camera *height_above_ground* metres
-        over the nearest ground: :attr:`NEAR_SHARE` of it, within
-        [*near*, :attr:`MAX_NEAR`]"""
-        return min(max(cls.NEAR_SHARE * height_above_ground, near), cls.MAX_NEAR)
-
-    def update(self, far: float, height_above_ground: float) -> None:
-        """Per frame: the near plane for the height, the app lens's field of
-        view, the culling cut at *far* (the lens itself reaches infinity), the
-        scene buffer at the window's size."""
+    def update(self, far: float) -> None:
+        """Per frame: the app lens's field of view, the culling cut at *far*
+        (the lens itself reaches infinity), the scene buffer at the window's
+        size."""
         source = self.app.camLens
-        if self.mode == DEPTH_REVERSED_11:
-            self.near = self.near_for(height_above_ground, self.min_near)
         self.far = max(far, 2.0 * self.near)
         for lens in (self.lens, self._cull_lens):
             lens.set_fov(source.get_fov())
             lens.set_aspect_ratio(source.get_aspect_ratio())
-        reversed_lens(self.lens, self.near)
         self._cull_lens.set_near_far(self.near, self.far)
         self.camera.node().set_cull_bounds(frustum_bounds(self._cull_lens))
         if self.present is not None:

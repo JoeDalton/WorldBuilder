@@ -784,7 +784,7 @@ def test_one_march_covers_the_view(window, executor):
             )
         march._finish()  # the weather in: the passes run
         for _ in range(2):
-            depth.update(5.0e6, 3000.0)
+            depth.update(5.0e6)
             march.update((0.0, 0.0, R + 3000.0))
             window.graphicsEngine.render_frame()
         assert layer.active and not card.is_hidden(FAR_CAMERA_MASK)
@@ -832,7 +832,7 @@ def test_the_march_traces_more_pixels_while_moving_when_asked(window, executor):
         still = layer.blocks[0]
         assert layer.blocks[1] == MOVING_BLOCKS[still]
         here = np.array([0.0, 0.0, R + 3000.0])
-        depth.update(planet_far(R, R + 3000.0), 3000.0)
+        depth.update(planet_far(R, R + 3000.0))
         for k in range(3):
             layer.update(window, k, here + [0.0, 0.0, 50.0 * k])
         assert layer.block == MOVING_BLOCKS[still]
@@ -898,7 +898,7 @@ def test_the_ground_reads_the_clouds_shadow_from_a_pass(window, executor):
             depth.depth_texture
         )
         march._finish()
-        depth.update(planet_far(R, R + 3000.0), 3000.0)
+        depth.update(planet_far(R, R + 3000.0))
         march.update((0.0, 0.0, R + 3000.0))
         window.graphicsEngine.render_frame()
         assert march._ground_on[0] == 1 and buffer.is_active()
@@ -1029,7 +1029,7 @@ def test_the_passes_read_the_scenes_distance_back(window, executor, distance):
         (layer,) = march._layers
         march._finish()
         for _ in range(3):
-            depth.update(far=1.0e7, height_above_ground=0.0)
+            depth.update(far=1.0e7)
             march.update((0.0, 0.0, R + 300.0))
             window.graphicsEngine.render_frame()
         texture = layer.ground.texture

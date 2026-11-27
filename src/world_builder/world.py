@@ -36,7 +36,7 @@ a file)::
     depth = ReversedDepthCamera(app)  # after the world (see below)
     world.use_depth_camera(depth)
     # Every frame, once the camera is placed:
-    depth.update(*world.view_ranges(origin_world))
+    depth.update(world.far_distance(origin_world))
     world.update(origin_world, far=depth.far)
     ...
     world.destroy()
@@ -554,7 +554,9 @@ class World:
                 body.clouds.bind_shadow_inputs(body.models.inputs)
             if body.cloud_maps is not None:
                 body.cloud_maps.bind(body.models.inputs)
-            if look.ocean is not None:
+            # The sea draws through its reflection camera (a copy of the
+            # app's lens, a buffer of the window's): none without a window.
+            if look.ocean is not None and getattr(app, "win", None) is not None:
                 kwargs = {
                     name: getattr(look.ocean, name)
                     for name in look.ocean.__dataclass_fields__
@@ -799,28 +801,6 @@ class World:
         )
         return max(far, reach)
 
-    def view_ranges(self, origin_world: ArrayLike) -> tuple[float, float]:
-        """The :class:`~world_builder.depth.ReversedDepthCamera`'s inputs this
-        frame: the far distance (:meth:`far_distance`) and the camera's
-        height over the nearest body's highest ground (its near plane follows
-        it: never more than the real height over the ground).
-
-        :param origin_world: render's origin in the world frame (float64)
-        :returns: (far, height), metres; in open space the height is the far
-            distance
-        """
-        far = self.far_distance(origin_world)
-        if not self.bodies:
-            return far, far
-        camera = np.asarray(origin_world, dtype=np.float64) + self.camera_render()
-        height = min(
-            float(np.linalg.norm(camera - body.position))
-            - body.radius
-            - body.terrain.planet.height_bounds[1]
-            for body in self.bodies
-        )
-        return far, height
-
     def gravity_field(self, g_constant: float = 1.0) -> Gravity:
         """The bodies' gravity as point masses (see :mod:`world_builder.gravity`).
         Build it once and evaluate it for many points: the bodies do not move.
@@ -1059,7 +1039,7 @@ class World:
         """The game's reversed camera (#57): the renderers that pin or read
         depth take its convention (the sky, the seas' reflections, the
         fields' haze), the clouds' raymarch draws its passes with it. Call
-        ``depth.update(*world.view_ranges(origin))`` before :meth:`update`
+        ``depth.update(world.far_distance(origin))`` before :meth:`update`
         every frame."""
         self.depth = depth
         if self.sky is not None:

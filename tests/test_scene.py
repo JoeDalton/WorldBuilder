@@ -70,7 +70,7 @@ def test_the_reversed_camera_follows_the_scene_into_a_post_process_buffer(window
             assert camera.present in list(buffer.get_display_regions())
             assert camera.present not in list(window.win.get_display_regions())
             assert camera.float_depth
-            camera.update(12e6, 1000.0)
+            camera.update(12e6)
             window.graphicsEngine.render_frame()
         finally:
             camera.destroy()
@@ -686,7 +686,13 @@ def test_the_sea_reflection_follows_the_depth_mode(window, sea):
     split's depth it is as it was. Its clip plane stays."""
     import math
 
-    from panda3d.core import ClipPlaneAttrib, DepthTestAttrib
+    from panda3d.core import (
+        BoundingSphere,
+        BoundingVolume,
+        ClipPlaneAttrib,
+        DepthTestAttrib,
+        Point3,
+    )
 
     from world_builder.depth import DEPTH_REVERSED_01, DEPTH_STANDARD
 
@@ -703,8 +709,9 @@ def test_the_sea_reflection_follows_the_depth_mode(window, sea):
     assert made.refl_buffer.get_clear_depth() == 0.0
     # culled at the old reach, not at infinity
     bounds = node.get_cull_bounds()
-    reach = max(bounds.get_point(i).length() for i in range(8))
-    assert far <= reach < 4.0 * far
+    for distance, inside in ((0.99 * far, True), (1.01 * far, False)):
+        point = BoundingSphere(Point3(0.0, distance, 0.0), 1e-3)
+        assert (bounds.contains(point) != BoundingVolume.IF_no_intersection) == inside
     window.graphicsEngine.render_frame()
     made.set_depth_mode(DEPTH_STANDARD)
     assert (lens.get_near(), lens.get_far()) == pytest.approx((near, far))

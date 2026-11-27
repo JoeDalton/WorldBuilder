@@ -469,7 +469,7 @@ class CloudBench(ShowBase):
             self.probe.set_pos(*(self.probe_world - self.cam_world))
         distance = float(np.linalg.norm(self.cam_world))
         far = system_far([(self.radius, distance, 0.0, 0.0)])
-        self.depth.update(far, distance - self.radius)
+        self.depth.update(far)
         self.atmospheres.update(self.cam_world)
         self.sky.set_sun(self.sun)
         self.sky.update((0.0, 0.0, 0.0), far)

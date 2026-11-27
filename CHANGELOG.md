@@ -19,10 +19,10 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
   buffer's precision (about 1e-7 of the distance at every range): one cull
   and one draw of the scene. Its own camera under `app.camera` (the app's
   lens stays standard, for picking), a "greater" depth test, culling cut at
-  the world's far distance, a fixed near plane (1 m: a float depth's
-  precision does not depend on it; without clip control, macOS, it follows
-  1 % of the height over the ground, up to 1 km). A window's framebuffer has no float depth, so it
-  draws into a scene buffer of its own (presented in the window, or in a
+  the world's far distance, a fixed near plane (1 m; one following the
+  altitude cut a game's cockpit and close ships). `update(far)`: the world
+  gives it `far_distance(origin)`. A window's framebuffer has no float
+  depth, so it draws into a scene buffer of its own (presented in the window, or in a
   game's post-process buffer, under the other regions; `scene_buffer=False`
   for an output with float depth already: `depth.float_depth_fbprops`). The
   scene buffer keeps its output's multisampling (`depth.scene_buffer_props`).
@@ -34,8 +34,7 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
   `depth.reversed_lens`, `depth.zero_to_one`. The renderers that pin or read
   depth follow it: `Sky.set_depth_mode`, `Sea.set_depth_mode` (its mirror's
   camera reversed too), `FieldHaze.set_depth_mode`, the clouds.
-- `World.use_depth_camera`, `World.view_ranges` (far distance and height over
-  the ground), `World.far_distance`; `depth.planet_far`, `depth.system_far`.
+- `World.use_depth_camera`, `World.far_distance`; `depth.planet_far`, `depth.system_far`.
 - `AsteroidField.out_of_reach`; `MaterialSet.mean_rough_ao`.
 - `scripts/frame_profile.py --pipelined` (frames as a game runs them; the
   default mode's frame is the CPU and the GPU added) and `--terrain-passes`
@@ -94,6 +93,17 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Fixed
 
+- `load_world` in an app without a window (`window-type none`: a game's
+  headless runs) failed on `app.camLens`: there `GameWorld.depth` is None
+  and bodies get no sea (both draw through the window); `update` and
+  `destroy` work without them.
+- `depth.frustum_bounds` is six planes (an `IntersectionBoundingVolume`),
+  no longer a `BoundingHexahedron`: Panda carries the cull volume into each
+  model's frame, where a hexahedron rebuilt its planes from corners out at
+  the far distance in single precision. Past ~10,000 km (a far moon) they
+  came out metres off near the camera, and culled a game's cockpit panels at
+  the screen's edge, flickering as the far distance moved. The sea's
+  reflection and SpaceFlight's mirror build theirs with it too.
 - The clouds' ground shadow pass unprojected clip z = 0 for its footprint,
   infinity in reversed 0-1 depth: the cloud shadow's softness on the ground
   came out wrong with the reversed camera.

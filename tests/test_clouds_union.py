@@ -413,7 +413,7 @@ def test_a_genus_inside_another_s_slab_renders(window, mid_genus):
         gsg = window.win.get_gsg()
         alphas = []
         for _ in range(6):
-            depth.update(planet_far(R, R + 600.0), 600.0)
+            depth.update(planet_far(R, R + 600.0))
             clouds.update(here)
             window.graphicsEngine.render_frame()
             window.graphicsEngine.extract_texture_data(layer.colour, gsg)

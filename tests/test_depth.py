@@ -10,11 +10,14 @@ import pytest
 from panda3d.core import (
     BitMask32,
     BoundingBox,
+    BoundingSphere,
     BoundingVolume,
     CardMaker,
     NodePath,
     PerspectiveLens,
     Point3,
+    TransformState,
+    Vec3,
 )
 
 from world_builder.depth import (
@@ -53,11 +56,18 @@ def _lens(near, far):
     return lens
 
 
+def _reaches(bounds, point) -> bool:
+    sphere = BoundingSphere(Point3(*point), 1e-3)
+    return bounds.contains(sphere) != BoundingVolume.IF_no_intersection
+
+
 def test_frustum_bounds_match_the_lens_within_its_own_limit():
     lens = _lens(500e3, 5e6)
     ours, panda = frustum_bounds(lens), lens.make_bounds()
-    for i in range(8):
-        np.testing.assert_allclose(ours.get_point(i), panda.get_point(i), rtol=1e-5)
+    for y in (400e3, 600e3, 2e6, 4.9e6, 5.1e6):
+        for x in (-4e6, -0.6 * y, 0.0, 0.6 * y, 4e6):
+            for z in (-0.3 * y, 0.0, 0.5 * y):
+                assert _reaches(ours, (x, y, z)) == _reaches(panda, (x, y, z))
 
 
 def test_frustum_bounds_reach_past_ten_thousand_km():
@@ -67,7 +77,34 @@ def test_frustum_bounds_reach_past_ten_thousand_km():
     planet = BoundingBox(Point3(-1e6, 10.2e6, -1e6), Point3(1e6, 11.4e6, 1e6))
     assert lens.make_bounds().contains(planet) == BoundingVolume.IF_no_intersection
     assert frustum_bounds(lens).contains(planet) != BoundingVolume.IF_no_intersection
-    assert frustum_bounds(lens).get_max()[1] == pytest.approx(12e6)
+    assert _reaches(frustum_bounds(lens), (0.0, 11.9e6, 0.0))
+    assert not _reaches(frustum_bounds(lens), (0.0, 12.1e6, 0.0))
+
+
+def test_frustum_bounds_stay_exact_near_the_camera_in_a_models_frame():
+    """Panda culls a model's parts with the volume carried into the model's
+    frame. A hexahedron rebuilt its planes there from corners 20,000 km out,
+    in single precision, a metre or two off near the camera: a game's
+    cockpit lost its panels at the screen's edge. Planes carry over exactly:
+    a part a few centimetres inside the bottom edge, 1.5 m off, stays in,
+    and one a few centimetres outside stays out."""
+    lens = _lens(1.0, 2.2e7)
+    half_z = math.tan(math.radians(lens.get_fov()[1]) / 2.0)
+    # a ship turned anyhow, its cockpit model offset, turned and scaled
+    ship = TransformState.make_hpr(Vec3(120.4, 69.472, 0.0))
+    model = TransformState.make_pos_hpr_scale(
+        Vec3(0.0, 0.8, -0.2), Vec3(180.0, 0.0, 0.0), Vec3(0.8)
+    )
+    net = ship.compose(model)
+    for inside, margin in ((True, -0.03), (False, 0.03)):
+        # 1.5 m ahead, *margin* metres off the bottom plane (outward +)
+        y = 1.5
+        z = -(half_z * y) - margin / math.cos(math.atan(half_z))
+        part = BoundingSphere(Point3(0.0, y, z), 0.01)
+        bounds = frustum_bounds(lens)
+        bounds.xform(net.get_inverse().get_mat())
+        part.xform(net.get_inverse().get_mat())
+        assert (bounds.contains(part) != BoundingVolume.IF_no_intersection) == inside
 
 
 def _drawn(node: NodePath, camera_mask) -> bool:
@@ -131,17 +168,6 @@ def test_a_reversed_lens_maps_near_to_one_and_infinity_to_minus_one():
     assert math.isinf(lens.get_near()) and lens.get_far() == pytest.approx(2.0)
 
 
-@pytest.mark.parametrize(
-    "height, near", [(0.0, 1.0), (50.0, 1.0), (1.0e4, 100.0), (1.0e7, 1000.0)]
-)
-def test_the_near_plane_follows_the_height_above_the_ground(height, near):
-    """1 % of the height above the nearest ground, within [near, 1 km]: fine
-    up close, and from orbit precise enough for [-1, 1] depth."""
-    from world_builder.depth import ReversedDepthCamera
-
-    assert ReversedDepthCamera.near_for(height, 1.0) == pytest.approx(near)
-
-
 @pytest.fixture(scope="module")
 def window(showbase):
     """The session's ShowBase with an offscreen window; skipped where none
@@ -164,7 +190,6 @@ def test_the_reversed_camera_draws_instead_of_the_app_camera_and_gives_it_back(w
     from panda3d.core import DepthTestAttrib
 
     from world_builder.depth import (
-        DEPTH_REVERSED_11,
         DEPTH_STANDARD,
         ReversedDepthCamera,
         depth_mode_input,
@@ -201,18 +226,15 @@ def test_the_reversed_camera_draws_instead_of_the_app_camera_and_gives_it_back(w
         # the one shared input every renderer binds
         assert depth_mode_input()[0] == camera.mode
         app.camLens.set_fov(70.0)
-        camera.update(far=5.0e4, height_above_ground=1.0e4)
+        camera.update(far=5.0e4)
         assert math.isinf(camera.lens.get_near())
         assert camera.lens.get_far() == pytest.approx(camera.near)
         assert camera.lens.get_fov()[0] == pytest.approx(70.0)
-        # under clip control the near plane stays put: a float depth needs
-        # no more, and a growing one cut a game's cockpit and close ships
-        near = 100.0 if camera.mode == DEPTH_REVERSED_11 else 1.0
-        assert camera.near == pytest.approx(near) and camera.far == 5.0e4
+        assert camera.near == pytest.approx(1.0) and camera.far == 5.0e4
         assert app.camLens.get_near() == pytest.approx(app_near)  # standard
         bounds = node.get_cull_bounds()
-        reach = max(Point3(bounds.get_point(i)).length() for i in range(8))
-        assert 5.0e4 <= reach < 2.0e5
+        assert _reaches(bounds, (0.0, 4.9e4, 0.0))
+        assert not _reaches(bounds, (0.0, 5.1e4, 0.0))
         scene = camera.output
     finally:
         camera.destroy()
@@ -267,7 +289,7 @@ def test_the_reversed_camera_hides_what_is_behind(window, distance):
         cards.append(card)
     camera = ReversedDepthCamera(app, near=1.0)
     try:
-        camera.update(far=distance * 10.0, height_above_ground=0.0)
+        camera.update(far=distance * 10.0)
         app.graphicsEngine.render_frame()
         app.graphicsEngine.render_frame()
         shot = app.win.get_screenshot()
@@ -299,7 +321,7 @@ def test_the_reversed_camera_copies_the_views_depth_for_the_next_frame(window):
             if output.get_texture(i) == texture
         ]
         assert planes == [GraphicsOutput.RTM_copy_texture]
-        camera.update(1.0e5, 100.0)
+        camera.update(1.0e5)
         window.graphicsEngine.render_frame()
         assert (texture.get_x_size(), texture.get_y_size()) == (
             output.get_x_size(),
@@ -329,7 +351,7 @@ def test_the_scene_buffer_follows_the_windows_size(window):
         size = (window.win.get_x_size(), window.win.get_y_size())
         camera.output.set_size(size[0] // 2, size[1] // 2)
         assert (camera.output.get_x_size(), camera.output.get_y_size()) != size
-        camera.update(1.0e5, 100.0)
+        camera.update(1.0e5)
         assert (camera.output.get_x_size(), camera.output.get_y_size()) == size
     finally:
         camera.destroy()

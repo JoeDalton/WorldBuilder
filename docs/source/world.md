@@ -43,7 +43,7 @@ depth = ReversedDepthCamera(app)  # after the world: see "Order" below
 world.use_depth_camera(depth)
 
 # Every frame, once the camera is placed:
-depth.update(*world.view_ranges(origin_world))
+depth.update(world.far_distance(origin_world))
 world.update(origin_world, far=depth.far)
 
 world.destroy()
@@ -171,8 +171,9 @@ under the other regions; `scene_buffer=False` for an output that has float
 depth already (`depth.float_depth_fbprops()`). Load `gl-depth-zero-to-one #t`
 in the game's PRC before ShowBase opens its window: OpenGL's 0-1 depth keeps
 the float precision. macOS's OpenGL has no clip control: there the depth keeps
-about a 24-bit range's precision, and its near plane follows the height over
-the ground (1 % of it, 1 m to 1 km) to keep bodies apart from orbit.
+about a 24-bit range's precision (far bodies' depths may fight). The near
+plane stays at 1 m everywhere: one following the altitude cut the cockpit and
+close ships.
 
 Load `transform-cache false` in the game's PRC (before ShowBase opens its
 window). The world moves around the camera, so every drawn node's net
@@ -189,8 +190,7 @@ camera draws them once.
 - **`far_distance(origin_world)`**: how far the view reaches, over every body
   (`depth.system_far`), and every asteroid field's rocks too
   (`AsteroidField.reach`: a shorter far plane cut the biggest while they were
-  still a few pixels wide). **`view_ranges(origin_world)`**: it and the
-  height over the nearest ground, the camera's `update` arguments.
+  still a few pixels wide): the camera's `update` argument.
 - **`gravity_field(g_constant=1.0)`**: the bodies' gravity as point masses
   (`BodyLook.mass`, keyword only); `acceleration(points)` is the raw vector
   for N points at once (numpy, or native: 4-9x faster), `-g` is "up". The

@@ -190,7 +190,7 @@ def _shoot(window, field, camera_world, look, near=10.0, view=None):
     window.camera.set_pos(0.0, 0.0, 0.0)
     window.camera.look_at(*look)
     if view is not None:
-        view.update(far=1.0e9, height_above_ground=0.0)
+        view.update(far=1.0e9)
         reversed_lens(view.lens, near)
     frames = []
     for show in (True, False):

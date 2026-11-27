@@ -744,7 +744,7 @@ def test_a_whole_world(window, monkeypatch):
         ball.set_pos(window.camera.get_pos(window.render) + (0.0, 50.0, 0.0))
         world.track_light(ball, cast=True, shader=True)
         for _ in range(2):
-            depth.update(*world.view_ranges(origin))
+            depth.update(world.far_distance(origin))
             world.update(origin, far=depth.far)
             window.graphicsEngine.render_frame()
         assert world.casters._on[0] == 1
@@ -872,26 +872,6 @@ def test_the_bodies_centres_are_gathered_once():
     centres = world._body_centres
     world._nearest_indices(points)
     assert world._body_centres is centres
-
-
-def test_the_view_ranges_are_the_far_distance_and_the_height_over_the_ground():
-    """The reversed camera's per-frame inputs (FRAME_COST_PLAN.md, Task 6.7):
-    the far distance the split's far camera had, and the height over the
-    nearest body's highest ground (its near plane follows it; never more
-    than the camera's real height over the ground)."""
-    from world_builder.world import SPACE_FAR_M
-
-    body = _body()
-    world = _world(body)
-    top = PLANET_HEIGHT_BOUNDS[1]
-    for altitude in (1000.0, 50_000.0, 3.0e6):
-        origin = np.array([0.0, 0.0, R + altitude])
-        far, height = world.view_ranges(origin)
-        assert far == world.far_distance(origin)
-        assert height == pytest.approx(altitude - top)
-    space = _world()
-    far, height = space.view_ranges(np.zeros(3))
-    assert far == SPACE_FAR_M and height == pytest.approx(SPACE_FAR_M)
 
 
 def test_the_depth_camera_reaches_every_part_that_pins_or_reads_depth():

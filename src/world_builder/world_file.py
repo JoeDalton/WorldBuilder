@@ -294,13 +294,20 @@ class GameWorld:
     :ivar spec: what the file defined
     :ivar world: the :class:`World`: bodies, fields, sky, lights, gravity,
         collisions (see its docs)
-    :ivar depth: the reversed camera (:class:`~world_builder.depth.ReversedDepthCamera`)
+    :ivar depth: the reversed camera
+        (:class:`~world_builder.depth.ReversedDepthCamera`); None in an app
+        without a window (``window-type none``: a game's headless runs),
+        which draws nothing
     """
 
     def __init__(self, app: Any, spec: WorldSpec, world: World) -> None:
         self.app = app
         self.spec = spec
         self.world = world
+        self.depth: ReversedDepthCamera | None = None
+        if getattr(app, "win", None) is None:
+            LOGGER.info("no window: the world is built without its depth camera")
+            return
         self.depth = ReversedDepthCamera(app, near=1.0)
         if not self.depth.float_depth:
             LOGGER.warning(
@@ -324,12 +331,16 @@ class GameWorld:
         :param origin_world: the camera's position in the world frame, metres
             (float64; the camera itself stays at render's origin)
         """
-        self.depth.update(*self.world.view_ranges(origin_world))
+        if self.depth is None:
+            self.world.update(origin_world)
+            return
+        self.depth.update(self.world.far_distance(origin_world))
         self.world.update(origin_world, far=self.depth.far)
 
     def destroy(self) -> None:
         """Remove the world and stop its workers."""
-        self.depth.destroy()
+        if self.depth is not None:
+            self.depth.destroy()
         self.world.destroy()
 
 
@@ -356,7 +367,9 @@ def load_world(
     """
     spec = parse_world(source)
     # Before the world is built: the sea's reflection camera copies the lens.
-    app.camLens.set_near_far(1.0, INITIAL_FAR_M)
+    # (An app without a window has none.)
+    if getattr(app, "camLens", None) is not None:
+        app.camLens.set_near_far(1.0, INITIAL_FAR_M)
     world = World(
         app,
         spec.bodies,
