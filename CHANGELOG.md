@@ -45,6 +45,13 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Changed
 
+- `World(light_period=N)` spreads the light's reckoning over its frames:
+  `lights_at` runs in `LIGHT_STAGES` (3) stages (the air's light; the
+  eclipses and the clouds' shadow; the rings' and the mountains' shadows),
+  one a frame at N = 3, instead of all of it every N-th frame (SpaceFlight's
+  Mission 3: a ~1 ms bump every third frame, now ~0.25-0.42 ms each frame).
+  The lights set are as of the job's first frame (two frames old at 3); a
+  moved sun or a change in the tracked nodes still reckons them at once.
 - `CasterMap.update` tests every caster's shadow size in one numpy pass
   (it made a few small arrays per caster): 197 to 129 µs an update with 16
   ships.

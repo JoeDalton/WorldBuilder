@@ -66,10 +66,11 @@ Ranked by what they would take off a game's frame.
   is now one pass over them all (197 to 129 µs an update with 16 ships,
   2026-11-27). What is left is Panda's bounds per caster (~2 µs each) and the
   fit's fixed cost: little to gain.
-- **The light at the tracked nodes on every third frame** (`World._light`,
-  0.47 ms averaged, so ~1.4 ms on those frames with `light_period=3`): one
-  frame in three is that much longer. Lighting a third of the nodes each
-  frame would even it out.
+- **The light at the tracked nodes**: staged (2026-11-27), its three stages
+  one a frame with `light_period=3` (0.42 / 0.25 / 0.42 ms in Mission 3,
+  against 0.98 ms every third frame; most of a `lights_at` call is fixed,
+  so lighting a third of the nodes a frame would have cost more). Left to
+  measure: the frame's mean and p95 against the old schedule, interleaved.
 - **`Terrain._select`'s Python** (~0.3 ms in the game, more in slow frames in
   fast flight). The native pass is 0.02 ms; the rest is around it: turning
   its results into Python keys (returning what changed since the last pass

@@ -63,7 +63,7 @@ from __future__ import annotations
 
 import functools
 import math
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -108,6 +108,21 @@ from world_builder.terrain.workers import ChunkExecutor
 
 #: Open space (a world with no body): the view's far distance, metres.
 SPACE_FAR_M = 1.0e6
+#: The stages the light at the camera and the tracked nodes is reckoned in
+#: (``World(light_period=...)`` spreads them over its frames): the air's
+#: light; the eclipses and the clouds' shadow; the rings' and the mountains'
+#: shadows, and the lights set.
+LIGHT_STAGES = 3
+
+
+def _run[T](stages: Generator[None, None, T]) -> T:
+    """:returns: what a staged computation returns, run all at once"""
+    while True:
+        try:
+            next(stages)
+        except StopIteration as done:
+            return done.value
+
 
 # ── looks: what the game decides ─────────────────────────────────────────────
 
@@ -389,12 +404,13 @@ class World:
         :param space_ambient: the sky light where there is no body (open
             space), linear
         :param fields: the asteroid fields and rings
-        :param light_period: frames between two reckonings of the light at
-            the camera and at the tracked nodes (:meth:`lights_at`, mostly
-            the CPU's march through the clouds' shadow, ~1 ms with a score of
-            nodes): the lights keep their last values in between. They are
-            reckoned again at once when the sun moves or the tracked nodes
-            change. 1 = every frame
+        :param light_period: frames between two settings of the light at
+            the camera and at the tracked nodes (:meth:`lights_at`, ~1 ms in
+            a game with a score of nodes): its :data:`LIGHT_STAGES` stages
+            are spread over the frames before (one a frame at 3), and the
+            lights keep their last values in between. They are reckoned
+            again at once when the sun moves or the tracked nodes change.
+            1 = all of it every frame
         :raises ValueError: two bodies (or fields) of one name, clouds
             without air, a high layer (the cirrus) not above the clouds or
             not inside the air, or an ocean on a dry planet
@@ -430,6 +446,7 @@ class World:
         # reckoned for (the sun, the tracked nodes)
         self._light_age = 0
         self._light_key: tuple | None = None
+        self._light_job: Generator[None, None, None] | None = None
         # The bodies' centres and radii (they do not move), for
         # _nearest_indices
         self._body_centres: np.ndarray | None = None
@@ -842,6 +859,15 @@ class World:
             for what the shaders shade per pixel (the near sea)
         :returns: (direct, ambient), (n, 3) each, linear rgb
         """
+        return _run(self._lights_at_stages(points_world, local))
+
+    def _lights_at_stages(
+        self, points_world: ArrayLike, local: bool | ArrayLike = True
+    ) -> Generator[None, None, tuple[np.ndarray, np.ndarray]]:
+        """:meth:`lights_at` in :data:`LIGHT_STAGES` stages of about equal
+        cost (a ``yield`` between two): the air's light; the eclipses and the
+        clouds' shadow; the rings' and the mountains' shadows. Returns what
+        :meth:`lights_at` does."""
         points = np.asarray(points_world, dtype=np.float64).reshape(-1, 3)
         if not self.bodies:
             shape = (len(points), 3)
@@ -850,14 +876,29 @@ class World:
                 np.broadcast_to(self._space_ambient, shape).copy(),
             )
         shaded = np.broadcast_to(np.asarray(local, dtype=bool), (len(points),))
+        nearest = self._nearest_indices(points)
+        groups = [(int(index), nearest == index) for index in np.unique(nearest)]
+        airs = [self._air_light(index, points[mask]) for index, mask in groups]
+        yield
+        shades = [
+            self._sun_visibility_first(index, points[mask], shaded[mask])
+            for index, mask in groups
+        ]
+        yield
         direct = np.empty((len(points), 3))
         ambient = np.empty((len(points), 3))
-        nearest = self._nearest_indices(points)
-        for index in np.unique(nearest):
-            mask = nearest == index
-            direct[mask], ambient[mask] = self._lights_at(
-                int(index), points[mask], shaded[mask]
+        for (index, mask), (air_direct, air_ambient), (eclipse, shade) in zip(
+            groups, airs, shades, strict=True
+        ):
+            self._sun_visibility_rest(index, points[mask], shaded[mask], shade)
+            # The sky's light dims in an eclipse, not under a cloud (lit air
+            # all round).
+            sky = ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * eclipse[:, None]
+            count = int(mask.sum())
+            direct[mask] = np.broadcast_to(
+                air_direct * (eclipse * shade)[:, None], (count, 3)
             )
+            ambient[mask] = np.broadcast_to(air_ambient * sky, (count, 3))
         return direct, ambient
 
     def sun_visibility(self, points_world: ArrayLike) -> np.ndarray:
@@ -878,8 +919,9 @@ class World:
         nearest = self._nearest_indices(points)
         for index in np.unique(nearest):
             mask = nearest == index
-            eclipse, clouds = self._sun_visibility(int(index), points[mask])
-            visible[mask] = eclipse * clouds
+            eclipse, shade = self._sun_visibility_first(int(index), points[mask])
+            self._sun_visibility_rest(int(index), points[mask], True, shade)
+            visible[mask] = eclipse * shade
         return visible
 
     def _nearest_indices(self, points: np.ndarray) -> np.ndarray:
@@ -892,49 +934,50 @@ class World:
         gaps = np.linalg.norm(points[:, None, :] - centres[None], axis=-1) - radii
         return np.argmin(gaps, axis=1)
 
-    def _sun_visibility(
+    def _air_light(
+        self, index: int, points: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """The light at points of body *index* before the shadows: its air's
+        (or, airless, its own shadow's), (direct, ambient)."""
+        body = self.bodies[index]
+        ambient = np.asarray(body.look.ambient, dtype=np.float64)
+        if body.atmosphere is not None:
+            return self.atmospheres.light_at(
+                body.atmosphere, points, self._sun, self._sun_color, ambient
+            )
+        hidden = in_shadow(points - body.position, self._sun, body.radius)
+        direct = np.where(np.asarray(hidden)[..., None], 0.0, self._sun_color)
+        return direct, ambient
+
+    def _sun_visibility_first(
         self, index: int, points: np.ndarray, local: ArrayLike = True
     ) -> tuple[np.ndarray, np.ndarray]:
-        """:meth:`sun_visibility` for points of body *index*, as its terms:
-        (the eclipses, the local shadows where *local*: the clouds', the
-        rings', the mountains'), (n,) each."""
+        """The sun's visibility at points of body *index*, first part: (the
+        eclipses, the clouds' shadow where *local*), (n,) each; the shade is
+        completed in place by :meth:`_sun_visibility_rest`."""
         eclipse = self.shadows.eclipse(points, self._sun, index)
         shade = np.ones(len(points))
         body = self.bodies[index]
         shaded = np.broadcast_to(np.asarray(local, dtype=bool), (len(points),))
-        if not shaded.any():
-            return eclipse, shade
         steps = self.shadows.settings.cloud_shadow_steps
-        if body.clouds is not None and steps > 0:
+        if body.clouds is not None and steps > 0 and shaded.any():
             shade[shaded] = body.clouds.sun_visibility(points[shaded], self._sun, steps)
+        return eclipse, shade
+
+    def _sun_visibility_rest(
+        self, index: int, points: np.ndarray, local: ArrayLike, shade: np.ndarray
+    ) -> None:
+        """The rings' and the mountains' shadows into *shade* where *local*
+        (after :meth:`_sun_visibility_first`)."""
+        shaded = np.broadcast_to(np.asarray(local, dtype=bool), (len(points),))
+        if not shaded.any():
+            return
         shade[shaded] *= self.shadows.ring_visibility(points[shaded], self._sun)
+        body = self.bodies[index]
         if body.shadow_map is not None:
             shade[shaded] *= body.shadow_map.visibility(
                 points[shaded], self.shadows.sun_angular_radius
             )
-        return eclipse, shade
-
-    def _lights_at(
-        self, index: int, points: np.ndarray, local: ArrayLike = True
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """:meth:`lights_at` for (n, 3) points of body *index*."""
-        body = self.bodies[index]
-        ambient = np.asarray(body.look.ambient, dtype=np.float64)
-        if body.atmosphere is not None:
-            direct, ambient = self.atmospheres.light_at(
-                body.atmosphere, points, self._sun, self._sun_color, ambient
-            )
-        else:
-            hidden = in_shadow(points - body.position, self._sun, body.radius)
-            direct = np.where(np.asarray(hidden)[..., None], 0.0, self._sun_color)
-        eclipse, shade = self._sun_visibility(index, points, local)
-        # The sky's light dims in an eclipse, not under a cloud (lit air
-        # all round).
-        sky = ECLIPSE_SKY_FLOOR + (1.0 - ECLIPSE_SKY_FLOOR) * eclipse[:, None]
-        return (
-            np.broadcast_to(direct * (eclipse * shade)[:, None], (len(points), 3)),
-            np.broadcast_to(ambient * sky, (len(points), 3)),
-        )
 
     # ── objects ─────────────────────────────────────────────────────────────
 
@@ -1121,25 +1164,41 @@ class World:
                 body.ocean.update(camera)
         origin = np.asarray(origin_world, dtype=np.float64)
         tracked = origin + self.tracked.positions()
-        if self._lights_due():
-            self._light(camera, tracked)
+        self._step_lights(camera, tracked)
         self._shade_models(camera_render, tracked)
         if self.casters is not None:
             self.casters.update(
                 self.tracked.casting, self._sun, camera_render, pixel_angle
             )
 
-    def _lights_due(self) -> bool:
-        """:returns: whether the lights are reckoned this frame (see
-        ``light_period``): every ``light_period`` frames, and at once when
-        the sun or the tracked nodes changed"""
+    def _step_lights(self, camera: np.ndarray, tracked: np.ndarray) -> None:
+        """Advance the lights' reckoning by this frame's share (see
+        ``light_period``): a job of :data:`LIGHT_STAGES` stages (the light at
+        the camera, the tracked nodes and the near seas, as of its first
+        frame) finished every ``light_period`` frames, its stages spread
+        over the frames before (one a frame at 3), so no frame takes it
+        whole. At once when the sun or the tracked nodes changed."""
         key = (tuple(self._sun), tuple(node.get_key() for node in self.tracked.nodes))
-        self._light_age += 1
-        if key != self._light_key or self._light_age >= self.light_period:
+        if key != self._light_key:
             self._light_key = key
+            self._light_job = None
             self._light_age = 0
-            return True
-        return False
+            self._light(camera, tracked)
+            return
+        self._light_age += 1
+        per_frame = math.ceil(LIGHT_STAGES / self.light_period)
+        frames = math.ceil(LIGHT_STAGES / per_frame)
+        if self._light_job is None:
+            if self._light_age < self.light_period - frames + 1:
+                return
+            self._light_job = self._light_stages(camera, tracked)
+        for _ in range(per_frame):
+            try:
+                next(self._light_job)
+            except StopIteration:
+                self._light_job = None
+                self._light_age = 0
+                return
 
     def _pixel_angle(self) -> float | None:
         """:returns: the angle one pixel of the camera's output spans
@@ -1155,7 +1214,14 @@ class World:
         """Panda3D's sun and ambient lights as they are at the camera, each
         tracked node's as they are where it is, and each near sea's look as
         the sea under the camera: one :meth:`lights_at` for them all (each
-        call costs ~0.2 ms, whatever its points)."""
+        call costs ~0.3 ms, whatever its points), all at once."""
+        _run(self._light_stages(camera, tracked))
+
+    def _light_stages(
+        self, camera: np.ndarray, tracked: np.ndarray
+    ) -> Generator[None, None, None]:
+        """:meth:`_light` in :data:`LIGHT_STAGES` stages (a ``yield``
+        between two), the lights set in the last."""
         seas = [
             body
             for body in self.bodies
@@ -1172,7 +1238,9 @@ class World:
         ]
         # The near seas take the local shadows per pixel (sea.glsl).
         local = np.arange(1 + len(tracked) + len(seas)) < 1 + len(tracked)
-        direct, ambient = self.lights_at(np.concatenate(points), local)
+        direct, ambient = yield from self._lights_at_stages(
+            np.concatenate(points), local
+        )
         scale = self.light_scale
         if self.sun_light is not None:
             self.sun_light.node().set_color((*(direct[0] * scale), 1.0))

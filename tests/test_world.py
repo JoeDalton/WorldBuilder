@@ -38,6 +38,7 @@ from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.world import (
+    LIGHT_STAGES,
     Body,
     BodyLook,
     CloudLook,
@@ -215,6 +216,7 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world.light_period = 1
     world._light_age = 0
     world._light_key = None
+    world._light_job = None
     world._body_centres = world._body_radii = None
     return world
 
@@ -439,10 +441,13 @@ def test_one_light_call_lights_the_camera_the_nodes_and_the_sea():
     ball.set_pos(0.0, 2e5, 0.0)  # 200 km away, still near the planet
     world.track_light(ball)
     calls = []
-    lights_at = world.lights_at
-    world.lights_at = lambda points, local=True: (
-        calls.append(len(points)) or lights_at(points, local)
-    )
+    stages = world._lights_at_stages
+
+    def counted(points, local=True):
+        calls.append(len(points))
+        return (yield from stages(points, local))
+
+    world._lights_at_stages = counted
 
     world._light(camera, camera + world.tracked.positions())
 
@@ -843,26 +848,100 @@ def test_a_ring_in_open_space(window):
     assert world.fields == [] and ring.root.is_empty()
 
 
-def test_lights_are_reckoned_every_light_period_frames():
-    """With light_period 3 the lights are reckoned on the first frame, then
-    every third; a moved sun or a newly tracked node brings them forward."""
+def _staged(world):
+    """Stand-in light stages recording what runs: ("stage", n) per stage,
+    "set" when the lights are set (the last), "all" for a reckoning at once."""
+    log = []
+
+    def stages(camera, tracked):
+        for n in range(1, LIGHT_STAGES):
+            log.append(("stage", n))
+            yield
+        log.append(("stage", LIGHT_STAGES))
+        log.append("set")
+
+    world._light_stages = stages
+    world._light = lambda camera, tracked: log.append("all")
+    return log
+
+
+def _frames(world, count):
+    camera, tracked = np.zeros(3), np.zeros((0, 3))
+    for _ in range(count):
+        world._step_lights(camera, tracked)
+
+
+def test_the_lights_are_set_every_light_period_frames_a_stage_a_frame():
+    """With light_period 3: at once on the first frame, then one stage a
+    frame (no frame takes the whole reckoning), set every third frame."""
     world = _world(_body())
     world.light_period = 3
-    due = [world._lights_due() for _ in range(7)]
-    assert due == [True, False, False, True, False, False, True]
-
-    world._sun = np.array([0.0, 1.0, 0.0])
-    assert world._lights_due()
-    assert not world._lights_due()
-
-    world.track_light(NodePath("ship"))
-    assert world._lights_due()
-    assert not world._lights_due()
+    log = _staged(world)
+    _frames(world, 1)
+    assert log == ["all"]
+    for _ in range(3):
+        log.clear()
+        _frames(world, 3)
+        assert log == [("stage", 1), ("stage", 2), ("stage", 3), "set"]
 
 
-def test_a_light_period_of_one_reckons_every_frame():
+def test_a_longer_period_waits_then_spreads_its_stages():
     world = _world(_body())
-    assert all(world._lights_due() for _ in range(5))
+    world.light_period = 6
+    log = _staged(world)
+    _frames(world, 1)
+    log.clear()
+    _frames(world, 3)
+    assert log == []
+    _frames(world, 3)
+    assert log == [("stage", 1), ("stage", 2), ("stage", 3), "set"]
+
+
+def test_a_moved_sun_or_a_new_tracked_node_sets_the_lights_at_once():
+    world = _world(_body())
+    world.light_period = 3
+    log = _staged(world)
+    _frames(world, 2)  # at once, then a stage of the next job
+    log.clear()
+    world._sun = np.array([0.0, 1.0, 0.0])
+    _frames(world, 1)
+    assert log == ["all"]  # the job under way dropped
+    log.clear()
+    world.track_light(NodePath("ship"))
+    _frames(world, 1)
+    assert log == ["all"]
+    log.clear()
+    _frames(world, 3)
+    assert log == [("stage", 1), ("stage", 2), ("stage", 3), "set"]
+
+
+def test_a_light_period_of_one_sets_the_lights_every_frame():
+    world = _world(_body())
+    log = _staged(world)
+    _frames(world, 4)
+    assert log.count("all") + log.count("set") == 4
+    assert log[1:] == [("stage", 1), ("stage", 2), ("stage", 3), "set"] * 3
+
+
+def test_the_staged_lights_are_the_lights_at_once():
+    """lights_at stepped stage by stage (one yield fewer than its stages)
+    gives what it gives at once (its own correctness:
+    test_lights_at_many_points_are_each_points_light)."""
+    world = _world(_body(), _body("moon", MOON, position=(0.0, 1e7, 0.0)))
+    points = np.array([[0.0, 0.0, R + 10.0], [0.0, 1e7, 2e6], [0.0, 0.0, -R - 5.0]])
+    stages = world._lights_at_stages(points, [True, True, False])
+    yields = 0
+    while True:
+        try:
+            next(stages)
+            yields += 1
+        except StopIteration as done:
+            staged = done.value
+            break
+    assert yields == LIGHT_STAGES - 1
+    whole = world.lights_at(points, [True, True, False])
+    for a, b in zip(staged, whole, strict=True):
+        np.testing.assert_array_equal(a, b)
 
 
 def test_the_bodies_centres_are_gathered_once():
