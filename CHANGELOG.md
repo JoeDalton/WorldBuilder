@@ -14,6 +14,25 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Added
 
+- `world_builder.post` (#68): the view's way to the screen, brought over from
+  SpaceFlight with AMD's FSR 1 added. `PostChain` runs the passes from a
+  view's texture to a window region:
+  - with the bilinear upscaler, a copy or FXAA, stretched bilinearly;
+  - with FSR 1, an optional FXAA at the view's size, then EASU at the
+    output's size, then RCAS sharpening.
+
+  EASU and RCAS are ports of `ffx_fsr1.h` (MIT; `texelFetch` taps in GLSL
+  1.40, reciprocals guarded against black and white). The `render` section
+  of `WorldSettings` (`RenderSettings`) sets it, with no levels of its own,
+  as for `display`:
+  - `scale`, 0.5 to 1;
+  - `msaa`;
+  - `fxaa`;
+  - `upscaler`: bilinear or FSR 1;
+  - `sharpness`: live, in stops.
+
+  FSR 1 without MSAA forces FXAA (`fxaa_forced`). `FSR_MODES` holds AMD's
+  ultra quality to performance scales (0.77 to 0.5).
 - `world_builder.depth.ReversedDepthCamera` (#57): one camera over the whole
   view, reversed and infinite (near at 1, infinity at 0), with a float depth
   buffer's precision (about 1e-7 of the distance at every range): one cull
