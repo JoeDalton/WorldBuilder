@@ -124,6 +124,10 @@ class Trees:
         self._buffers: list[Texture | None] = []
         self._points: dict[tuple, NodePath] = {}
         self._counts: dict[tuple, int] = {}
+        # Chunks in range whose plants have no impostor (rocks, bushes):
+        # looked at once, not on every pass (they were most of the nodes
+        # "made" a pass, ten times the chunks generated)
+        self._bare: set[tuple] = set()
         self.stats = {
             "meshes": 0,
             "impostors": 0,
@@ -263,10 +267,16 @@ class Trees:
             for (key, chunk), distance in zip(found, distances, strict=True):
                 if distance < s.mesh_range + MESH_MARGIN:
                     near.append(key)
-                if distance < s.tree_range and key not in self._points:
+                if (
+                    distance < s.tree_range
+                    and key not in self._points
+                    and key not in self._bare
+                ):
                     node = self._point_node(key, chunk, chunk.forest)
                     made += 1
-                    if node is not None:
+                    if node is None:
+                        self._bare.add(key)
+                    else:
                         self._points[key] = node
         for key in [k for k in self._points if k not in draw]:
             self._points.pop(key).remove_node()
@@ -285,12 +295,14 @@ class Trees:
         if node is not None:
             node.remove_node()
         self._counts.pop(key, None)
+        self._bare.discard(key)
 
     def clear(self) -> None:
         for node in self._points.values():
             node.remove_node()
         self._points.clear()
         self._counts.clear()
+        self._bare.clear()
         for node in self._meshes:
             if node is not None:
                 node.set_instance_count(0)

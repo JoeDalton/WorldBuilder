@@ -62,50 +62,70 @@ Ranked by what they would take off a game's frame.
   `set_inputs`, the low-pass filters; many small numpy arrays). One
   vectorised integration of every ship's state per frame (an (n, 10) array)
   is the lever; see SpaceFlight's docs/source/performance.md.
-- **The caster map's fit** (`CasterMap.update`): its numpy work per caster
-  is now one pass over them all (197 to 129 µs an update with 16 ships,
-  2026-11-27). What is left is Panda's bounds per caster (~2 µs each) and the
-  fit's fixed cost: little to gain.
-- **The light at the tracked nodes**: staged (2026-11-27), its three stages
-  one a frame with `light_period=3` (0.42 / 0.25 / 0.42 ms in Mission 3,
-  against 0.98 ms every third frame; most of a `lights_at` call is fixed,
-  so lighting a third of the nodes a frame would have cost more). Left to
-  measure: the frame's mean and p95 against the old schedule, interleaved.
-- **Chunk results through the pipe** (spikes ~3 ms in fast flight when
-  several land together). The pool's manager thread unpickles ~204 KB a
-  chunk (161 KB of vertices). Measure first how much of it holds the GIL (the
-  reads release it); if it is over ~0.3 ms a frame, hand the vertex buffers
-  over through shared memory (`workers.SharedArray`, the other way),
-  released on eviction and `set_spec`, orphans cleaned up.
-- **The mountain map's CPU twins** (~0.2 ms a frame in flight, the local
-  map's new nodes every ~50 m). Reading the GPU's map back instead of
-  marching its texels again: Panda 1.10 has no asynchronous read-back, and a
-  synchronous one (`extract_texture_data`, `RTM_copy_ram` on the bake) waits
-  for the GPU's queued frame, which can cost more than the marches. Measure a
-  bake's read-back on a quiet machine before choosing.
+- **The slow frames in fast flight** (2026-11-27, `flight_bench.py --flight
+  low --trace`: p95 18-20 ms against a 7 ms median). Their excess is Panda's
+  `renderFrame` (+7-8 ms, every one of them) and `Terrain._select` (+6 ms,
+  95 % of them). The mountain map's twins are not in it (+0.16 ms: their
+  marches are 2-4 texels a call, 0.14-0.22 ms a texel; their rare 4-6 ms
+  calls are the same work held up elsewhere). The slowest 5 % of the trees'
+  updates (6 ms): the drawn chunks with plants gathered (0.75 ms) and put in
+  arrays (1.3 ms, ~320 chunks), the distance loop and the new impostor
+  nodes (1.95), the meshes refilled (1.84); the quadtree's pass 1.4 ms (its
+  keys 1.1). Tried and no change in the slow frames: skipping a mesh
+  buffer's upload when its plants are the same (in fast flight they never
+  are), keeping a chunk's impostors while it is not drawn (chunks seldom
+  come back). Two leads follow.
+- **`renderFrame` in the slow frames of fast flight** (+7-8 ms, the larger
+  half of their excess). Record them with PStats (`want-pstats 1`,
+  `text-stats`) to see what they hold. Suspects: the new chunks' vertex
+  buffers created on their first draw (`NodePath.prepare_scene` at upload
+  would move that off the drawing frame), the whole chunk table sent again
+  on each upload (Panda 1.10 has no partial texture update: smaller tables
+  would send less), the trees' mesh buffers re-sent on every pass.
+- **The trees' share of a slow selection** (~4.7 of its 6.8 ms): spread over
+  passes instead of all of it on every pass. The meshes refilled only when
+  the near chunks or the origin changed (or the camera moved a share of
+  `MESH_MARGIN`); each chunk's box kept with it (its slot's row in an array)
+  instead of three arrays built from the drawn chunks every pass; the new
+  impostor nodes a few a pass, the nearest first (watch for holes where a
+  parent's impostors go before its children's come).
 
-Made 2026-11-27, not yet benchmarked (another agent loaded the machine):
+Measured 2026-11-27 (performance.md §42):
 
-- **`Terrain._select`**: in the game it ran one frame in eight at ~2.2 ms
-  (profiled), most of it two per-chunk loops over the ~250 drawn chunks, the
-  collision's reach (a `numpy.linalg.norm` per chunk) and the trees' box
-  distances. Both are one numpy pass now (`TerrainCollision.update`,
-  `Trees.update`). The selection itself was ~0.17 ms.
-- **The eclipse in the air's march** (Part A; measured 0.2-0.5 ms with no
-  eclipse in view: ground 10.22 → 10.78 ms, orbit 2.25 → 2.44): the march's
-  sample is a function (`atmoStep`) called from two loops, one reading the
-  gathered eclipses, one with none; the eclipses' array only in the first.
-- **One point's terrain query** (the demo's altimeter, and SpaceFlight's
-  `Scene.altitude_m` every frame of a warp): plain floats instead of ~100
-  numpy calls (`TerrainQuery._interpolate_one`, the same triangle; the arrays'
-  path where no chunk is stored), and the swell's native struct made once per
-  `Swell`. The finest stored ancestor already answered before the planet.
-- **The demo's HUD**: one text per line, set only when it changed
-  (`WorldDemo.hide_hud` for shots). `--no-hud` still skips its refresh.
+- **The light at the tracked nodes, staged** (`light_period=3`: one stage a
+  frame, 0.42 / 0.25 / 0.42 ms against 0.98 ms every third frame). Mission 3,
+  six rounds each way in one process: frame mean 8.78 against 9.05 ms (the
+  battle moves it more than this), p95 10.96 against 11.49, max 13.1 against
+  15.5. The same work, its peak gone.
+- **`Terrain._select`'s two per-chunk loops as numpy passes**: Mission 3's
+  fly pose, a selection 1.94-2.29 → 1.39-1.44 ms mean (p95 6.9-7.8 → 4.9-5.2),
+  of it the collision's reach 0.67-0.81 → 0.29-0.30 (p95 2.5-3.7 → 0.8-0.9)
+  and the trees' 0.78-0.89 → 0.46-0.50; the demo's low flight 2.27-2.39 →
+  1.68-1.84 (the trees' 1.74-1.87 → 1.13-1.25).
+- **One point's terrain query in plain floats**: 167 → 13.5 µs at the
+  demo's camera (the swell's struct made once in it).
+- **The caster map's fit** in one numpy pass: 197 → 129 µs an update with 16
+  ships.
+- **The eclipse in the air's march as two loops: no gain, removed.**
+  GPU-synced frame, two rounds each, before / after: `ground` 9.49, 8.93 /
+  9.36, 9.25; `high` 6.70, 6.68 / 6.57, 6.97; `orbit` 4.73, 4.82 / 4.80, 4.78;
+  the pipelined frame alike; and with an eclipse set up (the moon's shadow
+  on the planet) the same. The march already gathers the eclipses only
+  where a shadow can reach (`eclipseCanReach`), and the shader compiler kept
+  the array out of the rest: the 0.2-0.5 ms measured in Part A had been
+  taken back then. The shader is back as it was.
 
-To measure: Mission 3 (`bench_mission3.py`, and the light schedule above),
-the demo's `frame_profile.py --offscreen --pipelined` (`ground`, `orbit` for
-the eclipse), `flight_bench.py --flight low --trace` for `_select`.
+Leads measured and closed (2026-11-27):
+
+- **Chunk results through shared memory:** unpickling a chunk (250 KB) is
+  18.7 µs, what holds the GIL on the main side: ~3 ms a second at the low
+  flight's 150 chunks a second, ~0.03 ms a frame, a tenth of the 0.3 ms that
+  would have made it worth it. Its spikes are elsewhere.
+- **The mountain map read back from the GPU instead of its twins:** a
+  synchronous read-back right after a frame (`extract_texture_data`, Panda
+  1.10 has no asynchronous one) took 33 ms for the global map (6 x 1024²,
+  13.5 s the first time) and 9.1 ms for the local one (1024²), against a
+  3.45 ms frame: worse than the twins' marches even once per bake.
 
 ## Savings with a cost (the user's call)
 

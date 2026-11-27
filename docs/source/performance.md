@@ -2975,6 +2975,67 @@ ms a frame):
 | of it: the sea / the models' inputs | 0.15 / 0.1 |
 | Waiting for the GPU (the bench's read-back) | 1.6 |
 
+## 42. The backlog's smaller leads, measured (2026-11-27)
+
+RTX 3070, 5600X, HIGH. Each change against its parent commit, the trees run
+in turn (two rounds), or old and new in one process where the scene moves.
+
+**The light at the tracked nodes in three stages** (`World(light_period=3)`:
+the air's light; the eclipses and the clouds' shadow; the rings' and the
+mountains' shadows and the lights set, one a frame). Mission 3 at 1280 x 720,
+the old schedule (all of it every third frame) and the new swapped every 300
+frames, six rounds each, ms (median of the rounds):
+
+| | mean | p95 | max |
+|---|---|---|---|
+| staged | 8.78 | 10.96 | 13.12 |
+| every third frame | 9.05 | 11.49 | 15.54 |
+
+The rounds' means range 7.5-10.1 ms either way (the battle): the mean's
+difference is noise, as the work is the same; the peak is what went. The
+stages: 0.42 / 0.25 / 0.42 ms, against 0.98 ms at once.
+
+**The terrain selection's per-chunk loops as numpy passes**
+(`TerrainCollision.update`, `Trees.update`), ms a selection (mean, p95):
+
+| | Mission 3, fly (1280 x 720) | the demo's low flight |
+|---|---|---|
+| `_select` before | 1.94-2.29, 6.9-7.8 | 2.27-2.39, 7.8-7.9 |
+| `_select` after | 1.39-1.44, 4.9-5.2 | 1.68-1.84, 6.1-6.4 |
+| collision's reach | 0.67-0.81 → 0.29-0.30 | (not enabled) |
+| trees | 0.78-0.89 → 0.46-0.50 | 1.74-1.87 → 1.13-1.25 |
+
+In flight a selection runs about every other frame in Mission 3 (~450 in
+900), ~1.4 a frame in the demo (1775 in 1264: each of its three bodies'
+terrains): a frame with one is a slow frame.
+
+**One point's terrain query in plain floats** (`TerrainQuery._interpolate_one`):
+167 → 13.5 µs at the demo's camera, the swell's native struct made once.
+
+**The eclipse in the air's march as two loops** (`atmoStep`): no gain
+(`frame_profile.py --offscreen`, GPU-synced, before / after, two rounds:
+`ground` 9.49, 8.93 / 9.36, 9.25; `high` 6.70, 6.68 / 6.57, 6.97; `orbit` 4.73,
+4.82 / 4.80, 4.78; pipelined alike). The eclipses were already gathered only
+where a shadow can reach.
+
+With an eclipse set up (the sun behind the moon, the camera in its shadow
+on the planet: the moon one of the planet's casters, the eclipsed loop
+taken), GPU-synced, before / after, two rounds: under the moon looking at
+the horizon 8.44, 8.42 / 8.44, 8.47 ms; looking up 5.69, 5.71 / 5.69, 5.72;
+from 20 km 7.79, 7.82 / 7.83, 8.14. No gain either. The eclipse's own cost
+(the same poses with the sun 30° off the moon, no caster): ~0 near the
+ground (8.52, 8.30 / 8.51, 8.40; looking up 5.58, 5.40 / 5.49, 5.39), 0.5-0.9
+ms from 20 km looking down (8.29, 7.89 / 7.42, 7.36), where the air's march
+fills the view (the sun's angle differs between the two: approximate).
+The two loops were removed: the shader is as it was before them.
+
+**Two leads closed.** A chunk's unpickling, the GIL's share of its trip
+through the pipe: 18.7 µs for 250 KB, ~0.03 ms a frame at 150 chunks a
+second. The mountain maps read back synchronously after a frame (Panda 1.10
+has no asynchronous read-back): 33 ms (global, 6 x 1024²) and 9.1 ms (local,
+1024²), against the twins' 0.23 ms a frame in flight (up to 9.1 / 3.5 ms in
+the frames that march new texels: those spikes are the lead left).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

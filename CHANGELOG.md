@@ -45,13 +45,12 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Changed
 
+- `Trees` remembers the chunks in range whose plants have no impostor: they
+  were looked at again on every pass (in a low flight ~11 of them a pass,
+  nine times the chunks really made).
 - Per-chunk Python in a terrain selection made one numpy pass: the
   collision's reach (`TerrainCollision.update`) and the trees' box distances
   (`Trees.update`), most of a selection's ~2 ms in SpaceFlight's Mission 3.
-- The air's march (`atmosphere.glsl`'s `atmoSegment`) runs its samples
-  (`atmoStep`) in one of two loops: with the gathered eclipses, or with none,
-  the eclipses' array then untouched (it cost 0.2-0.5 ms with no eclipse in
-  view).
 - `TerrainQuery` answers a single point in plain floats (the same chunk and
   triangle as for many; the arrays' path where none is stored): the demo's
   altimeter and a game's altitude every frame. `Swell` makes its native
