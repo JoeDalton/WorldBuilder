@@ -90,7 +90,7 @@ Ways to make them better:
   along a visible line. Not investigated yet. Suspects, in order:
   - the far plane: in open space `World`'s far plane is 1,000 km, but at
     2 pixels the biggest rocks are drawn out to about 2,600 km, so the far
-    plane cuts them hard (fix: `World.depth_ranges` reaching the fields'
+    plane cuts them hard (fix: `World.far_distance` reaching the fields'
     reach, or the fields' `far` capped at it to fade them into the haze);
   - the held budget's class limits: their fade band (the last fifth of a
     limit) moves 3 % a frame while the budget adjusts, and the rocks there
@@ -106,7 +106,7 @@ Ways to make them better:
   Measured 2026-11-15: the far plane (1,000 km) is the line, the class
   limits a fainter one; the mean brightness matches across both, the grain
   does not. The far plane now reaches the fields' rocks
-  (`AsteroidField.reach`, `World.depth_ranges`); the options left are in
+  (`AsteroidField.reach`, `World.far_distance`); the options left are in
   `ASTEROID_EDGE_PLAN.md`.
 
 - **Shadows.** The haze and the rocks take no shadows: a planet's shadow

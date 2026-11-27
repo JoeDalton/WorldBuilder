@@ -33,14 +33,10 @@ const int MAX_MARCH_LAYERS = DETAIL_LEVELS;  // noise.DETAIL_LEVELS
 const float NOISE_FEATURE_UNITS = 4.0;  // noise.NOISE_FEATURE
 const float KM = 1000.0;                // the distance's unit out
 
-// The scene's depth in each range, at the view's resolution. The near one is
-// read only while it is drawn (uNearDepthOn: the slab reaches the near range).
-uniform sampler2D uSceneDepthNear;
-uniform sampler2D uSceneDepthFar;
-uniform int   uNearDepthOn;
+// The scene's depth, at the view's resolution over uDepthScale.
+uniform sampler2D uSceneDepth;
 uniform int   uDepthScale;       // view pixels per depth pixel, per axis (march.DEPTH_SCALE)
-uniform mat4  uClipToRender;     // the near range's clip space -> the render frame
-uniform mat4  uClipToRenderFar;  // the far range's
+uniform mat4  uClipToRender;     // the view's clip space -> the render frame
 uniform float uSplit;            // metres: where the near range ends (its step budget)
 uniform vec3  uCamRender;        // camera, render frame
 uniform vec3  camPos;            // camera, planet frame
@@ -736,11 +732,6 @@ vec3 unproject(vec3 ndc) {
     return p.xyz / p.w;
 }
 
-vec3 unprojectFar(vec3 ndc) {
-    vec4 p = uClipToRenderFar * vec4(ndc, 1.0);
-    return p.xyz / p.w;
-}
-
 // The stretch of the ray c + t dir inside the sphere of radius r around the
 // planet's centre: (t0, t1), empty when t0 >= t1. Through the ray's closest
 // point to the centre: float32 keeps a planet's radius to centimetres, its
@@ -867,7 +858,7 @@ void main() {
     recipeWiden = (uCloudDebug & 4096) == 0;
     vec2 ndc = (vec2(pixel) + 0.5) / uViewSize * 2.0 - 1.0;
     vec3 nearPoint = unproject(vec3(ndc, depthNearZ()));
-    vec3 farPoint = unprojectFar(vec3(ndc, depthFarNdc()));
+    vec3 farPoint = unproject(vec3(ndc, depthFarNdc()));
     vec3 dir = normalize(farPoint - nearPoint);
     if (uDepthMode != DEPTH_STANDARD) {
         // Reversed and infinite: the far end is beyond any band.
@@ -879,18 +870,14 @@ void main() {
     // The depth passes are drawn at half resolution (march.DEPTH_SCALE): a
     // pixel reads its 2 x 2 block's depth.
     ivec2 depthPixel = pixel / uDepthScale;
-    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, depthPixel, 0).r
-                                        : depthClear();
-    float farDepth = texelFetch(uSceneDepthFar, depthPixel, 0).r;
-    bool nearDrawn = depthDrawn(nearDepth), farDrawn = depthDrawn(farDepth);
-    vec3 end = nearDrawn ? unproject(vec3(ndc, depthNdc(nearDepth)))
-             : farDrawn ? unprojectFar(vec3(ndc, depthNdc(farDepth)))
-             : farPoint;
+    float sceneDepth = texelFetch(uSceneDepth, depthPixel, 0).r;
+    bool drawn = depthDrawn(sceneDepth);
+    vec3 end = drawn ? unproject(vec3(ndc, depthNdc(sceneDepth))) : farPoint;
     float tEnd = length(end - uCamRender);
     // The scene this sample stopped at, km from the near plane (0: none, the
     // sky), in the distance's g: cloud_resolve.frag weighs the samples by it
     // against each pixel's own (its sceneDistance, the same measure).
-    float sceneKm = nearDrawn || farDrawn ? length(end - nearPoint) / KM : 0.0;
+    float sceneKm = drawn ? length(end - nearPoint) / KM : 0.0;
 
     // Each sky band (cloud_field.glsl's uSkyBands: the genera's slabs merged)
     // between two spheres, less the planet: up to two segments each (a ray

@@ -8,7 +8,7 @@ updates every WorldBuilder part a game draws around its camera:
 
 A game does not build it by hand: it writes its world in a
 [world file](world_file.md) and loads it with `world_builder.load_world`, which
-builds this `World` and its split depth cameras in one line. This page is what
+builds this `World` and its depth camera in one line. This page is what
 that builds, for code that needs to reach into it (`GameWorld.world`), or that
 builds a world itself, for instance one varied from its own settings.
 
@@ -39,10 +39,11 @@ world = World(
     sky=SkyLook(),
     settings=world_settings,
 )
-depth = SplitDepthCameras(app)  # after the world: see "Order" below
+depth = ReversedDepthCamera(app)  # after the world: see "Order" below
+world.use_depth_camera(depth)
 
 # Every frame, once the camera is placed:
-depth.update(*world.depth_ranges(origin_world))
+depth.update(*world.view_ranges(origin_world))
 world.update(origin_world, far=depth.far)
 
 world.destroy()
@@ -53,10 +54,9 @@ world.destroy()
 **Open space.** A world may have no body: `World(app, [], sun=..., sky=...,
 space_ambient=...)` is the sky, the sun and the Panda3D lights alone, for a
 space level. Its light everywhere is the bare sun and `space_ambient` (the
-sky light away from any body), `loading` is always False, and `depth_ranges`
-gives a fixed split (`SPACE_SPLIT_M`, 2 km) and a far plane of at least
-`SPACE_FAR_M` (1,000 km), farther where a field's rocks are drawn farther
-(see below). An asteroid field (`world_builder.asteroids`) can share its worker
+sky light away from any body), `loading` is always False, and `far_distance`
+is at least `SPACE_FAR_M` (1,000 km), farther where a field's rocks are drawn
+farther (see below). An asteroid field (`world_builder.asteroids`) can share its worker
 pool (`executor=world.executor`).
 
 ## Looks
@@ -119,9 +119,8 @@ Quality is not part of the look. It comes in as `settings=`, a
 
 ## Every frame
 
-`World.update(origin_world, far=None)`. `far` is the far camera's far
-distance this frame; the sky is drawn just inside it. It defaults to
-`depth_ranges()`'s far value.
+`World.update(origin_world, far=None)`. `far` is the view's far distance this
+frame (`ReversedDepthCamera.far`). It defaults to `far_distance()`.
 
 In order, it updates:
 1. each body's terrain, placed and detailed around the camera, its collision
@@ -154,13 +153,26 @@ In order, it updates:
    - while the near look shows, its light, relative to the daylight its
      colour was tuned in.
 
-## Order with split depth
+## Order and the depth camera
 
-Build the world before `SplitDepthCameras`. The sea's reflection camera
-copies the app's lens once when it is built, and the split cameras then
-shorten that lens to the near range every frame. Then hand the split
-cameras to the world, `world.use_split_depth(depth)`: the clouds' raymarch
-draws its passes with them.
+Build the world before its `ReversedDepthCamera` (`world_builder.depth`): the
+sea's reflection camera copies the app's lens once when it is built. Then hand
+the camera to the world, `world.use_depth_camera(depth)`: the sky, the seas'
+reflections and the fields' haze take its depth convention, and the clouds'
+raymarch draws its passes with it.
+
+The camera draws the view with a reversed, infinite projection (near at 1,
+infinity at 0) and keeps a float depth buffer's precision at every range: a
+planet from orbit and a rock under the camera in one view, one cull and one
+draw (#57; the split cameras it replaced made two). A window's framebuffer has
+no float depth, so it draws into a scene buffer of its own, presented in the
+window (or in the game's post-process buffer, where the app's camera drew)
+under the other regions; `scene_buffer=False` for an output that has float
+depth already (`depth.float_depth_fbprops()`). Load `gl-depth-zero-to-one #t`
+in the game's PRC before ShowBase opens its window: OpenGL's 0-1 depth keeps
+the float precision. macOS's OpenGL has no clip control: there the depth keeps
+about a 24-bit range's precision, and its near plane follows the height over
+the ground (1 % of it, 1 m to 1 km) to keep bodies apart from orbit.
 
 Load `transform-cache false` in the game's PRC (before ShowBase opens its
 window). The world moves around the camera, so every drawn node's net
@@ -169,17 +181,16 @@ fills up for its garbage collection to empty: about 1 ms a frame in low
 flight (see [performance](performance.md) §19). The library sets no PRC of
 its own; `scripts/tools.window_config` does.
 
-A game's own translucent volumes, such as shield bubbles, go to
-`depth.update(split, far, translucent=...)`. The split then never cuts one:
-the two cameras overlap by 2%, and they would blend a volume twice in that
-band (see `world_builder.depth`).
+A game's own translucent volumes, such as shield bubbles, need nothing: one
+camera draws them once.
 
 ## Other members
 
-- **`depth_ranges(origin_world)`**: split and far distances over every body
-  (`SplitDepthCameras.system_ranges`), the far reaching every asteroid
-  field's rocks too (`AsteroidField.reach`: a shorter far plane cut the
-  biggest while they were still a few pixels wide).
+- **`far_distance(origin_world)`**: how far the view reaches, over every body
+  (`depth.system_far`), and every asteroid field's rocks too
+  (`AsteroidField.reach`: a shorter far plane cut the biggest while they were
+  still a few pixels wide). **`view_ranges(origin_world)`**: it and the
+  height over the nearest ground, the camera's `update` arguments.
 - **`gravity_field(g_constant=1.0)`**: the bodies' gravity as point masses
   (`BodyLook.mass`, keyword only); `acceleration(points)` is the raw vector
   for N points at once (numpy, or native: 4-9x faster), `-g` is "up". The

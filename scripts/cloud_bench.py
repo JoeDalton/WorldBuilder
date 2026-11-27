@@ -145,8 +145,8 @@ from world_builder.clouds.planet import PlanetClouds  # noqa: E402
 from world_builder.clouds.weather import WeatherSpec  # noqa: E402
 from world_builder.depth import (  # noqa: E402
     HIDE_FROM_CLOUD_PASS,
-    HIDE_FROM_NEAR,
-    SplitDepthCameras,
+    ReversedDepthCamera,
+    system_far,
 )
 from world_builder.quality import QualityLevel  # noqa: E402
 from world_builder.settings import WorldSettings  # noqa: E402
@@ -330,7 +330,6 @@ class CloudBench(ShowBase):
         self.atmospheres = Atmospheres(world.atmosphere)
         self.atmospheres.add(self.radius, AtmosphereParams())
         self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
-        self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it
         self.sky.attach_view(self.win)
         self.atmospheres.attach_aerial(
             self.win, self.cam, self.camLens, self.sky.sun_input
@@ -358,9 +357,10 @@ class CloudBench(ShowBase):
             genera=spec,
         )
         self.clouds.set_debug(cloud_debug)
-        self.depth = SplitDepthCameras(self, near=1.0)
+        self.depth = ReversedDepthCamera(self, near=1.0)
+        self.sky.set_depth_mode(self.depth.mode)
         self.sky.node.hide(HIDE_FROM_CLOUD_PASS)  # hides no cloud
-        self.clouds.use_split_depth(self, self.depth)
+        self.clouds.use_depth_camera(self, self.depth)
         self._clock = ClockObject.get_global_clock()
         # A game's model: opaque, black, writing depth like any.
         self.probe = self.loader.load_model("models/smiley")
@@ -471,10 +471,8 @@ class CloudBench(ShowBase):
             self.probe.show()
             self.probe.set_pos(*(self.probe_world - self.cam_world))
         distance = float(np.linalg.norm(self.cam_world))
-        split, far = SplitDepthCameras.system_ranges(
-            [(self.radius, distance, 0.0, 0.0)]
-        )
-        self.depth.update(split, far)
+        far = system_far([(self.radius, distance, 0.0, 0.0)])
+        self.depth.update(far, distance - self.radius)
         self.atmospheres.update(self.cam_world)
         self.sky.set_sun(self.sun)
         self.sky.update((0.0, 0.0, 0.0), far)

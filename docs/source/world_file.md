@@ -13,8 +13,8 @@ world.destroy()
 ```
 
 [`world_builder.world_file`](../../src/world_builder/world_file.py) reads the
-file, builds the [`World`](world.md) it describes, puts the split depth
-cameras on it and returns a `GameWorld`: `.world` (the `World`), `.depth`,
+file, builds the [`World`](world.md) it describes, puts its depth
+camera on it and returns a `GameWorld`: `.world` (the `World`), `.depth`,
 `.spec` (what the file defined), `.body(name)`, `.field(name)`, `update` and
 `destroy`. The camera stays the game's: it sits at render's origin, and the
 game gives `update` its position in the world frame (float64, metres).

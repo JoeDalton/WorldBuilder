@@ -371,7 +371,7 @@ def test_a_genus_inside_another_s_slab_renders(window, mid_genus):
 
     from world_builder.clouds.cloud import CloudSettings
     from world_builder.clouds.planet import PlanetClouds
-    from world_builder.depth import SplitDepthCameras
+    from world_builder.depth import ReversedDepthCamera, planet_far
     from world_builder.terrain.chart import TangentFrame
     from world_builder.terrain.workers import ChunkExecutor
 
@@ -384,7 +384,7 @@ def test_a_genus_inside_another_s_slab_renders(window, mid_genus):
         settings=CloudSettings(octave_bands=2),
         genera=mid_genus,
     )
-    depth = SplitDepthCameras(window, near=1.0)
+    depth = ReversedDepthCamera(window, near=1.0)
     camera = window.camera
     pos, hpr = camera.get_pos(), camera.get_hpr()
     try:
@@ -396,7 +396,7 @@ def test_a_genus_inside_another_s_slab_renders(window, mid_genus):
         rows = np.array([tuple(march._layer_params[i]) for i in range(3 * GENUS_VEC4S)])
         assert tuple(rows[2 * GENUS_VEC4S + 13]) == (COVERAGE_SOURCES["A"], 1, 2, 1)
         assert tuple(rows[2 * GENUS_VEC4S + 4][:2]) == (3000.0, 1000.0)
-        clouds.use_split_depth(window, depth)
+        clouds.use_depth_camera(window, depth)
         march._finish()
         assert march._genera[2].weather.shape[-1] == 3
         for name in ("genusCoverA", "genusShift", "genusDeckLight"):
@@ -413,7 +413,7 @@ def test_a_genus_inside_another_s_slab_renders(window, mid_genus):
         gsg = window.win.get_gsg()
         alphas = []
         for _ in range(6):
-            depth.update(*SplitDepthCameras.planet_ranges(R, R + 600.0))
+            depth.update(planet_far(R, R + 600.0), 600.0)
             clouds.update(here)
             window.graphicsEngine.render_frame()
             window.graphicsEngine.extract_texture_data(layer.colour, gsg)

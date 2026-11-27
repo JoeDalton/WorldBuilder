@@ -37,8 +37,8 @@ demo's printed camera lines as poses (`at1`, `at2`...).
   overlaps the two and takes the slower: `--pipelined` times that (400 free
   steps, then 100 synced ones for **step**). A frame close to its step is
   CPU-bound; one above it, GPU-bound. `--terrain-passes` adds the terrain's
-  cost in each camera pass (`t_near`, `t_far`, `t_refl`, `t_cldnear`,
-  `t_cldfar`); **asteroids** is the fields' per-frame update. Run to run,
+  cost in each camera pass (`t_view`, `t_refl`, `t_clouds`; before the
+  reversed camera, `t_near`, `t_far`, `t_cldnear`, `t_cldfar`); **asteroids** is the fields' per-frame update. Run to run,
   pipelined: 0.1-0.15 ms. Measurements: [performance.md §38](performance.md).
 - `scripts/flight_bench.py --flight low --trace`: the CPU's parts in flight.
 

@@ -17,11 +17,8 @@
 in vec2 vNdc;
 out vec4 fragColor;
 
-uniform sampler2D uSceneDepthNear;
-uniform sampler2D uSceneDepthFar;
-uniform int   uNearDepthOn;
-uniform mat4  uClipToRender;     // the near range's clip space -> the render frame
-uniform mat4  uClipToRenderFar;  // the far range's
+uniform sampler2D uSceneDepth;
+uniform mat4  uClipToRender;     // the view's clip space -> the render frame
 uniform vec3  uCamRender;        // camera, render frame
 uniform vec3  camPos;            // camera, planet frame
 uniform int   uOwnAtmosphere;    // the planet's atmosphere, -1 none: no shadow
@@ -38,16 +35,12 @@ vec3 unproject(mat4 clipToRender, vec3 ndc) {
 void main() {
     ivec2 texel = ivec2(gl_FragCoord.xy);
     vec2 ndc = gl_FragCoord.xy / uViewSize * 2.0 - 1.0;
-    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, texel, 0).r
-                                        : depthClear();
-    float farDepth = texelFetch(uSceneDepthFar, texel, 0).r;
-    bool near = depthDrawn(nearDepth);
-    mat4 toRender = near ? uClipToRender : uClipToRenderFar;
-    vec3 end = unproject(toRender, vec3(ndc, depthNdc(near ? nearDepth : farDepth)));
+    float sceneDepth = texelFetch(uSceneDepth, texel, 0).r;
+    vec3 end = unproject(uClipToRender, vec3(ndc, depthNdc(sceneDepth)));
     vec3 rel = end - uCamRender;
     // Taken out of any branch (derivatives): this pass's own footprint.
     float local = max(length(dFdx(rel)), length(dFdy(rel))) / float(uDepthScale);
-    if (!near && !depthDrawn(farDepth)) {
+    if (!depthDrawn(sceneDepth)) {
         fragColor = vec4(1.0, -1.0, 0.0, 1.0);  // the sky
         return;
     }
@@ -62,8 +55,10 @@ void main() {
         // scale (huge across a silhouette: the level ground's there).
         vec3 planet = camPos + rel;
         vec3 dir = rel / max(dist, 1e-3);
-        vec3 middle = unproject(toRender, vec3(ndc, 0.0));
-        vec3 beside = unproject(toRender, vec3(ndc + vec2(2.0 / uViewSize.x, 0.0), 0.0));
+        // (a finite point along each ray: reversed 0-1 depth's 0 is infinity)
+        float z = depthFarNdc();
+        vec3 middle = unproject(uClipToRender, vec3(ndc, z));
+        vec3 beside = unproject(uClipToRender, vec3(ndc + vec2(2.0 / uViewSize.x, 0.0), z));
         float angle = length(beside - middle) / max(length(middle - uCamRender), 1e-6)
                     / float(uDepthScale);
         float grazing = abs(dot(dir, normalize(planet)));

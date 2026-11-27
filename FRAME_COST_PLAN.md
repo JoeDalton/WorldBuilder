@@ -505,6 +505,9 @@ Global for these tasks:
   `tools.window_config`); 6.7b removes the split (`SplitDepthCameras`, the
   haze's near passes, the clouds' dormant near range). **Order: 6.7a, then
   6.8 (SpaceFlight off the split), then 6.7b**, or 6.7b breaks SpaceFlight.
+- **6.7b done (2026-11-27), before 6.8:** SpaceFlight is pinned on a
+  WorldBuilder tag, so removing the split cannot break it; 6.8 moves it to
+  the reversed camera when it takes a new tag.
 - `GameWorld` builds `ReversedDepthCamera`; `World.depth_ranges` becomes
   `World.far_distance` plus the height above the nearest ground;
   `SplitDepthCameras`, `split_clear_of`, `camera_span`, the NEAR/FAR masks'

@@ -274,11 +274,13 @@ turns it off.
 
 ## Sky
 
-`Sky` draws a camera-centred sphere first, behind everything, without depth,
-with the far camera only (`hide(HIDE_FROM_NEAR)`: the near pass would paint
-it over the far one), and recentres it every frame (`Sky.update`).
-`sky.vert` puts the sphere on the far plane whatever the camera's range, so
-the ocean's reflection camera, with a range of its own, still sees it whole.
+`Sky` draws a camera-centred sphere after the ground, at the far plane
+(`depth_convention.glsl`'s `depthFarZ`, in either depth convention), with the
+camera's depth test and equality (`Sky.set_depth_mode`): it shows where
+nothing nearer was, the stars it carries too (an airless moon hides them by
+depth; an atmosphere's ground by `atmoHitsGround`). It is recentred every
+frame (`Sky.update`); the ocean's reflection camera, with a range of its own,
+still sees it whole.
 Its shader shows:
 
 - **the procedural star field** (`Starfield`), in two parts:
@@ -569,7 +571,7 @@ weather, from the same systems as the cumulus:
 layer's crossings with the low clouds' along each ray (the downward one
 before the bands', the upward one after), so the cirrus is behind the
 cumulus from below and in front of it from above, for any camera. The far
-plane (`World.depth_ranges`) reaches the high layer's middle where it is
+distance (`World.far_distance`) reaches the high layer's middle where it is
 higher than any ground.
 
 **Lit** as a thin slab (`thinSlabRadiance`): the ice's phase function (the

@@ -43,14 +43,11 @@ uniform float uStill;               // 1: the camera still, 0: moving (the clamp
 uniform float uSmooth;               // how far a pixel on fresh samples takes their smooth mean (0 to 1)
 uniform float uMinWeight;            // this frame's least share, with a full count
 uniform float uMovingWeight;         // the same while the camera moves (by uStill): march.MOVING_WEIGHTS
-// The scene's depth in each range (the march's: cloud_march.frag), and each
-// range's clip space -> the render frame.
-uniform sampler2D uSceneDepthNear;
-uniform sampler2D uSceneDepthFar;
-uniform int   uNearDepthOn;
+// The scene's depth (the march's: cloud_march.frag), and the view's clip
+// space -> the render frame.
+uniform sampler2D uSceneDepth;
 uniform int   uDepthScale;           // view pixels per depth pixel, per axis
 uniform mat4  uClipToRender;
-uniform mat4  uClipToRenderFar;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragDistance;
@@ -101,18 +98,11 @@ float sceneDistance(ivec2 viewPixel) {
     ivec2 depthPixel = viewPixel / uDepthScale;
     vec2 ndc = (vec2(viewPixel) + 0.5) / uViewSize * 2.0 - 1.0;
     vec4 near = uClipToRender * vec4(ndc, depthNearZ(), 1.0);
-    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, depthPixel, 0).r
-                                        : depthClear();
-    vec4 p;
-    if (depthDrawn(nearDepth)) {
-        p = uClipToRender * vec4(ndc, depthNdc(nearDepth), 1.0);
-    } else {
-        float farDepth = texelFetch(uSceneDepthFar, depthPixel, 0).r;
-        if (!depthDrawn(farDepth)) {
-            return SKY_DISTANCE;
-        }
-        p = uClipToRenderFar * vec4(ndc, depthNdc(farDepth), 1.0);
+    float sceneDepth = texelFetch(uSceneDepth, depthPixel, 0).r;
+    if (!depthDrawn(sceneDepth)) {
+        return SKY_DISTANCE;
     }
+    vec4 p = uClipToRender * vec4(ndc, depthNdc(sceneDepth), 1.0);
     return length(p.xyz / p.w - near.xyz / near.w);
 }
 

@@ -24,7 +24,9 @@ from world_builder.clouds.planet import PlanetClouds
 from world_builder.depth import (
     FAR_CAMERA_MASK,
     NEAR_CAMERA_MASK,
-    SplitDepthCameras,
+    ReversedDepthCamera,
+    planet_far,
+    system_far,
 )
 from world_builder.lights import TrackedLights
 from world_builder.objects import PBR_FULL, ModelLighting, ModelSettings, model_shader
@@ -237,20 +239,18 @@ def test_the_far_plane_reaches_the_fields_rocks():
 
     space = _world()
     ring = _field(space)
-    assert space.depth_ranges(np.zeros(3))[1] == SPACE_FAR_M
+    assert space.far_distance(np.zeros(3)) == SPACE_FAR_M
     ring.reach.return_value = 2.6e6
-    assert space.depth_ranges(np.zeros(3))[1] == 2.6e6
+    assert space.far_distance(np.zeros(3)) == 2.6e6
     body = _body()
     world = _world(body)
     origin = np.array([0.0, 0.0, R + 1000.0])
-    _, planet_far = world.depth_ranges(origin)
+    bodies_far = world.far_distance(origin)
     near = _field(world)
-    near.reach.return_value = 0.5 * planet_far
-    assert world.depth_ranges(origin)[1] == planet_far
-    near.reach.return_value = 2.0 * planet_far
-    split, far = world.depth_ranges(origin)
-    assert far == 2.0 * planet_far
-    np.testing.assert_allclose(split, _world(body).depth_ranges(origin)[0])
+    near.reach.return_value = 0.5 * bodies_far
+    assert world.far_distance(origin) == bodies_far
+    near.reach.return_value = 2.0 * bodies_far
+    assert world.far_distance(origin) == 2.0 * bodies_far
 
 
 def test_update_works_around_the_camera():
@@ -272,21 +272,21 @@ def test_update_works_around_the_camera():
     np.testing.assert_allclose(world.camera_world, camera)
 
 
-def test_update_without_far_takes_the_depth_ranges():
+def test_update_without_far_takes_the_far_distance():
     world = _world(_body())
     origin = np.array([0.0, 0.0, R + 1000.0])
     world.update(origin)
-    assert world.sky.update.call_args[0][1] == world.depth_ranges(origin)[1]
+    assert world.sky.update.call_args[0][1] == world.far_distance(origin)
 
 
 def test_open_space_is_a_world_without_bodies():
-    """No planet: the sky, the sun and the lights alone, a fixed depth split,
-    the bare sun and the space ambient light, nothing loading."""
-    from world_builder.world import SPACE_FAR_M, SPACE_SPLIT_M
+    """No planet: the sky, the sun and the lights alone, a fixed far
+    distance, the bare sun and the space ambient light, nothing loading."""
+    from world_builder.world import SPACE_FAR_M
 
     world = _world()
     origin = np.array([1e6, -2e6, 3e5])
-    assert world.depth_ranges(origin) == (SPACE_SPLIT_M, SPACE_FAR_M)
+    assert world.far_distance(origin) == SPACE_FAR_M
     direct, ambient = world.light_at(origin)
     np.testing.assert_allclose(direct, [2.0, 2.0, 2.0])
     np.testing.assert_allclose(ambient, [0.1, 0.2, 0.3])
@@ -296,12 +296,12 @@ def test_open_space_is_a_world_without_bodies():
     assert world.sky.update.call_args[0][1] == SPACE_FAR_M
 
 
-def test_depth_ranges_cover_every_body():
+def test_the_far_distance_covers_every_body():
     planet = _body()
     moon = _body("moon", MOON, position=(0.0, 1e7, 0.0))
     world = _world(planet, moon)
     origin = np.array([0.0, 0.0, R + 800.0])
-    expected = SplitDepthCameras.system_ranges(
+    expected = system_far(
         [
             (R, R + 800.0, UNKNOWN_BOUNDS[1], 0.0),
             (
@@ -312,7 +312,7 @@ def test_depth_ranges_cover_every_body():
             ),
         ]
     )
-    assert world.depth_ranges(origin) == pytest.approx(expected)
+    assert world.far_distance(origin) == pytest.approx(expected)
 
 
 def test_nearest_body_is_by_sea_level():
@@ -592,13 +592,12 @@ def test_the_far_plane_reaches_the_cirrus_above_the_mountains():
     planet.terrain.planet.height_bounds = (-1000.0, 3000.0)
     world = _world(planet)
     origin = np.array([0.0, 0.0, R + 800.0])
-    _, bare = world.depth_ranges(origin)
+    bare = world.far_distance(origin)
     planet.clouds = SimpleNamespace(high_slab=HIGH_SLAB)
-    _, far = world.depth_ranges(origin)
+    far = world.far_distance(origin)
     mid = HIGH_SLAB[0] + 0.5 * HIGH_SLAB[1]
-    expected = SplitDepthCameras.planet_ranges(R, R + 800.0, mid, 0.0)
     assert far > bare
-    assert far == pytest.approx(expected[1])
+    assert far == pytest.approx(planet_far(R, R + 800.0, mid, 0.0))
 
 
 def test_collision_for_the_chosen_bodies():
@@ -727,16 +726,16 @@ def test_a_whole_world(window, monkeypatch):
     )
     shutdowns = []
     monkeypatch.setattr(world.executor, "shutdown", lambda: shutdowns.append(1))
-    depth = SplitDepthCameras(window)
+    depth = ReversedDepthCamera(window)
+    world.use_depth_camera(depth)
     try:
         planet, moon = world.body("planet"), world.body("moon")
         assert planet.terrain.executor is world.executor
         assert moon.terrain.executor is world.executor
         assert planet.clouds.volume.executor is world.executor
         assert planet.atmosphere == 0 and moon.atmosphere is None
-        # Drawn by the far camera only
-        assert world.sky.node.is_hidden(NEAR_CAMERA_MASK)
-        assert not world.sky.node.is_hidden(FAR_CAMERA_MASK)
+        # Drawn by the view's camera (both its bits)
+        assert not world.sky.node.is_hidden(NEAR_CAMERA_MASK | FAR_CAMERA_MASK)
 
         origin = frame.up * (R + 300.0)
         # A ball drawn by the model shader, casting its shadow.
@@ -745,7 +744,7 @@ def test_a_whole_world(window, monkeypatch):
         ball.set_pos(window.camera.get_pos(window.render) + (0.0, 50.0, 0.0))
         world.track_light(ball, cast=True, shader=True)
         for _ in range(2):
-            depth.update(*world.depth_ranges(origin))
+            depth.update(*world.view_ranges(origin))
             world.update(origin, far=depth.far)
             window.graphicsEngine.render_frame()
         assert world.casters._on[0] == 1
@@ -888,7 +887,7 @@ def test_the_view_ranges_are_the_far_distance_and_the_height_over_the_ground():
     for altitude in (1000.0, 50_000.0, 3.0e6):
         origin = np.array([0.0, 0.0, R + altitude])
         far, height = world.view_ranges(origin)
-        assert far == world.depth_ranges(origin)[1]
+        assert far == world.far_distance(origin)
         assert height == pytest.approx(altitude - top)
     space = _world()
     far, height = space.view_ranges(np.zeros(3))

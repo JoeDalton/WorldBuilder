@@ -98,3 +98,11 @@ def test_the_clouds_read_depth_through_the_convention(name):
         "ndc, -1.0",
     ):
         assert standard_only not in source, standard_only
+
+
+def test_no_cloud_shader_unprojects_the_reversed_infinity():
+    """Clip z = 0 is infinity in reversed 0-1 depth (w = 0 after unprojection):
+    a direction or footprint takes depthFarNdc's finite point instead."""
+    for name in ("cloud_march.glsl", "cloud_resolve.frag", "ground_shadow.frag"):
+        source = (PACKAGE / "clouds" / "shaders" / name).read_text()
+        assert "vec3(ndc, 0.0)" not in source and ", 0.0), 0.0)" not in source, name

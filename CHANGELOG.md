@@ -86,6 +86,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of GPU at `ground`, 0.36 ms at `sunset`; the far ground changes by one
   level in 255 at most on 15 % of pixels.
 
+### Removed
+
+- **The split depth cameras** (#57): `depth.SplitDepthCameras`,
+  `split_clear_of`, `camera_span`, `MIN_SPLIT_M`, the split's
+  `planet_ranges` / `system_ranges` (their far distance is
+  `depth.planet_far` / `depth.system_far`), `World.use_split_depth` and
+  `World.depth_ranges` (`World.use_depth_camera`, `World.far_distance`,
+  `World.view_ranges`), `SPACE_SPLIT_M`, `PlanetClouds.use_split_depth`
+  (`use_depth_camera`), the asteroid haze's split passes
+  (`FieldHaze.set_split`, `uHazeSplit`, `uHazeToFar`) and the clouds' near
+  range (its depth pass, card and `set_near`; one depth texture,
+  `uSceneDepth`, one matrix, `uClipToRender`). A game building the split
+  cameras itself builds a `depth.ReversedDepthCamera` (or uses
+  `load_world`). `frame_profile.py --terrain-passes` measures `t_view`,
+  `t_refl`, `t_clouds`. The tests run in desktop's 0-1 depth by default
+  (`WB_DEPTH_ZERO_TO_ONE=0` for macOS's).
+
+### Fixed
+
+- The clouds' ground-shadow pass unprojected clip z = 0 for its footprint,
+  infinity in reversed 0-1 depth: the cloud shadow's softness on the ground
+  came out wrong with the reversed camera (no test or shot measured it).
+
 ## [0.5.0] 2026-11-22
 
 ### Added

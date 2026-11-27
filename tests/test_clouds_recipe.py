@@ -502,7 +502,7 @@ def test_recipe_genera_render(window, recipe_genera):
 
     from world_builder.clouds.cloud import CloudSettings
     from world_builder.clouds.planet import PlanetClouds
-    from world_builder.depth import SplitDepthCameras
+    from world_builder.depth import ReversedDepthCamera, planet_far
     from world_builder.terrain.chart import TangentFrame
     from world_builder.terrain.workers import ChunkExecutor
 
@@ -511,13 +511,13 @@ def test_recipe_genera_render(window, recipe_genera):
         window.render, R, executor, altitude=2200.0,
         settings=CloudSettings(octave_bands=2), genera=recipe_genera,
     )  # fmt: skip
-    depth = SplitDepthCameras(window, near=1.0)
+    depth = ReversedDepthCamera(window, near=1.0)
     camera = window.camera
     pos, hpr = camera.get_pos(), camera.get_hpr()
     try:
         march = clouds.volume
         assert march.genera_count == 4
-        clouds.use_split_depth(window, depth)
+        clouds.use_depth_camera(window, depth)
         march._finish()
         for name in ("genusCoverA", "genusCoverB", "cloudCells"):
             assert name in march._textures or name in march._inputs
@@ -536,7 +536,7 @@ def test_recipe_genera_render(window, recipe_genera):
         gsg = window.win.get_gsg()
         alphas = []
         for _ in range(6):
-            depth.update(*SplitDepthCameras.planet_ranges(R, R + 600.0))
+            depth.update(planet_far(R, R + 600.0), 600.0)
             clouds.update(here)
             window.graphicsEngine.render_frame()
             window.graphicsEngine.extract_texture_data(layer.colour, gsg)

@@ -15,11 +15,10 @@ from panda3d.core import loadPrcFileData
 # Must be applied before the first ShowBase construction.
 loadPrcFileData("", "window-type none")
 loadPrcFileData("", "audio-library-name null")
-# The depth convention under test (FRAME_COST_PLAN.md, Phase 2): OpenGL's
-# [-1, 1] (the default while the world still draws with the split cameras,
-# and macOS's), or its 0-1 through clip control (WB_DEPTH_ZERO_TO_ONE=1: the
-# reversed camera on desktop).
-ZERO_TO_ONE = os.environ.get("WB_DEPTH_ZERO_TO_ONE", "0") == "1"
+# The depth convention under test (depth.ReversedDepthCamera): OpenGL's 0-1
+# through clip control (desktop, the default), or its [-1, 1] (macOS:
+# WB_DEPTH_ZERO_TO_ONE=0). Run the suite under both.
+ZERO_TO_ONE = os.environ.get("WB_DEPTH_ZERO_TO_ONE", "1") != "0"
 loadPrcFileData("", f"gl-depth-zero-to-one {'#t' if ZERO_TO_ONE else '#f'}")
 
 

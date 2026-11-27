@@ -312,12 +312,14 @@ def test_rocks_fade_into_the_haze_at_far(window, ring):
 
 @pytest.mark.parametrize("reversed_view", [False, True])
 def test_the_haze_starts_at_the_near_plane(window, ring, reversed_view):
-    """A near plane inside the ring: only what lies beyond it (the far
-    camera of a split starts at the split). The same through the reversed
-    camera, whose near plane sits at clip z = +w (depth_convention.glsl's
-    depthNearZ), not -w."""
-    from world_builder.depth import DEPTH_STANDARD, ReversedDepthCamera
+    """A near plane inside the ring: only what lies beyond it. Through the
+    app's own camera (standard depth) and through the reversed camera, whose
+    near plane sits at clip z = +w (depth_convention.glsl's depthNearZ), not
+    -w."""
+    from world_builder.depth import DEPTH_STANDARD, ReversedDepthCamera, zero_to_one
 
+    if not reversed_view and zero_to_one():
+        pytest.skip("standard depth with clip control: no camera draws so")
     view = None
     if reversed_view:
         view = ReversedDepthCamera(window, near=10.0)

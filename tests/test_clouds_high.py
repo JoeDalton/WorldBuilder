@@ -357,7 +357,7 @@ def test_an_eclipse_darkens_the_marched_clouds(window, weather, high):
 
     from world_builder.clouds.cloud import CloudSettings
     from world_builder.clouds.planet import PlanetClouds
-    from world_builder.depth import SplitDepthCameras
+    from world_builder.depth import ReversedDepthCamera, planet_far
     from world_builder.shadows import MAX_SHADOW_BODIES
     from world_builder.terrain.chart import TangentFrame
     from world_builder.terrain.workers import ChunkExecutor
@@ -389,7 +389,7 @@ def test_an_eclipse_darkens_the_marched_clouds(window, weather, high):
             window.render, R, executor, altitude=2200.0,
             settings=CloudSettings(octave_bands=2), genera=spec,
         )  # fmt: skip
-        depth = SplitDepthCameras(window, near=1.0)
+        depth = ReversedDepthCamera(window, near=1.0)
         try:
             march = clouds.volume
             if eclipse:
@@ -399,7 +399,7 @@ def test_an_eclipse_darkens_the_marched_clouds(window, weather, high):
                         uShadowCount=count, uShadowSelf=-1,
                     )
                 )  # fmt: skip
-            clouds.use_split_depth(window, depth)
+            clouds.use_depth_camera(window, depth)
             march._finish()
             camera.set_pos(0.0, 0.0, 0.0)
             camera.look_at(Point3(*frame.up))
@@ -409,7 +409,7 @@ def test_an_eclipse_darkens_the_marched_clouds(window, weather, high):
                     march.set_genus_visible(genus, False)
             colours = []
             for _ in range(6):
-                depth.update(*SplitDepthCameras.planet_ranges(R, R + 13000.0))
+                depth.update(planet_far(R, R + 13000.0), 13000.0)
                 clouds.update(here)
                 window.graphicsEngine.render_frame()
                 (layer,) = march._layers
@@ -442,7 +442,7 @@ def test_the_high_layer_renders_only_when_covered(window, weather, genus):
 
     from world_builder.clouds.cloud import CloudSettings
     from world_builder.clouds.planet import PlanetClouds
-    from world_builder.depth import SplitDepthCameras
+    from world_builder.depth import ReversedDepthCamera, planet_far
     from world_builder.terrain.chart import TangentFrame
     from world_builder.terrain.workers import ChunkExecutor
 
@@ -457,13 +457,13 @@ def test_the_high_layer_renders_only_when_covered(window, weather, genus):
         window.render, R, executor, altitude=2200.0,
         settings=CloudSettings(octave_bands=2), genera=spec,
     )  # fmt: skip
-    depth = SplitDepthCameras(window, near=1.0)
+    depth = ReversedDepthCamera(window, near=1.0)
     camera = window.camera
     pos, hpr = camera.get_pos(), camera.get_hpr()
     try:
         march = clouds.volume
         assert march.high_genera == ([genus] if covered else [])
-        clouds.use_split_depth(window, depth)
+        clouds.use_depth_camera(window, depth)
         march._finish()
         frame = TangentFrame.at(-2.86, 0.0)
         here = frame.up * (R + 600.0)
@@ -478,7 +478,7 @@ def test_the_high_layer_renders_only_when_covered(window, weather, genus):
         gsg = window.win.get_gsg()
         alphas = []
         for _ in range(6):
-            depth.update(*SplitDepthCameras.planet_ranges(R, R + 13000.0))
+            depth.update(planet_far(R, R + 13000.0), 13000.0)
             clouds.update(here)
             window.graphicsEngine.render_frame()
             window.graphicsEngine.extract_texture_data(layer.colour, gsg)
@@ -507,7 +507,7 @@ def test_a_one_type_march_draws_the_weather_cirrus(window, weather):
     from world_builder.clouds.cloud import CloudSettings
     from world_builder.clouds.planet import PlanetClouds
     from world_builder.clouds.weather import cirrus_cover_map
-    from world_builder.depth import SplitDepthCameras
+    from world_builder.depth import ReversedDepthCamera, planet_far
     from world_builder.sky.starfield import cube_directions
     from world_builder.terrain.workers import ChunkExecutor
 
@@ -519,13 +519,13 @@ def test_a_one_type_march_draws_the_weather_cirrus(window, weather):
         window.render, R, executor, altitude=2200.0,
         settings=CloudSettings(octave_bands=2), weather=weather, cirrus=True,
     )  # fmt: skip
-    depth = SplitDepthCameras(window, near=1.0)
+    depth = ReversedDepthCamera(window, near=1.0)
     camera = window.camera
     pos, hpr = camera.get_pos(), camera.get_hpr()
     try:
         march = clouds.volume
         assert march.high_genera == ["cirrus"]
-        clouds.use_split_depth(window, depth)
+        clouds.use_depth_camera(window, depth)
         march._finish()
         camera.set_pos(0.0, 0.0, 0.0)
         camera.look_at(Point3(*up))
@@ -536,7 +536,7 @@ def test_a_one_type_march_draws_the_weather_cirrus(window, weather):
 
         def alpha():
             for _ in range(8):
-                depth.update(*SplitDepthCameras.planet_ranges(R, R + 13000.0))
+                depth.update(planet_far(R, R + 13000.0), 13000.0)
                 clouds.update(up * (R + 600.0))
                 window.graphicsEngine.render_frame()
             window.graphicsEngine.extract_texture_data(layer.colour, gsg)

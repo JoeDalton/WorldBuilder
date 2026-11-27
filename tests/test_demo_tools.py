@@ -35,18 +35,16 @@ def test_the_bench_scenes_are_the_world_simplified():
 
 def test_the_terrain_passes_are_the_cameras_bits():
     """--terrain-passes hides the terrain from one camera at a time: the
-    main view's near and far cameras, the sea's reflection and the clouds'
-    two depth passes, by their own bits."""
+    view's camera (both its bits), the sea's reflection and the clouds' depth
+    pass."""
     from panda3d.core import BitMask32
 
     from world_builder import depth
 
     assert frame_profile.TERRAIN_PASSES == {
-        "t_near": BitMask32.bit(depth.NEAR_BIT),
-        "t_far": BitMask32.bit(depth.FAR_BIT),
+        "t_view": BitMask32.bit(depth.NEAR_BIT) | BitMask32.bit(depth.FAR_BIT),
         "t_refl": depth.REFLECTION_CAMERA_MASK,
-        "t_cldnear": BitMask32.bit(depth.CLOUD_NEAR_BIT),
-        "t_cldfar": BitMask32.bit(depth.CLOUD_FAR_BIT),
+        "t_clouds": BitMask32.bit(depth.CLOUD_FAR_BIT),
     }
 
 

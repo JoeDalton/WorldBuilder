@@ -5,7 +5,7 @@ updated as one.
 A game describes its world in a world file
 (:mod:`world_builder.world_file`) and loads it in one line,
 ``world_builder.load_world(app, "my_world.yaml")``, which builds this
-:class:`World` and its split depth cameras. :class:`World` builds and wires the
+:class:`World` and its reversed depth camera. :class:`World` builds and wires the
 parts: each body's terrain, its air,
 its planet clouds (and their cirrus) and its sea, the asteroid fields and
 rings, the sky, the sun, and Panda3D lights for everything else (the game's
@@ -33,9 +33,11 @@ a file)::
         sky=SkyLook(),
         settings=world_settings,
     )
+    depth = ReversedDepthCamera(app)  # after the world (see below)
+    world.use_depth_camera(depth)
     # Every frame, once the camera is placed:
-    split_depth.update(*world.depth_ranges(origin_world))
-    world.update(origin_world, far=split_depth.far)
+    depth.update(*world.view_ranges(origin_world))
+    world.update(origin_world, far=depth.far)
     ...
     world.destroy()
 
@@ -52,9 +54,9 @@ Frames:
   own render position is read from ``app.camera``; the two give the camera's
   world position.
 
-Build a world before any :class:`world_builder.depth.SplitDepthCameras`: the
-sea's reflection camera copies the app's lens once, and the split cameras
-shorten it to the near range.
+Build a world before its :class:`world_builder.depth.ReversedDepthCamera`
+(``load_world`` does both): the sea's reflection camera copies the app's lens
+once.
 """
 
 from __future__ import annotations
@@ -87,7 +89,7 @@ from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
-from world_builder.depth import HIDE_FROM_NEAR, ReversedDepthCamera, SplitDepthCameras
+from world_builder.depth import ReversedDepthCamera, system_far
 from world_builder.display import FrameCap
 from world_builder.gravity import Gravity
 from world_builder.lights import TrackedLights
@@ -104,9 +106,7 @@ from world_builder.terrain.shadow_map import ShadowMap
 from world_builder.terrain.terrain import Terrain
 from world_builder.terrain.workers import ChunkExecutor
 
-#: Open space (a world with no body): the depth split and the far plane,
-#: metres (the sky is drawn just inside the far plane).
-SPACE_SPLIT_M = 2000.0
+#: Open space (a world with no body): the view's far distance, metres.
 SPACE_FAR_M = 1.0e6
 
 # ── looks: what the game decides ─────────────────────────────────────────────
@@ -350,9 +350,8 @@ class World:
     :ivar casters: the objects' shadow map (None without a window)
     """
 
-    #: The game's depth camera (:meth:`use_depth_camera`; the split cameras:
-    #: :meth:`use_split_depth`)
-    depth: ReversedDepthCamera | SplitDepthCameras | None = None
+    #: The game's depth camera (:meth:`use_depth_camera`)
+    depth: ReversedDepthCamera | None = None
 
     def __init__(
         self,
@@ -633,7 +632,6 @@ class World:
                 sun_angular_radius=sun.angular_radius,
             )
             self.shadows.bind(self.sky.node)
-            self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it
             if getattr(app, "win", None) is not None:
                 self.sky.attach_view(app.win, self.shadows)
                 self.atmospheres.attach_aerial(
@@ -768,23 +766,21 @@ class World:
         f = camera.get_quat(self.app.render).get_forward()
         return np.array([f.x, f.y, f.z])
 
-    def depth_ranges(self, origin_world: ArrayLike) -> tuple[float, float]:
-        """Split and far distances for :class:`SplitDepthCameras` this
-        frame: the split follows the nearest ground, the far plane reaches
-        the farthest visible part of any body, and as far as any field's
-        rocks are drawn (:meth:`AsteroidField.reach`: a far plane short of
-        it cut the biggest rocks while they were still a few pixels wide,
-        a line where they met the haze).
+    def far_distance(self, origin_world: ArrayLike) -> float:
+        """How far the view reaches this frame: the farthest visible part of
+        any body, and as far as any field's rocks are drawn
+        (:meth:`AsteroidField.reach`: a far distance short of it cut the
+        biggest rocks while they were still a few pixels wide, a line where
+        they met the haze).
 
         :param origin_world: render's origin in the world frame (float64)
-        :returns: (split, far), metres; in open space (no body) a fixed
-            split and at least :data:`SPACE_FAR_M`
+        :returns: metres; in open space (no body) at least :data:`SPACE_FAR_M`
         """
         camera = np.asarray(origin_world, dtype=np.float64) + self.camera_render()
         reach = max((f.reach(camera) for f in self.fields), default=0.0)
         if not self.bodies:
-            return SPACE_SPLIT_M, max(SPACE_FAR_M, reach)
-        split, far = SplitDepthCameras.system_ranges(
+            return max(SPACE_FAR_M, reach)
+        far = system_far(
             (
                 body.radius,
                 float(np.linalg.norm(camera - body.position)),
@@ -801,11 +797,11 @@ class World:
             )
             for body in self.bodies
         )
-        return split, max(far, reach)
+        return max(far, reach)
 
     def view_ranges(self, origin_world: ArrayLike) -> tuple[float, float]:
         """The :class:`~world_builder.depth.ReversedDepthCamera`'s inputs this
-        frame: the far distance (:meth:`depth_ranges`') and the camera's
+        frame: the far distance (:meth:`far_distance`) and the camera's
         height over the nearest body's highest ground (its near plane follows
         it: never more than the real height over the ground).
 
@@ -813,7 +809,7 @@ class World:
         :returns: (far, height), metres; in open space the height is the far
             distance
         """
-        far = self.depth_ranges(origin_world)[1]
+        far = self.far_distance(origin_world)
         if not self.bodies:
             return far, far
         camera = np.asarray(origin_world, dtype=np.float64) + self.camera_render()
@@ -1072,18 +1068,9 @@ class World:
             if body.ocean is not None:
                 body.ocean.set_depth_mode(depth.mode)
             if body.clouds is not None:
-                body.clouds.use_split_depth(self.app, depth)
+                body.clouds.use_depth_camera(self.app, depth)
         for asteroids in self.fields:
             asteroids.haze.set_depth_mode(depth.mode)
-
-    def use_split_depth(self, depth: SplitDepthCameras) -> None:
-        """The split cameras the game built after the world: the clouds'
-        raymarch draws its passes with them. Call ``depth.update`` before
-        :meth:`update` every frame, as always."""
-        self.depth = depth
-        for body in self.bodies:
-            if body.clouds is not None:
-                body.clouds.use_split_depth(self.app, depth)
 
     def enable_collision(
         self, into_mask: Any, bodies: Iterable[str] | None = None, **kwargs: Any
@@ -1115,9 +1102,9 @@ class World:
 
         :param origin_world: render's origin in the world frame (float64);
             the camera's render position is read from ``app.camera``
-        :param far: the far camera's far distance this frame
-            (:attr:`SplitDepthCameras.far`), metres: the sky is drawn just
-            inside it. None = :meth:`depth_ranges`'
+        :param far: the view's far distance this frame
+            (:attr:`~world_builder.depth.ReversedDepthCamera.far`), metres.
+            None = :meth:`far_distance`'s
         """
         camera_render = self.camera_render()
         camera = np.asarray(origin_world, dtype=np.float64) + camera_render
@@ -1134,7 +1121,7 @@ class World:
         self.shadows.update(camera)
         if self.sky is not None:
             if far is None:
-                far = self.depth_ranges(origin_world)[1]
+                far = self.far_distance(origin_world)
             self.sky.update(tuple(camera_render), far)
         pixel_angle = self._pixel_angle()
         for body in self.bodies:

@@ -404,17 +404,15 @@ the sea.
   both families: the chord, the weather, two maps each; now each genus's
   chord for the far fade and one map pair) cost 0.8-0.9 ms a frame at
   2560 x 1440 (performance.md §32).
-- **The pass** (`ground_shadow.frag`): from the march's own depth passes (the
-  near range's where it drew, the far range's elsewhere), each texel's scene
-  point, and `planetCloudShadow` there: the same function as the terrain's,
+- **The pass** (`ground_shadow.frag`): from the march's own depth pass, each
+  texel's scene point, and `planetCloudShadow` there: the same function as the terrain's,
   its footprint from the pass's own derivatives or, across a silhouette, a
   level ground's at that distance. Out: the shade, and the distance (km; -1
   for the sky).
 - **The reading** (`terrain_frag.glsl`'s `groundShadowAt`): the four texels
   around the pixel, bilinear, keeping those whose distance is within 8 % of
   the pixel's (`GROUND_SHADOW_AGREE`): a silhouette's far side or a model in
-  front is left out. Where none agrees (a silhouette's edge; the near range
-  while its depth pass is off, the slab being out of it), and in the sea's
+  front is left out. Where none agrees (a silhouette's edge), and in the sea's
   reflection (`vMirror`), per pixel as before. `uGroundShadowOn` is 1 while the
   passes draw; the billboards have none (`ground_shadow_defaults`).
 - **Look.** The terrain's debug view 6 shows the shade alone: against per

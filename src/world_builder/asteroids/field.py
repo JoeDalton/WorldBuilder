@@ -53,7 +53,6 @@ from panda3d.core import (
     SamplerState,
     Shader,
     Texture,
-    Vec3,
 )
 
 from world_builder.asteroids.haze import FieldHaze, mean_projected_cover
@@ -66,7 +65,7 @@ from world_builder.asteroids.rock import ROCK_UV_PERIOD
 from world_builder.asteroids.scatter import Scatter
 from world_builder.asteroids.settings import AsteroidSettings
 from world_builder.asteroids.spec import FieldSpec, KeepOut
-from world_builder.depth import NEAR_CAMERA_MASK, REFLECTION_CAMERA_MASK
+from world_builder.depth import REFLECTION_CAMERA_MASK
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.materials import (
     MaterialSet,
@@ -310,7 +309,7 @@ class AsteroidField:
         its largest rock's distance at the smallest size drawn (the
         settings', so the budget raising it does not pull the far plane in
         and out), at most the field's far side. What the camera's far plane
-        must reach (``World.depth_ranges``): nearer, it cut the biggest
+        must reach (``World.far_distance``): nearer, it cut the biggest
         rocks while they were several pixels wide, a line against the haze.
 
         :param camera_world: the camera, world frame
@@ -433,13 +432,6 @@ class AsteroidField:
             cell = np.floor(camera / c.cell)
             frame["uCamCell"][k] = LVecBase3f(*cell)
             frame["uCamLocal"][k] = LVecBase3f(*(camera - cell * c.cell))
-        split = None
-        if cameras and cameras[0].node().get_camera_mask() == NEAR_CAMERA_MASK:
-            # The near camera of a split view: its far plane is the split
-            view = cameras[0]
-            forward = self.app.render.get_relative_vector(view, Vec3(0.0, 1.0, 0.0))
-            split = (tuple(forward), view.node().get_lens().get_far())
-        self.haze.set_split(split)
         # While skipped no rock is held (and the windows no longer follow the
         # pixel scale): the whole field is haze.
         limits = self.population.limits(self.far)
