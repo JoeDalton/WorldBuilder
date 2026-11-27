@@ -447,7 +447,7 @@ The library ships in the Linux (x86_64, aarch64), Windows x64 and macOS (univers
 
 **Loading:** only drawn ground is solid, and the ground around a new camera position takes seconds to load (about 10 s from nothing on the earthlike planet). `Terrain.loading` is True while the last LOD pass still wanted chunks it needs. A game's loading phase should wait for it to stay False for a moment: in flight it turns on briefly whenever detail refines.
 
-`TerrainQuery` stays the pure-numpy path for one-off queries (`altitude`, `height_at`, and so on).
+`TerrainQuery` stays the Python path for one-off queries (`altitude`, `height_at`, and so on): numpy for many points, plain floats for one (an altimeter's, a game's altitude every frame: ~13 µs).
 
 ## Paths to SpaceFlight
 

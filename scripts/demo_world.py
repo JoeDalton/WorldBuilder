@@ -166,8 +166,7 @@ class WorldDemo(ShowBase):
         self.start = start or self.default_start()
         self._keys = dict.fromkeys(_CONTROLS, False)
         self._bind_keys()
-        # One text per line, set only when its text changed: rebuilding one
-        # multi-line text took ~5 ms every refresh.
+        # One text per line, set only when its text changed.
         self._hud: list[OnscreenText] = []
         self._hud_hidden = False
         self._hud_time = -1.0

@@ -426,6 +426,12 @@ sky + terrain: 0.2 ms less at the ground. Two findings shape the migration:
 
 ### Phase 2 migration tasks (6.1-6.8)
 
+> **Since (2026-11-27):** the near plane no longer follows the altitude (it
+> cut SpaceFlight's cockpit and close ships): `update(far)` alone, a fixed
+> near of 1 m; `World.view_ranges` went. The cull bounds are six planes, not
+> a hexahedron (a hexahedron's corners 20,000 km out cost its planes metres
+> near the camera). The text below is the plan as it was made.
+
 Global for these tasks:
 - **Both conventions under test.** `tests/conftest.py` sets
   `gl-depth-zero-to-one` from `WB_DEPTH_ZERO_TO_ONE` (default 1) before the

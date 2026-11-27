@@ -944,6 +944,22 @@ def test_the_staged_lights_are_the_lights_at_once():
         np.testing.assert_array_equal(a, b)
 
 
+def test_points_without_local_shadows_skip_the_rings_and_mountains():
+    """lights_at(points, local=False) (what a shader shades per pixel: the
+    near sea) asks the rings' and the mountains' shadows nothing; with
+    local=True it does."""
+    world = _world(_body())
+    world.shadows.ring_visibility = MagicMock(
+        side_effect=lambda p, sun: np.ones(len(p))
+    )
+    points = np.array([[0.0, 0.0, R + 10.0], [0.0, 0.0, R + 20.0]])
+    world.lights_at(points, False)
+    world.shadows.ring_visibility.assert_not_called()
+    world.lights_at(points, [False, True])
+    (called, _), _ = world.shadows.ring_visibility.call_args
+    assert len(called) == 1
+
+
 def test_the_bodies_centres_are_gathered_once():
     world = _world(_body())
     points = np.array([[0.0, 0.0, R + 10.0]])

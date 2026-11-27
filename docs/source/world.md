@@ -135,23 +135,28 @@ In order, it updates:
 3. the sky;
 4. each body's clouds, with the angle one pixel spans, taken from the
    camera's own output (a window, or a game's offscreen buffer);
-5. Panda3D's sun and ambient lights, set to the light at the camera
-   (`World.light_at`), and each tracked model's at the model: the air reddens the sun, an airless body's shadow
-   hides it, and the other bodies eclipse it. Their colours are multiplied by `light_scale`. A game
-   whose models use Panda3D's fixed-function lighting scales them down, since
-   that lighting has no tone map and clips the physical noon sun (about 2.5)
-   to white (see [Lighting on objects](object_lighting.md));
-   a model tracked with `shader=True` takes its nearest body's model shader
-   inputs instead (`Body.models`);
-6. each body's sea (`Sea.update`):
+5. each body's sea (`Sea.update`):
    - its swell, drifted to the game time and handed to the terrain, its
      query and its collision solid;
    - its near look's share by altitude (`near_band`), which also turns the
      reflection pass on or off;
    - its frame, the tangent plane at the camera's nadir, with the waves
      anchored to the ground through a chart;
-   - while the near look shows, its light, relative to the daylight its
-     colour was tuned in.
+6. Panda3D's sun and ambient lights, set to the light at the camera
+   (`World.light_at`), and each tracked model's at the model: the air reddens the sun, an airless body's shadow
+   hides it, and the other bodies eclipse it. Their colours are multiplied by `light_scale`. A game
+   whose models use Panda3D's fixed-function lighting scales them down, since
+   that lighting has no tone map and clips the physical noon sun (about 2.5)
+   to white (see [Lighting on objects](object_lighting.md));
+   a model tracked with `shader=True` takes its nearest body's model shader
+   inputs instead (`Body.models`). With them, each near sea's light, relative
+   to the daylight its colour was tuned in. `World(light_period=N)` sets
+   these lights every N frames, their reckoning spread over the frames
+   before in `LIGHT_STAGES` stages (one a frame at 3: no frame takes it
+   whole); they are reckoned at once when the sun moves or the tracked
+   models change;
+7. the casters' shadow map (`World.casters`), fitted to the tracked models
+   that cast (see [Shadows](shadows.md)).
 
 ## Order and the depth camera
 
@@ -173,7 +178,11 @@ in the game's PRC before ShowBase opens its window: OpenGL's 0-1 depth keeps
 the float precision. macOS's OpenGL has no clip control: there the depth keeps
 about a 24-bit range's precision (far bodies' depths may fight). The near
 plane stays at 1 m everywhere: one following the altitude cut the cockpit and
-close ships.
+close ships. It culls to the world's far distance (`depth.frustum_bounds`:
+six planes, exact in every model's frame; Panda's own frustum stops at
+10,000 km, and a box's corners that far out cost its planes metres of
+precision near the camera). Its scene buffer keeps the output's
+multisampling (`depth.scene_buffer_props`).
 
 Load `transform-cache false` in the game's PRC (before ShowBase opens its
 window). The world moves around the camera, so every drawn node's net
@@ -209,8 +218,8 @@ camera draws them once.
   out, for what a shader shades per pixel (the near sea).
 - **`track_light(node, cast=False, shader=False)`, `untrack_light(node)`**:
   a model lit by the light where it is, not at the camera: its own Panda3D
-  sun and ambient lights (the world's off on it), set at every `update` in
-  one vectorised call, times `light_scale`. Place the model before
+  sun and ambient lights (the world's off on it), set by `update` in one
+  vectorised call (every `light_period` frames), times `light_scale`. Place the model before
   `update`. With `cast=True` it casts shadows on the terrain, the sea and
   the shaded models (`World.casters`, see [Shadows](shadows.md)). With
   `shader=True` the world's model shader draws it: lit and tonemapped as

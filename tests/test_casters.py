@@ -233,3 +233,22 @@ def test_the_map_is_the_casters_geometric_shadow(window, reversed_view):
             view.destroy()
         casters.destroy()
         scene.remove_node()
+
+
+def test_a_casters_box_bounds_give_the_sphere_around_the_box():
+    """A caster whose bounds are a box (a node made final with one): the
+    sphere about its centre through its corners, in render's frame."""
+    from panda3d.core import BoundingBox, Point3
+
+    from world_builder.shadows.casters import _sphere
+
+    render = NodePath("render")
+    parent = render.attach_new_node("ship")
+    parent.set_pos(100.0, 0.0, 0.0)
+    part = parent.attach_new_node("hull")
+    part.node().set_bounds(BoundingBox(Point3(0, 0, 0), Point3(2, 2, 2)))
+    part.node().set_final(True)
+    x, y, z, radius = _sphere(part, render)
+    assert (x, y, z) == pytest.approx((101.0, 1.0, 1.0))
+    assert radius == pytest.approx(3**0.5)
+    assert _sphere(render.attach_new_node("empty"), render) is None

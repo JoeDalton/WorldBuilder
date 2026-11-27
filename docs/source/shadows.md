@@ -560,7 +560,9 @@ tracked model where it is:
 - `World.track_light(node, cast=False)`: the node gets its own
   `DirectionalLight` and `AmbientLight`
   (`world_builder.lights.TrackedLights`), the world's off on it; `update`
-  sets them from `lights_at` at the nodes' positions, times `light_scale`.
+  sets them from `lights_at` at the nodes' positions, times `light_scale`
+  (every `light_period` frames, the reckoning spread over the frames
+  before).
   `untrack_light` puts back the node's own lights. `cast` is kept for the
   caster map (part H).
 

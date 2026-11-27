@@ -45,6 +45,11 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Changed
 
+- Docs: `World.update`'s order (the seas before the lights, the casters'
+  map last), the tracked lights every `light_period` frames, the depth
+  camera's culling and multisampling (world.md, shadows.md,
+  object_lighting.md, terrain.md); FRAME_COST_PLAN.md notes the near plane
+  and cull bounds changed since. `world_file._BODY_ONLY` (unused) removed.
 - `Trees` remembers the chunks in range whose plants have no impostor: they
   were looked at again on every pass (in a low flight ~11 of them a pass,
   nine times the chunks really made).

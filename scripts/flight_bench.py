@@ -22,8 +22,8 @@ paths, reporting frame times and where the main thread spends them::
     --trace          time the main thread's parts in every frame and print
                      what the slowest 5 % of frames spend beyond the median
                      ones (the slow frames' causes)
-    --no-hud         skip the demo's HUD refresh (its text cost ~5 ms every
-                     0.2 s), so the frames measure the world only
+    --no-hud         skip the demo's HUD refresh (every 0.2 s), so the
+                     frames measure the world only
     --size           window or buffer size (default "1600 900")
     --workers        generation processes (the terrain's setting; default:
                      physical cores - 1)

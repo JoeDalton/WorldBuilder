@@ -95,7 +95,6 @@ SHIPPED_PLANETS = ("kerbin", "earth", "desert", "forest", "moon", "ice")
 SHIPPED_FIELDS = ("asteroid_cube", "asteroid_icy_ball", "ring")
 
 _TOP = {"sun", "sky", "space_ambient", "bodies", "fields"}
-_BODY_ONLY = {"planet", "mass", "density"}
 
 LOGGER = logging.getLogger(__name__)
 

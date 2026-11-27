@@ -37,9 +37,9 @@ air between the camera and the surface (aerial perspective, `applyAtmospheres`).
 A model the world does not draw has no shader. OpenGL's built-in lighting computes
 `ambient + sun × cos(angle)` from Panda3D lights and **clips each channel at
 1.0**. The lights are either the world's (a `DirectionalLight` and an
-`AmbientLight` on `render`, set each frame from the light at the camera), or,
-for a model tracked with `World.track_light(node)`, its own pair, set each
-frame from the light where the model is (`world_builder.lights.TrackedLights`;
+`AmbientLight` on `render`, set from the light at the camera), or, for a
+model tracked with `World.track_light(node)`, its own pair, set from the
+light where the model is (both every `World(light_period=N)` frames) (`world_builder.lights.TrackedLights`;
 a game tracks its models). Nothing else is applied, which shows on the
 test ball:
 

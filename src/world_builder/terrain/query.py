@@ -1,5 +1,7 @@
 """
-Terrain queries for collision, sensors and gameplay (pure numpy).
+Terrain queries for collision, sensors and gameplay (numpy; a single point,
+an altimeter's or a game's altitude every frame, in plain floats: the same
+chunk and triangle, ~13 µs against ~170).
 
 Positions are float64 metres in the planet frame (centre at the origin, no
 rotation). Heights are measured along the radial line through the query
