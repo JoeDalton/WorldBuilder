@@ -104,6 +104,17 @@ then the default) is measured, not built. What is left:
 
 ### Steadiness
 
+- **Horizontal lines across the deck seen edge-on from just above it**
+  (reported 2026-11-27 in `demo_world.py` at rest; there with the split
+  cameras already, `a9297a6`, as with the reversed camera and with Task 7's
+  view depth: not the depth work). Reproduce:
+  `terrain_shots.py --offscreen --size "2493 1408" --at 0.8057 30.4001 2956 0 -4
+  --pose at` (the camera 2,957 m up, pitch -4, the cumulus deck's top just
+  under it): thin bright and dark rows through the deck's grazing far side,
+  steady in a still view. Suspects, not checked: the march's 4 x 2 block at
+  HIGH (rows traced two at a time) or the resolve's history at grazing
+  angles. Not looked into further.
+
 - **The light volume re-baked mid-flight lights the clouds anew at once**
   (found 2026-11-08, performance.md §30). A bake is started when the camera
   has moved 3 % of the volume's reach or the reach has changed by as much,
