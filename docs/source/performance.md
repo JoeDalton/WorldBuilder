@@ -2913,6 +2913,68 @@ the same (0.96 %, 0.10-0.11 %). Still shots: within the clouds' own
 run-to-run difference (the largest, at `sunset`, the sun's glint along the
 far shore, which moves between runs).
 
+## 41. A game's frame: SpaceFlight's Mission 3 (November 2026)
+
+The heaviest scene a game draws with `World`: the earth-like planet (terrain,
+raymarched clouds with genera and cirrus, the swell sea, every shadow), its
+moon, and some 25 ships tracked with the model shader and casting shadows.
+SpaceFlight's `scripts/bench_mission3.py`: the game offscreen, HIGH, each frame
+waiting for the GPU (so CPU and GPU in series), RTX 3070 / 5600X. Two runs of
+the same tree differ by up to 0.8 ms.
+
+**Early November, with the split cameras: about 16 ms a frame** at 2560 x
+1440 (~11 at 1280 x 720). PStats then:
+
+| Part | ms a frame |
+|---|---|
+| GPU: the clouds' far march / near march (camera 900 m under the slab) | 2.5 / 1.5 |
+| GPU: the clouds' depth passes (near, far) and resolves | 0.75 + 0.2 |
+| GPU: the main view (far range 2.1, near 0.65) | 2.8 |
+| GPU: the sea's reflection / the caster map / the game's mirror | 0.55 / 0.15 / 0.1 |
+| CPU: Panda's draw (set state 3.0, of which shader inputs 0.95, textures 0.7) | 5.3 |
+| CPU: Panda's cull (about ten cameras) | 1.5 |
+| CPU: `World.update` (the light at the ships and the camera, mostly) | ~2 |
+| CPU: the game (bots' flight model and thinking, collisions) | ~3 |
+
+Made then, with no visible change:
+
+- **The light at the camera and the tracked nodes every N frames**
+  (`World(light_period=N)`; SpaceFlight uses 3), at once when the sun moves
+  or the tracked nodes change: `lights_at` (the CPU's march through the
+  clouds' shadow) was ~1 ms a frame with a score of nodes.
+- **No new render state per frame for the tracked models**: the model
+  shader's attrib is set on a node only when it differs
+  (`ModelLighting.apply`), and the body's rotation given to the shader only
+  when it turned (`ModelLighting.update`).
+- **The cloud march's per-frame inputs bound once**: matrices, offsets and
+  flags as PTAs written in place, the composite's two states made once.
+- **`World.update`** reads the tracked nodes' positions once and keeps the
+  bodies' centres and radii; the caster map compares its casters by key.
+- **A sun tolerance** for the cloud shadow maps and the terrain's shadow
+  bake (`utils.sun_moved`, 0.05°): a slowly turning sun no longer redraws
+  them every frame.
+- **The terrain's collision range** defaults to 20 km (it was 100 km).
+
+Measured and not worth it: `transform-cache false` (within the noise), the
+game's mirror (under 0.5 ms), the ships' shadows (~0.4 ms), the cirrus.
+
+**2026-11-27, after §38-40 (one reversed camera, the clouds on its depth):
+11.7 ms median at 2560 x 1440** (mean 12.1, p95 15.4), **9.1 at 1280 x 720**
+(mean 9.5): four times the pixels add 2.6 ms, so the frame is mostly the
+CPU's now. cProfile over 300 frames at 1280 x 720 (inflated by the profiler,
+ms a frame):
+
+| Part | ms |
+|---|---|
+| Panda's `renderFrame` (cull and draw) | 3.3 |
+| The game's bots (`move_bot_task`; the ships' physics 0.9 of it) | 2.35 |
+| `World.update` | 1.95 |
+| of it: the light at the tracked nodes (`_light`, every third frame) | 0.47 |
+| of it: the caster map's fit (`casters.update`) | 0.44 |
+| of it: the terrain (`_select` 0.3) | 0.43 |
+| of it: the sea / the models' inputs | 0.15 / 0.1 |
+| Waiting for the GPU (the bench's read-back) | 1.6 |
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

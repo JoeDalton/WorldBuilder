@@ -525,9 +525,8 @@ class Sea:
         # A copy of the main lens, its field of view widened by
         # reflection_fov_scale (a margin against culling at the edges when
         # turning; _mirror follows the main lens's). Near and far are taken
-        # here, before a split-depth setup shortens the main lens; the far
-        # plane is pushed out, as the mirrored camera sits farther from what
-        # it sees.
+        # from the app's lens (load_world sets them first); the far plane is
+        # pushed out, as the mirrored camera sits farther from what it sees.
         lens = self.app.camLens.make_copy()
         fov = self.app.camLens.get_fov()
         scale = self._settings.reflection_fov_scale

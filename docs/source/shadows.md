@@ -171,8 +171,7 @@ only, so it lines up with the clouds drawn, and it moves with the sun.
   HIGH, MID): ground 10.95, 12.70, 11.98; high 6.01, 7.37, 6.78; stratosphere
   4.29, 5.15, 5.10; sea_surface 8.23, 9.27, 9.02; orbit 2.62, 2.84. A
   shadow map (the march once per texel of a map around the camera, one
-  fetch per pixel) is the way to most of it back: see the
-  [performance backlog](performance_backlog.md).
+  fetch per pixel) took most of it back: `CloudShadowMaps`, 0.3-1.1 ms.
 
 ## Mountain shadows (the global map)
 

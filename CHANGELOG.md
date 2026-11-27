@@ -45,6 +45,12 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Changed
 
+- `performance_backlog.md` cleaned up: the items about the billboard clouds,
+  the split cameras and the clouds' depth passes (all gone) and the done ones
+  removed; where the frame stands now (the demo, SpaceFlight's Mission 3: 11.7
+  ms at 2560 x 1440, ~16 before) and the candidates left, with two new ones
+  (the caster map's fit, the light's every-third-frame spike). Mission 3's
+  history moved to performance.md §41.
 - **One reversed-Z camera instead of the split cameras** (#57):
   `load_world` draws the view with a `ReversedDepthCamera` and hands it to the
   world (`World.use_depth_camera`). Games should set `gl-depth-zero-to-one #t`
