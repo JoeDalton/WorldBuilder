@@ -59,3 +59,77 @@ def test_the_table_texture_holds_the_table():
         n_l,
         groups * lambdas * phis,
     )
+
+
+def test_the_plants_follow_their_chunks_distance():
+    """Trees.update: impostors for the drawn chunks with plants within
+    tree_range (by their box's distance), the meshes for those within
+    mesh_range and its margin, nothing for chunks without plants or nodes."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from world_builder.terrain.trees import MESH_MARGIN, Trees
+
+    def chunk(x, plants=True):
+        return SimpleNamespace(
+            centre=np.array([x, 0.0, 0.0]),
+            aabb_min=np.array([-100.0, -100.0, -100.0]),
+            aabb_max=np.array([100.0, 100.0, 100.0]),
+            forest=np.zeros((1, 7), np.float32) if plants else None,
+        )
+
+    store = {
+        "close": chunk(0.0),  # the camera in its box
+        "mid": chunk(1100.0),  # 1000 m off its box
+        "far": chunk(5100.0),  # 5000 m: past both
+        "bare": chunk(0.0, plants=False),
+        "unbuilt": chunk(0.0),
+    }
+    settings = SimpleNamespace(mesh_range=500.0, tree_range=3000.0)
+    trees = object.__new__(Trees)
+    trees._terrain = SimpleNamespace(
+        store=store,
+        nodes={k for k in store if k != "unbuilt"},
+        vegetation=SimpleNamespace(settings=settings, active=True),
+    )
+    trees._points, trees._counts, trees._bare, trees.stats = {}, {}, set(), {}
+    trees._point_node = MagicMock(side_effect=lambda key, chunk, plants: key)
+    trees._fill_meshes = MagicMock()
+    trees.update(set(store), np.zeros(3), np.zeros(3))
+    assert set(trees._points) == {"close", "mid"}
+    near = trees._fill_meshes.call_args.args[0]
+    assert near == ["close"] and 1000.0 > 500.0 + MESH_MARGIN
+
+
+def test_a_chunk_without_impostor_plants_is_looked_at_once():
+    """A chunk in range whose plants have no impostor (rocks, bushes) is
+    looked at on its first pass only, until it is dropped."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from world_builder.terrain.trees import Trees
+
+    chunk = SimpleNamespace(
+        centre=np.zeros(3),
+        aabb_min=np.full(3, -100.0),
+        aabb_max=np.full(3, 100.0),
+        forest=np.zeros((1, 7), np.float32),
+    )
+    trees = object.__new__(Trees)
+    trees._terrain = SimpleNamespace(
+        store={"bare": chunk},
+        nodes={"bare"},
+        vegetation=SimpleNamespace(
+            settings=SimpleNamespace(mesh_range=500.0, tree_range=3000.0),
+            active=True,
+        ),
+    )
+    trees._points, trees._counts, trees._bare, trees.stats = {}, {}, set(), {}
+    trees._point_node = MagicMock(return_value=None)
+    trees._fill_meshes = MagicMock()
+    for _ in range(3):
+        trees.update({"bare"}, np.zeros(3), np.zeros(3))
+    assert trees._point_node.call_count == 1
+    trees.drop("bare")
+    trees.update({"bare"}, np.zeros(3), np.zeros(3))
+    assert trees._point_node.call_count == 2

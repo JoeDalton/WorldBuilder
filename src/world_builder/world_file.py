@@ -42,6 +42,7 @@ Positions are metres in the world frame; the game places its camera there.
 from __future__ import annotations
 
 import functools
+import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,7 +59,7 @@ from world_builder.config import (
     load_document,
     to_config,
 )
-from world_builder.depth import SplitDepthCameras
+from world_builder.depth import ReversedDepthCamera
 from world_builder.settings import WorldSettings
 from world_builder.terrain.planet import PlanetSpec
 from world_builder.world import (
@@ -94,7 +95,8 @@ SHIPPED_PLANETS = ("kerbin", "earth", "desert", "forest", "moon", "ice")
 SHIPPED_FIELDS = ("asteroid_cube", "asteroid_icy_ball", "ring")
 
 _TOP = {"sun", "sky", "space_ambient", "bodies", "fields"}
-_BODY_ONLY = {"planet", "mass", "density"}
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -285,21 +287,33 @@ def world_to_yaml(spec: WorldSpec) -> str:
 
 
 class GameWorld:
-    """A world loaded from a file: the :class:`World` and its split cameras,
+    """A world loaded from a file: the :class:`World` and its depth camera,
     updated in one call.
 
     :ivar spec: what the file defined
     :ivar world: the :class:`World`: bodies, fields, sky, lights, gravity,
         collisions (see its docs)
-    :ivar depth: the split cameras
+    :ivar depth: the reversed camera
+        (:class:`~world_builder.depth.ReversedDepthCamera`); None in an app
+        without a window (``window-type none``: a game's headless runs),
+        which draws nothing
     """
 
     def __init__(self, app: Any, spec: WorldSpec, world: World) -> None:
         self.app = app
         self.spec = spec
         self.world = world
-        self.depth = SplitDepthCameras(app, near=1.0)
-        world.use_split_depth(self.depth)
+        self.depth: ReversedDepthCamera | None = None
+        if getattr(app, "win", None) is None:
+            LOGGER.info("no window: the world is built without its depth camera")
+            return
+        self.depth = ReversedDepthCamera(app, near=1.0)
+        if not self.depth.float_depth:
+            LOGGER.warning(
+                "the window has no float depth buffer: depth precision is a "
+                "24-bit range's (open it with depth.float_depth_fbprops())"
+            )
+        world.use_depth_camera(self.depth)
 
     def body(self, name: str):
         """:returns: the built body called *name* (:meth:`World.body`)"""
@@ -316,12 +330,16 @@ class GameWorld:
         :param origin_world: the camera's position in the world frame, metres
             (float64; the camera itself stays at render's origin)
         """
-        self.depth.update(*self.world.depth_ranges(origin_world))
+        if self.depth is None:
+            self.world.update(origin_world)
+            return
+        self.depth.update(self.world.far_distance(origin_world))
         self.world.update(origin_world, far=self.depth.far)
 
     def destroy(self) -> None:
         """Remove the world and stop its workers."""
-        self.depth.destroy()
+        if self.depth is not None:
+            self.depth.destroy()
         self.world.destroy()
 
 
@@ -348,7 +366,9 @@ def load_world(
     """
     spec = parse_world(source)
     # Before the world is built: the sea's reflection camera copies the lens.
-    app.camLens.set_near_far(1.0, INITIAL_FAR_M)
+    # (An app without a window has none.)
+    if getattr(app, "camLens", None) is not None:
+        app.camLens.set_near_far(1.0, INITIAL_FAR_M)
     world = World(
         app,
         spec.bodies,

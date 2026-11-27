@@ -7,6 +7,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Frame time at 2560 x 1440, HIGH, as a game runs it (CPU and GPU overlapping,
+`frame_profile.py --pipelined`), on an RTX 3070 / Ryzen 5600X: `ground` 6.20 to
+3.44 ms, `coast` 6.02 to 3.46, `sunset` 6.30 to 3.57, 20 km 3.85 to 2.10 (the
+steps below; FRAME_COST_PLAN.md, performance.md §38-40).
+
+### Added
+
+- `world_builder.depth.ReversedDepthCamera` (#57): one camera over the whole
+  view, reversed and infinite (near at 1, infinity at 0), with a float depth
+  buffer's precision (about 1e-7 of the distance at every range): one cull
+  and one draw of the scene. Its own camera under `app.camera` (the app's
+  lens stays standard, for picking), a "greater" depth test, culling cut at
+  the world's far distance, a fixed near plane (1 m; one following the
+  altitude cut a game's cockpit and close ships). `update(far)`: the world
+  gives it `far_distance(origin)`. A window's framebuffer has no float
+  depth, so it draws into a scene buffer of its own (presented in the window, or in a
+  game's post-process buffer, under the other regions; `scene_buffer=False`
+  for an output with float depth already: `depth.float_depth_fbprops`). The
+  scene buffer keeps its output's multisampling (`depth.scene_buffer_props`).
+  It copies its depth into `depth_texture` after each frame.
+- The depth convention's one source: `shaders/depth_convention.glsl` and
+  `depth.depth_mode_input()` (`uDepthMode`, `DEPTH_STANDARD`,
+  `DEPTH_REVERSED_01` with `gl-depth-zero-to-one`, `DEPTH_REVERSED_11`
+  without: macOS), `depth.far_plane_test`, `depth.view_test`,
+  `depth.reversed_lens`, `depth.zero_to_one`. The renderers that pin or read
+  depth follow it: `Sky.set_depth_mode`, `Sea.set_depth_mode` (its mirror's
+  camera reversed too), `FieldHaze.set_depth_mode`, the clouds.
+- `World.use_depth_camera`, `World.far_distance`; `depth.planet_far`, `depth.system_far`.
+- `AsteroidField.out_of_reach`; `MaterialSet.mean_rough_ao`.
+- `scripts/frame_profile.py --pipelined` (frames as a game runs them; the
+  default mode's frame is the CPU and the GPU added) and `--terrain-passes`
+  (the terrain's cost in the view, `t_view`, and the sea's reflection,
+  `t_refl`); a part `asteroids` (the fields' per-frame update).
+- The tests run in either depth convention: desktop's 0-1 by default,
+  `WB_DEPTH_ZERO_TO_ONE=0` for macOS's [-1, 1].
+
+### Changed
+
+- Docs: `World.update`'s order (the seas before the lights, the casters'
+  map last), the tracked lights every `light_period` frames, the depth
+  camera's culling and multisampling (world.md, shadows.md,
+  object_lighting.md, terrain.md); FRAME_COST_PLAN.md notes the near plane
+  and cull bounds changed since. `world_file._BODY_ONLY` (unused) removed.
+- `Trees` remembers the chunks in range whose plants have no impostor: they
+  were looked at again on every pass (in a low flight ~11 of them a pass,
+  nine times the chunks really made).
+- Per-chunk Python in a terrain selection made one numpy pass: the
+  collision's reach (`TerrainCollision.update`) and the trees' box distances
+  (`Trees.update`), most of a selection's ~2 ms in SpaceFlight's Mission 3.
+- `TerrainQuery` answers a single point in plain floats (the same chunk and
+  triangle as for many; the arrays' path where none is stored): the demo's
+  altimeter and a game's altitude every frame. `Swell` makes its native
+  struct once.
+- The demo's HUD is one text per line, each set only when it changed;
+  `WorldDemo.hide_hud()` hides it for shots (`terrain_shots.py`,
+  `motion_shots.py`, `tree_gallery.py`).
+- `World(light_period=N)` spreads the light's reckoning over its frames:
+  `lights_at` runs in `LIGHT_STAGES` (3) stages (the air's light; the
+  eclipses and the clouds' shadow; the rings' and the mountains' shadows),
+  one a frame at N = 3, instead of all of it every N-th frame (SpaceFlight's
+  Mission 3: a ~1 ms bump every third frame, now ~0.25-0.42 ms each frame).
+  The lights set are as of the job's first frame (two frames old at 3); a
+  moved sun or a change in the tracked nodes still reckons them at once.
+- `CasterMap.update` tests every caster's shadow size in one numpy pass
+  (it made a few small arrays per caster): 197 to 129 µs an update with 16
+  ships.
+- `performance_backlog.md` cleaned up: the items about the billboard clouds,
+  the split cameras and the clouds' depth passes (all gone) and the done ones
+  removed; where the frame stands now (the demo, SpaceFlight's Mission 3: 11.7
+  ms at 2560 x 1440, ~16 before) and the candidates left, with two new ones
+  (the caster map's fit, the light's every-third-frame spike). Mission 3's
+  history moved to performance.md §41.
+- **One reversed-Z camera instead of the split cameras** (#57):
+  `load_world` draws the view with a `ReversedDepthCamera` and hands it to the
+  world (`World.use_depth_camera`). Games should set `gl-depth-zero-to-one #t`
+  before opening their window (not on macOS: its OpenGL has no clip control;
+  the world then keeps about a 24-bit range's precision). The demo and
+  scripts do (`tools.window_config`). -0.2 to -0.25 ms low over the ground.
+- **The clouds read the view's depth instead of drawing their own**: the
+  march, its resolve, the composite and the ground shadow pass read last
+  frame's (`ReversedDepthCamera.depth_texture`); their depth pass, which drew
+  the scene again, is gone: -1.1 to -1.45 ms a frame low over the ground. In
+  motion the clouds' edges against a moving silhouette are a frame late (a
+  forward flight: the same error against converged frames as before).
+- An asteroid field or ring out of the camera's reach does no per-frame work
+  for its rocks once it has let them go (its haze still follows the camera):
+  the demo's ring, 60,000 km away, took ~1.1 ms of every frame.
+- A field's haze makes its table of the rocks not drawn only when the pixel
+  scale, the smallest size drawn or the classes' limits change: 0.3 ms less a
+  frame inside a field.
+- The ground's materials (terrain, and rocks drawn with its textures) no
+  longer read their normal, roughness and occlusion texture past 600 m, where
+  the normal map has faded out: each layer's mean roughness and occlusion
+  stand in (`uMeanRoughAO`): 0.17-0.36 ms of GPU low over the ground.
+- The sea's reflection culls to its own standard range through explicit
+  bounds (`depth.frustum_bounds`), whatever its lens.
+- `PlanetClouds.use_split_depth` is `use_depth_camera`; the clouds' shaders
+  read one depth texture (`uSceneDepth`) through one matrix (`uClipToRender`).
+- `frame_profile.py --terrain-passes` measures `t_view` and `t_refl`.
+
+### Removed
+
+- **The split depth cameras** (#57): `depth.SplitDepthCameras`,
+  `split_clear_of`, `camera_span`, `MIN_SPLIT_M`, `planet_ranges` /
+  `system_ranges` (the far distance: `depth.planet_far` / `system_far`),
+  `World.use_split_depth`, `World.depth_ranges`, `SPACE_SPLIT_M`, the haze's
+  split passes (`FieldHaze.set_split`, `uHazeSplit`, `uHazeToFar`), the
+  clouds' near range (its depth pass, card, `set_near`, `uSceneDepthNear`,
+  `uNearDepthOn`, `uClipToRenderFar`). A game building the split cameras
+  itself builds a `depth.ReversedDepthCamera` (or uses `load_world`).
+- The clouds' depth pass and what served only it: `clouds.passes.pass_states`
+  and `pass_camera`, the terrain's depth-only stage (`depth_only_shader`,
+  `terrain_depth.frag`, `PASS_TAG`), the trees' `pass_state` and
+  `IMPOSTOR_TAG` (and the impostors' coarser-target sprites:
+  `uPointScale`), `depth.CLOUD_NEAR_BIT`, `CLOUD_FAR_BIT`,
+  `HIDE_FROM_CLOUD_PASS`.
+- `cloud_bench.py --passes` has no `-near` / `-depth` columns.
+
+### Fixed
+
+- `load_world` in an app without a window (`window-type none`: a game's
+  headless runs) failed on `app.camLens`: there `GameWorld.depth` is None
+  and bodies get no sea (both draw through the window); `update` and
+  `destroy` work without them.
+- `depth.frustum_bounds` is six planes (an `IntersectionBoundingVolume`),
+  no longer a `BoundingHexahedron`: Panda carries the cull volume into each
+  model's frame, where a hexahedron rebuilt its planes from corners out at
+  the far distance in single precision. Past ~10,000 km (a far moon) they
+  came out metres off near the camera, and culled a game's cockpit panels at
+  the screen's edge, flickering as the far distance moved. The sea's
+  reflection and SpaceFlight's mirror build theirs with it too.
+- The clouds' ground shadow pass unprojected clip z = 0 for its footprint,
+  infinity in reversed 0-1 depth: the cloud shadow's softness on the ground
+  came out wrong with the reversed camera.
 
 ## [0.5.0] 2026-11-22
 

@@ -8,7 +8,7 @@ updates every WorldBuilder part a game draws around its camera:
 
 A game does not build it by hand: it writes its world in a
 [world file](world_file.md) and loads it with `world_builder.load_world`, which
-builds this `World` and its split depth cameras in one line. This page is what
+builds this `World` and its depth camera in one line. This page is what
 that builds, for code that needs to reach into it (`GameWorld.world`), or that
 builds a world itself, for instance one varied from its own settings.
 
@@ -39,10 +39,11 @@ world = World(
     sky=SkyLook(),
     settings=world_settings,
 )
-depth = SplitDepthCameras(app)  # after the world: see "Order" below
+depth = ReversedDepthCamera(app)  # after the world: see "Order" below
+world.use_depth_camera(depth)
 
 # Every frame, once the camera is placed:
-depth.update(*world.depth_ranges(origin_world))
+depth.update(world.far_distance(origin_world))
 world.update(origin_world, far=depth.far)
 
 world.destroy()
@@ -53,10 +54,9 @@ world.destroy()
 **Open space.** A world may have no body: `World(app, [], sun=..., sky=...,
 space_ambient=...)` is the sky, the sun and the Panda3D lights alone, for a
 space level. Its light everywhere is the bare sun and `space_ambient` (the
-sky light away from any body), `loading` is always False, and `depth_ranges`
-gives a fixed split (`SPACE_SPLIT_M`, 2 km) and a far plane of at least
-`SPACE_FAR_M` (1,000 km), farther where a field's rocks are drawn farther
-(see below). An asteroid field (`world_builder.asteroids`) can share its worker
+sky light away from any body), `loading` is always False, and `far_distance`
+is at least `SPACE_FAR_M` (1,000 km), farther where a field's rocks are drawn
+farther (see below). An asteroid field (`world_builder.asteroids`) can share its worker
 pool (`executor=world.executor`).
 
 ## Looks
@@ -119,9 +119,8 @@ Quality is not part of the look. It comes in as `settings=`, a
 
 ## Every frame
 
-`World.update(origin_world, far=None)`. `far` is the far camera's far
-distance this frame; the sky is drawn just inside it. It defaults to
-`depth_ranges()`'s far value.
+`World.update(origin_world, far=None)`. `far` is the view's far distance this
+frame (`ReversedDepthCamera.far`). It defaults to `far_distance()`.
 
 In order, it updates:
 1. each body's terrain, placed and detailed around the camera, its collision
@@ -136,31 +135,54 @@ In order, it updates:
 3. the sky;
 4. each body's clouds, with the angle one pixel spans, taken from the
    camera's own output (a window, or a game's offscreen buffer);
-5. Panda3D's sun and ambient lights, set to the light at the camera
-   (`World.light_at`), and each tracked model's at the model: the air reddens the sun, an airless body's shadow
-   hides it, and the other bodies eclipse it. Their colours are multiplied by `light_scale`. A game
-   whose models use Panda3D's fixed-function lighting scales them down, since
-   that lighting has no tone map and clips the physical noon sun (about 2.5)
-   to white (see [Lighting on objects](object_lighting.md));
-   a model tracked with `shader=True` takes its nearest body's model shader
-   inputs instead (`Body.models`);
-6. each body's sea (`Sea.update`):
+5. each body's sea (`Sea.update`):
    - its swell, drifted to the game time and handed to the terrain, its
      query and its collision solid;
    - its near look's share by altitude (`near_band`), which also turns the
      reflection pass on or off;
    - its frame, the tangent plane at the camera's nadir, with the waves
      anchored to the ground through a chart;
-   - while the near look shows, its light, relative to the daylight its
-     colour was tuned in.
+6. Panda3D's sun and ambient lights, set to the light at the camera
+   (`World.light_at`), and each tracked model's at the model: the air reddens the sun, an airless body's shadow
+   hides it, and the other bodies eclipse it. Their colours are multiplied by `light_scale`. A game
+   whose models use Panda3D's fixed-function lighting scales them down, since
+   that lighting has no tone map and clips the physical noon sun (about 2.5)
+   to white (see [Lighting on objects](object_lighting.md));
+   a model tracked with `shader=True` takes its nearest body's model shader
+   inputs instead (`Body.models`). With them, each near sea's light, relative
+   to the daylight its colour was tuned in. `World(light_period=N)` sets
+   these lights every N frames, their reckoning spread over the frames
+   before in `LIGHT_STAGES` stages (one a frame at 3: no frame takes it
+   whole); they are reckoned at once when the sun moves or the tracked
+   models change;
+7. the casters' shadow map (`World.casters`), fitted to the tracked models
+   that cast (see [Shadows](shadows.md)).
 
-## Order with split depth
+## Order and the depth camera
 
-Build the world before `SplitDepthCameras`. The sea's reflection camera
-copies the app's lens once when it is built, and the split cameras then
-shorten that lens to the near range every frame. Then hand the split
-cameras to the world, `world.use_split_depth(depth)`: the clouds' raymarch
-draws its passes with them.
+Build the world before its `ReversedDepthCamera` (`world_builder.depth`): the
+sea's reflection camera copies the app's lens once when it is built. Then hand
+the camera to the world, `world.use_depth_camera(depth)`: the sky, the seas'
+reflections and the fields' haze take its depth convention, and the clouds'
+raymarch draws its passes with it.
+
+The camera draws the view with a reversed, infinite projection (near at 1,
+infinity at 0) and keeps a float depth buffer's precision at every range: a
+planet from orbit and a rock under the camera in one view, one cull and one
+draw (#57; the split cameras it replaced made two). A window's framebuffer has
+no float depth, so it draws into a scene buffer of its own, presented in the
+window (or in the game's post-process buffer, where the app's camera drew)
+under the other regions; `scene_buffer=False` for an output that has float
+depth already (`depth.float_depth_fbprops()`). Load `gl-depth-zero-to-one #t`
+in the game's PRC before ShowBase opens its window: OpenGL's 0-1 depth keeps
+the float precision. macOS's OpenGL has no clip control: there the depth keeps
+about a 24-bit range's precision (far bodies' depths may fight). The near
+plane stays at 1 m everywhere: one following the altitude cut the cockpit and
+close ships. It culls to the world's far distance (`depth.frustum_bounds`:
+six planes, exact in every model's frame; Panda's own frustum stops at
+10,000 km, and a box's corners that far out cost its planes metres of
+precision near the camera). Its scene buffer keeps the output's
+multisampling (`depth.scene_buffer_props`).
 
 Load `transform-cache false` in the game's PRC (before ShowBase opens its
 window). The world moves around the camera, so every drawn node's net
@@ -169,17 +191,15 @@ fills up for its garbage collection to empty: about 1 ms a frame in low
 flight (see [performance](performance.md) §19). The library sets no PRC of
 its own; `scripts/tools.window_config` does.
 
-A game's own translucent volumes, such as shield bubbles, go to
-`depth.update(split, far, translucent=...)`. The split then never cuts one:
-the two cameras overlap by 2%, and they would blend a volume twice in that
-band (see `world_builder.depth`).
+A game's own translucent volumes, such as shield bubbles, need nothing: one
+camera draws them once.
 
 ## Other members
 
-- **`depth_ranges(origin_world)`**: split and far distances over every body
-  (`SplitDepthCameras.system_ranges`), the far reaching every asteroid
-  field's rocks too (`AsteroidField.reach`: a shorter far plane cut the
-  biggest while they were still a few pixels wide).
+- **`far_distance(origin_world)`**: how far the view reaches, over every body
+  (`depth.system_far`), and every asteroid field's rocks too
+  (`AsteroidField.reach`: a shorter far plane cut the biggest while they were
+  still a few pixels wide): the camera's `update` argument.
 - **`gravity_field(g_constant=1.0)`**: the bodies' gravity as point masses
   (`BodyLook.mass`, keyword only); `acceleration(points)` is the raw vector
   for N points at once (numpy, or native: 4-9x faster), `-g` is "up". The
@@ -198,8 +218,8 @@ band (see `world_builder.depth`).
   out, for what a shader shades per pixel (the near sea).
 - **`track_light(node, cast=False, shader=False)`, `untrack_light(node)`**:
   a model lit by the light where it is, not at the camera: its own Panda3D
-  sun and ambient lights (the world's off on it), set at every `update` in
-  one vectorised call, times `light_scale`. Place the model before
+  sun and ambient lights (the world's off on it), set by `update` in one
+  vectorised call (every `light_period` frames), times `light_scale`. Place the model before
   `update`. With `cast=True` it casts shadows on the terrain, the sea and
   the shaded models (`World.casters`, see [Shadows](shadows.md)). With
   `shader=True` the world's model shader draws it: lit and tonemapped as

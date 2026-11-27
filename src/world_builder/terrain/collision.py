@@ -140,14 +140,25 @@ class TerrainCollision:
         :param camera: camera position, planet frame
         """
         grid = self.terrain.grid
-        wanted = set()
+        # One pass over the drawn chunks in numpy (a norm per chunk was most
+        # of a terrain selection's time with ~250 chunks drawn).
+        keys, centres, reach = [], [], []
+        sizes: dict[int, float] = {}
         for key in drawn:
             chunk = store.get(key)
             if chunk is None:
                 continue
-            reach = 0.75 * grid.chunk_size(key[0])  # centre to corner, roughly
-            if np.linalg.norm(chunk.centre - camera) - reach < self.max_distance:
-                wanted.add(key)
+            level = key[0]
+            if level not in sizes:
+                sizes[level] = 0.75 * grid.chunk_size(level)  # centre to corner
+            keys.append(key)
+            centres.append(chunk.centre)
+            reach.append(sizes[level])
+        wanted = set()
+        if keys:
+            gaps = np.linalg.norm(np.asarray(centres) - camera, axis=1)
+            near = gaps - np.asarray(reach) < self.max_distance
+            wanted = {key for key, keep in zip(keys, near, strict=True) if keep}
         for key in self._registered - wanted:
             self.native.remove_chunk(key)
         for key in wanted - self._registered:

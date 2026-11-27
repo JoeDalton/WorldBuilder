@@ -2730,6 +2730,312 @@ read with a cubic B-spline, four reads instead of two. At 2560x1440 HIGH,
 frame / clouds: `genera_cb` 9.19 / 4.53 → 9.20 / 4.63 ms, the anvil pose
 8.49 / 5.54 → 8.33 / 5.37 ms (noise).
 
+## 38. The frame is CPU-bound: what the CPU spends it on (2026-11-26)
+
+RTX 3070, 5600X, 2560 x 1440, HIGH, offscreen, GPU at P0. The plan and its
+diagnosis: FRAME_COST_PLAN.md.
+
+**Pipelined, not serialized.** frame_profile.py's frames were GPU-synced, so
+its frame was the CPU's step plus the GPU's frame (11 ms at `ground`). Timed
+as a game runs (`--pipelined`), the frame was 6.2 ms there, equal to the CPU's
+step: the CPU bounds it. Skipping the asteroid fields' update (pure CPU) took
+the frame down by as much as the step (6.15 to 5.02 ms), so the GPU was under
+~5 ms. GPU work only pays below that.
+
+**Baseline** (`frame_profile.py --offscreen --pipelined --terrain-passes`, ms;
+the terrain's columns: hidden from one camera at a time):
+
+| pose | frame | step | terrain | t_near | t_far | t_refl | t_cldnear | t_cldfar | asteroids |
+|---|---|---|---|---|---|---|---|---|---|
+| ground | 6.20 | 6.69 | 2.71 | 0.18 | 0.81 | 0.71 | -0.23 | 0.44 | 1.00 |
+| coast | 6.02 | 6.48 | 2.64 | -0.15 | 0.86 | 0.62 | 0.16 | 1.04 | 1.14 |
+| sunset | 6.30 | 6.32 | 3.05 | 0.28 | 0.68 | 0.70 | 0.28 | 1.04 | 1.11 |
+| high | 3.85 | 3.84 | 0.91 | -0.02 | 0.26 | 0.00 | -0.05 | 0.54 | 1.13 |
+
+One run's per-pass parts are noisy (0.2-0.3 ms); an earlier run of the same
+split gave the clouds' far depth pass 0.85-0.95, the main far range 0.73, the
+reflection 0.55-0.6, the main near 0.1-0.3, the clouds' near depth 0.1-0.2.
+The terrain's cost is nearly all CPU: Panda's cull and draw per chunk per
+pass (PStats at `ground`: Draw 3.9 ms, Set State 1.85 of it; 531 Geoms, 1045
+transform changes a frame).
+
+**The asteroid ring, 60,000 km away: 1.0-1.15 ms a frame**, though nothing of
+it is drawn from the home planet. Its population walked its windows every
+frame (0.6 ms) and its haze remade its table of what is missing (0.4 ms).
+Now a field out of reach, its rocks let go, skips its population
+(`AsteroidField.out_of_reach`), and the haze keeps its table while the pixel
+scale, the smallest size and the limits hold (the camera is not an input):
+
+| pose | frame before | after |
+|---|---|---|
+| ground | 6.20 | 5.14 |
+| coast | 6.02 | 4.86 |
+| sunset | 6.30 | 5.33 |
+| high | 3.85 | 2.82 |
+
+Inside a field the haze's table is kept too (`asteroid_bench.py --field
+asteroid_cube --offscreen`, median frame ms, before / after): cruise 2.11 /
+1.77, sweep 1.96 / 1.62, outside 2.37 / 2.05.
+
+**Panda's per-chunk overhead: two cuts tried, neither kept** (a throw-away
+hack, `ground`, pipelined, two runs each, ms):
+
+- *A shared transform.* Each chunk's offset from its cell baked into its
+  vertices at upload, its node left at the identity, so the chunks of a cell
+  share the cell's transform (cell-relative float32 keeps ~2 mm at 32 km; the
+  trees' impostors given the offset instead): 5.01 / 5.00 to 4.83 / 4.81, and
+  4.66 / 4.62 to 4.44 / 4.53 with the vegetation off. About 0.2 ms, against the
+  shader changes it needs (the chunk-relative position from the chunk table)
+  and the impostors' placement: not worth it. Most of the per-draw cost is
+  not the transform.
+- *One node less per chunk* (the fine and coarse GeomNodes straight under the
+  cell, no chunk node between): 5.30 to 5.40, its step 5.02 to 5.70. Worse.
+
+A first try that modified the drawn chunks' vertex arrays in place gave 15 ms
+(every array re-sent each frame, 2729 transform changes): a harness artefact,
+noted so it is not repeated. What remains of the terrain's CPU is its draws'
+count: chunks times passes. Fewer passes (#57's single camera, the clouds
+reading the scene's depth) or fewer chunks (a split by roughness) are the
+levers.
+
+**The normal map's texture past its fade.** `layeredMaterial` read every
+layer's normal, roughness and occlusion texture at any distance, though the
+normal is faded out from 600 m; there its roughness and occlusion come from the
+texture's smallest mipmaps, about its mean. Now each layer's means
+(`MaterialSet.mean_rough_ao`) stand in and the fetch is skipped. Serialized
+frame (GPU-synced, so the GPU's share shows), three rounds, before / after, ms:
+`ground` 10.58 / 10.57, 10.80 / 10.52, 10.34 / 10.11; `sunset` 11.54 / 11.33,
+11.55 / 10.91, 11.17 / 10.94. The pipelined frame does not move (4.95-5.05 at
+`ground`): it is still the CPU's. Shots without clouds at `ground`: 15 % of
+pixels one level brighter or darker, beyond two levels as two shots of the same
+tree (0.011 % against 0.007 %).
+
+## 39. One reversed-Z camera instead of the split (#57 spike, 2026-11-27)
+
+A throw-away script (FRAME_COST_PLAN.md, Task 6) turned the demo's split
+cameras into one at run time, the sky, the terrain and the sea's reflection
+drawn (clouds and fields hidden; the reflection could not be: `Sea.update`
+turns its buffer back on whenever the sea is in view): the app's camera seeing
+both camera bits, its
+lens `set_near_far(inf, 1)` (Panda 1.10.16 makes that a reversed, infinite
+projection: near at +1, far at -1, mapped to 1 and 0 with
+`gl-depth-zero-to-one`), "greater" depth test, depth cleared to 0, culling to
+the split's own far distance (`frustum_bounds` of a finite copy of the lens),
+the scene in an offscreen buffer of its own (32-bit float depth; Panda's
+default framebuffer properties cannot be changed from code, so a game asks for
+it when it makes its window or scene buffer). The sky and its stars were pinned
+at the reversed far plane (depth 0, copies of their vertex stages) and drawn
+after the ground, "greater or equal" against the cleared 0; the sea's
+reflection camera got the same reversed lens and a depth cleared to 0.
+
+Two things the first try got wrong, kept as the migration's warnings:
+- *The sky drawn first without depth* let the stars (its child, in their own
+  bin after the ground) draw over the moon. Planets hid it: `stars.vert` drops
+  stars where a sky direction meets an atmosphere's ground, so only airless
+  bodies rely on the depth test. Pinned at depth 0 and depth-tested, the stars
+  stop at any body (moon from orbit: identical to the split's).
+- *The sea's reflection left standard* while "greater" sat on render: its
+  ground failed against its depth cleared to 1, and with the sky depth-tested
+  its sky too; the far sea reflected nothing and came out up to 25 levels
+  darker (6.6 % of the pixels at `ground`, 20 % at the tower). Every camera
+  that draws the scene with perspective must take the reversed convention at
+  once.
+
+**Frame** (pipelined, ms, two runs each, same per configuration):
+
+| pose | split | single, 0-1 depth | single, [-1, 1] (macOS) | macOS, scaled near |
+|---|---|---|---|---|
+| ground | 3.19 / 3.21 | 2.99 / 3.01 | 2.97 / 2.98 | 2.98 / 2.98 |
+| sunset | 3.31 / 3.32 | 3.12 / 3.13 | 3.12 / 3.13 | 3.10 / 3.11 |
+| tower (`29.74164 29.82320 2358 0 -8`) | 2.38 / 2.39 | 2.35 / 2.36 | 2.34 / 2.35 | 2.36 / 2.36 |
+| high | 1.72 / 1.73 | 1.68 / 1.69 | 1.69 / 1.69 | 1.69 / 1.69 |
+| orbit | 1.38 / 1.45 | 1.36 / 1.40 | 1.35 / 1.36 | 1.35 / 1.36 |
+
+**Culling** (PStats, per frame): the same Geoms and triangles from 20 km and
+orbit; at the ground 239 Geoms against 266 and 10 % fewer triangles (the chunks
+straddling the split no longer drawn twice), cull 1.02 to 0.70 ms, draw 2.61 to
+2.28 ms. Nothing missing in the shots.
+
+**Look**, against the split's shots: desktop within two shots' own noise
+everywhere (`ground` 0.035 %, `high` 0.008 %, tower 0.011 % of pixels, orbit and
+the moon from orbit identical; at `sunset` 0.56 %, the sun's glint on the sea,
+as between two runs of the same tree). The macOS path breaks only from orbit: the
+coasts and land speckle (0.93 % of pixels, up to 143 levels: the land, sea and
+skirts fighting for depth); a near plane of 1 % of the height above the ground
+(1 m to 1 km) takes it to 6 pixels.
+
+**Verdict: go.** A single camera is no slower anywhere and 0.2 ms faster at
+the ground with the sky and terrain alone; the full scene adds the clouds'
+near-range passes, the haze's second pass and the objects across the split.
+Migration plan: FRAME_COST_PLAN.md, Phase 2.
+
+**The demo on the reversed camera (Task 6.7a, 2026-11-27).** `load_world`
+now draws with one `ReversedDepthCamera`, its view in a float-depth scene
+buffer presented in the window (a window's framebuffer has no float depth: GLX
+offered 24 bits when asked for 32 float). Pipelined, 2560 x 1440, HIGH, two
+rounds each, ms (split / reversed): `ground` 4.92, 5.10 / 4.72, 4.85; `coast`
+4.84, 4.85 / 4.59, 4.64; `sunset` 5.24, 5.27 / 5.00, 5.05; `high` 2.79, 2.80 /
+2.81, 2.82; `orbit` 2.01, 2.03 / 2.05, 2.06. About 0.2-0.25 ms less low over
+the ground; 0.02-0.04 ms more high up and in orbit (the scene buffer's copy to
+the window). Shots against the split's: without clouds at most 0.035 % of
+pixels over 2 levels (two shots of one tree: 0.017-0.06 %); with clouds below
+their own run-to-run difference.
+
+## 40. The clouds on the view's own depth (FRAME_COST_PLAN.md Task 7, 2026-11-27)
+
+With one reversed camera, the clouds' depth pass (a camera of the march's
+drawing the scene's depth again at half resolution, the terrain through a
+depth-only stage) was the dearest pass left: switched off, the pipelined
+frame fell by 1.21 ms at `ground`, 1.11 at `coast`, 1.45 at `sunset`, 0.70 at
+`high`, nearly all of it the terrain's cull and draw in it (`t_clouds`
+1.0-1.4 ms). Now the view's depth is copied into a texture after each frame
+(`RTM_copy_texture`: the composite samples it while the view draws, which a
+bound attachment would not allow) and the clouds read last frame's: the
+march's stop, the resolve's scene distance, the composite's cut, the ground
+shadow pass's scene points (at half resolution, reading the full one). Last
+frame's also settles the ground shadow pass's circularity (the terrain reads
+it while drawing): it already falls back per pixel where a texel's distance
+disagrees with the pixel's.
+
+Pipelined, 2560 x 1440, HIGH, two rounds each, ms (own pass / view's depth):
+
+| pose | before | after |
+|---|---|---|
+| ground | 4.64, 4.61 | 3.42, 3.45 |
+| coast | 4.61, 4.56 | 3.46, 3.46 |
+| sunset | 5.02, 4.97 | 3.58, 3.56 |
+| high | 2.80, 2.79 | 2.11, 2.08 |
+
+In motion (`motion_shots.py --at 20.91 30.40 800 0 0 --boost --frames 60
+--every 15`, 1600 x 900; moving frames against converged ones), mean error
+over the clouds 1.35 levels before, 1.36 after; the clouds lost and found
+the same (0.96 %, 0.10-0.11 %). Still shots: within the clouds' own
+run-to-run difference (the largest, at `sunset`, the sun's glint along the
+far shore, which moves between runs).
+
+## 41. A game's frame: SpaceFlight's Mission 3 (November 2026)
+
+The heaviest scene a game draws with `World`: the earth-like planet (terrain,
+raymarched clouds with genera and cirrus, the swell sea, every shadow), its
+moon, and some 25 ships tracked with the model shader and casting shadows.
+SpaceFlight's `scripts/bench_mission3.py`: the game offscreen, HIGH, each frame
+waiting for the GPU (so CPU and GPU in series), RTX 3070 / 5600X. Two runs of
+the same tree differ by up to 0.8 ms.
+
+**Early November, with the split cameras: about 16 ms a frame** at 2560 x
+1440 (~11 at 1280 x 720). PStats then:
+
+| Part | ms a frame |
+|---|---|
+| GPU: the clouds' far march / near march (camera 900 m under the slab) | 2.5 / 1.5 |
+| GPU: the clouds' depth passes (near, far) and resolves | 0.75 + 0.2 |
+| GPU: the main view (far range 2.1, near 0.65) | 2.8 |
+| GPU: the sea's reflection / the caster map / the game's mirror | 0.55 / 0.15 / 0.1 |
+| CPU: Panda's draw (set state 3.0, of which shader inputs 0.95, textures 0.7) | 5.3 |
+| CPU: Panda's cull (about ten cameras) | 1.5 |
+| CPU: `World.update` (the light at the ships and the camera, mostly) | ~2 |
+| CPU: the game (bots' flight model and thinking, collisions) | ~3 |
+
+Made then, with no visible change:
+
+- **The light at the camera and the tracked nodes every N frames**
+  (`World(light_period=N)`; SpaceFlight uses 3), at once when the sun moves
+  or the tracked nodes change: `lights_at` (the CPU's march through the
+  clouds' shadow) was ~1 ms a frame with a score of nodes.
+- **No new render state per frame for the tracked models**: the model
+  shader's attrib is set on a node only when it differs
+  (`ModelLighting.apply`), and the body's rotation given to the shader only
+  when it turned (`ModelLighting.update`).
+- **The cloud march's per-frame inputs bound once**: matrices, offsets and
+  flags as PTAs written in place, the composite's two states made once.
+- **`World.update`** reads the tracked nodes' positions once and keeps the
+  bodies' centres and radii; the caster map compares its casters by key.
+- **A sun tolerance** for the cloud shadow maps and the terrain's shadow
+  bake (`utils.sun_moved`, 0.05°): a slowly turning sun no longer redraws
+  them every frame.
+- **The terrain's collision range** defaults to 20 km (it was 100 km).
+
+Measured and not worth it: `transform-cache false` (within the noise), the
+game's mirror (under 0.5 ms), the ships' shadows (~0.4 ms), the cirrus.
+
+**2026-11-27, after §38-40 (one reversed camera, the clouds on its depth):
+11.7 ms median at 2560 x 1440** (mean 12.1, p95 15.4), **9.1 at 1280 x 720**
+(mean 9.5): four times the pixels add 2.6 ms, so the frame is mostly the
+CPU's now. cProfile over 300 frames at 1280 x 720 (inflated by the profiler,
+ms a frame):
+
+| Part | ms |
+|---|---|
+| Panda's `renderFrame` (cull and draw) | 3.3 |
+| The game's bots (`move_bot_task`; the ships' physics 0.9 of it) | 2.35 |
+| `World.update` | 1.95 |
+| of it: the light at the tracked nodes (`_light`, every third frame) | 0.47 |
+| of it: the caster map's fit (`casters.update`) | 0.44 |
+| of it: the terrain (`_select` 0.3) | 0.43 |
+| of it: the sea / the models' inputs | 0.15 / 0.1 |
+| Waiting for the GPU (the bench's read-back) | 1.6 |
+
+## 42. The backlog's smaller leads, measured (2026-11-27)
+
+RTX 3070, 5600X, HIGH. Each change against its parent commit, the trees run
+in turn (two rounds), or old and new in one process where the scene moves.
+
+**The light at the tracked nodes in three stages** (`World(light_period=3)`:
+the air's light; the eclipses and the clouds' shadow; the rings' and the
+mountains' shadows and the lights set, one a frame). Mission 3 at 1280 x 720,
+the old schedule (all of it every third frame) and the new swapped every 300
+frames, six rounds each, ms (median of the rounds):
+
+| | mean | p95 | max |
+|---|---|---|---|
+| staged | 8.78 | 10.96 | 13.12 |
+| every third frame | 9.05 | 11.49 | 15.54 |
+
+The rounds' means range 7.5-10.1 ms either way (the battle): the mean's
+difference is noise, as the work is the same; the peak is what went. The
+stages: 0.42 / 0.25 / 0.42 ms, against 0.98 ms at once.
+
+**The terrain selection's per-chunk loops as numpy passes**
+(`TerrainCollision.update`, `Trees.update`), ms a selection (mean, p95):
+
+| | Mission 3, fly (1280 x 720) | the demo's low flight |
+|---|---|---|
+| `_select` before | 1.94-2.29, 6.9-7.8 | 2.27-2.39, 7.8-7.9 |
+| `_select` after | 1.39-1.44, 4.9-5.2 | 1.68-1.84, 6.1-6.4 |
+| collision's reach | 0.67-0.81 → 0.29-0.30 | (not enabled) |
+| trees | 0.78-0.89 → 0.46-0.50 | 1.74-1.87 → 1.13-1.25 |
+
+In flight a selection runs about every other frame in Mission 3 (~450 in
+900), ~1.4 a frame in the demo (1775 in 1264: each of its three bodies'
+terrains): a frame with one is a slow frame.
+
+**One point's terrain query in plain floats** (`TerrainQuery._interpolate_one`):
+167 → 13.5 µs at the demo's camera, the swell's native struct made once.
+
+**The eclipse in the air's march as two loops** (`atmoStep`): no gain
+(`frame_profile.py --offscreen`, GPU-synced, before / after, two rounds:
+`ground` 9.49, 8.93 / 9.36, 9.25; `high` 6.70, 6.68 / 6.57, 6.97; `orbit` 4.73,
+4.82 / 4.80, 4.78; pipelined alike). The eclipses were already gathered only
+where a shadow can reach.
+
+With an eclipse set up (the sun behind the moon, the camera in its shadow
+on the planet: the moon one of the planet's casters, the eclipsed loop
+taken), GPU-synced, before / after, two rounds: under the moon looking at
+the horizon 8.44, 8.42 / 8.44, 8.47 ms; looking up 5.69, 5.71 / 5.69, 5.72;
+from 20 km 7.79, 7.82 / 7.83, 8.14. No gain either. The eclipse's own cost
+(the same poses with the sun 30° off the moon, no caster): ~0 near the
+ground (8.52, 8.30 / 8.51, 8.40; looking up 5.58, 5.40 / 5.49, 5.39), 0.5-0.9
+ms from 20 km looking down (8.29, 7.89 / 7.42, 7.36), where the air's march
+fills the view (the sun's angle differs between the two: approximate).
+The two loops were removed: the shader is as it was before them.
+
+**Two leads closed.** A chunk's unpickling, the GIL's share of its trip
+through the pipe: 18.7 µs for 250 KB, ~0.03 ms a frame at 150 chunks a
+second. The mountain maps read back synchronously after a frame (Panda 1.10
+has no asynchronous read-back): 33 ms (global, 6 x 1024²) and 9.1 ms (local,
+1024²), against the twins' 0.23 ms a frame in flight (up to 9.1 / 3.5 ms in
+the frames that march new texels: those spikes are the lead left).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

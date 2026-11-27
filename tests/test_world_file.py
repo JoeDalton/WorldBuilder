@@ -5,6 +5,7 @@ on an offscreen window.
 """
 
 import math
+import os
 from pathlib import Path
 
 import numpy as np
@@ -238,3 +239,93 @@ def test_deep_space_loads_and_updates(window):
         assert world.world.depth is world.depth
     finally:
         world.destroy()
+
+
+def test_a_loaded_world_draws_with_one_reversed_camera(window):
+    """load_world's camera is the reversed one (#57): the world's renderers
+    take its depth mode, given back on destroy."""
+    from panda3d.core import DepthTestAttrib
+
+    from world_builder.depth import (
+        DEPTH_STANDARD,
+        ReversedDepthCamera,
+        depth_mode_input,
+    )
+    from world_builder.settings import WorldSettings
+
+    world = load_world(
+        window, DEEP, settings=WorldSettings.preset("low"), backend="inline"
+    )
+    try:
+        depth = world.depth
+        assert isinstance(depth, ReversedDepthCamera)
+        assert world.world.depth is depth
+        assert depth_mode_input()[0] == depth.mode
+        greater_equal = DepthTestAttrib.M_greater_equal
+        haze = world.field("cube").haze.node
+        assert haze.get_attrib(DepthTestAttrib).get_mode() == greater_equal
+        if world.world.sky is not None:
+            sky = world.world.sky.node
+            assert sky.get_attrib(DepthTestAttrib).get_mode() == greater_equal
+        world.update(np.array([0.0, -9000.0, 500.0]))
+        assert depth.far >= 1.0 and depth.near >= 1.0
+    finally:
+        world.destroy()
+    assert depth_mode_input()[0] == DEPTH_STANDARD
+
+
+_WINDOWLESS = """
+import sys
+
+import numpy as np
+from direct.showbase.ShowBase import ShowBase
+from panda3d.core import loadPrcFileData
+
+loadPrcFileData("", "window-type none\\naudio-library-name null")
+from world_builder import load_world
+from world_builder.settings import WorldSettings
+
+app = ShowBase()
+for path in sys.argv[1:]:
+    world = load_world(
+        app, path, settings=WorldSettings.preset("low"), backend="inline"
+    )
+    assert world.depth is None and world.world.depth is None
+    assert all(body.ocean is None for body in world.world.bodies)
+    origin = np.zeros(3)
+    if world.world.bodies:
+        body = world.world.bodies[0]
+        origin = np.asarray(body.position) + (0.0, 0.0, body.radius + 2000.0)
+    for _ in range(3):
+        world.update(origin)
+        app.taskMgr.step()
+    world.destroy()
+    print("loaded", path)
+"""
+
+
+def test_a_world_loads_without_a_window():
+    """A game's headless runs (``window-type none``): no depth camera and no
+    sea (both draw through the window), the rest built and updated as usual.
+    ShowBase is one per process and the suite's has a window: a process of
+    its own."""
+    import subprocess
+    import sys
+
+    worlds = [WORLDS / "tiny_world.yaml", DEEP]  # a sea; an asteroid field
+    run = subprocess.run(
+        [sys.executable, "-c", _WINDOWLESS, *map(str, worlds)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env={**os.environ, "PYTHONPATH": str(Path(world_builder.__file__).parents[1])},
+    )
+    assert run.returncode == 0, run.stderr[-3000:]
+    assert run.stdout.count("loaded") == len(worlds)
+
+
+def test_float_depth_props_ask_for_a_float_buffer():
+    from world_builder.depth import float_depth_fbprops
+
+    props = float_depth_fbprops()
+    assert props.get_float_depth() and props.get_depth_bits() == 32

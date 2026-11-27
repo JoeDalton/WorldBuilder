@@ -30,6 +30,16 @@ demo's printed camera lines as poses (`at1`, `at2`...).
     its samples at 8 against 2, scaled linearly to all 8.
   Parts overlap (atmo is inside terrain and sky), and a part's cost includes its
   CPU's when the frame is CPU-bound. Run to run: 0.3-0.5 ms.
+- **Serialized against pipelined.** The read back after each step makes the
+  GPU finish before the next step starts, so the default mode's frame is the
+  CPU's step *plus* the GPU's frame (11 ms at `ground` in November 2026, where
+  the game ran at 6.2). It ranks GPU parts against each other. A game's frame
+  overlaps the two and takes the slower: `--pipelined` times that (400 free
+  steps, then 100 synced ones for **step**). A frame close to its step is
+  CPU-bound; one above it, GPU-bound. `--terrain-passes` adds the terrain's
+  cost in each camera pass (`t_view`, `t_refl`, `t_clouds`; before the
+  reversed camera, `t_near`, `t_far`, `t_cldnear`, `t_cldfar`); **asteroids** is the fields' per-frame update. Run to run,
+  pipelined: 0.1-0.15 ms. Measurements: [performance.md §38](performance.md).
 - `scripts/flight_bench.py --flight low --trace`: the CPU's parts in flight.
 
 ## The frame, per pose (2560 x 1440, HIGH)
@@ -76,7 +86,7 @@ ms, with genera 7.8-10.1:
 
 1. **The terrain: 2.1-3.8 ms** (with the near sea and its per-pixel atmosphere),
    about 1.5-2.5 ms of it the CPU's at 720p. Its atmosphere is part B's; its
-   draws (per chunk) are in performance_backlog.md ("Panda's state changes").
+   draws (per chunk) are in performance_backlog.md ("Panda's per-draw cost").
 2. **The clouds: 1.5-3.1 ms, with genera 2.5-4.8.** Within it, **the second order
    of scattering costs 0.7-0.85 ms with genera** (in_clouds 9.72 / 9.86 ms
    compiled out against 10.62 / 10.70 in; clouds_low 9.11 / 9.16 against 9.78 /
@@ -92,7 +102,7 @@ ms, with genera 7.8-10.1:
    20 km and in clouds). Part B's tables aim at <= 0.5 ms with their bakes: a gain
    of up to ~0.7 ms, and real multiple scattering.
 5. **The sea's reflection: 0.8-1.1 ms** wherever the sea is near (it draws the
-   scene again: performance_backlog.md's "sea reflection's cull" and reach).
+   scene again: performance_backlog.md's "sea reflection's reach").
 6. **The p95 spikes: 9-16 ms against 7-10 median** at still poses (in_clouds 13.8,
    genera 15-16): periodic work in a still view (not the cloud bakes, which are
    change-driven; candidates: the terrain's selection and uploads, the GC, the

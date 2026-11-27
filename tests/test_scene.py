@@ -17,10 +17,8 @@ from world_builder.atmosphere import AtmosphereParams, Atmospheres
 from world_builder.clouds.cloud import CloudSettings
 from world_builder.clouds.march import CloudMarch
 from world_builder.depth import (
-    FAR_CAMERA_MASK,
-    NEAR_CAMERA_MASK,
     REFLECTION_CAMERA_MASK,
-    SplitDepthCameras,
+    ReversedDepthCamera,
 )
 from world_builder.ocean import OceanSettings, aces_tonemap
 from world_builder.sky import Sky
@@ -52,56 +50,14 @@ def window(showbase):
     return showbase
 
 
-# ── depth partitioning ─────────────────────────────────────────────────────────
+# ── the view's camera ─────────────────────────────────────────────────────────
 
 
-def test_split_cameras_draw_into_the_window(window):
-    cameras = SplitDepthCameras(window, near=1.0)
-    try:
-        assert window.cam.node().get_camera_mask() == NEAR_CAMERA_MASK
-        assert cameras.far_camera.node().get_camera_mask() == FAR_CAMERA_MASK
-        assert cameras.far_region.get_sort() < cameras.near_region.get_sort()
-        cameras.update(5000.0, 12e6)
-        assert window.camLens.get_near() == 1.0
-        assert window.camLens.get_far() == pytest.approx(5000.0 * cameras.overlap)
-        assert cameras.far_lens.get_near() == 5000.0
-        assert cameras.far_lens.get_far() == 12e6
-        # Culled to the true far plane, past Panda's 10,000 km.
-        bounds = cameras.far_camera.node().get_cull_bounds()
-        assert bounds.get_max()[1] == pytest.approx(12e6)
-        cameras.update(0.5, 0.6)  # too small: raised
-        assert cameras.split == 2.0 and cameras.far == 4.0
-        window.graphicsEngine.render_frame()
-    finally:
-        cameras.destroy()
-    assert cameras.far_region not in list(window.win.get_display_regions())
-
-
-def test_split_cameras_keep_the_split_off_translucent_volumes(window):
-    """A translucent volume the wanted split would cut moves it in front:
-    blended twice where the cameras overlap, it would show a ring there."""
-    from panda3d.core import CardMaker
-
-    maker = CardMaker("bubble")
-    maker.set_frame(-30.0, 30.0, -40.0, 40.0)  # bounding radius 50 m
-    bubble = window.render.attach_new_node(maker.generate())
-    camera = window.cam.get_pos(window.render)
-    bubble.set_pos(camera + (0.0, 2000.0, 0.0))  # 2 km ahead
-    cameras = SplitDepthCameras(window, near=1.0)
-    try:
-        cameras.update(2000.0, 12e6, translucent=[bubble])
-        assert cameras.split == pytest.approx(1950.0 / cameras.overlap, abs=1.0)
-        cameras.update(2000.0, 12e6)  # none: as wanted
-        assert cameras.split == 2000.0
-    finally:
-        cameras.destroy()
-        bubble.remove_node()
-
-
-def test_split_cameras_follow_the_scene_into_a_post_process_buffer(window):
+def test_the_reversed_camera_follows_the_scene_into_a_post_process_buffer(window):
     """With the scene rendered into a texture (a game's render scale or
-    anti-aliasing pipeline), the far camera draws into that buffer, before
-    the near one, not into the window under the composited quad."""
+    anti-aliasing pipeline), the reversed camera's scene buffer is presented
+    into that buffer, where the game's filters take it, not into the window
+    under the composited quad."""
     from direct.filter.FilterManager import FilterManager
 
     manager = FilterManager(window.win, window.cam)
@@ -109,17 +65,16 @@ def test_split_cameras_follow_the_scene_into_a_post_process_buffer(window):
     try:
         buffer = window.cam.node().get_display_region(0).get_window()
         assert buffer != window.win
-        cameras = SplitDepthCameras(window, near=1.0)
+        camera = ReversedDepthCamera(window, near=1.0)
         try:
-            assert cameras.output == buffer
-            assert cameras.far_region in list(buffer.get_display_regions())
-            assert cameras.far_region not in list(window.win.get_display_regions())
-            assert cameras.far_region.get_sort() < cameras.near_region.get_sort()
-            cameras.update(5000.0, 12e6)
+            assert camera.present in list(buffer.get_display_regions())
+            assert camera.present not in list(window.win.get_display_regions())
+            assert camera.float_depth
+            camera.update(12e6)
             window.graphicsEngine.render_frame()
         finally:
-            cameras.destroy()
-        assert cameras.far_region not in list(buffer.get_display_regions())
+            camera.destroy()
+        assert camera.present not in list(buffer.get_display_regions())
     finally:
         manager.cleanup()
 
@@ -722,3 +677,56 @@ def test_sky_settings_thin_the_stars(showbase):
         assert np.all(np.diff(flux) <= 0)
     finally:
         sky.remove()
+
+
+def test_the_sea_reflection_follows_the_depth_mode(window, sea):
+    """With the reversed camera the mirror's camera is reversed too (its lens
+    infinite, "greater", depth cleared to 0), or its ground and sky fail their
+    depth tests and the far sea darkens (performance.md §39); back to the
+    split's depth it is as it was. Its clip plane stays."""
+    import math
+
+    from panda3d.core import (
+        BoundingSphere,
+        BoundingVolume,
+        ClipPlaneAttrib,
+        DepthTestAttrib,
+        Point3,
+    )
+
+    from world_builder.depth import DEPTH_REVERSED_01, DEPTH_STANDARD
+
+    made, _, camera = sea
+    node = made.refl_cam_node
+    lens = node.get_lens()
+    near, far = lens.get_near(), lens.get_far()
+    made.set_depth_mode(DEPTH_REVERSED_01)
+    made.update(camera)
+    assert math.isinf(lens.get_near()) and lens.get_far() == pytest.approx(near)
+    state = node.get_initial_state()
+    assert state.get_attrib(DepthTestAttrib).get_mode() == DepthTestAttrib.M_greater
+    assert state.has_attrib(ClipPlaneAttrib)
+    assert made.refl_buffer.get_clear_depth() == 0.0
+    # culled at the old reach, not at infinity
+    bounds = node.get_cull_bounds()
+    for distance, inside in ((0.99 * far, True), (1.01 * far, False)):
+        point = BoundingSphere(Point3(0.0, distance, 0.0), 1e-3)
+        assert (bounds.contains(point) != BoundingVolume.IF_no_intersection) == inside
+    window.graphicsEngine.render_frame()
+    made.set_depth_mode(DEPTH_STANDARD)
+    assert (lens.get_near(), lens.get_far()) == pytest.approx((near, far))
+    state = node.get_initial_state()
+    assert not state.has_attrib(DepthTestAttrib) and state.has_attrib(ClipPlaneAttrib)
+    assert made.refl_buffer.get_clear_depth() == 1.0
+
+
+def test_a_rebuilt_reflection_keeps_the_depth_mode(window, sea):
+    from dataclasses import replace
+
+    from world_builder.depth import DEPTH_REVERSED_11, DEPTH_STANDARD
+
+    made, _, _ = sea
+    made.set_depth_mode(DEPTH_REVERSED_11)
+    made.set_settings(replace(made.settings, reflection_scale=0.5))
+    assert made.refl_buffer.get_clear_depth() == 0.0
+    made.set_depth_mode(DEPTH_STANDARD)

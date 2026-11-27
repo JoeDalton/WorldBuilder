@@ -97,6 +97,31 @@ def test_a_caster_whose_shadow_is_too_small_to_see_is_left_out(window):
     assert not scene.is_hidden(CASTER_CAMERA_MASK)
 
 
+def test_the_casters_kept_and_left_out_together(window):
+    """Several casters at once, near and far ones mixed (and an empty one):
+    each kept or left out as it would be alone, and the map fitted to the
+    kept ones only."""
+    scene = NodePath("scene")
+    casters = CasterMap(window.win, scene, 256)
+    try:
+        near_a = _ball(window, scene, 10.0, (0.0, 100.0, 0.0))
+        far_a = _ball(window, scene, 10.0, (0.0, 50e3, 0.0))
+        near_b = _ball(window, scene, 5.0, (40.0, 120.0, 10.0))
+        far_b = _ball(window, scene, 10.0, (-30e3, 40e3, 0.0))
+        empty = scene.attach_new_node("empty")
+        sun, pixel = (0.0, 0.0, 1.0), 1e-3
+        casters.update([far_a, near_a, empty, far_b, near_b], sun, (0, 0, 0), pixel)
+        assert casters.casters == [near_a, near_b] and casters._on[0] == 1
+        assert _shows_through(near_a) and _shows_through(near_b)
+        assert not _shows_through(far_a) and not _shows_through(far_b)
+        # The map's square spans the kept ones (x from -10 to 45 m with the
+        # margin), not the far ones tens of km off.
+        side = casters.camera.node().get_lens().get_film_size()[0]
+        assert 55.0 <= side < 200.0
+    finally:
+        casters.destroy()
+
+
 def _read_back(window, casters, rel, normals, sun):
     """casterShadow at each point (from the camera), its normal given."""
     vdata = GeomVertexData("points", GeomVertexFormat.get_v3n3(), Geom.UH_static)
@@ -153,12 +178,18 @@ void main() {
     return got.ravel()[: len(rel)]
 
 
-def test_the_map_is_the_casters_geometric_shadow(window):
+@pytest.mark.parametrize("reversed_view", [False, True])
+def test_the_map_is_the_casters_geometric_shadow(window, reversed_view):
     """A ball over a plane: the plane is in shadow where its ray toward the
     sun crosses the ball, lit elsewhere, and outside the map's square; a
-    point between the ball and the sun is lit; the ball's lit side too."""
+    point between the ball and the sun is lit; the ball's lit side too. The
+    same with the view's reversed camera (FRAME_COST_PLAN.md, Task 6.4): the
+    map's own orthographic camera keeps the standard depth."""
+    from world_builder.depth import ReversedDepthCamera
+
     scene = NodePath("scene")
     casters = CasterMap(window.win, scene, 512)
+    view = ReversedDepthCamera(window) if reversed_view else None
     try:
         assert casters.buffer is not None
         centre = np.array([30.0, -20.0, 40.0])
@@ -198,5 +229,26 @@ def test_the_map_is_the_casters_geometric_shadow(window):
         assert (expected[clear] == 0.0).sum() > 100
         np.testing.assert_allclose(got[clear], expected[clear], atol=0.02)
     finally:
+        if view is not None:
+            view.destroy()
         casters.destroy()
         scene.remove_node()
+
+
+def test_a_casters_box_bounds_give_the_sphere_around_the_box():
+    """A caster whose bounds are a box (a node made final with one): the
+    sphere about its centre through its corners, in render's frame."""
+    from panda3d.core import BoundingBox, Point3
+
+    from world_builder.shadows.casters import _sphere
+
+    render = NodePath("render")
+    parent = render.attach_new_node("ship")
+    parent.set_pos(100.0, 0.0, 0.0)
+    part = parent.attach_new_node("hull")
+    part.node().set_bounds(BoundingBox(Point3(0, 0, 0), Point3(2, 2, 2)))
+    part.node().set_final(True)
+    x, y, z, radius = _sphere(part, render)
+    assert (x, y, z) == pytest.approx((101.0, 1.0, 1.0))
+    assert radius == pytest.approx(3**0.5)
+    assert _sphere(render.attach_new_node("empty"), render) is None

@@ -77,6 +77,7 @@ BOOST = 5.0
 MIN_CLEARANCE = 3.0  # metres the camera stays above the ground
 ORBIT_RADII = 3.0  # HOME and TAB jump this high
 HUD_PERIOD = 0.2  # seconds between HUD refreshes
+HUD_LINE = 0.048  # the HUD's line spacing (its text's scale 0.04, as one text's)
 #: Where a world with no body starts: this many times a field's extent from
 #: its centre, when it has no corridor to start in.
 START_EXTENT = 1.2
@@ -158,22 +159,16 @@ class WorldDemo(ShowBase):
         self._orientation = LQuaternionf()
         self._ground = 0.0
         print("starting terrain workers ...")
-        # The one line: lens, bodies, fields, sky, sun, lights, split depth.
+        # The one line: lens, bodies, fields, sky, sun, lights, depth camera.
         self.world = load_world(self, path, settings=self.settings, backend=backend)
         self.bodies = list(self.world.world.bodies)
         self.body = self.bodies[0] if self.bodies else None
         self.start = start or self.default_start()
         self._keys = dict.fromkeys(_CONTROLS, False)
         self._bind_keys()
-        self._hud = OnscreenText(
-            text="",
-            pos=(-1.32, 0.92),
-            scale=0.04,
-            fg=(1, 1, 1, 0.9),
-            shadow=(0, 0, 0, 0.7),
-            align=TextNode.ALeft,
-            mayChange=True,
-        )
+        # One text per line, set only when its text changed.
+        self._hud: list[OnscreenText] = []
+        self._hud_hidden = False
         self._hud_time = -1.0
         self.reset_camera()
         self.taskMgr.add(self._update, "world_demo_update")
@@ -357,7 +352,7 @@ class WorldDemo(ShowBase):
             f"camera {self.cam_world[0]:,.0f} {self.cam_world[1]:,.0f} "
             f"{self.cam_world[2]:,.0f}   heading {heading:.0f}  pitch {pitch:.0f}"
             f"   speed x{self.speed / SPEED:g}"
-            f"   depth split {depth.split / 1e3:,.1f} km, far {depth.far / 1e3:,.0f} km"
+            f"   depth near {depth.near:,.0f} m, far {depth.far / 1e3:,.0f} km"
         ]
         body = self.body
         if body is not None:
@@ -385,7 +380,34 @@ class WorldDemo(ShowBase):
             if others:
                 lines.append(others)
         lines.append(f"quality: {quality}")
-        self._hud.setText("\n".join(lines))
+        self._show_hud(lines)
+
+    def hide_hud(self) -> None:
+        """No HUD from now on (shots and benchmarks)."""
+        self._hud_hidden = True
+        for text in self._hud:
+            text.hide()
+
+    def _show_hud(self, lines: list[str]) -> None:
+        """The HUD's lines, each its own text, set only when it changed."""
+        if self._hud_hidden:
+            return
+        while len(self._hud) < len(lines):
+            self._hud.append(
+                OnscreenText(
+                    text="",
+                    pos=(-1.32, 0.92 - HUD_LINE * len(self._hud)),
+                    scale=0.04,
+                    fg=(1, 1, 1, 0.9),
+                    shadow=(0, 0, 0, 0.7),
+                    align=TextNode.ALeft,
+                    mayChange=True,
+                )
+            )
+        for k, text in enumerate(self._hud):
+            line = lines[k] if k < len(lines) else ""
+            if text.getText() != line:
+                text.setText(line)
 
     # ── keys ───────────────────────────────────────────────────────────────
 

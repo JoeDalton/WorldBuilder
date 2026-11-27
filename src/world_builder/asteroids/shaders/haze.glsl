@@ -21,10 +21,6 @@ uniform float uMissingT0;        // over log distance from uMissingT0 ...
 uniform float uMissingLogSpan;   // ... spanning this (natural log)
 uniform float uHazeStart;        // HazeModel.start this frame
 uniform vec3 uHazeAlbedo;        // linear
-// A split view (FieldHaze.set_split): the split as a plane (xyz the
-// cameras' forward axis, render frame; w its distance along it; 0
-// unsplit). The near camera draws the haze up to it, the far one beyond.
-uniform vec4 uHazeSplit;
 
 const float HAZE_PI = 3.141592653589793;
 const float HAZE_INF = 1e30;
@@ -139,21 +135,6 @@ int hazeIntervals(vec3 o, vec3 d, out vec2 s0, out vec2 s1) {
     }
     s0 = vec2(lo, hi);
     return hi > lo ? 1 : 0;
-}
-
-// Where a ray (render frame) crosses the split; 1e30 unsplit or never.
-float hazeSplitAlong(vec3 dirRender) {
-    if (uHazeSplit.w <= 0.0) return HAZE_INF;
-    float along = dot(dirRender, uHazeSplit.xyz);
-    return along > 0.0 ? uHazeSplit.w / along : HAZE_INF;
-}
-
-// Where the haze veiling something at dist along a ray (render frame)
-// starts: past the split, the near camera's haze pass already covers what
-// lies before it (drawn after the far camera's pass, over it).
-float hazeVeilStart(vec3 dirRender, float dist) {
-    float t = hazeSplitAlong(dirRender);
-    return dist > t ? t : 0.0;
 }
 
 // HazeModel.missing at a distance t, from this frame's table (FieldHaze):

@@ -158,8 +158,9 @@ and no look gets the far look only.
   the main display region times `reflection_scale` (0.5 at HIGH).
   - Its lens is a copy of the main camera's taken at construction, its field
     of view widened by `reflection_fov_scale` (1.1) and its far distance ×4.
-  - So build the sea (or the `World`) before a
-    `world_builder.depth.SplitDepthCameras` shortens the main lens.
+  - So build the sea (or the `World`) before the depth camera; `Sea.set_depth_mode`
+    gives the mirror's camera the view's depth convention (reversed, or its
+    ground and sky fail their depth tests).
 - **What it shows.**
   - A clip plane on the camera keeps only what is above the water.
   - Shaders drawn through the mirror write `gl_ClipDistance[0]`. The terrain

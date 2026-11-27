@@ -584,3 +584,121 @@ def test_the_reach_is_the_largest_rock_at_the_smallest_size(showbase):
     finally:
         field.destroy()
         executor.shutdown()
+
+
+# ── a field out of reach ────────────────────────────────────────────────────
+
+#: Far outside the 3 km box: no rock can be in range from here.
+FAR_AWAY = (1.0e7, 0.0, 0.0)
+
+
+@pytest.fixture
+def far_field(window):
+    """A field of its own (the tests move its camera far away and back)."""
+    from world_builder.asteroids.field import AsteroidField
+    from world_builder.asteroids.settings import AsteroidSettings
+    from world_builder.terrain.workers import ChunkExecutor
+
+    executor = ChunkExecutor(backend="inline", inline_budget=4)
+    spec = FieldSpec(
+        shape=Box((3000.0, 3000.0, 3000.0)),
+        density=Density(10.0),
+        sizes=Distribution.uniform(80.0, 150.0),
+        shapes=ShapeSpec(prototypes=2),
+        spin=SpinSpec(Distribution.constant(0.3), size_exponent=0.0),
+        material=MaterialSpec(Distribution.constant(0.1)),
+    )
+    field = AsteroidField(
+        window,
+        spec,
+        clock=lambda: 0.0,
+        settings=AsteroidSettings(max_lod=16, normal_size=64, texture_size=256),
+        executor=executor,
+    )
+    for _ in range(10):
+        field.update((0.0, 0.0, 0.0))
+        if not field.loading:
+            break
+    assert not field.loading and field.population.count > 0
+    yield field
+    field.destroy()
+    executor.shutdown()
+
+
+def _leave(field, frames: int = 20) -> None:
+    for _ in range(frames):
+        field.update(FAR_AWAY, FAR_AWAY)
+
+
+def test_a_far_field_skips_its_population(far_field, monkeypatch):
+    """From far outside its reach, once its rocks are let go, a field's
+    update does not walk its population (it cost ~1 ms a frame from the home
+    planet for a ring 60,000 km away)."""
+    _leave(far_field)
+    assert far_field.population.count == 0
+    assert far_field.out_of_reach and not far_field.loading
+    calls = []
+
+    def update(*args, **kwargs):
+        calls.append(1)
+        return np.empty(0, np.int64), np.empty(0, np.int64)
+
+    monkeypatch.setattr(far_field.population, "update", update)
+    far_field.update(FAR_AWAY, FAR_AWAY)
+    assert calls == []
+    assert far_field.stats["out_of_reach"]
+    assert far_field.stats["drawn"] == 0
+
+
+def test_a_field_out_of_reach_fills_again_on_return(far_field):
+    """Coming back, the rocks are held again as from a cold start."""
+    _leave(far_field)
+    assert far_field.out_of_reach
+    for _ in range(10):
+        far_field.update((0.0, 0.0, 0.0))
+        if not far_field.loading:
+            break
+    assert not far_field.out_of_reach
+    assert far_field.population.count > 0 and not far_field.loading
+
+
+def test_the_haze_still_updates_out_of_reach(far_field, monkeypatch):
+    """The haze can be seen from afar: it follows the camera even while the
+    rocks are skipped."""
+    _leave(far_field)
+    calls = []
+    real = far_field.haze.update
+
+    def update(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(far_field.haze, "update", update)
+    far_field.update(FAR_AWAY, FAR_AWAY)
+    assert calls == [1]
+
+
+def test_the_rocks_get_the_materials_far_roughness_and_occlusion(built_field):
+    """asteroid.frag shares terrain_material.glsl: its layers' mean
+    roughness and occlusion (uMeanRoughAO) are bound on the field's root."""
+    field, _ = built_field
+    bound = field.root.get_shader_input("uMeanRoughAO")
+    assert bound is not None and bound.get_name().get_name() == "uMeanRoughAO"
+
+
+def test_the_haze_takes_every_rock_out_of_reach(far_field, monkeypatch):
+    """While the rocks are skipped none is held: the haze is given no class
+    limit (all of the field is haze), not the population's last windows,
+    which stop following the pixel scale while skipped."""
+    _leave(far_field)
+    seen = []
+    real = far_field.haze.update
+
+    def update(camera, limits, *args, **kwargs):
+        seen.append(np.array(limits, dtype=float))
+        return real(camera, limits, *args, **kwargs)
+
+    monkeypatch.setattr(far_field.haze, "update", update)
+    far_field.update(FAR_AWAY, FAR_AWAY)
+    assert far_field.stats["out_of_reach"]
+    assert len(seen) == 1 and np.all(seen[0] == 0.0)

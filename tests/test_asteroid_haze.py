@@ -3,10 +3,12 @@ the scatter's rocks, its rays, and the shader against the numpy model."""
 
 import math
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
 
+import world_builder.asteroids
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.haze import (
     FADE_MIDDLE,
@@ -176,14 +178,20 @@ def ring(window):
     executor.shutdown()
 
 
-def _shoot(window, field, camera_world, look, near=10.0):
+def _shoot(window, field, camera_world, look, near=10.0, view=None):
     """Render with the camera at *camera_world* (render's origin), looking
     along *look*; :returns: the frame, and the frame without the haze (the
-    rocks alone)."""
+    rocks alone). *view*: a ReversedDepthCamera drawing instead of the app's
+    (its lens's near plane set to *near*)."""
+    from world_builder.depth import reversed_lens
+
     window.set_background_color(0, 0, 0, 1)
     window.camLens.set_near_far(near, 1.0e9)
     window.camera.set_pos(0.0, 0.0, 0.0)
     window.camera.look_at(*look)
+    if view is not None:
+        view.update(far=1.0e9)
+        reversed_lens(view.lens, near)
     frames = []
     for show in (True, False):
         if show:
@@ -302,15 +310,65 @@ def test_rocks_fade_into_the_haze_at_far(window, ring):
         ring.far = math.inf
 
 
-def test_the_haze_starts_at_the_near_plane(window, ring):
-    """A near plane inside the ring: only what lies beyond it (the far
-    camera of a split starts at the split)."""
-    camera = np.array([0.0, 2.5e6, 5.0e6])
-    near = 5.0e6 - 200.0
-    whole, _ = _shoot(window, ring, camera, (0.0, 0.0, -1.0))
-    frame, rocks = _shoot(window, ring, camera, (0.0, 0.0, -1.0), near=near)
-    assert frame[SIZE // 2, SIZE // 2].mean() < 0.9 * whole[SIZE // 2, SIZE // 2].mean()
-    assert _compare(window, ring, camera, frame, rocks) > 40
+@pytest.mark.parametrize("reversed_view", [False, True])
+def test_the_haze_starts_at_the_near_plane(window, ring, reversed_view):
+    """A near plane inside the ring: only what lies beyond it. Through the
+    app's own camera (standard depth) and through the reversed camera, whose
+    near plane sits at clip z = +w (depth_convention.glsl's depthNearZ), not
+    -w."""
+    from world_builder.depth import DEPTH_STANDARD, ReversedDepthCamera, zero_to_one
+
+    if not reversed_view and zero_to_one():
+        pytest.skip("standard depth with clip control: no camera draws so")
+    view = None
+    if reversed_view:
+        view = ReversedDepthCamera(window, near=10.0)
+        ring.haze.set_depth_mode(view.mode)
+    try:
+        camera = np.array([0.0, 2.5e6, 5.0e6])
+        near = 5.0e6 - 200.0
+        whole, _ = _shoot(window, ring, camera, (0.0, 0.0, -1.0), view=view)
+        frame, rocks = _shoot(
+            window, ring, camera, (0.0, 0.0, -1.0), near=near, view=view
+        )
+        middle = SIZE // 2
+        assert frame[middle, middle].mean() < 0.9 * whole[middle, middle].mean()
+        if not reversed_view:  # _compare models the standard lens
+            assert _compare(window, ring, camera, frame, rocks) > 40
+    finally:
+        if view is not None:
+            view.destroy()
+            ring.haze.set_depth_mode(DEPTH_STANDARD)
+
+
+def test_the_haze_follows_the_depth_mode(ring):
+    """The hull's depth test is the camera's with equality; its shaders read
+    the shared mode."""
+    from panda3d.core import DepthTestAttrib
+
+    from world_builder.depth import DEPTH_REVERSED_11, DEPTH_STANDARD
+
+    node = ring.haze.node
+    assert node.get_shader_input("uDepthMode").get_name().get_name() == "uDepthMode"
+    mode = lambda: node.get_attrib(DepthTestAttrib).get_mode()  # noqa: E731
+    assert mode() == DepthTestAttrib.M_less_equal
+    ring.haze.set_depth_mode(DEPTH_REVERSED_11)
+    assert mode() == DepthTestAttrib.M_greater_equal
+    ring.haze.set_depth_mode(DEPTH_STANDARD)
+    assert mode() == DepthTestAttrib.M_less_equal
+
+
+def test_the_haze_shaders_take_the_depth_convention():
+    shaders = Path(world_builder.asteroids.__file__).parent / "shaders"
+    vert = (shaders / "haze.vert").read_text()
+    frag = (shaders / "haze.frag").read_text()
+    for source in (vert, frag):
+        assert '#pragma include "../../shaders/depth_convention.glsl"' in source
+    # the far clamp only where there is a far plane
+    assert "uDepthMode == DEPTH_STANDARD" in vert
+    assert "0.999999" not in vert and "depthFarZ(gl_Position.w)" in vert
+    # the near plane where the convention puts it
+    assert "depthNearZ()" in frag and "(A.z + A.w)" not in frag
 
 
 def test_dust_is_haze_from_the_camera_on():
@@ -413,3 +471,30 @@ def test_the_haze_follows_the_drawing_scale():
     assert model.start(ppr, min_pixels, 1e9) == pytest.approx(
         RING.sizes.lo * 2.0 * ppr / (FADE_MIDDLE * min_pixels)
     )
+
+
+def test_the_missing_table_is_made_again_only_when_its_inputs_change(
+    window, ring, monkeypatch
+):
+    """What is missing at each distance depends on the pixel scale, the
+    smallest size drawn and the classes' limits, not on the camera: a frame
+    with the same three keeps the table (it cost ~0.3 ms a frame for a ring
+    seen from another planet)."""
+    haze = ring.haze
+    calls = []
+    real = haze.model.missing
+
+    def missing(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(haze.model, "missing", missing)
+    limits = np.array([1000.0] * len(haze.model.class_lo))
+    haze.update(np.array([1.0, 2.0, 3.0]), limits, 800.0, 2.0)
+    haze.update(np.array([5.0, 6.0, 7.0]), limits, 800.0, 2.0)
+    assert len(calls) == 1
+    assert tuple(haze._cam[0]) == (5.0, 6.0, 7.0)  # the camera still follows
+    haze.update(np.array([5.0, 6.0, 7.0]), limits * 2.0, 800.0, 2.0)
+    haze.update(np.array([5.0, 6.0, 7.0]), limits * 2.0, 900.0, 2.0)
+    haze.update(np.array([5.0, 6.0, 7.0]), limits * 2.0, 900.0, 3.0)
+    assert len(calls) == 4

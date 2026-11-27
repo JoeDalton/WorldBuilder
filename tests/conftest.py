@@ -7,12 +7,19 @@ while still giving full access to the scene-graph API, loaders, and math types
 from panda3d.core.
 """
 
+import os
+
 import pytest
 from panda3d.core import loadPrcFileData
 
 # Must be applied before the first ShowBase construction.
 loadPrcFileData("", "window-type none")
 loadPrcFileData("", "audio-library-name null")
+# The depth convention under test (depth.ReversedDepthCamera): OpenGL's 0-1
+# through clip control (desktop, the default), or its [-1, 1] (macOS:
+# WB_DEPTH_ZERO_TO_ONE=0). Run the suite under both.
+ZERO_TO_ONE = os.environ.get("WB_DEPTH_ZERO_TO_ONE", "1") != "0"
+loadPrcFileData("", f"gl-depth-zero-to-one {'#t' if ZERO_TO_ONE else '#f'}")
 
 
 @pytest.fixture(scope="session")

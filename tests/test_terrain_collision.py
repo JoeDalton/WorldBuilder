@@ -569,3 +569,39 @@ def test_without_the_sea_the_seabed_is_hit(showbase, ocean_terrain):
         assert collision.surface.material_at(point) != "water"
     finally:
         terrain.disable_collision()
+
+
+def test_only_the_drawn_chunks_within_reach_are_solid():
+    """TerrainCollision.update registers the drawn chunks whose centre comes
+    within max_distance of the camera (less 3/4 of their size), drops the
+    ones that left, and skips those not stored."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from world_builder.terrain.collision import TerrainCollision
+
+    collision = object.__new__(TerrainCollision)
+    collision.terrain = SimpleNamespace(
+        grid=SimpleNamespace(chunk_size=lambda level: 1000.0 * (1 << level))
+    )
+    collision.native = MagicMock()
+    collision.max_distance = 5000.0
+    collision._registered = {(0, 0, 9, 9)}  # drawn before, not any more
+
+    def chunk(x):
+        return SimpleNamespace(centre=np.array([x, 0.0, 0.0]))
+
+    store = {
+        (0, 0, 0, 0): chunk(4000.0),  # 4000 - 750 < 5000: in
+        (0, 0, 1, 0): chunk(5800.0),  # 5800 - 750 > 5000: out
+        (2, 0, 0, 0): chunk(7500.0),  # 7500 - 3000 < 5000: in (a bigger one)
+        (0, 0, 9, 9): chunk(100.0),
+    }
+    drawn = {(0, 0, 0, 0), (0, 0, 1, 0), (2, 0, 0, 0), (0, 0, 5, 5)}  # last unstored
+    collision.update(drawn, store, np.zeros(3))
+    assert collision._registered == {(0, 0, 0, 0), (2, 0, 0, 0)}
+    added = {
+        call.args[0].centre[0] for call in collision.native.add_chunk.call_args_list
+    }
+    assert added == {4000.0, 7500.0}
+    collision.native.remove_chunk.assert_called_once_with((0, 0, 9, 9))

@@ -5,8 +5,8 @@ one raymarch.
 :class:`PlanetClouds` is what a game (or :class:`world_builder.world.World`)
 builds for a planet. It owns the **volume**: the low clouds, cumulus by
 default (any :class:`cloud.CloudType`, or the genera), raymarched
-(:class:`march.CloudMarch`; it needs the split cameras,
-:meth:`PlanetClouds.use_split_depth`), with a deck sphere for the sea's
+(:class:`march.CloudMarch`; it needs the depth camera,
+:meth:`PlanetClouds.use_depth_camera`), with a deck sphere for the sea's
 reflection, and, with ``cirrus=True``, the weather's cirrus in the march's
 high layer (:func:`weather.cirrus_cover_map`; clouds.md, "The high layer").
 
@@ -38,7 +38,7 @@ from world_builder.clouds.weather import WeatherSpec
 from world_builder.terrain.planet import PlanetSpec
 
 if TYPE_CHECKING:
-    from world_builder.depth import SplitDepthCameras
+    from world_builder.depth import ReversedDepthCamera
     from world_builder.terrain.workers import ChunkExecutor
 
 
@@ -243,7 +243,7 @@ class PlanetClouds:
             self._volume_args.update(genera=genera)
         if cirrus:
             self._volume_args.update(cirrus=True)
-        self._split: tuple[Any, SplitDepthCameras] | None = None
+        self._camera: tuple[Any, ReversedDepthCamera] | None = None
         # The live state a new volume is given (set_sun, set_sky_light,
         # set_debug).
         self._sun: tuple = ((0.0, 0.0, 1.0), None, None)
@@ -261,8 +261,8 @@ class PlanetClouds:
 
     def _make_volume(self, settings: CloudSettings) -> CloudMarch:
         volume = CloudMarch(self.root, settings=settings, **self._volume_args)
-        if self._split is not None:
-            volume.attach(*self._split)
+        if self._camera is not None:
+            volume.attach(*self._camera)
         return volume
 
     # ── settings ──────────────────────────────────────────────────────────────
@@ -447,14 +447,14 @@ class PlanetClouds:
             self.root.hide()
         self.volume.set_visible(visible)
 
-    def use_split_depth(self, app: Any, depth: SplitDepthCameras) -> None:
-        """The game's split cameras, which a raymarched volume draws its
+    def use_depth_camera(self, app: Any, depth: ReversedDepthCamera) -> None:
+        """The game's depth camera, which a raymarched volume draws its
         passes with (:meth:`march.CloudMarch.attach`).
 
         :param app: the ShowBase
-        :param depth: the split cameras
+        :param depth: the reversed camera
         """
-        self._split = (app, depth)
+        self._camera = (app, depth)
         self.volume.attach(app, depth)
 
     def update(

@@ -10,7 +10,7 @@ This is also a full vibe-coding experiment for me
 | `world_builder.sky` | A star field (procedural, with tunable nebulae, or a painted cube map) and the sun, seen through the air |
 | `world_builder.clouds` | Volumetric billboard clouds: a flat field, or a whole planet's, following a weather map (billboards near, a deck far, one pattern) |
 | `world_builder.ocean` | The sea's look on the terrain's own chunks: filtered waves, a drifting swell that collisions follow, planar reflections, depth colour and shoreline foam |
-| `world_builder.depth` | A near/far camera split, for views from the ground to orbit |
+| `world_builder.depth` | One reversed-Z camera, for views from the ground to orbit |
 
 The flat cloud field curves with the planet by a camera-relative drop,
 `d²/2R`, so it meets the horizon (`world_builder.PLANET_RADIUS_M` by default).

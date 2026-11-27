@@ -145,7 +145,7 @@ def main() -> None:
     tools.window_config("Motion shots", args.size, args.offscreen, vsync=False)
     demo = WorldDemo(args.world, settings=tools.settings_from_args(args))
     demo.setFrameRateMeter(False)
-    demo._hud.hide()
+    demo.hide_hud()
     demo._update_hud = lambda: None
     clouds = [b.clouds for b in demo.bodies if b.clouds is not None]
     for layer in clouds:

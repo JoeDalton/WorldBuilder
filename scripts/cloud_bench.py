@@ -37,10 +37,9 @@ sky and the clouds, so the clouds are most of the frame.
                        (below)
     --interactive      fly the probe in and out of the clouds in a window
                        (keys below); no timing
-    --passes           (raymarch) the cost of each pass at each pose: without
-                       the near range's depth pass and card, then with the
-                       depth passes, the march, the resolve and the
-                       composites left out
+    --passes           (raymarch) the cost of each pass at each pose: the
+                       march, the resolve and the composite left out (the
+                       scene's depth is the view's own: no pass)
     --steps-sweep      (raymarch) the clouds' cost against the step budget
                        (8 to 128) at each march block (4x4, 3x3, 4x2, 2x2,
                        1x1)
@@ -144,9 +143,8 @@ from world_builder.clouds.noise import density_on_sphere  # noqa: E402
 from world_builder.clouds.planet import PlanetClouds  # noqa: E402
 from world_builder.clouds.weather import WeatherSpec  # noqa: E402
 from world_builder.depth import (  # noqa: E402
-    HIDE_FROM_CLOUD_PASS,
-    HIDE_FROM_NEAR,
-    SplitDepthCameras,
+    ReversedDepthCamera,
+    system_far,
 )
 from world_builder.quality import QualityLevel  # noqa: E402
 from world_builder.settings import WorldSettings  # noqa: E402
@@ -330,7 +328,6 @@ class CloudBench(ShowBase):
         self.atmospheres = Atmospheres(world.atmosphere)
         self.atmospheres.add(self.radius, AtmosphereParams())
         self.sky = Sky(self.render, stars, self.atmospheres, settings=world.sky)
-        self.sky.node.hide(HIDE_FROM_NEAR)  # the far camera draws it
         self.sky.attach_view(self.win)
         self.atmospheres.attach_aerial(
             self.win, self.cam, self.camLens, self.sky.sun_input
@@ -358,9 +355,9 @@ class CloudBench(ShowBase):
             genera=spec,
         )
         self.clouds.set_debug(cloud_debug)
-        self.depth = SplitDepthCameras(self, near=1.0)
-        self.sky.node.hide(HIDE_FROM_CLOUD_PASS)  # hides no cloud
-        self.clouds.use_split_depth(self, self.depth)
+        self.depth = ReversedDepthCamera(self, near=1.0)
+        self.sky.set_depth_mode(self.depth.mode)
+        self.clouds.use_depth_camera(self, self.depth)
         self._clock = ClockObject.get_global_clock()
         # A game's model: opaque, black, writing depth like any.
         self.probe = self.loader.load_model("models/smiley")
@@ -471,10 +468,8 @@ class CloudBench(ShowBase):
             self.probe.show()
             self.probe.set_pos(*(self.probe_world - self.cam_world))
         distance = float(np.linalg.norm(self.cam_world))
-        split, far = SplitDepthCameras.system_ranges(
-            [(self.radius, distance, 0.0, 0.0)]
-        )
-        self.depth.update(split, far)
+        far = system_far([(self.radius, distance, 0.0, 0.0)])
+        self.depth.update(far)
         self.atmospheres.update(self.cam_world)
         self.sky.set_sun(self.sun)
         self.sky.update((0.0, 0.0, 0.0), far)
@@ -890,24 +885,13 @@ def bench_passes(bench: CloudBench, args: argparse.Namespace) -> None:
         none = _cost(bench, args.frames)
         bench.clouds.set_visible(True)
         row = [_cost(bench, args.frames) - none]  # full
-        # Without the near range's depth pass and card (the march stops at the
-        # far range's scene), where they run.
-        near = [layer.near for layer in layers]
-        for layer in layers:
-            layer.set_near(False)
+        # The march's pass left out (its depth is the view's: no pass).
+        off = [layer.buffer for layer in layers]
+        for buffer in off:
+            buffer.set_active(False)
         row.append(_cost(bench, args.frames) - none)
-        for layer, was in zip(layers, near):
-            layer.set_near(was)
-        for buffers in (
-            lambda layer: [b for b in layer.depth_buffers if b.is_active()],
-            lambda layer: [layer.buffer],
-        ):
-            off = [b for layer in layers for b in buffers(layer)]
-            for buffer in off:
-                buffer.set_active(False)
-            row.append(_cost(bench, args.frames) - none)
-            for buffer in off:
-                buffer.set_active(True)
+        for buffer in off:
+            buffer.set_active(True)
         for cards in (
             lambda: [r.card for layer in layers for r in layer.resolves],
             lambda: [c for layer in layers for c in layer.composites],
@@ -923,8 +907,8 @@ def bench_passes(bench: CloudBench, args: argparse.Namespace) -> None:
 
 
 #: The columns of :func:`bench_passes`: the clouds' cost with everything, then
-#: without the near range's depth pass and card, then each pass left out.
-_PASSES = ("full", "-near", "-depth", "-march", "-resolve", "-comp")
+#: each pass left out (the scene's depth is the view's own: no pass).
+_PASSES = ("full", "-march", "-resolve", "-comp")
 
 
 def bench_steps(bench: CloudBench, args: argparse.Namespace) -> None:

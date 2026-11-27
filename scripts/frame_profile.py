@@ -4,8 +4,9 @@ reference profile, RENDERING_PLAN.md part A; results in
 docs/source/frame_profile.md)::
 
     python scripts/frame_profile.py [WORLD.yaml] [--pose NAME ...] [--size "W H"]
-        [--quality LEVEL] [--frames N] [--offscreen]
-        [--at LAT LON ALT HEADING PITCH ...] [--scene bench-sea|bench-dry]
+        [--quality LEVEL] [--frames N] [--offscreen] [--pipelined]
+        [--terrain-passes] [--at LAT LON ALT HEADING PITCH ...]
+        [--scene bench-sea|bench-dry]
 
 The poses are over the world file's first body (default: the home planet of
 three_planets.yaml), at its reference point.
@@ -30,6 +31,17 @@ read back after each step, as terrain_shots.py times them):
   samples less at 2 (``AtmosphereSettings.steps``), scaled to all of them
   (``* steps / (steps - 2)``): a linear estimate of the whole march.
 
+With --pipelined, every frame is timed as a game runs it: steps not held
+for the GPU, the CPU's next frame overlapping the GPU's last, so **frame** is
+the slower of the two (the game's frame); **step** stays GPU-synced (the
+CPU's part). Read the default mode to rank GPU parts against each other (its
+frame is the CPU and the GPU added); read --pipelined for what a change does
+to the game's frame and which side bounds it (frame close to step: the CPU;
+frame over step: the GPU). --terrain-passes adds the terrain's cost per
+camera pass: **t_view** (the view's camera), **t_refl** (the sea's
+reflection).
+**asteroids** is the fields' per-frame update skipped (CPU only).
+
 With --scene, a bench scene (BENCH_SCENES): the first planet simple (no
 vegetation, mountains 600 m), with its reflective sea or without, at the
 ground, 1.5 km and 10 km up over the start.
@@ -53,9 +65,20 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from panda3d.core import BitMask32  # noqa: E402
+
 import tools  # noqa: E402
 from demo_world import DEFAULT_WORLD, WorldDemo  # noqa: E402
+from world_builder import depth  # noqa: E402
 from world_builder.world_file import WorldSpec, parse_world, world_to_yaml  # noqa: E402
+
+#: --terrain-passes: the terrain hidden from one camera at a time (its cull
+#: and draw in that pass): the view's camera (both its bits), the sea's
+#: reflection.
+TERRAIN_PASSES = {
+    "t_view": BitMask32.bit(depth.NEAR_BIT) | BitMask32.bit(depth.FAR_BIT),
+    "t_refl": depth.REFLECTION_CAMERA_MASK,
+}
 
 #: The bench scenes (--scene): the first body's planet, simple: no vegetation,
 #: its mountains 600 m (not 4.8 km), with its reflective sea (bench-sea) or
@@ -154,7 +177,38 @@ def _time(demo: WorldDemo, probe, frames: int) -> tuple[float, float, float]:
     )
 
 
-def _parts(demo: WorldDemo) -> dict:
+def _summary(seconds) -> tuple[float, float]:
+    """:returns: the median and the 95th percentile of *seconds*, in ms"""
+    ms = np.asarray(seconds, dtype=np.float64) * 1e3
+    return float(np.median(ms)), float(np.percentile(ms, 95))
+
+
+def _time_pipelined(demo: WorldDemo, probe, frames: int) -> tuple[float, float, float]:
+    """The frame as a game runs it: steps not held for the GPU, so the CPU and
+    the GPU overlap and the frame is the slower of the two (the driver queues
+    a few frames at most).
+
+    :returns: the median pipelined frame, its p95, and the median step
+        alone GPU-synced (the CPU's part, as :func:`_time`'s), ms"""
+    for _ in range(30):
+        demo.taskMgr.step()
+    whole = []
+    for _ in range(frames):
+        start = time.perf_counter()
+        demo.taskMgr.step()
+        whole.append(time.perf_counter() - start)
+    probe.get_screenshot()  # drain the queue before the synced steps
+    steps = []
+    for _ in range(100):
+        start = time.perf_counter()
+        demo.taskMgr.step()
+        steps.append(time.perf_counter() - start)
+        probe.get_screenshot()
+    frame, p95 = _summary(whole)
+    return frame, p95, _summary(steps)[0]
+
+
+def _parts(demo: WorldDemo, terrain_passes: bool = False) -> dict:
     """Each part as (off, on) callables."""
     world = demo.world.world
     terrains = [body.terrain.root for body in demo.bodies]
@@ -164,6 +218,19 @@ def _parts(demo: WorldDemo) -> dict:
             lambda: [t.show() for t in terrains],
         ),
     }
+    if terrain_passes:
+        for name, mask in TERRAIN_PASSES.items():
+            parts[name] = (
+                lambda m=mask: [t.hide(m) for t in terrains],
+                lambda m=mask: [t.show(m) for t in terrains],
+            )
+    if world.fields:
+        # The fields' per-frame work (CPU only): their update skipped.
+        fields = list(world.fields)
+        parts["asteroids"] = (
+            lambda: [setattr(f, "update", lambda *a, **k: None) for f in fields],
+            lambda: [f.__dict__.pop("update", None) for f in fields],
+        )
     if world.sky is not None:
         parts["sky"] = (world.sky.node.hide, world.sky.node.show)
     atmospheres = world.atmospheres
@@ -218,7 +285,20 @@ def main() -> None:
     parser.add_argument("--timeout", type=float, default=90.0)
     parser.add_argument("--size", default="2560 1440", help='"width height"')
     parser.add_argument("--offscreen", action="store_true")
-    parser.add_argument("--frames", type=int, default=80)
+    parser.add_argument(
+        "--frames", type=int, default=None, help="default 80, 400 pipelined"
+    )
+    parser.add_argument(
+        "--pipelined",
+        action="store_true",
+        help="time frames as a game runs them (CPU and GPU overlapping), not "
+        "GPU-synced: the frame is the slower of the two",
+    )
+    parser.add_argument(
+        "--terrain-passes",
+        action="store_true",
+        help="also the terrain's cost per camera pass (t_near ... t_cldfar)",
+    )
     parser.add_argument(
         "--at",
         nargs=5,
@@ -256,7 +336,12 @@ def main() -> None:
         for alt in (1500.0, 10000.0):
             poses[f"bench_{alt:.0f}"] = (lat, lon, alt, 0.0, 3.0, 0)
     atmo = settings.atmosphere
-    columns = ["frame", "p95", "step", "terrain", "refl", "sky", "clouds", "cirrus"]
+    timer = _time_pipelined if args.pipelined else _time
+    frames = args.frames or (400 if args.pipelined else 80)
+    columns = ["frame", "p95", "step", "terrain"]
+    if args.terrain_passes:
+        columns += list(TERRAIN_PASSES)
+    columns += ["refl", "sky", "clouds", "cirrus", "asteroids"]
     columns += ["skyview", "aerial", "godrays", "atmo"]
     print(f"{'pose':<12} " + " ".join(f"{c:>7}" for c in columns))
     default = list(BENCH_POSES if args.scene else POSES)
@@ -266,15 +351,15 @@ def main() -> None:
             demo.place_camera(lat, lon, alt, heading, pitch, demo.bodies[body])
             tools.set_local_sun(demo, *SUNS.get(name, DEFAULT_SUN))
             settled = tools.settle(demo, args.timeout)
-            frame, p95, step = _time(demo, probe, args.frames)
+            frame, p95, step = timer(demo, probe, frames)
             row = {"frame": frame, "p95": p95, "step": step}
-            for part, (off, on) in _parts(demo).items():
+            for part, (off, on) in _parts(demo, args.terrain_passes).items():
                 off()
-                row[part] = frame - _time(demo, probe, args.frames)[0]
+                row[part] = frame - timer(demo, probe, frames)[0]
                 on()
             if atmo.steps > 2:
                 demo.world.world.atmospheres.set_settings(replace(atmo, steps=2))
-                fewer = _time(demo, probe, args.frames)[0]
+                fewer = timer(demo, probe, frames)[0]
                 demo.world.world.atmospheres.set_settings(atmo)
                 row["atmo"] = (frame - fewer) * atmo.steps / (atmo.steps - 2)
             cells = " ".join(

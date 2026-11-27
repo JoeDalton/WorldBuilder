@@ -177,7 +177,7 @@ def main() -> None:
     if args.shot is not None:
         from panda3d.core import Filename
 
-        demo._hud.hide()
+        demo.hide_hud()
         demo.setFrameRateMeter(False)
         tools.settle(demo, 120.0)
         for _ in range(5):

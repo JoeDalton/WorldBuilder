@@ -74,12 +74,48 @@ out:
   grazing the planet's limb is not reddened: the planet's shadow on the
   ring has a penumbra but no red edge.
 
+## Sky
+
+- **A black band at the horizon from low over ground below the base
+  radius** (found 2026-11-27 during the #57 spike; the same with the split
+  cameras and with one reversed-Z camera: 91,248 black pixels, rows 795-912 of
+  2560 x 1440, in both). On the ice planet at `--at -64.8560 -160.1385 7 -152
+  2` (`ice`, the world file's sun, a low one), 7 m above the base radius and
+  2,878 m above the ground around: between the sky and the terrain's horizon a
+  black strip. Likely the sky's ground test (`atmoHitsGround`) takes rays that
+  dip under the base sphere's horizon as hitting the ground, while the real
+  ground there is lower and those rays reach a farther, lower horizon: nothing
+  draws them. Not looked into further.
+
 ## Clouds (shadows' part F, #11)
 
 - **The far cloud deck's rim.** The billboards at the deck's distant rim
   show their rectangular edges; the long shadows (`cloudFarDepth`, one value
   per billboard) darken some of them, which makes them stand out a little
   more at dusk (`dusk_in_clouds`).
+
+- **A game's translucent volumes over the clouds** (SpaceFlight's shields,
+  reported 2026-11-27; there before the depth work). The clouds are laid
+  over the view as a premultiplied card that writes no depth
+  (`cloud_composite.frag`); a translucent volume that writes none either
+  (the shield: depth write off, bin `fixed` 60, after the clouds) is blended
+  over whatever cloud is on screen, a cloud in front of it included.
+  Drawing it before the clouds would fail the other way (a cloud behind it
+  laid over it). Lead: the march already keeps, per pixel, the cloud's
+  premultiplied colour and coverage and its distance from the camera (km;
+  0 none): the resolve's `colour` and `distance` targets in `march.py`
+  (`_Resolve`; the composite swaps between two each frame), which
+  `cloud_composite.frag` reads. WorldBuilder would hand a game those two textures (and their
+  downscale, `uDownscale`) through the world (per body's clouds, the one
+  drawn) and a GLSL helper, e.g. `cloudCoverBefore(fragCoord, distance)`:
+  the cloud's alpha where its distance is short of *distance*, else 0. The
+  shield's shader scales its colour and alpha by `1 - cover`: a dense cloud
+  in front hides it, a thin one lets it through, a cloud behind it stays
+  behind. Left: the cloud slightly dimmed where a shield overlaps it in
+  front (`(1 - cover * a)` on the cloud's term instead of 1); one distance
+  per pixel (the cloud's representative one, not its front), so a shield
+  inside a cloud is all in front or all behind; cirrus decks (`deck.py`,
+  their own bins) not covered.
 
 ## The raymarch (MARCH_PLAN)
 
@@ -90,6 +126,17 @@ where they hold it. Phases 0-3 are done (MARCH_PLAN.md); Phase 4 (speed,
 then the default) is measured, not built. What is left:
 
 ### Steadiness
+
+- **Horizontal lines across the deck seen edge-on from just above it**
+  (reported 2026-11-27 in `demo_world.py` at rest; there with the split
+  cameras already, `a9297a6`, as with the reversed camera and with Task 7's
+  view depth: not the depth work). Reproduce:
+  `terrain_shots.py --offscreen --size "2493 1408" --at 0.8057 30.4001 2956 0 -4
+  --pose at` (the camera 2,957 m up, pitch -4, the cumulus deck's top just
+  under it): thin bright and dark rows through the deck's grazing far side,
+  steady in a still view. Suspects, not checked: the march's 4 x 2 block at
+  HIGH (rows traced two at a time) or the resolve's history at grazing
+  angles. Not looked into further.
 
 - **The light volume re-baked mid-flight lights the clouds anew at once**
   (found 2026-11-08, performance.md §30). A bake is started when the camera

@@ -472,17 +472,9 @@ approaching, rocks appear out of it while it thins by as much.
 - **Drawing.** A hull around the shape (1,024 segments for a ring), drawn on
   both sides with depth test and no depth write, after the sky and clouds:
   a planet in front hides it. Hull points beyond the far plane are pulled
-  onto it, so a ring across the sky is drawn whole without pushing the far
-  plane out. With split depth cameras both draw it (`FieldHaze.set_split`,
-  called by the field when the app's camera is a split's near one): the
-  near camera from its near plane to the split, the far camera from the
-  split on, both cutting the rays at the same plane (given from Python:
-  read from the near lens's projection in floats, it was off by kilometres,
-  a seam). Drawn by the far camera alone, the haze ended at the split: a
-  ring's dust is never drawn as rocks, and from orbit the split sits
-  hundreds of kilometres out. A rock beyond the split is veiled from the
-  split on (`hazeVeilStart`): the near camera's haze pass covers the
-  stretch before it.
+  onto it in standard depth, so a ring across the sky is drawn whole without
+  pushing the far plane out; the reversed camera reaches infinity. Its rays
+  start at the camera's near plane (`depthNearZ`, `FieldHaze.set_depth_mode`).
 - **Behind the clouds.** The clouds write no depth: drawn after them, a ring
   seen from the ground covered them (and dimmed the clouds round a peak
   the ring passes behind). Around a planet with clouds
@@ -508,13 +500,14 @@ time), and the bodies' textures. They are part of `World.loading`,
 finds one (to make it solid, find clear spots...). a world file's `fields:` builds them this way
 ([World files](world_file.md); `worlds/ring.yaml`, `worlds/asteroid_cube.yaml`).
 
-**The far plane.** `World.depth_ranges` reaches every field's
+**The far distance.** `World.far_distance` reaches every field's
 `AsteroidField.reach`: its largest rock at the settings' `min_pixels`
 (2 × radius × pixels per radian / `min_pixels`: about 3,400 km for the
 `ring` preset at 1600×900), at most the field's far side. Short of it the
 far plane cut the biggest rocks while they were still a few pixels wide,
 a line where they met the haze (open space's fixed 1,000 km). The far
-plane costs nothing in depth precision: that is the split's. The world
+distance costs nothing in depth precision: the reversed camera's float depth
+keeps about 1e-7 of the distance at every range. The world
 passes the far on to the fields (`World.update(far=)`), and they fade
 their rocks out over its last fifth.
 

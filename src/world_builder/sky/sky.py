@@ -38,6 +38,7 @@ from panda3d.core import (
 
 from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.atmosphere.sky_view import SkyView, bind_sky_view_defaults
+from world_builder.depth import DEPTH_STANDARD, depth_mode_input, far_plane_test
 from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 from world_builder.shadows import SUN_ANGULAR_RADIUS
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
@@ -92,12 +93,11 @@ class SkySettings(QualitySettings):
 class Sky:
     """A sky sphere around the camera.
 
-    Draw it with the far camera only (``hide(depth.HIDE_FROM_NEAR)``):
-    it draws first, without depth, over whatever is there, so the near pass
-    would paint it over the far one. Recentre it every frame
-    (:meth:`update`). ``sky.vert`` puts it on the far plane whatever its
-    scale, so any camera that draws it (the ocean's reflection, with a range
-    of its own) sees it whole.
+    Drawn after the ground on the far plane (``sky.vert``:
+    ``depth_convention.glsl``'s ``depthFarZ``) with the camera's depth test
+    and equality (:meth:`set_depth_mode`): it shows where nothing nearer was,
+    its stars too. Recentre it every frame (:meth:`update`); any camera that
+    draws it (the ocean's reflection, with a range of its own) sees it whole.
 
     With a :class:`starfield.Starfield`, the point stars are a child node,
     :attr:`stars`, drawn just after the sphere and added to it.
@@ -173,7 +173,10 @@ class Sky:
         ensure_sky_bin()
         self.node.set_bin(SKY_BIN, 0)
         self.node.set_depth_write(False)
-        self.node.set_attrib(DepthTestAttrib.make(DepthTestAttrib.M_less_equal))
+        # Its vertices sit on the far plane (depth_convention.glsl): the
+        # camera's test with equality, by the shared depth mode.
+        self.node.set_shader_input("uDepthMode", depth_mode_input())
+        self.set_depth_mode(DEPTH_STANDARD)
         self.node.set_light_off()
         self.node.set_two_sided(True)
         bind_defaults(self.node)
@@ -234,6 +237,13 @@ class Sky:
     def settings(self) -> SkySettings:
         """What the sky costs (:meth:`set_settings`)."""
         return self._settings
+
+    def set_depth_mode(self, mode: int) -> None:
+        """The depth convention the view draws with
+        (:mod:`world_builder.depth`): the far-plane test of *mode* on the
+        sphere, its stars inheriting it. The shaders read the shared
+        ``uDepthMode`` themselves."""
+        self.node.set_attrib(DepthTestAttrib.make(far_plane_test(mode)))
 
     def set_settings(self, settings: SkySettings) -> None:
         """Change what the sky costs: the star share live, the glow's size
@@ -298,11 +308,11 @@ class Sky:
         self._sun[0] = LVecBase3f(*Vec3(*direction).normalized())
 
     def update(self, camera_render: ArrayLike, far: float) -> None:
-        """Per frame: around the camera, inside the far camera's range (the
-        scale is a margin only: ``sky.vert`` draws it on the far plane).
+        """Per frame: around the camera, inside the view's range (the scale
+        is a margin only: ``sky.vert`` draws it on the far plane).
 
         :param camera_render: the camera's position in the render frame
-        :param far: the far camera's far distance
+        :param far: the view's far distance (``ReversedDepthCamera.far``)
         """
         self.node.set_pos(*camera_render)
         self.node.set_scale(0.9 * far)

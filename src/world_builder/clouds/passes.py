@@ -1,10 +1,8 @@
 """
-The clouds' passes' shared pieces: the render states a pass camera starts
-from (everything but the clouds into depth only), a camera sharing a split
-camera's lens, and a fullscreen card laying a premultiplied texture over one
-depth range in the clouds' slot. The raymarch (:mod:`march`) draws its depth
-passes and its composite with them. (They were the half-resolution
-billboards' pass's, :mod:`half_res`, removed with the billboards.)
+The clouds' composite card: a fullscreen card laying a premultiplied
+texture over the view in the clouds' slot (the raymarch's, :mod:`march`).
+Its depth passes' cameras and states went when the clouds took the view's
+own depth (FRAME_COST_PLAN.md, Task 7).
 """
 
 from __future__ import annotations
@@ -13,26 +11,16 @@ from typing import Any
 
 from panda3d.core import (
     BitMask32,
-    Camera,
     CardMaker,
     ColorBlendAttrib,
-    ColorWriteAttrib,
     CullBinManager,
-    Lens,
     LVecBase2f,
     NodePath,
     OmniBoundingVolume,
-    RenderState,
     Shader,
-    ShaderAttrib,
     Texture,
     TransparencyAttrib,
 )
-
-from world_builder.depth import (
-    PASS_TAG,
-)
-from world_builder.terrain.terrain import depth_only_shader
 
 #: The composites' cull bin: after the sky (21), where the clouds draw
 #: without this pass (22-28), before the transparent bin (30).
@@ -60,50 +48,6 @@ void main() {
     fragColor = texture(uClouds, vUv);  // premultiplied
 }
 """
-
-
-def pass_states() -> tuple[RenderState, RenderState]:
-    """The render states of a camera drawing the scene for a cloud pass:
-    everything writes depth only (initial), the terrain through its
-    depth-only fragment stage (its tag state, ``PASS_TAG`` "terrain").
-
-    :returns: (initial, terrain)
-    """
-    initial = RenderState.make(ColorWriteAttrib.make(ColorWriteAttrib.C_off))
-    terrain = RenderState.make(
-        ShaderAttrib.make(depth_only_shader()),
-        ColorWriteAttrib.make(ColorWriteAttrib.C_off),
-        1,  # over the sea's own shader below the terrain's root
-    )
-    return initial, terrain
-
-
-def pass_camera(
-    app: Any,
-    name: str,
-    lens: Lens,
-    bit: int,
-    initial: RenderState,
-    terrain: RenderState,
-    point_scale: float = 1.0,
-) -> NodePath:
-    """A camera of a cloud pass: under the app's camera, sharing a split
-    camera's very lens (so it follows its range, fov and aspect every
-    frame), seeing what is shown to *bit* with :func:`pass_states`, the
-    trees' impostors sized in its pixels (*point_scale*: its pixels per view
-    pixel, across).
-
-    :returns: the camera's NodePath
-    """
-    node = Camera(name, lens)
-    node.set_camera_mask(BitMask32.bit(bit))
-    node.set_initial_state(initial)
-    node.set_tag_state_key(PASS_TAG)
-    node.set_tag_state("terrain", terrain)
-    from world_builder.terrain.trees import IMPOSTOR_TAG, pass_state
-
-    node.set_tag_state(IMPOSTOR_TAG, pass_state(point_scale))
-    return app.camera.attach_new_node(node)
 
 
 def composite_card(app: Any, name: str, texture: Texture, shown_to: int) -> NodePath:

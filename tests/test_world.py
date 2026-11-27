@@ -24,7 +24,9 @@ from world_builder.clouds.planet import PlanetClouds
 from world_builder.depth import (
     FAR_CAMERA_MASK,
     NEAR_CAMERA_MASK,
-    SplitDepthCameras,
+    ReversedDepthCamera,
+    planet_far,
+    system_far,
 )
 from world_builder.lights import TrackedLights
 from world_builder.objects import PBR_FULL, ModelLighting, ModelSettings, model_shader
@@ -36,6 +38,7 @@ from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.world import (
+    LIGHT_STAGES,
     Body,
     BodyLook,
     CloudLook,
@@ -213,6 +216,7 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world.light_period = 1
     world._light_age = 0
     world._light_key = None
+    world._light_job = None
     world._body_centres = world._body_radii = None
     return world
 
@@ -237,20 +241,18 @@ def test_the_far_plane_reaches_the_fields_rocks():
 
     space = _world()
     ring = _field(space)
-    assert space.depth_ranges(np.zeros(3))[1] == SPACE_FAR_M
+    assert space.far_distance(np.zeros(3)) == SPACE_FAR_M
     ring.reach.return_value = 2.6e6
-    assert space.depth_ranges(np.zeros(3))[1] == 2.6e6
+    assert space.far_distance(np.zeros(3)) == 2.6e6
     body = _body()
     world = _world(body)
     origin = np.array([0.0, 0.0, R + 1000.0])
-    _, planet_far = world.depth_ranges(origin)
+    bodies_far = world.far_distance(origin)
     near = _field(world)
-    near.reach.return_value = 0.5 * planet_far
-    assert world.depth_ranges(origin)[1] == planet_far
-    near.reach.return_value = 2.0 * planet_far
-    split, far = world.depth_ranges(origin)
-    assert far == 2.0 * planet_far
-    np.testing.assert_allclose(split, _world(body).depth_ranges(origin)[0])
+    near.reach.return_value = 0.5 * bodies_far
+    assert world.far_distance(origin) == bodies_far
+    near.reach.return_value = 2.0 * bodies_far
+    assert world.far_distance(origin) == 2.0 * bodies_far
 
 
 def test_update_works_around_the_camera():
@@ -272,21 +274,21 @@ def test_update_works_around_the_camera():
     np.testing.assert_allclose(world.camera_world, camera)
 
 
-def test_update_without_far_takes_the_depth_ranges():
+def test_update_without_far_takes_the_far_distance():
     world = _world(_body())
     origin = np.array([0.0, 0.0, R + 1000.0])
     world.update(origin)
-    assert world.sky.update.call_args[0][1] == world.depth_ranges(origin)[1]
+    assert world.sky.update.call_args[0][1] == world.far_distance(origin)
 
 
 def test_open_space_is_a_world_without_bodies():
-    """No planet: the sky, the sun and the lights alone, a fixed depth split,
-    the bare sun and the space ambient light, nothing loading."""
-    from world_builder.world import SPACE_FAR_M, SPACE_SPLIT_M
+    """No planet: the sky, the sun and the lights alone, a fixed far
+    distance, the bare sun and the space ambient light, nothing loading."""
+    from world_builder.world import SPACE_FAR_M
 
     world = _world()
     origin = np.array([1e6, -2e6, 3e5])
-    assert world.depth_ranges(origin) == (SPACE_SPLIT_M, SPACE_FAR_M)
+    assert world.far_distance(origin) == SPACE_FAR_M
     direct, ambient = world.light_at(origin)
     np.testing.assert_allclose(direct, [2.0, 2.0, 2.0])
     np.testing.assert_allclose(ambient, [0.1, 0.2, 0.3])
@@ -296,12 +298,12 @@ def test_open_space_is_a_world_without_bodies():
     assert world.sky.update.call_args[0][1] == SPACE_FAR_M
 
 
-def test_depth_ranges_cover_every_body():
+def test_the_far_distance_covers_every_body():
     planet = _body()
     moon = _body("moon", MOON, position=(0.0, 1e7, 0.0))
     world = _world(planet, moon)
     origin = np.array([0.0, 0.0, R + 800.0])
-    expected = SplitDepthCameras.system_ranges(
+    expected = system_far(
         [
             (R, R + 800.0, UNKNOWN_BOUNDS[1], 0.0),
             (
@@ -312,7 +314,7 @@ def test_depth_ranges_cover_every_body():
             ),
         ]
     )
-    assert world.depth_ranges(origin) == pytest.approx(expected)
+    assert world.far_distance(origin) == pytest.approx(expected)
 
 
 def test_nearest_body_is_by_sea_level():
@@ -439,10 +441,13 @@ def test_one_light_call_lights_the_camera_the_nodes_and_the_sea():
     ball.set_pos(0.0, 2e5, 0.0)  # 200 km away, still near the planet
     world.track_light(ball)
     calls = []
-    lights_at = world.lights_at
-    world.lights_at = lambda points, local=True: (
-        calls.append(len(points)) or lights_at(points, local)
-    )
+    stages = world._lights_at_stages
+
+    def counted(points, local=True):
+        calls.append(len(points))
+        return (yield from stages(points, local))
+
+    world._lights_at_stages = counted
 
     world._light(camera, camera + world.tracked.positions())
 
@@ -592,13 +597,12 @@ def test_the_far_plane_reaches_the_cirrus_above_the_mountains():
     planet.terrain.planet.height_bounds = (-1000.0, 3000.0)
     world = _world(planet)
     origin = np.array([0.0, 0.0, R + 800.0])
-    _, bare = world.depth_ranges(origin)
+    bare = world.far_distance(origin)
     planet.clouds = SimpleNamespace(high_slab=HIGH_SLAB)
-    _, far = world.depth_ranges(origin)
+    far = world.far_distance(origin)
     mid = HIGH_SLAB[0] + 0.5 * HIGH_SLAB[1]
-    expected = SplitDepthCameras.planet_ranges(R, R + 800.0, mid, 0.0)
     assert far > bare
-    assert far == pytest.approx(expected[1])
+    assert far == pytest.approx(planet_far(R, R + 800.0, mid, 0.0))
 
 
 def test_collision_for_the_chosen_bodies():
@@ -727,16 +731,16 @@ def test_a_whole_world(window, monkeypatch):
     )
     shutdowns = []
     monkeypatch.setattr(world.executor, "shutdown", lambda: shutdowns.append(1))
-    depth = SplitDepthCameras(window)
+    depth = ReversedDepthCamera(window)
+    world.use_depth_camera(depth)
     try:
         planet, moon = world.body("planet"), world.body("moon")
         assert planet.terrain.executor is world.executor
         assert moon.terrain.executor is world.executor
         assert planet.clouds.volume.executor is world.executor
         assert planet.atmosphere == 0 and moon.atmosphere is None
-        # Drawn by the far camera only
-        assert world.sky.node.is_hidden(NEAR_CAMERA_MASK)
-        assert not world.sky.node.is_hidden(FAR_CAMERA_MASK)
+        # Drawn by the view's camera (both its bits)
+        assert not world.sky.node.is_hidden(NEAR_CAMERA_MASK | FAR_CAMERA_MASK)
 
         origin = frame.up * (R + 300.0)
         # A ball drawn by the model shader, casting its shadow.
@@ -745,7 +749,7 @@ def test_a_whole_world(window, monkeypatch):
         ball.set_pos(window.camera.get_pos(window.render) + (0.0, 50.0, 0.0))
         world.track_light(ball, cast=True, shader=True)
         for _ in range(2):
-            depth.update(*world.depth_ranges(origin))
+            depth.update(world.far_distance(origin))
             world.update(origin, far=depth.far)
             window.graphicsEngine.render_frame()
         assert world.casters._on[0] == 1
@@ -844,26 +848,116 @@ def test_a_ring_in_open_space(window):
     assert world.fields == [] and ring.root.is_empty()
 
 
-def test_lights_are_reckoned_every_light_period_frames():
-    """With light_period 3 the lights are reckoned on the first frame, then
-    every third; a moved sun or a newly tracked node brings them forward."""
+def _staged(world):
+    """Stand-in light stages recording what runs: ("stage", n) per stage,
+    "set" when the lights are set (the last), "all" for a reckoning at once."""
+    log = []
+
+    def stages(camera, tracked):
+        for n in range(1, LIGHT_STAGES):
+            log.append(("stage", n))
+            yield
+        log.append(("stage", LIGHT_STAGES))
+        log.append("set")
+
+    world._light_stages = stages
+    world._light = lambda camera, tracked: log.append("all")
+    return log
+
+
+def _frames(world, count):
+    camera, tracked = np.zeros(3), np.zeros((0, 3))
+    for _ in range(count):
+        world._step_lights(camera, tracked)
+
+
+def test_the_lights_are_set_every_light_period_frames_a_stage_a_frame():
+    """With light_period 3: at once on the first frame, then one stage a
+    frame (no frame takes the whole reckoning), set every third frame."""
     world = _world(_body())
     world.light_period = 3
-    due = [world._lights_due() for _ in range(7)]
-    assert due == [True, False, False, True, False, False, True]
-
-    world._sun = np.array([0.0, 1.0, 0.0])
-    assert world._lights_due()
-    assert not world._lights_due()
-
-    world.track_light(NodePath("ship"))
-    assert world._lights_due()
-    assert not world._lights_due()
+    log = _staged(world)
+    _frames(world, 1)
+    assert log == ["all"]
+    for _ in range(3):
+        log.clear()
+        _frames(world, 3)
+        assert log == [("stage", 1), ("stage", 2), ("stage", 3), "set"]
 
 
-def test_a_light_period_of_one_reckons_every_frame():
+def test_a_longer_period_waits_then_spreads_its_stages():
     world = _world(_body())
-    assert all(world._lights_due() for _ in range(5))
+    world.light_period = 6
+    log = _staged(world)
+    _frames(world, 1)
+    log.clear()
+    _frames(world, 3)
+    assert log == []
+    _frames(world, 3)
+    assert log == [("stage", 1), ("stage", 2), ("stage", 3), "set"]
+
+
+def test_a_moved_sun_or_a_new_tracked_node_sets_the_lights_at_once():
+    world = _world(_body())
+    world.light_period = 3
+    log = _staged(world)
+    _frames(world, 2)  # at once, then a stage of the next job
+    log.clear()
+    world._sun = np.array([0.0, 1.0, 0.0])
+    _frames(world, 1)
+    assert log == ["all"]  # the job under way dropped
+    log.clear()
+    world.track_light(NodePath("ship"))
+    _frames(world, 1)
+    assert log == ["all"]
+    log.clear()
+    _frames(world, 3)
+    assert log == [("stage", 1), ("stage", 2), ("stage", 3), "set"]
+
+
+def test_a_light_period_of_one_sets_the_lights_every_frame():
+    world = _world(_body())
+    log = _staged(world)
+    _frames(world, 4)
+    assert log.count("all") + log.count("set") == 4
+    assert log[1:] == [("stage", 1), ("stage", 2), ("stage", 3), "set"] * 3
+
+
+def test_the_staged_lights_are_the_lights_at_once():
+    """lights_at stepped stage by stage (one yield fewer than its stages)
+    gives what it gives at once (its own correctness:
+    test_lights_at_many_points_are_each_points_light)."""
+    world = _world(_body(), _body("moon", MOON, position=(0.0, 1e7, 0.0)))
+    points = np.array([[0.0, 0.0, R + 10.0], [0.0, 1e7, 2e6], [0.0, 0.0, -R - 5.0]])
+    stages = world._lights_at_stages(points, [True, True, False])
+    yields = 0
+    while True:
+        try:
+            next(stages)
+            yields += 1
+        except StopIteration as done:
+            staged = done.value
+            break
+    assert yields == LIGHT_STAGES - 1
+    whole = world.lights_at(points, [True, True, False])
+    for a, b in zip(staged, whole, strict=True):
+        np.testing.assert_array_equal(a, b)
+
+
+def test_points_without_local_shadows_skip_the_rings_and_mountains():
+    """lights_at(points, local=False) (what a shader shades per pixel: the
+    near sea) asks the rings' and the mountains' shadows nothing; with
+    local=True it does."""
+    world = _world(_body())
+    world.shadows.ring_visibility = MagicMock(
+        side_effect=lambda p, sun: np.ones(len(p))
+    )
+    points = np.array([[0.0, 0.0, R + 10.0], [0.0, 0.0, R + 20.0]])
+    world.lights_at(points, False)
+    world.shadows.ring_visibility.assert_not_called()
+    world.lights_at(points, [False, True])
+    (called, _), _ = world.shadows.ring_visibility.call_args
+    assert len(called) == 1
 
 
 def test_the_bodies_centres_are_gathered_once():
@@ -873,3 +967,25 @@ def test_the_bodies_centres_are_gathered_once():
     centres = world._body_centres
     world._nearest_indices(points)
     assert world._body_centres is centres
+
+
+def test_the_depth_camera_reaches_every_part_that_pins_or_reads_depth():
+    """use_depth_camera: the sky, each sea's mirror and each field's haze take
+    its depth mode; each body's clouds draw their passes with it."""
+    from types import SimpleNamespace as NS
+
+    from world_builder.depth import DEPTH_REVERSED_01
+
+    planet = _body()
+    planet.ocean = MagicMock()
+    planet.clouds = MagicMock()
+    moon = _body("moon", MOON, position=(0.0, 1e7, 0.0))
+    world = _world(planet, moon)
+    field = _field(world)
+    depth = NS(mode=DEPTH_REVERSED_01)
+    world.use_depth_camera(depth)
+    assert world.depth is depth
+    world.sky.set_depth_mode.assert_called_once_with(DEPTH_REVERSED_01)
+    planet.ocean.set_depth_mode.assert_called_once_with(DEPTH_REVERSED_01)
+    planet.clouds.use_depth_camera.assert_called_once_with(world.app, depth)
+    field.haze.set_depth_mode.assert_called_once_with(DEPTH_REVERSED_01)

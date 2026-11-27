@@ -42,16 +42,17 @@ from panda3d.core import (
     BitMask32,
     GeomNode,
     LMatrix4f,
+    LVecBase2f,
     LVecBase3f,
     NodePath,
     OmniBoundingVolume,
     PTA_float,
     PTA_int,
+    PTA_LVecBase2f,
     PTA_LVecBase3f,
     SamplerState,
     Shader,
     Texture,
-    Vec3,
 )
 
 from world_builder.asteroids.haze import FieldHaze, mean_projected_cover
@@ -64,7 +65,7 @@ from world_builder.asteroids.rock import ROCK_UV_PERIOD
 from world_builder.asteroids.scatter import Scatter
 from world_builder.asteroids.settings import AsteroidSettings
 from world_builder.asteroids.spec import FieldSpec, KeepOut
-from world_builder.depth import NEAR_CAMERA_MASK, REFLECTION_CAMERA_MASK
+from world_builder.depth import REFLECTION_CAMERA_MASK
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.materials import (
     MaterialSet,
@@ -201,6 +202,9 @@ class AsteroidField:
         self._draws: list[tuple[NodePath, Any, int]] = []  # node, offset PTA, count
         self._errors = None
         self._last_visible = None
+        # The last update found the camera out of the field's reach with no
+        # rock held: the next ones skip the population while it stays so.
+        self._out_of_reach = False
         self._near = np.zeros(0, dtype=np.int64)  # the last pass's
         self.collision = None
         #: per prototype, its finest mesh's error to the full detail (None
@@ -223,6 +227,20 @@ class AsteroidField:
     @property
     def settings(self) -> AsteroidSettings:
         return self._settings
+
+    @property
+    def out_of_reach(self) -> bool:
+        """True while the camera is too far from the field for any of its
+        rocks to be held: :meth:`update` then leaves the population alone
+        (the haze still follows the camera)."""
+        return self._out_of_reach
+
+    def _beyond_reach(self, camera: np.ndarray, ranges: np.ndarray) -> bool:
+        """:returns: whether *camera* (field frame) is farther from every
+        rock centre the shape allows than any class's range"""
+        lo, hi = self.spec.shape.bounds()
+        gap = np.maximum(np.maximum(lo - camera, camera - hi), 0.0)
+        return float(np.sqrt(gap @ gap)) > float(np.max(ranges, initial=0.0))
 
     @property
     def loading(self) -> bool:
@@ -291,7 +309,7 @@ class AsteroidField:
         its largest rock's distance at the smallest size drawn (the
         settings', so the budget raising it does not pull the far plane in
         and out), at most the field's far side. What the camera's far plane
-        must reach (``World.depth_ranges``): nearer, it cut the biggest
+        must reach (``World.far_distance``): nearer, it cut the biggest
         rocks while they were several pixels wide, a line against the haze.
 
         :param camera_world: the camera, world frame
@@ -380,13 +398,18 @@ class AsteroidField:
         # Rocks in and out of range.
         kept = max(self._min_pixels, self._held_pixels)
         ranges = self.population.ranges(pixels_per_radian, kept, self.far)
-        added, removed = self.population.update(camera, ranges)
-        if self.population.capacity > len(self._ready):
-            self._make_table(self.population.capacity)
-        self._ready[removed] = False
-        self._held_budget()
-        if len(added):
-            self._pending.append(added)
+        # Out of reach (a ring around another planet): once its rocks are let
+        # go, nothing of the population is walked until the camera comes back.
+        beyond = self._beyond_reach(camera, ranges)
+        skip = beyond and self._out_of_reach
+        if not skip:
+            added, removed = self.population.update(camera, ranges)
+            if self.population.capacity > len(self._ready):
+                self._make_table(self.population.capacity)
+            self._ready[removed] = False
+            self._held_budget()
+            if len(added):
+                self._pending.append(added)
         # The game's time, and the table's epoch.
         now = float(self._clock())
         epoch = math.floor(now / EPOCH_S) * EPOCH_S
@@ -409,56 +432,60 @@ class AsteroidField:
             cell = np.floor(camera / c.cell)
             frame["uCamCell"][k] = LVecBase3f(*cell)
             frame["uCamLocal"][k] = LVecBase3f(*(camera - cell * c.cell))
-        split = None
-        if cameras and cameras[0].node().get_camera_mask() == NEAR_CAMERA_MASK:
-            # The near camera of a split view: its far plane is the split
-            view = cameras[0]
-            forward = self.app.render.get_relative_vector(view, Vec3(0.0, 1.0, 0.0))
-            split = (tuple(forward), view.node().get_lens().get_far())
-        self.haze.set_split(split)
+        # While skipped no rock is held (and the windows no longer follow the
+        # pixel scale): the whole field is haze.
+        limits = self.population.limits(self.far)
+        if skip:
+            limits = np.zeros_like(limits)
         self.haze.update(
             camera,
-            self.population.limits(self.far),
+            limits,
             pixels_per_radian,
             self._min_pixels,
         )
         visible_ms = 0.0
-        # Big rocks near the camera drawn as terrain (hidden as instances,
-        # solid as terrain)
-        promoted = self.terrain_rocks.update(
-            camera,
-            np.asarray(camera_world, dtype=np.float64),
-            camera_render,
-            now,
-            self._near,
-        )[: self.population.capacity]
-        if self._errors is not None and self.collision is not None:
-            self.collision.update(camera, camera_render, now, exclude=promoted)
-        if self._errors is not None:
-            # Headless (no views), nothing is drawn: the pass still lists
-            # the big rocks near the camera
-            t = time.perf_counter()
-            planes = np.array([self._planes(view) for view in cameras])
-            if not cameras or self.app.win is None:
-                planes = np.zeros((0, 4, 3))
-            visible = self.population.visible(
+        promoted = np.zeros(self.population.capacity, dtype=bool)
+        if not skip:
+            # Big rocks near the camera drawn as terrain (hidden as instances,
+            # solid as terrain)
+            promoted = self.terrain_rocks.update(
                 camera,
-                planes,
-                pixels_per_radian,
-                self._min_pixels,
-                self._settings.lod_error_px,
-                self._errors,
-                self._ready[: self.population.capacity] & ~promoted,
-                far=self.far,
-                near_radius=self._settings.terrain_min_radius,
-                near_factor=self.terrain_rocks.near_factor(),
-            )
-            self._near = visible.near
-            self._draw(visible)
-            self._budget(len(visible.slots))
-            self._last_visible = visible
-            visible_ms = (time.perf_counter() - t) * 1e3
+                np.asarray(camera_world, dtype=np.float64),
+                camera_render,
+                now,
+                self._near,
+            )[: self.population.capacity]
+            if self._errors is not None and self.collision is not None:
+                self.collision.update(camera, camera_render, now, exclude=promoted)
+            if self._errors is not None:
+                # Headless (no views), nothing is drawn: the pass still lists
+                # the big rocks near the camera
+                t = time.perf_counter()
+                planes = np.array([self._planes(view) for view in cameras])
+                if not cameras or self.app.win is None:
+                    planes = np.zeros((0, 4, 3))
+                visible = self.population.visible(
+                    camera,
+                    planes,
+                    pixels_per_radian,
+                    self._min_pixels,
+                    self._settings.lod_error_px,
+                    self._errors,
+                    self._ready[: self.population.capacity] & ~promoted,
+                    far=self.far,
+                    near_radius=self._settings.terrain_min_radius,
+                    near_factor=self.terrain_rocks.near_factor(),
+                )
+                self._near = visible.near
+                self._draw(visible)
+                self._budget(len(visible.slots))
+                self._last_visible = visible
+                visible_ms = (time.perf_counter() - t) * 1e3
+        self._out_of_reach = bool(
+            beyond and self.population.count == 0 and self.population.settled
+        )
         self.stats = {
+            "out_of_reach": skip,
             "rocks": self.population.count,
             "drawn": 0 if self._last_visible is None else len(self._last_visible.slots),
             "in_range": 0
@@ -679,11 +706,14 @@ class AsteroidField:
         root.set_shader_input("uNormRA", self.rock_textures[1])
         tile = PTA_float.empty_array(6)
         mean = PTA_LVecBase3f.empty_array(6)
+        mean_ra = PTA_LVecBase2f.empty_array(6)
         for i in range(6):
             tile[i] = float(m.tile_m[min(i, 1)])
             mean[i] = LVecBase3f(*m.mean_albedo[min(i, 1)])
+            mean_ra[i] = LVecBase2f(*m.mean_rough_ao[min(i, 1)])
         root.set_shader_input("uTileM", tile)
         root.set_shader_input("uMeanAlbedo", mean)
+        root.set_shader_input("uMeanRoughAO", mean_ra)
         root.set_shader_input("uNormalSize", float(s.normal_size))
         root.set_shader_input("uBlendDepth", 0.3)
         root.set_shader_input("uDetailFar", float(s.detail_far))

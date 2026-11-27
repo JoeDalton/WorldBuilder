@@ -404,3 +404,29 @@ def test_chunks_keep_their_place_across_a_rebase(showbase, two_bodies):
             )
         assert fine > 0
     assert any(np.any(a != b) for a, b in zip(origins, origins[1:]))
+
+
+def test_the_terrain_binds_its_layers_mean_roughness_and_occlusion(two_bodies):
+    """The shader's far stand-in for the normal map's texture
+    (terrain_material.glsl: uMeanRoughAO), one per layer."""
+    planet, _ = two_bodies
+    bound = planet.root.get_shader_input("uMeanRoughAO")
+    assert bound.get_name().get_name() == "uMeanRoughAO"
+
+
+def test_the_normal_map_is_not_read_past_its_fade():
+    """Past 600 m the normal is faded out: the layer's texture of normal,
+    roughness and occlusion is not fetched there (0.2-0.3 ms of GPU at the
+    ground), its means stand in."""
+    from pathlib import Path
+
+    import world_builder.terrain as terrain_package
+
+    source = (
+        Path(terrain_package.__file__).parent / "shaders" / "terrain_material.glsl"
+    ).read_text()
+    assert "uniform vec2  uMeanRoughAO[6];" in source
+    fetch = "sampleLayer(uNormRA, uv, gx, gy, scale, i)"
+    assert source.count(fetch) == 1
+    line = next(li for li in source.splitlines() if fetch in li)
+    assert "normalFade > 0.0" in line

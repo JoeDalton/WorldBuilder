@@ -1,4 +1,6 @@
 #version 330
+
+#pragma include "../../shaders/depth_convention.glsl"
 // The raymarch's full resolution (clouds.march), gathered over the frames:
 // cloud_march.frag traces one pixel of every uBlock.x x uBlock.y block a frame;
 // every pixel here blends this frame's samples around it (reconstructed
@@ -16,7 +18,7 @@
 //
 // Depth-aware: each sample weighs by how near its scene (where its march
 // stopped: cloud_march.frag keeps its distance in the distance's g) is to
-// this pixel's own (the depth passes here, the same measure). A
+// this pixel's own (the view's depth here, the same measure). A
 // sample that stopped at a thin thing in front (a tree, a ridge's rim) holds
 // only the air before it: blended into the pixels around, it showed as a halo
 // of sky round the tree in a cloud; those pixels now take the samples that
@@ -41,14 +43,11 @@ uniform float uStill;               // 1: the camera still, 0: moving (the clamp
 uniform float uSmooth;               // how far a pixel on fresh samples takes their smooth mean (0 to 1)
 uniform float uMinWeight;            // this frame's least share, with a full count
 uniform float uMovingWeight;         // the same while the camera moves (by uStill): march.MOVING_WEIGHTS
-// The scene's depth in each range (the march's: cloud_march.frag), and each
-// range's clip space -> the render frame.
-uniform sampler2D uSceneDepthNear;
-uniform sampler2D uSceneDepthFar;
-uniform int   uNearDepthOn;
+// The scene's depth (the march's: cloud_march.frag), and the view's clip
+// space -> the render frame.
+uniform sampler2D uSceneDepth;
 uniform int   uDepthScale;           // view pixels per depth pixel, per axis
 uniform mat4  uClipToRender;
-uniform mat4  uClipToRenderFar;
 
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out vec4 fragDistance;
@@ -92,24 +91,17 @@ const float DEPTH_FLOOR = 1e-3;
 const float SKY_DISTANCE = 1.0e9;
 
 // The distance of the scene at a view pixel, metres, as the march stopped at
-// it (the near range's surface, else the far range's, else none): from the
-// near range's near plane, the same for both ranges (cloud_march.frag's
+// it (the view's surface, else none): from the near plane (cloud_march.frag's
 // sceneKm, there for each sample).
 float sceneDistance(ivec2 viewPixel) {
     ivec2 depthPixel = viewPixel / uDepthScale;
     vec2 ndc = (vec2(viewPixel) + 0.5) / uViewSize * 2.0 - 1.0;
-    vec4 near = uClipToRender * vec4(ndc, -1.0, 1.0);
-    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, depthPixel, 0).r : 1.0;
-    vec4 p;
-    if (nearDepth < 1.0) {
-        p = uClipToRender * vec4(ndc, nearDepth * 2.0 - 1.0, 1.0);
-    } else {
-        float farDepth = texelFetch(uSceneDepthFar, depthPixel, 0).r;
-        if (farDepth >= 1.0) {
-            return SKY_DISTANCE;
-        }
-        p = uClipToRenderFar * vec4(ndc, farDepth * 2.0 - 1.0, 1.0);
+    vec4 near = uClipToRender * vec4(ndc, depthNearZ(), 1.0);
+    float sceneDepth = texelFetch(uSceneDepth, depthPixel, 0).r;
+    if (!depthDrawn(sceneDepth)) {
+        return SKY_DISTANCE;
     }
+    vec4 p = uClipToRender * vec4(ndc, depthNdc(sceneDepth), 1.0);
     return length(p.xyz / p.w - near.xyz / near.w);
 }
 
@@ -118,8 +110,8 @@ float depthWeight(float other, float own) {
 }
 
 vec3 rayDir(vec2 ndc) {
-    vec4 near = uClipToRel * vec4(ndc, -1.0, 1.0);
-    vec4 far = uClipToRel * vec4(ndc, 1.0, 1.0);
+    vec4 near = uClipToRel * vec4(ndc, depthNearZ(), 1.0);
+    vec4 far = uClipToRel * vec4(ndc, depthFarNdc(), 1.0);
     return normalize(far.xyz / far.w - near.xyz / near.w);
 }
 

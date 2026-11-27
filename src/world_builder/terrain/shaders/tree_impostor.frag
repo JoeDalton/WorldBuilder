@@ -25,12 +25,9 @@ flat in vec3 vView;
 flat in vec2 vScreenUp;
 flat in float vFadeIn;
 flat in float vFadeOut;
-flat in float vSpriteScale;
-flat in float vHalfTexel;
 
 out vec4 fragColor;
 
-uniform float uPointScale;  // the target's pixels per view pixel (tree_impostor.vert)
 
 // The point at *offset* from the sprite's middle (in the tree's sprite, y
 // up) in the baked view's tile, turned so that the tile's up (the tree's
@@ -50,33 +47,7 @@ void main() {
     if (dither > vFadeIn || dither > vFadeOut) {
         discard;
     }
-    vec2 offset = (vec2(gl_PointCoord.x, 1.0 - gl_PointCoord.y) - 0.5) / vSpriteScale;
-    if (vHalfTexel > 0.0) {
-        // A coarser target (the clouds' depth passes): its pixel stands for
-        // several of the view's, kept if the tree covers any of them (the
-        // clouds' cards are told apart, and cut, by these passes: a view
-        // pixel of the tree they missed stood unfogged in front of a cloud).
-        // Its coverage read at the view's mip level: at this target's own,
-        // coarser, a thin tip's coverage averaged under the cut and the
-        // tree lost its top here, where the view still drew it.
-        vec2 gx = (tileAt(offset + dFdx(offset) * uPointScale) - tileAt(offset)) / float(uFrames);
-        vec2 gy = (tileAt(offset + dFdy(offset) * uPointScale) - tileAt(offset)) / float(uFrames);
-        bool covered = false;
-        for (int y = -1; y <= 1 && !covered; ++y) {
-            for (int x = -1; x <= 1 && !covered; ++x) {
-                vec2 at = tileAt(offset + vec2(x, y) * vHalfTexel);
-                covered = inTile(at)
-                       && textureGrad(uImpostorAlbedo,
-                                      vec3((vTile + at) / float(uFrames), float(vLayer)),
-                                      gx, gy).a >= 0.5;
-            }
-        }
-        if (!covered) {
-            discard;
-        }
-        fragColor = vec4(0.0);  // depth only
-        return;
-    }
+    vec2 offset = vec2(gl_PointCoord.x, 1.0 - gl_PointCoord.y) - 0.5;
     vec2 at = tileAt(offset);
     if (!inTile(at)) {
         discard;

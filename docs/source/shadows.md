@@ -171,8 +171,7 @@ only, so it lines up with the clouds drawn, and it moves with the sun.
   HIGH, MID): ground 10.95, 12.70, 11.98; high 6.01, 7.37, 6.78; stratosphere
   4.29, 5.15, 5.10; sea_surface 8.23, 9.27, 9.02; orbit 2.62, 2.84. A
   shadow map (the march once per texel of a map around the camera, one
-  fetch per pixel) is the way to most of it back: see the
-  [performance backlog](performance_backlog.md).
+  fetch per pixel) took most of it back: `CloudShadowMaps`, 0.3-1.1 ms.
 
 ## Mountain shadows (the global map)
 
@@ -395,26 +394,24 @@ texel instead of once per pixel of ground (it was 0.8-1.7 ms at HIGH).
 ## The clouds' shadow on the view's ground (one pass)
 
 `clouds.march._GroundShadow`, `PlanetClouds.bind_ground_shadow`: with the
-raymarch, the ground's lookup above runs once per texel of a pass at the
-depth passes' resolution (half the view's), not per pixel of the terrain and
-the sea.
+raymarch, the ground's lookup above runs once per texel of a pass at half
+the view's resolution (on the view's own depth, last frame's), not per pixel
+of the terrain and the sea.
 
 - **Why.** Far off, the ground's triangles are a pixel or two; the GPU shades
   2 x 2 quads, so every pixel's work ran for up to four, and the lookup (then
   both families: the chord, the weather, two maps each; now each genus's
   chord for the far fade and one map pair) cost 0.8-0.9 ms a frame at
   2560 x 1440 (performance.md §32).
-- **The pass** (`ground_shadow.frag`): from the march's own depth passes (the
-  near range's where it drew, the far range's elsewhere), each texel's scene
-  point, and `planetCloudShadow` there: the same function as the terrain's,
+- **The pass** (`ground_shadow.frag`): from the view's depth (last frame's,
+  `ReversedDepthCamera.depth_texture`), each texel's scene point, and `planetCloudShadow` there: the same function as the terrain's,
   its footprint from the pass's own derivatives or, across a silhouette, a
   level ground's at that distance. Out: the shade, and the distance (km; -1
   for the sky).
 - **The reading** (`terrain_frag.glsl`'s `groundShadowAt`): the four texels
   around the pixel, bilinear, keeping those whose distance is within 8 % of
   the pixel's (`GROUND_SHADOW_AGREE`): a silhouette's far side or a model in
-  front is left out. Where none agrees (a silhouette's edge; the near range
-  while its depth pass is off, the slab being out of it), and in the sea's
+  front is left out. Where none agrees (a silhouette's edge), and in the sea's
   reflection (`vMirror`), per pixel as before. `uGroundShadowOn` is 1 while the
   passes draw; the billboards have none (`ground_shadow_defaults`).
 - **Look.** The terrain's debug view 6 shows the shade alone: against per
@@ -563,7 +560,9 @@ tracked model where it is:
 - `World.track_light(node, cast=False)`: the node gets its own
   `DirectionalLight` and `AmbientLight`
   (`world_builder.lights.TrackedLights`), the world's off on it; `update`
-  sets them from `lights_at` at the nodes' positions, times `light_scale`.
+  sets them from `lights_at` at the nodes' positions, times `light_scale`
+  (every `light_period` frames, the reckoning spread over the frames
+  before).
   `untrack_light` puts back the node's own lights. `cast` is kept for the
   caster map (part H).
 

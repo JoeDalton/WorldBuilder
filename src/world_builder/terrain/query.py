@@ -1,5 +1,7 @@
 """
-Terrain queries for collision, sensors and gameplay (pure numpy).
+Terrain queries for collision, sensors and gameplay (numpy; a single point,
+an altimeter's or a game's altitude every frame, in plain floats: the same
+chunk and triangle, ~13 µs against ~170).
 
 Positions are float64 metres in the planet frame (centre at the origin, no
 rotation). Heights are measured along the radial line through the query
@@ -28,6 +30,7 @@ triangles: the radial direction stands in for the normal).
 from __future__ import annotations
 
 import math
+import struct
 from collections.abc import Callable, MutableMapping
 from typing import TYPE_CHECKING
 
@@ -35,7 +38,13 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from world_builder.terrain.biomes import BIOMES
-from world_builder.terrain.chunkgen import QUADS, VERTS, ChunkData, generate_chunk
+from world_builder.terrain.chunkgen import (
+    QUADS,
+    VERTEX_DTYPE,
+    VERTS,
+    ChunkData,
+    generate_chunk,
+)
 from world_builder.terrain.cubesphere import (
     FACE_FRAMES,
     CubeGrid,
@@ -50,6 +59,15 @@ if TYPE_CHECKING:
 #: Face-parameter margin of the sphere_contact sample window: cells near a
 #: face's corners are down to 0.71x the nominal spacing.
 _WINDOW_MARGIN = 1.5
+
+#: FACE_FRAMES as plain floats (normal, u, v per face), for one point's query
+_FRAMES = [
+    tuple(tuple(float(c) for c in axis) for axis in frame) for frame in FACE_FRAMES
+]
+#: A vertex record's size and its position's offset in it (VERTEX_DTYPE)
+_STRIDE = VERTEX_DTYPE.itemsize
+_POSITION = VERTEX_DTYPE.fields["vertex"][1]
+_FLOAT3 = struct.Struct("<3f")
 
 
 class TerrainQuery:
@@ -295,8 +313,13 @@ class TerrainQuery:
         normals = np.zeros((len(dirs), 3))
         if len(dirs) == 0:
             return heights, normals
+        if len(dirs) == 1:  # the common case (an altimeter): plain floats
+            one = self._interpolate_one(dirs[0], level, generate, sea)
+            if one is not None:
+                heights[0], normals[0] = one
+                return heights, normals
         face, i, j, _, _ = self.grid.locate(dirs, level)
-        if len(dirs) == 1:  # the common case (an altimeter): no grouping
+        if len(dirs) == 1:
             groups = [((int(face[0]), int(i[0]), int(j[0])), np.zeros(1, np.intp))]
         else:
             # One int64 key per chunk, sorted once and split: for many points
@@ -326,6 +349,86 @@ class TerrainQuery:
                 continue
             heights[sel], normals[sel] = self._triangle_intersect(chunk, dirs[sel], sea)
         return heights, normals
+
+    def _interpolate_one(
+        self, direction: np.ndarray, level: int, generate: bool, sea: bool
+    ) -> tuple[float, tuple[float, float, float]] | None:
+        """:meth:`_interpolate` for one unit direction in plain floats (a
+        hundred numpy calls on small arrays were most of an altimeter's
+        query): the same chunk, the same triangle, the same intersection.
+
+        :returns: (height, normal), or None where no chunk is stored (the
+            planet is evaluated then, by the arrays' path)
+        """
+        x, y, z = (float(c) for c in direction)
+        ax, ay, az = abs(x), abs(y), abs(z)
+        # dirs_to_face: the largest component's axis (the first on a tie)
+        axis = 0 if ax >= ay and ax >= az else (1 if ay >= az else 2)
+        face = 2 * axis + ((x, y, z)[axis] < 0.0)
+        fn, fu_axis, fv_axis = _FRAMES[face]
+        along_n = x * fn[0] + y * fn[1] + z * fn[2]
+        along_u = x * fu_axis[0] + y * fu_axis[1] + z * fu_axis[2]
+        along_v = x * fv_axis[0] + y * fv_axis[1] + z * fv_axis[2]
+        a = min(max(math.atan(along_u / along_n) * (4.0 / math.pi), -1.0), 1.0)
+        b = min(max(math.atan(along_v / along_n) * (4.0 / math.pi), -1.0), 1.0)
+        half = self.grid.n0 / 2.0
+        per_chunk = QUADS << level
+        last = self.grid.side(level) - 1
+        i = min(max(math.floor((a + 1.0) * half / per_chunk), 0), last)
+        j = min(max(math.floor((b + 1.0) * half / per_chunk), 0), last)
+        chunk = self._chunk((level, face, i, j), generate)
+        if chunk is None:
+            return None
+        # _in_chunk: on the chunk's own face (an ancestor's is the same)
+        chunk_level, chunk_face, ci, cj = chunk.key
+        fn, fu_axis, fv_axis = _FRAMES[chunk_face]
+        along_n = x * fn[0] + y * fn[1] + z * fn[2]
+        along_u = x * fu_axis[0] + y * fu_axis[1] + z * fu_axis[2]
+        along_v = x * fv_axis[0] + y * fv_axis[1] + z * fv_axis[2]
+        scale = float(1 << chunk_level)
+        fu = (math.atan2(along_u, along_n) * (4.0 / math.pi) + 1.0) * half / scale
+        fv = (math.atan2(along_v, along_n) * (4.0 / math.pi) + 1.0) * half / scale
+        fu -= ci * QUADS
+        fv -= cj * QUADS
+        col = min(max(math.floor(fu), 0), QUADS - 1)
+        row = min(max(math.floor(fv), 0), QUADS - 1)
+        base = row * VERTS + col
+        cx, cy, cz = (float(c) for c in chunk.centre)
+        data = chunk.vertex_bytes
+        corners = []
+        for index in (base, base + 1, base + VERTS, base + VERTS + 1):
+            vx, vy, vz = _FLOAT3.unpack_from(data, index * _STRIDE + _POSITION)
+            corners.append([vx + cx, vy + cy, vz + cz])
+        if sea:
+            wet = []
+            for k, (vx, vy, vz) in enumerate(corners):
+                r = math.sqrt(vx * vx + vy * vy + vz * vz)
+                if r - self.radius < 0.0:
+                    wet.append((k, r))
+            if wet:
+                ups = np.array([[c / r for c in corners[k]] for k, r in wet])
+                depths = np.array([self.radius - r for _, r in wet])
+                water = self._water(ups, depths, chunk_level)
+                for (k, _), up, w in zip(wet, ups, water, strict=True):
+                    corners[k] = [float(c) * (self.radius + float(w)) for c in up]
+        v00, v01, v10, v11 = corners
+        if (fu - col) >= (fv - row):  # triangle (00, 01, 11), else (00, 11, 10)
+            e1 = [v01[k] - v00[k] for k in range(3)]
+            e2 = [v11[k] - v00[k] for k in range(3)]
+        else:
+            e1 = [v11[k] - v00[k] for k in range(3)]
+            e2 = [v10[k] - v00[k] for k in range(3)]
+        n = [
+            e1[1] * e2[2] - e1[2] * e2[1],
+            e1[2] * e2[0] - e1[0] * e2[2],
+            e1[0] * e2[1] - e1[1] * e2[0],
+        ]
+        length = math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2])
+        n = [c / length for c in n]
+        t = (n[0] * v00[0] + n[1] * v00[1] + n[2] * v00[2]) / (
+            n[0] * x + n[1] * y + n[2] * z
+        )
+        return t - self.radius, (n[0], n[1], n[2])
 
     def _water(self, dirs: np.ndarray, depths: np.ndarray, level: int) -> np.ndarray:
         """The water's height over unit directions with seabed this deep, as a

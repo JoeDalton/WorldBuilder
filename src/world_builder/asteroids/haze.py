@@ -37,16 +37,10 @@ of light from afar and fills the distance between drawn rocks up close.
   them. The clouds write no depth: drawn after them, the ring seen from the
   ground covered them. Along a ray a ring (well outside the planet) and
   the clouds never overlap. Depth-tested, not written: a planet in
-  front hides it. Hull points beyond the far plane are pulled onto it (as the
-  sky's), so a ring across the sky is drawn whole. A single camera draws it
-  from its near plane on (read from its projection). A split view
-  (``depth.SplitDepthCameras``) draws it with both cameras: the far one
-  from its near plane (the split) on, the near one from its near plane to
-  its far plane (the split again, give or take the sliver both draw). A
-  ring with dust, or with rocks too small to be drawn at the split, is
-  missing nearer than it: drawn by the far camera alone, the haze ended
-  abruptly at the split (:meth:`FieldHaze.set_split`, which the field
-  calls).
+  front hides it. In standard depth, hull points beyond the far plane are
+  pulled onto it (as the sky's), so a ring across the sky is drawn whole; the
+  reversed camera's reaches infinity. The camera draws it from its near plane
+  on (read from its projection: ``depth_convention.glsl``'s ``depthNearZ``).
 """
 
 from __future__ import annotations
@@ -67,18 +61,16 @@ from panda3d.core import (
     GeomVertexFormat,
     GeomVertexWriter,
     LVecBase3f,
-    LVecBase4f,
     OmniBoundingVolume,
     PTA_float,
     PTA_LVecBase3f,
-    PTA_LVecBase4f,
     Shader,
 )
 
 from world_builder.asteroids.distributions import interpolate
 from world_builder.asteroids.population import FAR_FADE
 from world_builder.asteroids.spec import Annulus, Box, FieldShape, FieldSpec, Sphere
-from world_builder.depth import HIDE_FROM_FAR, HIDE_FROM_NEAR
+from world_builder.depth import DEPTH_STANDARD, depth_mode_input, far_plane_test
 from world_builder.sky.sky import SKY_BIN, ensure_sky_bin
 
 if TYPE_CHECKING:
@@ -525,28 +517,6 @@ class FieldHaze:
         behind.set_shader_input("uHazePass", 2)
         hull = front.attach_new_node(_hull_node(tris, normals))
         hull.instance_to(behind)
-        node.set_shader_input("uHazeToFar", 0)
-        # The far camera's passes; the near camera's (to its far plane: the
-        # split), shown only while the app's camera is a split's near one.
-        self._near_passes = []
-        for part, (bin_name, order, haze_pass) in (
-            ("front", (HAZE_BIN, HAZE_BIN_SORT, 1)),
-            ("behind", (SKY_BIN, HAZE_BEHIND_ORDER, 2)),
-        ):
-            near = node.attach_new_node(f"haze_near_{part}")
-            near.set_bin(bin_name, order)
-            near.set_shader_input("uHazePass", haze_pass)
-            near.set_shader_input("uHazeToFar", 1)
-            near.hide(HIDE_FROM_FAR)
-            hull.instance_to(near)
-            near.stash()
-            self._near_passes.append(near)
-        for far in (front, behind):
-            far.hide(HIDE_FROM_NEAR)
-        self._split = False
-        self._split_plane = PTA_LVecBase4f.empty_array(1)
-        # On the field's root: the rocks' veil starts at the split too
-        field.root.set_shader_input("uHazeSplit", self._split_plane)
         self._clouds_top = PTA_float.empty_array(1)
         node.set_shader_input("uCloudTop", self._clouds_top)
         node.set_shader(
@@ -557,7 +527,10 @@ class FieldHaze:
             )
         )
         node.set_depth_write(False)
-        node.set_attrib(DepthTestAttrib.make(DepthTestAttrib.M_less_equal))
+        # The hull's far vertices sit on the far plane (haze.vert): the
+        # camera's test with equality, by the shared depth mode.
+        node.set_shader_input("uDepthMode", depth_mode_input())
+        self.set_depth_mode(DEPTH_STANDARD)
         node.set_attrib(CullFaceAttrib.make(CullFaceAttrib.M_cull_none))
         node.set_attrib(
             ColorBlendAttrib.make(
@@ -580,6 +553,8 @@ class FieldHaze:
         root.set_shader_input("uMissingLogSpan", math.log(MISSING_T1 / MISSING_T0))
         self._start = PTA_float.empty_array(1)
         root.set_shader_input("uHazeStart", self._start)
+        # update()'s inputs the table was last made from (None: make it)
+        self._missing_key = None
         self._distances = MISSING_T0 * (MISSING_T1 / MISSING_T0) ** np.linspace(
             0.0, 1.0, MISSING
         )
@@ -619,35 +594,16 @@ class FieldHaze:
         clouds)."""
         self._clouds_top[0] = float(radius)
 
-    def set_split(self, plane=None) -> None:
-        """The split of a split view (``depth.SplitDepthCameras``): the near
-        camera draws the haze up to it, the far camera beyond. Both passes
-        cut the rays at this plane, not at their lenses' (the near lens's far
-        plane, read from its projection in floats, was off by kilometres:
-        a seam), so they meet whatever the lenses hold this frame.
-
-        :param plane: (the cameras' forward axis, render frame; the split's
-            distance along it, metres), or None: unsplit, the one camera
-            draws all of it
-        """
-        if plane is None:
-            self._split_plane[0] = LVecBase4f(0.0, 0.0, 0.0, 0.0)
-        else:
-            forward, distance = plane
-            self._split_plane[0] = LVecBase4f(*forward, float(distance))
-        split = plane is not None
-        if split == self._split:
-            return
-        self._split = split
-        for near in self._near_passes:
-            if split:
-                near.unstash()
-            else:
-                near.stash()
+    def set_depth_mode(self, mode: int) -> None:
+        """The depth convention the view draws with
+        (:mod:`world_builder.depth`): the hull's far-plane test of *mode*.
+        Its shaders read the shared ``uDepthMode`` themselves."""
+        self.node.set_attrib(DepthTestAttrib.make(far_plane_test(mode)))
 
     def set_cover(self, cover: float) -> None:
         """The rocks' mean projected area over their bounding disc's."""
         self.model.cover = float(cover)
+        self._missing_key = None  # the table again at the next update
 
     def set_albedo(self, materials, spec: FieldSpec) -> None:
         self.albedo = mean_rock_albedo(
@@ -670,6 +626,12 @@ class FieldHaze:
         :param pixels_per_radian: the main view's
         :param min_pixels: the smallest diameter drawn"""
         self._cam[0] = LVecBase3f(*camera)
+        # The table depends on these alone, not on the camera: kept while
+        # they hold (a field seen from afar: every frame).
+        key = (float(pixels_per_radian), float(min_pixels), tuple(map(float, limits)))
+        if key == self._missing_key:
+            return
+        self._missing_key = key
         for k, limit in enumerate(limits):
             self._limits[k] = float(min(limit, 1e30))
         missing = self.model.missing(

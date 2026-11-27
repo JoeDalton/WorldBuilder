@@ -201,9 +201,9 @@ Chunk keys are `(level, face, i, j)`.
   other one, a quarter of the triangles (`triangle_indices(COARSE_STRIDE)`,
   the skirt from every other edge vertex). Both index buffers are shared by
   every chunk. The passes that want the ground's shape but not its detail draw
-  the coarse mesh alone (`mesh.COARSE_PASSES`): the clouds' two depth passes
-  (half the view's resolution) and the sea's reflection (blurred, at a
-  fraction of it). The view's cameras draw the full one (performance.md §34).
+  the coarse mesh alone (`mesh.COARSE_PASSES`): the sea's reflection
+  (blurred, at a fraction of the view's resolution; the clouds' depth passes
+  did too until they went, FRAME_COST_PLAN.md Task 7). The view's cameras draw the full one (performance.md §34).
 
 ## Other bodies
 
@@ -285,20 +285,13 @@ cell, a few centimetres under the planet's (tiles ≥ 30 km away).
 
 ### Depth
 
-`world_builder.depth.SplitDepthCameras` draws the view twice into the same
-window. A far camera covers [split, far]. Then the usual camera covers
-[near, split] after clearing depth. This is KSP's scaled-space trick, without
-the scaled space.
-
-The split sits halfway down to the highest possible ground, and the far plane
-just past the horizon. That keeps 24-bit depth steps under a metre at the far
-end of each range at every altitude.
-
-Nothing else changes:
-
-- the window's depth buffer and MSAA
-- the existing shaders
-- the sea's reflection camera, which keeps its own copy of the lens
+`world_builder.depth.ReversedDepthCamera` draws the view once with a
+reversed, infinite projection (near at 1, infinity at 0) into a 32-bit float
+depth buffer: depth error about 1e-7 of the distance at every range, the
+ground under the camera and a moon thousands of kilometres off in one view
+(#57; it replaced the split cameras, KSP's scaled-space trick, which drew the
+view twice). The terrain needs nothing of its own: it draws through Panda's
+projection. See [World](world.md), "Order and the depth camera".
 
 ## Lighting
 
@@ -375,11 +368,10 @@ atmospheres.update(camera_world)
   HIGH), and below that, 3× what its current selection
   needs (at least 256). A planet you fly away from releases its ground; a
   moon seen from the planet costs about 6–15 tiles.
-- **Depth.** `SplitDepthCameras.system_ranges` takes the split from the
-  nearest ground and the far plane from the farthest visible body. Depth
-  steps up close only depend on the split, so reaching a moon 21,000 km
-  away costs nothing on the ground; on the moon itself steps are a few km,
-  narrower than a pixel at that range.
+- **Depth.** One reversed camera (`world_builder.depth`) keeps the depth
+  error about 1e-7 of the distance with a float buffer: a moon 21,000 km away
+  costs nothing on the ground. Its cull distance (`depth.system_far`) reaches
+  the farthest visible body.
 - **No atmosphere:** leave `atmosphere=` unset (no air of its own). Give
   such a body bare sunlight and almost no ambient light (`set_sun`); it is
   still seen through the other bodies' air when a sight line crosses it.
@@ -455,7 +447,7 @@ The library ships in the Linux (x86_64, aarch64), Windows x64 and macOS (univers
 
 **Loading:** only drawn ground is solid, and the ground around a new camera position takes seconds to load (about 10 s from nothing on the earthlike planet). `Terrain.loading` is True while the last LOD pass still wanted chunks it needs. A game's loading phase should wait for it to stay False for a moment: in flight it turns on briefly whenever detail refines.
 
-`TerrainQuery` stays the pure-numpy path for one-off queries (`altitude`, `height_at`, and so on).
+`TerrainQuery` stays the Python path for one-off queries (`altitude`, `height_at`, and so on): numpy for many points, plain floats for one (an altimeter's, a game's altitude every frame: ~13 µs).
 
 ## Paths to SpaceFlight
 
@@ -465,8 +457,10 @@ The library ships in the Linux (x86_64, aarch64), Windows x64 and macOS (univers
   (`recenter_render_origin`). The terrain's root must hang under `render`,
   not the game root, and be updated after that recentring with the camera's
   float64 planet-frame position.
-- **Depth:** `SplitDepthCameras` is opt-in. With it, the HUD's
-  `lens.project` and `laser.frag`'s `gl_FragDepth` should use the near camera's lens.
+- **Depth:** the world's `ReversedDepthCamera` draws the view; `app.camLens`
+  stays a standard lens for picking and `lens.project`. A shader writing
+  `gl_FragDepth` itself must follow its convention
+  (`shaders/depth_convention.glsl`).
 - **Ocean and clouds** are the planet's own: `World` builds them with the
   body's radius (`BodyLook.ocean`, `BodyLook.clouds`), or build `Sea` and
   `PlanetClouds` with the terrain's.

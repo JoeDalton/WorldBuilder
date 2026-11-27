@@ -54,6 +54,7 @@ from panda3d.core import (
     LVecBase3f,
     NodePath,
     PTA_float,
+    PTA_LVecBase2f,
     PTA_LVecBase3f,
     SamplerState,
     Shader,
@@ -67,7 +68,7 @@ from world_builder.clouds.shadow_defaults import (
     cloud_shadow_defaults,
     ground_shadow_defaults,
 )
-from world_builder.depth import PASS_TAG, REFLECTION_CAMERA_MASK
+from world_builder.depth import REFLECTION_CAMERA_MASK
 from world_builder.ocean.ocean import bind_sea_defaults
 from world_builder.ocean.swell import Swell
 from world_builder.quality import RESTART, QualityLevel, QualitySettings, knob
@@ -109,14 +110,6 @@ def _shader(fragment: str) -> Shader:
         vertex=SHADER_PATH / "terrain.vert",
         fragment=SHADER_PATH / fragment,
     )
-
-
-def depth_only_shader() -> Shader:
-    """:returns: the terrain's shader with a depth-only fragment stage, for
-    passes that want its depth and nothing else (``terrain.vert`` kept, so
-    the sea's lift and swell are right). Each terrain's root carries the
-    tag ``PASS_TAG = "terrain"`` for a camera's tag state to swap it in."""
-    return _shader("terrain_depth.frag")
 
 
 def _ensure_terrain_bin() -> None:
@@ -416,7 +409,6 @@ class Terrain:
         self.root.set_shader(_shader("terrain.frag"))
         _ensure_terrain_bin()
         self.root.set_bin(TERRAIN_BIN, 0)
-        self.root.set_tag(PASS_TAG, "terrain")  # see depth_only_shader
         # The chunks with water hang here: a Sea gives them the shader with
         # its near look (set_sea_near), which the others never pay for.
         self.sea_root = self.root.attach_new_node("terrain_sea")
@@ -891,13 +883,16 @@ class Terrain:
         root.set_shader_input("uNoise", make_noise_texture())
         tile = PTA_float.empty_array(len(m.tile_m))
         mean = PTA_LVecBase3f.empty_array(len(m.tile_m))
+        mean_ra = PTA_LVecBase2f.empty_array(len(m.tile_m))
         flat = PTA_LVecBase3f.empty_array(len(m.tile_m))
         for i in range(len(m.tile_m)):
             tile[i] = float(m.tile_m[i])
             mean[i] = LVecBase3f(*m.mean_albedo[i])
+            mean_ra[i] = LVecBase2f(*m.mean_rough_ao[i])
             flat[i] = LVecBase3f(*(BIOME_COLORS[i] ** 2.2))
         root.set_shader_input("uTileM", tile)
         root.set_shader_input("uMeanAlbedo", mean)
+        root.set_shader_input("uMeanRoughAO", mean_ra)
         root.set_shader_input("uFlatAlbedo", flat)
         root.set_shader_input("uTextured", 1)
         root.set_shader_input("uPbrGround", 1)
