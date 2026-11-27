@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] 2026-11-27
+
 Frame time at 2560 x 1440, HIGH, as a game runs it (CPU and GPU overlapping,
 `frame_profile.py --pipelined`), on an RTX 3070 / Ryzen 5600X: `ground` 6.20 to
 3.44 ms, `coast` 6.02 to 3.46, `sunset` 6.30 to 3.57, 20 km 3.85 to 2.10 (the
