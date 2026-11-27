@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.0] 2026-11-27
+## [0.6.0] 2026-11-28
 
 Frame time at 2560 x 1440, HIGH, as a game runs it (CPU and GPU overlapping,
 `frame_profile.py --pipelined`), on an RTX 3070 / Ryzen 5600X: `ground` 6.20 to
