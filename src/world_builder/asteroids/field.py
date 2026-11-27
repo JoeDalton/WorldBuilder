@@ -65,7 +65,7 @@ from world_builder.asteroids.rock import ROCK_UV_PERIOD
 from world_builder.asteroids.scatter import Scatter
 from world_builder.asteroids.settings import AsteroidSettings
 from world_builder.asteroids.spec import FieldSpec, KeepOut
-from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.depth import REFLECTION_CAMERA_MASK, view_size
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.materials import (
     MaterialSet,
@@ -300,7 +300,7 @@ class AsteroidField:
         """:returns: the first view's pixels per radian (vertically)"""
         if cameras and self.app.win is not None:
             vfov = cameras[0].node().get_lens().get_vfov()
-            return self.app.win.get_y_size() / math.radians(vfov)
+            return view_size(self.app)[1] / math.radians(vfov)
         # headless: rocks held and solid as on a 900-pixel 40-degree view
         return HEADLESS_PIXELS_PER_RADIAN
 

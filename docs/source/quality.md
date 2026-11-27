@@ -238,6 +238,19 @@ the old key, so an old save keeps its value.
 | `object_shadows` | Objects' shadows | live | on / off | off | on | on | on |
 | `caster_map_size` | Objects' shadow detail | rebuild | 512, 1024, 2048, 4096 px | 512 | 1024 | 2048 | 4096 |
 
+### `render`: Render (`RenderSettings`)
+
+No presets: every knob is kept by LOW to ULTRA. See
+[Render scale, anti-aliasing and FSR 1](render_pipeline.md).
+
+| Id | Label | Applies | Range or choices | Default |
+|---|---|---|---|---|
+| `scale` | Render scale | rebuild | 0.5 to 1 | 1 |
+| `msaa` | MSAA | rebuild | Off, 2x, 4x, 8x, 16x | Off |
+| `fxaa` | FXAA | rebuild | on / off | off |
+| `upscaler` | Upscaler | rebuild | Bilinear, FSR 1 | Bilinear |
+| `sharpness` | FSR sharpness | live | 0 to 2 stops | 0.1 |
+
 ## Notes
 
 - **The models' shading** (`ModelSettings.shading`) picks one of five
@@ -263,9 +276,9 @@ the old key, so an old save keeps its value.
   made HIGH *faster*: the loop is no longer unrolled, and the frames
   measured 13.3–13.7 ms instead of 15.8 ms at the sea-level night pose. The
   images are unchanged.
-- **The sea's reflection** is sized from the main camera's display region
-  (`app.cam`). A game that renders its scene at a lower resolution than the
-  window gets a reflection sized to that resolution, with nothing to set.
+- **The sea's reflection** is sized from the view (`depth.view_size`): the
+  depth camera's render size (`render.scale`), else the main camera's region.
+  It is made again when that size changes.
 
 ## Measured
 

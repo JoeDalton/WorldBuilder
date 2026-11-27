@@ -529,3 +529,20 @@ def test_the_msaa_setting_asks_the_scene_buffer_for_its_samples():
     host.set_multisamples(2)
     assert scene_buffer_props(host, 8).get_multisamples() == 8
     assert scene_buffer_props(host, 0).get_multisamples() == 2  # the host's
+
+
+def test_view_size_is_the_reversed_cameras_render_size(window):
+    """What the sea's reflection and the pixel angles follow: the live
+    reversed camera's view (its render scale), else the app camera's
+    region."""
+    from world_builder.depth import ReversedDepthCamera, view_size
+    from world_builder.post import RenderSettings
+
+    full = (window.win.get_x_size(), window.win.get_y_size())
+    assert view_size(window) == full
+    camera = ReversedDepthCamera(window, render=RenderSettings(scale=0.5))
+    try:
+        assert view_size(window) == (full[0] // 2, full[1] // 2)
+    finally:
+        camera.destroy()
+    assert view_size(window) == full

@@ -181,8 +181,10 @@ plane stays at 1 m everywhere: one following the altitude cut the cockpit and
 close ships. It culls to the world's far distance (`depth.frustum_bounds`:
 six planes, exact in every model's frame; Panda's own frustum stops at
 10,000 km, and a box's corners that far out cost its planes metres of
-precision near the camera). Its scene buffer keeps the output's
-multisampling (`depth.scene_buffer_props`).
+precision near the camera). The world's `render` settings (render scale,
+MSAA, FXAA, FSR 1) set its scene buffer's size and samples, and the passes
+that show it in the window. See
+[Render scale, anti-aliasing and FSR 1](render_pipeline.md).
 
 Load `transform-cache false` in the game's PRC (before ShowBase opens its
 window). The world moves around the camera, so every drawn node's net

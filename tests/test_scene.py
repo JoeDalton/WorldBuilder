@@ -730,3 +730,26 @@ def test_a_rebuilt_reflection_keeps_the_depth_mode(window, sea):
     made.set_settings(replace(made.settings, reflection_scale=0.5))
     assert made.refl_buffer.get_clear_depth() == 0.0
     made.set_depth_mode(DEPTH_STANDARD)
+
+
+def test_the_sea_reflection_follows_the_render_scale(window, sea):
+    """The reflection takes its share of the view's pixels (depth.view_size):
+    the reversed camera's render scale makes it again at that size, its
+    removal back at the window's. Made again on the first update, before
+    the old buffer ever drew, the pass still runs (the sea showed no
+    reflection: the old buffer's is_active() is False until opened)."""
+    from world_builder.post import RenderSettings
+
+    made, _terrain, camera = sea
+    width = made.refl_buffer.get_x_size()
+    depth = ReversedDepthCamera(window, render=RenderSettings(scale=0.5))
+    try:
+        made.update(camera)
+        assert made.near > 0.0  # 30 m over the water: the pass runs
+        assert made.refl_buffer.get_x_size() == pytest.approx(width / 2, abs=1)
+        window.graphicsEngine.render_frame()
+        assert made.refl_buffer.is_active()
+    finally:
+        depth.destroy()
+    made.update(camera)
+    assert made.refl_buffer.get_x_size() == width

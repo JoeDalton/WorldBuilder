@@ -319,3 +319,53 @@ def test_rcas_sharpness_shows_and_applies_live(window, target):
     inner = (slice(4, -4), slice(4, -4))
     assert sharp[inner].std() > soft[inner].std() * 1.02
     assert chain.settings.sharpness == 0.0
+
+
+def _valid_size(texture) -> tuple[int, int]:
+    """A render target's drawn size: its size times its tex scale (the GSG
+    may pad it to powers of two)."""
+    sx, sy = texture.get_tex_scale()
+    return round(texture.get_x_size() * sx), round(texture.get_y_size() * sy)
+
+
+@pytest.mark.parametrize("name", ["bilinear", "fxaa", "fsr_forced_fxaa"])
+def test_a_chain_can_end_in_a_texture(window, name):
+    """Given an output size (a mirror's card on screen), the chain ends in a
+    texture of that size instead of a region, a flat view still flat in it;
+    resize follows a new size; destroy removes every buffer."""
+    engine = window.graphicsEngine
+    engine.render_frame()
+    windows = engine.get_num_windows()
+    regions = window.win.get_num_display_regions()
+    settings = CHAINS[name]
+    width, height = settings.render_size(OUT)
+    chain = PostChain(
+        engine,
+        window.win,
+        _view(np.full((height, width), 0.5)),
+        settings,
+        (width, height),
+        buffer_sort=-50,
+        output_size=OUT,
+    )
+    try:
+        assert chain.region is None and chain.output_size == OUT
+        assert window.win.get_num_display_regions() == regions
+        engine.render_frame()
+        engine.render_frame()
+        assert engine.get_num_windows() == windows + chain.passes + 1
+        texture = chain.texture
+        assert engine.extract_texture_data(texture, window.win.get_gsg())
+        assert _valid_size(texture) == OUT  # the rest padding, maybe
+        raw = np.frombuffer(texture.get_ram_image_as("RGB"), np.uint8)
+        image = raw.reshape(texture.get_y_size(), texture.get_x_size(), 3)
+        valid = image[: OUT[1], : OUT[0]].astype(int)
+        assert np.all(np.abs(valid - 128) <= 1), name
+        chain.resize((width, height), (40, 20))
+        assert chain.output_size == (40, 20)
+        engine.render_frame()
+        assert _valid_size(chain.texture) == (40, 20)
+    finally:
+        chain.destroy()
+    engine.render_frame()
+    assert engine.get_num_windows() == windows

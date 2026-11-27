@@ -245,6 +245,33 @@ def reversed_lens(lens: Lens, near: float) -> Lens:
     return lens
 
 
+#: The live reversed cameras (:func:`view_size`), the latest last.
+_ACTIVE: list = []
+
+
+def view_size(app: Any) -> tuple[int, int]:
+    """The view's size in pixels, what the parts that size passes or pick
+    detail per pixel follow (the sea's reflection, the trees', clouds' and
+    asteroids' pixel angle): a :class:`ReversedDepthCamera`'s
+    (``RenderSettings.scale`` of its region), else the app camera's region,
+    else the window.
+
+    :param app: the ShowBase
+    :returns: (width, height), at least a pixel each
+    """
+    for camera in reversed(_ACTIVE):
+        if camera.app is app:
+            width, height = camera.render_size
+            return max(1, width), max(1, height)
+    cam = getattr(app, "cam", None)
+    if cam is not None and cam.node().get_num_display_regions():
+        region = cam.node().get_display_region(0)
+        if region.get_pixel_width() > 0:
+            return region.get_pixel_width(), region.get_pixel_height()
+    win = app.win
+    return max(1, win.get_x_size()), max(1, win.get_y_size())
+
+
 class ReversedDepthCamera:
     """One camera over the whole depth range, reversed (#57): one cull and one
     draw of the scene (the split cameras it replaced made two).
@@ -336,6 +363,7 @@ class ReversedDepthCamera:
         self.depth_texture = Texture("view_depth")
         self._build_output()
         self.app_region.set_active(False)
+        _ACTIVE.append(self)
         _DEPTH_MODE[0] = self.mode
         app.render.set_shader_input("uDepthMode", _DEPTH_MODE)
 
@@ -519,6 +547,8 @@ class ReversedDepthCamera:
         self._destroy_output()
         self.camera.remove_node()
         self.app_region.set_active(True)
+        if self in _ACTIVE:
+            _ACTIVE.remove(self)
         _DEPTH_MODE[0] = DEPTH_STANDARD
 
 

@@ -22,6 +22,7 @@ from panda3d.core import (
     loadPrcFileData,
 )
 
+from world_builder.post import FSR1
 from world_builder.quality import QualityLevel
 from world_builder.settings import SECTIONS, WorldSettings
 from world_builder.terrain.chart import TangentFrame, dirs_from_latlon, latlon
@@ -94,7 +95,9 @@ def describe_window(demo: ShowBase) -> str:
 def add_quality_arguments(parser: argparse.ArgumentParser) -> None:
     """The run-time arguments every script takes: ``--quality``, a
     ``--<part>-quality`` per WorldSettings section, ``--workers`` (the
-    terrain's setting) and ``--frame-cap``."""
+    terrain's setting), ``--frame-cap`` and the view's way to the screen
+    (the ``render`` section: ``--render-scale``, ``--msaa``, ``--fxaa``,
+    ``--fsr``, ``--sharpness``)."""
     levels = [level.value for level in QualityLevel]
     parser.add_argument(
         "--quality", default="high", choices=levels, help="every part's preset"
@@ -115,6 +118,25 @@ def add_quality_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="the most frames a second, 0 none (default: the settings', none)",
     )
+    parser.add_argument(
+        "--render-scale",
+        type=float,
+        default=None,
+        help="the view's resolution over the window's, 0.5-1 (default 1)",
+    )
+    parser.add_argument(
+        "--msaa", type=int, default=None, choices=(0, 2, 4, 8, 16), help="samples"
+    )
+    parser.add_argument("--fxaa", action="store_true", help="FXAA over the view")
+    parser.add_argument(
+        "--fsr", action="store_true", help="upscale with FSR 1 (else bilinear)"
+    )
+    parser.add_argument(
+        "--sharpness",
+        type=float,
+        default=None,
+        help="FSR 1's sharpening in stops: 0 the most (default 0.1)",
+    )
 
 
 def settings_from_args(args: argparse.Namespace) -> WorldSettings:
@@ -129,6 +151,16 @@ def settings_from_args(args: argparse.Namespace) -> WorldSettings:
         settings = settings.with_value("terrain", "workers", args.workers)
     if args.frame_cap is not None:
         settings = settings.with_value("display", "frame_cap", args.frame_cap)
+    render = {
+        "scale": args.render_scale,
+        "msaa": args.msaa,
+        "fxaa": True if args.fxaa else None,
+        "upscaler": FSR1 if args.fsr else None,
+        "sharpness": args.sharpness,
+    }
+    for name, value in render.items():
+        if value is not None:
+            settings = settings.with_value("render", name, value)
     return settings
 
 

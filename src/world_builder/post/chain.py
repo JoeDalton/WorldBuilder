@@ -91,7 +91,7 @@ class _Pass:
         name: str,
         size: tuple[int, int],
         sort: int,
-        shader: Shader,
+        quad: _Quad,
     ) -> None:
         self.texture = target_texture(name)
         props = FrameBufferProperties()
@@ -113,7 +113,7 @@ class _Pass:
             self.texture, GraphicsOutput.RTM_bind_or_copy, GraphicsOutput.RTP_color
         )
         self.buffer.set_clear_color_active(False)
-        self.quad = _Quad(name, shader)
+        self.quad = quad
         region = self.buffer.make_display_region()
         region.disable_clears()
         region.set_camera(self.quad.camera)
@@ -138,11 +138,19 @@ class PostChain:
     *window* of its own (:attr:`region`), at *dimensions* and *sort*: where
     the game's 3D region was.
 
-    :ivar region: the window's region the chain ends in
+    Or, given an *output_size*, the chain ends in a texture of that size
+    instead (:attr:`texture`): a view shown on a card, e.g. a game's
+    rear-view mirror drawn small and upscaled to the card's size on screen.
+    The card shows it texel for texel (with the texture's
+    ``get_tex_scale()``, should the GSG pad it).
+
+    :ivar region: the window's region the chain ends in (None when it ends
+        in :attr:`texture`)
+    :ivar texture: the texture it ends in (None when it ends in a region)
     :ivar settings: what it was built for (:meth:`set_sharpness` changes
         the one live knob)
     :ivar render_size: the view's size, pixels
-    :ivar output_size: the region's size, pixels
+    :ivar output_size: the region's (or :attr:`texture`'s) size, pixels
     """
 
     def __init__(
@@ -155,6 +163,7 @@ class PostChain:
         dimensions: tuple[float, float, float, float] = (0.0, 1.0, 0.0, 1.0),
         sort: int = 0,
         buffer_sort: int | None = None,
+        output_size: tuple[int, int] | None = None,
     ) -> None:
         """
         :param engine: the GraphicsEngine
@@ -165,18 +174,26 @@ class PostChain:
         :param dimensions: the region's (left, right, bottom, top) in the
             window, 0-1
         :param sort: the region's sort in the window
-        :param buffer_sort: the intermediate passes' first sort: after the
-            view's buffer, before the window; None = the window's - 2
+        :param buffer_sort: the passes' first sort (up to 3 buffers, one
+            sort each): after the view's buffer, before the window or what
+            shows the texture; None = the window's - 2
+        :param output_size: end in a texture of this size, pixels, instead of
+            a window region (*dimensions* and *sort* unused)
         """
         self.engine = engine
         self.window = window
         self.source = source
         self.settings = settings
         self.render_size = render_size
-        self.region = window.make_display_region(*dimensions)
-        self.region.set_sort(sort)
-        self.region.disable_clears()
-        self.output_size = self._region_size()
+        self._fixed_size = output_size
+        self.region = None
+        self.texture: Texture | None = None
+        self._out: _Pass | None = None
+        if output_size is None:
+            self.region = window.make_display_region(*dimensions)
+            self.region.set_sort(sort)
+            self.region.disable_clears()
+        self.output_size = self._target_size()
         first_sort = window.get_sort() - 2 if buffer_sort is None else buffer_sort
         self._passes: list[_Pass] = []
         # Cards sampling a possibly padded texture by coordinates: (card, its
@@ -191,7 +208,18 @@ class PostChain:
                 "post_present", _shader("fxaa.frag" if self.fxaa else "blit.frag")
             )
             self._sample(self._final.card, source)
-        self.region.set_camera(self._final.camera)
+        if self.region is not None:
+            self.region.set_camera(self._final.camera)
+        else:
+            self._out = _Pass(
+                engine,
+                window,
+                "post_out",
+                self.output_size,
+                first_sort + 2,
+                self._final,
+            )
+            self.texture = self._out.texture
         self._set_size_inputs()
         self.update()
 
@@ -205,7 +233,7 @@ class PostChain:
                 "post_fxaa",
                 self.render_size,
                 sort,
-                _shader("fxaa.frag"),
+                _Quad("post_fxaa", _shader("fxaa.frag")),
             )
             self._sample(fxaa.quad.card, self.source)
             self._passes.append(fxaa)
@@ -216,7 +244,7 @@ class PostChain:
             "post_easu",
             self.output_size,
             sort + 1,
-            _shader("fsr_easu.frag"),
+            _Quad("post_easu", _shader("fsr_easu.frag")),
         )
         easu.quad.card.set_shader_input("inputTex", easu_input)
         self._passes.append(easu)
@@ -230,7 +258,9 @@ class PostChain:
         card.set_shader_input("sceneTex", texture)
         self._sampled.append((card, texture))
 
-    def _region_size(self) -> tuple[int, int]:
+    def _target_size(self) -> tuple[int, int]:
+        if self.region is None:
+            return self._fixed_size
         return (
             max(1, self.region.get_pixel_width()),
             max(1, self.region.get_pixel_height()),
@@ -242,8 +272,11 @@ class PostChain:
             self.easu.set_shader_input("outputSize", self.output_size)
         if self.settings.fsr:
             # The region's lower-left pixel, as Panda rounds it.
-            left = int(self.region.get_left() * self.window.get_x_size() + 0.5)
-            bottom = int(self.region.get_bottom() * self.window.get_y_size() + 0.5)
+            left = bottom = 0
+            if self.region is not None:
+                width, height = self.window.get_x_size(), self.window.get_y_size()
+                left = int(self.region.get_left() * width + 0.5)
+                bottom = int(self.region.get_bottom() * height + 0.5)
             card = self._final.card
             card.set_shader_input("inputSize", self.output_size)
             card.set_shader_input("outputOrigin", (float(left), float(bottom)))
@@ -261,10 +294,17 @@ class PostChain:
         """:returns: the intermediate passes' textures, in drawing order"""
         return [p.texture for p in self._passes]
 
-    def resize(self, render_size: tuple[int, int]) -> None:
-        """Follow a new view size, and the region's (the window's) size."""
+    def resize(
+        self, render_size: tuple[int, int], output_size: tuple[int, int] | None = None
+    ) -> None:
+        """Follow a new view size, and the region's (the window's) size, or
+        the texture's new *output_size*."""
         self.render_size = render_size
-        self.output_size = self._region_size()
+        if output_size is not None and self.region is None:
+            self._fixed_size = output_size
+        self.output_size = self._target_size()
+        if self._out is not None:
+            self._out.resize(self.output_size)
         if self.fxaa and self.settings.fsr:
             self._passes[0].resize(render_size)
         if self.settings.fsr:
@@ -304,10 +344,15 @@ class PostChain:
         return f"{rw}x{rh} -> {ow}x{oh} | {chain}"
 
     def destroy(self) -> None:
-        """Remove the passes and the window's region."""
-        self.window.remove_display_region(self.region)
+        """Remove the passes and the window's region (or the texture's
+        buffer)."""
+        if self.region is not None:
+            self.window.remove_display_region(self.region)
         for p in self._passes:
             p.destroy()
         self._passes = []
+        if self._out is not None:
+            self._out.destroy()
+            self._out = None
         self._final.root.remove_node()
         self._sampled = []

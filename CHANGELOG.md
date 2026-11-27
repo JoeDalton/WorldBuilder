@@ -55,6 +55,36 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
   the driver actually granted. With `scene_buffer=False` (a window with float
   depth), the camera still uses a scene buffer when the settings need the
   chain.
+- `PostChain(output_size=(w, h))` (#68) ends in a texture of that size
+  (`chain.texture`) instead of a window region. This is for a view shown on a
+  card, such as SpaceFlight's rear-view mirror: drawn small, upscaled by
+  FSR 1 to the card's size on screen. `resize(render_size, output_size)`
+  follows a new size.
+- `depth.view_size(app)`: the view's size in pixels, which is the live
+  reversed camera's render size, else the app camera's region. The parts
+  that size a pass or pick detail per pixel follow it (see Changed).
+- The scripts' render arguments (`tools.add_quality_arguments`):
+  `--render-scale`, `--msaa`, `--fxaa`, `--fsr` and `--sharpness`. The demo's
+  keys:
+  - F9 cycles the scale: native, then FSR 1's modes;
+  - F10 toggles FSR 1;
+  - F11 cycles MSAA (off, 2, 4, 8, 16);
+  - F12 toggles FXAA;
+  - U / I make FSR 1 sharper or softer;
+  - N switches to native and back.
+
+  The HUD's last line is the camera's `describe()`. The docs page is
+  [Render scale, anti-aliasing and FSR 1](docs/source/render_pipeline.md).
+
+  Measured at 2560×1440 at HIGH on an RTX 3070, GPU-synced, ground pose. The
+  GPU's share of a frame:
+  - native: 5.15 ms;
+  - 0.77 with FSR 1: 3.89 ms;
+  - 0.67 with FSR 1: 2.96 ms (the same as bilinear at 0.67);
+  - 0.5 with FSR 1: 1.96 ms.
+
+  The clouds' raymarch went from 3.5 to 1.8 ms at 0.67. MSAA 4 costs about
+  0.25 ms.
 - `world_builder.depth.ReversedDepthCamera` (#57): one camera over the whole
   view, reversed and infinite (near at 1, infinity at 0), with a float depth
   buffer's precision (about 1e-7 of the distance at every range): one cull
@@ -86,6 +116,11 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Changed
 
+- The sea's reflection, the trees' and the clouds' pixel angle, and the
+  asteroid fields' pixels per radian follow the view's size
+  (`depth.view_size`) instead of the window's (#68). At a lower render scale
+  they cost less, and their detail drops with the view's pixels. The sea
+  makes its reflection buffer again when the view's size changes.
 - Docs: `World.update`'s order (the seas before the lights, the casters'
   map last), the tracked lights every `light_period` frames, the depth
   camera's culling and multisampling (world.md, shadows.md,
@@ -168,6 +203,12 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Fixed
 
+- The sea's reflection, made again (`Sea._rebuild_reflection`) before its
+  old buffer had drawn a frame, came out switched off: the old buffer's
+  `is_active()` is False until it is opened. It now takes the sea's own
+  state. The sea then reflected nothing, which showed as darker water toward
+  the horizon. It showed once the reflection followed the render scale,
+  because the first update made the buffer again.
 - `load_world` in an app without a window (`window-type none`: a game's
   headless runs) failed on `app.camLens`: there `GameWorld.depth` is None
   and bodies get no sea (both draw through the window); `update` and

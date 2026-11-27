@@ -89,7 +89,7 @@ from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
-from world_builder.depth import ReversedDepthCamera, system_far
+from world_builder.depth import ReversedDepthCamera, system_far, view_size
 from world_builder.display import FrameCap
 from world_builder.gravity import Gravity
 from world_builder.lights import TrackedLights
@@ -1208,13 +1208,14 @@ class World:
                 return
 
     def _pixel_angle(self) -> float | None:
-        """:returns: the angle one pixel of the camera's output spans
-        (vertical fov / its height), or None without a camera"""
+        """:returns: the angle one pixel of the view spans (vertical fov /
+        its height: :func:`depth.view_size`, the render scale's), or None
+        without a camera"""
         lens = getattr(self.app, "camLens", None)
         cam = getattr(self.app, "cam", None)
         if lens is None or cam is None or cam.node().get_num_display_regions() == 0:
             return None
-        height = cam.node().get_display_region(0).get_pixel_height()
+        height = view_size(self.app)[1]
         return math.radians(lens.get_fov()[1]) / max(height, 1)
 
     def _light(self, camera: np.ndarray, tracked: np.ndarray) -> None:

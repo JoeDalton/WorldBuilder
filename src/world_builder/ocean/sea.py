@@ -57,6 +57,7 @@ from world_builder.depth import (
     REFLECTION_CAMERA_MASK,
     frustum_bounds,
     reversed_lens,
+    view_size,
 )
 from world_builder.ocean.ocean import (
     _MAX_WAVE_ITER,
@@ -458,6 +459,10 @@ class Sea:
         scale = self._settings.reflection_fov_scale
         lens = self.refl_cam_node.get_lens()
         size = self._render_size()
+        if size != self._buffer_view:
+            # The view resized (the window, the render scale): the
+            # reflection keeps its share of it.
+            self._rebuild_reflection()
         if (fov.x, fov.y, scale, size) != self._lens_key:
             self._lens_key = (fov.x, fov.y, scale, size)
             lens.set_fov(fov.x * scale, fov.y * scale)
@@ -560,7 +565,7 @@ class Sea:
         :returns: its texture, and the provisional UV scale (buffer over
             padded texture size) until the real one is known
         """
-        render_w, render_h = self._render_size()
+        render_w, render_h = self._buffer_view = self._render_size()
         buf_w = max(1, int(render_w * refl_scale))
         buf_h = max(1, int(render_h * refl_scale))
         refl_tex = Texture("sea_reflection")
@@ -587,7 +592,10 @@ class Sea:
         """Make the buffer again at the settings' scale, on the same camera,
         keeping whether it is active and its clear colour."""
         old = self.refl_buffer
-        active, clear = old.is_active(), old.get_clear_color()
+        # Whether the pass runs, as update set it (the old buffer's own
+        # is_active() is False until its first frame has opened it).
+        active = old.is_active() if self._showing is None else self._showing
+        clear = old.get_clear_color()
         self.app.graphicsEngine.remove_window(old)
         self.refl_tex, uv_scale = self._make_reflection_buffer(
             self._settings.reflection_scale, clear
@@ -598,14 +606,9 @@ class Sea:
         self._uv_scale_set = False
 
     def _render_size(self) -> tuple[int, int]:
-        """:returns: the 3D render's size in pixels: the main camera's display
-        region's, else the window's"""
-        camera = getattr(self.app, "cam", None)
-        if camera is not None and camera.node().get_num_display_regions():
-            region = camera.node().get_display_region(0)
-            if region.get_pixel_width() > 0:
-                return region.get_pixel_width(), region.get_pixel_height()
-        return self.app.win.get_x_size(), self.app.win.get_y_size()
+        """:returns: the 3D view's size in pixels (:func:`depth.view_size`:
+        the render scale's, with the reversed camera)"""
+        return view_size(self.app)
 
     def _pixel_angle(self, fov_y: float) -> float:
         """:returns: a pixel's angle at the screen's centre, radians"""
