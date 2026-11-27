@@ -33,6 +33,7 @@ from numpy.typing import ArrayLike
 from panda3d.core import (
     Camera,
     ClipPlaneAttrib,
+    DepthTestAttrib,
     LMatrix3f,
     LMatrix4f,
     LPlane,
@@ -51,7 +52,12 @@ from panda3d.core import (
 )
 
 from world_builder import SHALLOW_WATER_COLOR, SHALLOW_WATER_DEPTH_M
-from world_builder.depth import REFLECTION_CAMERA_MASK
+from world_builder.depth import (
+    DEPTH_STANDARD,
+    REFLECTION_CAMERA_MASK,
+    frustum_bounds,
+    reversed_lens,
+)
 from world_builder.ocean.ocean import (
     _MAX_WAVE_ITER,
     DEFAULT_EXPOSURE,
@@ -325,6 +331,26 @@ class Sea:
         self._swell_time = None  # swell_by_depth: hand the swell over again
         self._lens_key = None  # the reflection's fov margin, or a new lens
 
+    def set_depth_mode(self, mode: int) -> None:
+        """The depth convention the view draws with (:mod:`world_builder.depth`):
+        the mirror's camera takes the same (a reversed, infinite lens, the
+        "greater" test, depth cleared to 0), or the reflection's ground and
+        sky fail their depth tests. Its culling keeps its standard range."""
+        self._depth_mode = mode
+        node = self.refl_cam_node
+        lens = node.get_lens()
+        near, far = self._refl_near_far
+        state = node.get_initial_state()
+        if mode == DEPTH_STANDARD:
+            lens.set_near_far(near, far)
+            state = state.remove_attrib(DepthTestAttrib)
+        else:
+            reversed_lens(lens, near)
+            state = state.set_attrib(DepthTestAttrib.make(DepthTestAttrib.M_greater))
+        node.set_initial_state(state)
+        self.refl_buffer.set_clear_depth(1.0 if mode == DEPTH_STANDARD else 0.0)
+        self._lens_key = None  # the culling again at the next update
+
     def set_swell_amplitude(self, amplitude: float) -> None:
         """The swell's height in deep water, metres, live. The field mostly
         spans 0.1 to 0.5 of it, so crests stand some 0.4 times this above the
@@ -435,6 +461,12 @@ class Sea:
         if (fov.x, fov.y, scale, size) != self._lens_key:
             self._lens_key = (fov.x, fov.y, scale, size)
             lens.set_fov(fov.x * scale, fov.y * scale)
+            # Culled to its standard range whatever its depth mode.
+            cull = self._cull_lens
+            cull.set_fov(fov.x * scale, fov.y * scale)
+            cull.set_aspect_ratio(lens.get_aspect_ratio())
+            cull.set_near_far(*self._refl_near_far)
+            self.refl_cam_node.set_cull_bounds(frustum_bounds(cull))
             self._frame_inputs["uSeaPixelAngle"][0] = self._pixel_angle(fov.y)
         view = LMatrix4f()
         view.invert_from(self.refl_cam.get_mat(app.render))
@@ -502,6 +534,11 @@ class Sea:
         lens.set_fov(fov.x * scale, fov.y * scale)
         lens.set_far(self.app.camLens.get_far() * 4.0)
         self.refl_cam_node.set_lens(lens)
+        # Its range in the split's standard depth, and a finite copy to cull
+        # by (set_depth_mode can make the lens itself reversed and infinite).
+        self._refl_near_far = (lens.get_near(), lens.get_far())
+        self._cull_lens = lens.make_copy()
+        self._depth_mode = DEPTH_STANDARD
         self.refl_cam_node.set_camera_mask(REFLECTION_CAMERA_MASK)
         self.refl_cam = self.frame.attach_new_node(self.refl_cam_node)
         # Only what is above the water: a clip plane on the camera's initial
@@ -534,6 +571,9 @@ class Sea:
             "sea_reflection", buf_w, buf_h, refl_tex
         )
         self.refl_buffer.set_sort(-100)
+        self.refl_buffer.set_clear_depth(
+            1.0 if self._depth_mode == DEPTH_STANDARD else 0.0
+        )
         # Cleared to the water's colour: where the camera renders nothing,
         # the reflection blends into the water.
         self.refl_buffer.set_clear_color(clear_color)

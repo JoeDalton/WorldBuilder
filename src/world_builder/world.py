@@ -87,7 +87,7 @@ from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds, check_layers
 from world_builder.clouds.shadow_map import CloudShadowMaps
 from world_builder.clouds.weather import WeatherSpec
-from world_builder.depth import HIDE_FROM_NEAR, SplitDepthCameras
+from world_builder.depth import HIDE_FROM_NEAR, ReversedDepthCamera, SplitDepthCameras
 from world_builder.display import FrameCap
 from world_builder.gravity import Gravity
 from world_builder.lights import TrackedLights
@@ -350,8 +350,9 @@ class World:
     :ivar casters: the objects' shadow map (None without a window)
     """
 
-    #: The game's split cameras (:meth:`use_split_depth`)
-    depth: SplitDepthCameras | None = None
+    #: The game's depth camera (:meth:`use_depth_camera`; the split cameras:
+    #: :meth:`use_split_depth`)
+    depth: ReversedDepthCamera | SplitDepthCameras | None = None
 
     def __init__(
         self,
@@ -802,6 +803,28 @@ class World:
         )
         return split, max(far, reach)
 
+    def view_ranges(self, origin_world: ArrayLike) -> tuple[float, float]:
+        """The :class:`~world_builder.depth.ReversedDepthCamera`'s inputs this
+        frame: the far distance (:meth:`depth_ranges`') and the camera's
+        height over the nearest body's highest ground (its near plane follows
+        it: never more than the real height over the ground).
+
+        :param origin_world: render's origin in the world frame (float64)
+        :returns: (far, height), metres; in open space the height is the far
+            distance
+        """
+        far = self.depth_ranges(origin_world)[1]
+        if not self.bodies:
+            return far, far
+        camera = np.asarray(origin_world, dtype=np.float64) + self.camera_render()
+        height = min(
+            float(np.linalg.norm(camera - body.position))
+            - body.radius
+            - body.terrain.planet.height_bounds[1]
+            for body in self.bodies
+        )
+        return far, height
+
     def gravity_field(self, g_constant: float = 1.0) -> Gravity:
         """The bodies' gravity as point masses (see :mod:`world_builder.gravity`).
         Build it once and evaluate it for many points: the bodies do not move.
@@ -1035,6 +1058,23 @@ class World:
                     binders.append(part.bind)
             self.atmospheres.bind_god_rays(body.atmosphere, binders)
             return
+
+    def use_depth_camera(self, depth: ReversedDepthCamera) -> None:
+        """The game's reversed camera (#57): the renderers that pin or read
+        depth take its convention (the sky, the seas' reflections, the
+        fields' haze), the clouds' raymarch draws its passes with it. Call
+        ``depth.update(*world.view_ranges(origin))`` before :meth:`update`
+        every frame."""
+        self.depth = depth
+        if self.sky is not None:
+            self.sky.set_depth_mode(depth.mode)
+        for body in self.bodies:
+            if body.ocean is not None:
+                body.ocean.set_depth_mode(depth.mode)
+            if body.clouds is not None:
+                body.clouds.use_split_depth(self.app, depth)
+        for asteroids in self.fields:
+            asteroids.haze.set_depth_mode(depth.mode)
 
     def use_split_depth(self, depth: SplitDepthCameras) -> None:
         """The split cameras the game built after the world: the clouds'

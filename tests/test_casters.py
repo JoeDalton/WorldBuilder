@@ -153,12 +153,18 @@ void main() {
     return got.ravel()[: len(rel)]
 
 
-def test_the_map_is_the_casters_geometric_shadow(window):
+@pytest.mark.parametrize("reversed_view", [False, True])
+def test_the_map_is_the_casters_geometric_shadow(window, reversed_view):
     """A ball over a plane: the plane is in shadow where its ray toward the
     sun crosses the ball, lit elsewhere, and outside the map's square; a
-    point between the ball and the sun is lit; the ball's lit side too."""
+    point between the ball and the sun is lit; the ball's lit side too. The
+    same with the view's reversed camera (FRAME_COST_PLAN.md, Task 6.4): the
+    map's own orthographic camera keeps the standard depth."""
+    from world_builder.depth import ReversedDepthCamera
+
     scene = NodePath("scene")
     casters = CasterMap(window.win, scene, 512)
+    view = ReversedDepthCamera(window) if reversed_view else None
     try:
         assert casters.buffer is not None
         centre = np.array([30.0, -20.0, 40.0])
@@ -198,5 +204,7 @@ def test_the_map_is_the_casters_geometric_shadow(window):
         assert (expected[clear] == 0.0).sum() > 100
         np.testing.assert_allclose(got[clear], expected[clear], atol=0.02)
     finally:
+        if view is not None:
+            view.destroy()
         casters.destroy()
         scene.remove_node()

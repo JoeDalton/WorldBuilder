@@ -23,6 +23,7 @@
 // CLOUD_HIGH (cloud_march_high.frag, cloud_march_recipes_high.frag): the high
 // layer's thin-layer crossings (highCrossing), only for a march with a high
 // genus covered (march.march_fragment).
+#pragma include "../../shaders/depth_convention.glsl"
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "cloud_field.glsl"
@@ -865,25 +866,31 @@ void main() {
     // A recipe genus's far edges widen as the field's (edgeWidening)
     recipeWiden = (uCloudDebug & 4096) == 0;
     vec2 ndc = (vec2(pixel) + 0.5) / uViewSize * 2.0 - 1.0;
-    vec3 nearPoint = unproject(vec3(ndc, -1.0));
-    vec3 farPoint = unprojectFar(vec3(ndc, 1.0));
+    vec3 nearPoint = unproject(vec3(ndc, depthNearZ()));
+    vec3 farPoint = unprojectFar(vec3(ndc, depthFarNdc()));
     vec3 dir = normalize(farPoint - nearPoint);
+    if (uDepthMode != DEPTH_STANDARD) {
+        // Reversed and infinite: the far end is beyond any band.
+        farPoint = nearPoint + dir * 1e10;
+    }
     float tStart = max(dot(nearPoint - uCamRender, dir), 0.0);
     // The scene: the near range's surface where it has one, else the far
     // range's, else the far plane (EVE's distance buffer of both cameras).
     // The depth passes are drawn at half resolution (march.DEPTH_SCALE): a
     // pixel reads its 2 x 2 block's depth.
     ivec2 depthPixel = pixel / uDepthScale;
-    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, depthPixel, 0).r : 1.0;
+    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, depthPixel, 0).r
+                                        : depthClear();
     float farDepth = texelFetch(uSceneDepthFar, depthPixel, 0).r;
-    vec3 end = nearDepth < 1.0 ? unproject(vec3(ndc, nearDepth * 2.0 - 1.0))
-             : farDepth < 1.0 ? unprojectFar(vec3(ndc, farDepth * 2.0 - 1.0))
+    bool nearDrawn = depthDrawn(nearDepth), farDrawn = depthDrawn(farDepth);
+    vec3 end = nearDrawn ? unproject(vec3(ndc, depthNdc(nearDepth)))
+             : farDrawn ? unprojectFar(vec3(ndc, depthNdc(farDepth)))
              : farPoint;
     float tEnd = length(end - uCamRender);
     // The scene this sample stopped at, km from the near plane (0: none, the
     // sky), in the distance's g: cloud_resolve.frag weighs the samples by it
     // against each pixel's own (its sceneDistance, the same measure).
-    float sceneKm = nearDepth < 1.0 || farDepth < 1.0 ? length(end - nearPoint) / KM : 0.0;
+    float sceneKm = nearDrawn || farDrawn ? length(end - nearPoint) / KM : 0.0;
 
     // Each sky band (cloud_field.glsl's uSkyBands: the genera's slabs merged)
     // between two spheres, less the planet: up to two segments each (a ray

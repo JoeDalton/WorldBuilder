@@ -357,7 +357,7 @@ class WorldDemo(ShowBase):
             f"camera {self.cam_world[0]:,.0f} {self.cam_world[1]:,.0f} "
             f"{self.cam_world[2]:,.0f}   heading {heading:.0f}  pitch {pitch:.0f}"
             f"   speed x{self.speed / SPEED:g}"
-            f"   depth split {depth.split / 1e3:,.1f} km, far {depth.far / 1e3:,.0f} km"
+            f"   depth near {depth.near:,.0f} m, far {depth.far / 1e3:,.0f} km"
         ]
         body = self.body
         if body is not None:

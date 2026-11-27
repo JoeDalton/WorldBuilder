@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `world_builder.depth.ReversedDepthCamera`: one camera over the whole depth
+  range, reversed and infinite (#57), to replace `SplitDepthCameras`: its own
+  camera under `app.camera` with both of the split's bits, a "greater" depth
+  test, depth cleared to 0, culling cut at the world's far distance, and a
+  near plane at 1 % of the height above the ground (1 m to 1 km); it sets
+  `uDepthMode` on render (`DEPTH_REVERSED_01` with `gl-depth-zero-to-one`,
+  `DEPTH_REVERSED_11` without: macOS). Not used by `World` yet (the
+  renderers move to it first). The tests run under either convention:
+  `WB_DEPTH_ZERO_TO_ONE=1` for desktop's 0-1 depth.
+- `shaders/depth_convention.glsl` and `depth.depth_mode_input()`: the one
+  source of the depth convention (`uDepthMode`, shared by every node that
+  pins or reads depth, set by the reversed camera). The sky and its stars
+  pin the far plane through it (`depthFarZ`) and take its far-plane test
+  (`Sky.set_depth_mode`, `depth.far_plane_test`): unchanged with the split
+  cameras.
+- `Sea.set_depth_mode`: the sea's reflection camera follows the view's depth
+  convention (with the reversed camera: a reversed, infinite lens, "greater",
+  depth cleared to 0; left standard, the far sea reflects nothing). Its
+  culling now always reaches its own standard range through explicit bounds
+  (`depth.frustum_bounds`), whatever its lens.
+- Models, trees and the objects' caster map need no change for the reversed
+  camera (they draw through Panda's projection; the caster map keeps its own
+  orthographic standard depth): tested under both conventions.
+- The asteroid fields' haze follows the depth convention
+  (`FieldHaze.set_depth_mode`): its hull's far clamp only where there is a far
+  plane, its rays starting at the near plane wherever the convention puts it
+  (`depthNearZ`), its depth test the camera's with equality.
+- The raymarched clouds run on the reversed camera too
+  (`PlanetClouds.use_split_depth` takes either camera): one range, the far
+  one's passes through its lens, the near range never on; the depth pass
+  reversed (float depth, cleared to 0, "greater"), the composite and the
+  sea-reflection decks testing "greater". Every cloud shader reads depth
+  through `depth_convention.glsl` (`depthDrawn`, `depthNdc`, `depthNearZ`,
+  `depthFarNdc`, `depthWindow`); under clip control the march's matrices take
+  the GSG's 0-1 remap, so reversed float depth decodes exactly (the scene at
+  1,000 km within 1 %).
 - `scripts/frame_profile.py --pipelined`: frames timed as a game runs them,
   the CPU and the GPU overlapping (the frame is the slower of the two),
   with the CPU's step still GPU-synced beside it. The default mode's frame
@@ -19,6 +55,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   update (CPU only).
 
 ### Changed
+
+- **One reversed-Z camera instead of the split cameras** (#57,
+  FRAME_COST_PLAN.md Phase 2): `load_world` draws the view with
+  `depth.ReversedDepthCamera`, and `World.use_depth_camera` hands its depth
+  convention to the sky, the seas' reflections, the fields' haze and the
+  clouds (`World.view_ranges` gives it the far distance and the height over
+  the ground). A window's framebuffer has no float depth, so the view is
+  drawn into a float-depth scene buffer of the window's size and presented
+  in the window under its other regions (the HUD); `scene_buffer=False` for
+  an output that already has float depth (`depth.float_depth_fbprops`).
+  Games should set `gl-depth-zero-to-one #t` before opening their window
+  (not on macOS: its OpenGL has no clip control; the world then works with
+  about a 24-bit range's precision). The demo and scripts do
+  (`tools.window_config`).
 
 - An asteroid field or ring out of the camera's reach does no per-frame work
   for its rocks once it has let them go (`AsteroidField.out_of_reach`; its

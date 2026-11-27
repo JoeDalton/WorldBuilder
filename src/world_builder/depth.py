@@ -57,10 +57,15 @@ from panda3d.core import (
     BoundingHexahedron,
     BoundingSphere,
     Camera,
+    ConfigVariableBool,
+    DepthTestAttrib,
+    FrameBufferProperties,
     Lens,
     NodePath,
     PandaNode,
     Point3,
+    PTA_int,
+    RenderState,
 )
 
 #: Camera bit of the objects' shadow map's camera
@@ -339,3 +344,270 @@ class SplitDepthCameras:
         self.far_camera.remove_node()
         self.app.cam.node().set_camera_mask(PandaNode.get_all_camera_mask())
         self.near_region.set_clear_depth_active(False)
+
+
+# ── one reversed-Z camera (FRAME_COST_PLAN.md, Phase 2; issue #57) ───────────
+
+#: ``uDepthMode`` (on render): the split's standard depth, near at 0 and far
+#: at 1 in each range.
+DEPTH_STANDARD = 0
+#: Reversed depth with OpenGL's 0-1 range (``gl-depth-zero-to-one``, clip
+#: control): near at 1, infinity at 0, a float depth buffer's full precision.
+DEPTH_REVERSED_01 = 1
+#: Reversed depth in OpenGL's [-1, 1] (no clip control: macOS): near at 1,
+#: infinity at 0 after the window's remap, about a 24-bit range's precision.
+DEPTH_REVERSED_11 = 2
+
+
+#: The one ``uDepthMode`` every renderer binds (a node's own inputs win over
+#: render's, so each binds this same array): the reversed camera writes it.
+_DEPTH_MODE = PTA_int.empty_array(1)
+
+
+def depth_mode_input() -> PTA_int:
+    """:returns: the shared ``uDepthMode`` input (:data:`DEPTH_STANDARD` until
+    a :class:`ReversedDepthCamera` is made): bind it on the nodes whose
+    shaders pin or read depth"""
+    return _DEPTH_MODE
+
+
+def zero_to_one() -> bool:
+    """:returns: whether OpenGL's depth runs 0-1 (``gl-depth-zero-to-one``,
+    read by the GSG when it is made: set it before the window opens)"""
+    return bool(ConfigVariableBool("gl-depth-zero-to-one", False).get_value())
+
+
+def reversed_depth_mode() -> int:
+    """:returns: the reversed camera's ``uDepthMode`` under this PRC setting"""
+    return DEPTH_REVERSED_01 if zero_to_one() else DEPTH_REVERSED_11
+
+
+def far_plane_test(mode: int) -> int:
+    """:returns: the ``DepthTestAttrib`` mode for what sits on the far plane
+    (the sky: ``depth_convention.glsl``'s ``depthFarZ``) in depth *mode*: the
+    camera's own test with equality ("less or equal" against the standard
+    clear of 1, "greater or equal" against the reversed clear of 0), as a
+    24-bit buffer rounds the far plane onto the clear value"""
+    if mode == DEPTH_STANDARD:
+        return DepthTestAttrib.M_less_equal
+    return DepthTestAttrib.M_greater_equal
+
+
+def float_depth_fbprops() -> FrameBufferProperties:
+    """:returns: Panda's default framebuffer properties with a 32-bit float
+    depth buffer: what a game passes when it opens its window (or makes its
+    scene buffer) for :class:`ReversedDepthCamera`'s full precision (Panda's
+    default properties cannot be changed from code)"""
+    props = FrameBufferProperties(FrameBufferProperties.get_default())
+    props.set_depth_bits(32)
+    props.set_float_depth(True)
+    return props
+
+
+def view_test(mode: int) -> int:
+    """:returns: the ``DepthTestAttrib`` mode of the view's own cameras in
+    depth *mode*: "less" (standard), "greater" (reversed)"""
+    if mode == DEPTH_STANDARD:
+        return DepthTestAttrib.M_less
+    return DepthTestAttrib.M_greater
+
+
+def reversed_lens(lens: Lens, near: float) -> Lens:
+    """Make *lens* reversed and infinite: Panda takes near = inf, far = the
+    near plane as that (near maps to 1, infinity to -1 in the lens's [-1, 1],
+    to 0 after the GSG's 0-1 mapping or the window's remap).
+
+    :returns: *lens*
+    """
+    lens.set_near_far(math.inf, near)
+    return lens
+
+
+class ReversedDepthCamera:
+    """One camera over the whole depth range, reversed (#57): one cull and one
+    draw of the scene where :class:`SplitDepthCameras` made two.
+
+    A camera of its own under ``app.camera`` (as the split's far camera),
+    with both of the split's bits (a node kept to one range is drawn), the
+    "greater" depth test as its initial state, and a reversed, infinite copy
+    of ``app.camLens`` (:func:`reversed_lens`) kept in step with its field of
+    view; culling is cut at :attr:`far`. ``app.camLens`` stays a standard
+    lens (a game's picking and ray maths keep working); the app camera's
+    region is switched off. The shared ``uDepthMode``
+    (:func:`depth_mode_input`, also bound on ``render``) becomes
+    :func:`reversed_depth_mode` for the shaders that pin or read depth.
+    :meth:`destroy` gives it all back.
+
+    Full precision needs a float depth buffer, which a window's framebuffer
+    does not have: the view is drawn into a scene buffer of its own (32-bit
+    float depth, the window's size) and a card in the window presents it,
+    under the window's other regions (the HUD). A game whose window or scene
+    output already has float depth (:func:`float_depth_fbprops`) can pass
+    ``scene_buffer=False``.
+
+    :ivar camera: its NodePath (a child of ``app.camera``)
+    :ivar lens: its lens
+    :ivar region: its display region (in :attr:`output`)
+    :ivar output: what it draws into: the scene buffer, or the app camera's
+        output
+    :ivar present: the window's region showing the scene buffer (None
+        without one)
+    :ivar app_region: the app camera's, switched off meanwhile
+    :ivar near: the current near plane, metres (:meth:`near_for`)
+    :ivar far: the cull distance, metres (0 before :meth:`update`)
+    :ivar mode: ``uDepthMode``
+    """
+
+    #: The near plane follows this share of the height above the ground ...
+    NEAR_SHARE = 0.01
+    #: ... up to this, metres: from orbit [-1, 1] depth keeps bodies apart.
+    MAX_NEAR = 1000.0
+
+    def __init__(
+        self, app: Any, near: float = 1.0, scene_buffer: bool | None = None
+    ) -> None:
+        """
+        :param app: the ShowBase (``camera``, ``cam``, ``camLens``, ``render``,
+            ``graphicsEngine``)
+        :param near: the nearest the near plane comes, metres
+        :param scene_buffer: draw into a float-depth buffer presented in the
+            window; None = unless the app camera's output has float depth
+        """
+        self.app = app
+        self.min_near = near
+        self.near = near
+        self.far = 0.0
+        self.mode = reversed_depth_mode()
+        self.lens = reversed_lens(app.camLens.make_copy(), near)
+        self._cull_lens = app.camLens.make_copy()
+        node = Camera("reversed_camera", self.lens)
+        node.set_camera_mask(NEAR_CAMERA_MASK | FAR_CAMERA_MASK)
+        node.set_initial_state(
+            RenderState.make(DepthTestAttrib.make(DepthTestAttrib.M_greater))
+        )
+        self.camera = app.camera.attach_new_node(node)
+        self.app_region = app.cam.node().get_display_region(0)
+        window = self.app_region.get_window()
+        if scene_buffer is None:
+            scene_buffer = not window.get_fb_properties().get_float_depth()
+        self.present = None
+        self._window = window
+        self._scene: NodePath | None = None
+        self._texture = None
+        self._card: NodePath | None = None
+        if scene_buffer:
+            self.output = self._make_scene_buffer(window)
+            self.region = self.output.make_display_region()
+        else:
+            self.output = window
+            left, right, bottom, top = self.app_region.get_dimensions()
+            self.region = window.make_display_region(left, right, bottom, top)
+            self.region.set_sort(self.app_region.get_sort())
+        self.region.set_camera(self.camera)
+        self.region.set_clear_depth_active(True)
+        self.region.set_clear_depth(0.0)
+        self.app_region.set_active(False)
+        _DEPTH_MODE[0] = self.mode
+        app.render.set_shader_input("uDepthMode", _DEPTH_MODE)
+
+    def _make_scene_buffer(self, window: Any) -> Any:
+        """The view's float-depth buffer at the window's size, and the
+        window's card that presents it where the app camera's region was."""
+        from panda3d.core import (
+            CardMaker,
+            GraphicsOutput,
+            GraphicsPipe,
+            OrthographicLens,
+            Texture,
+            WindowProperties,
+        )
+
+        # Fresh properties: an FBO's (the defaults' back buffers refuse it).
+        props = FrameBufferProperties()
+        props.set_rgba_bits(8, 8, 8, 8)
+        props.set_depth_bits(32)
+        props.set_float_depth(True)
+        self._texture = Texture("reversed_scene")
+        buffer = self.app.graphicsEngine.make_output(
+            window.get_pipe(),
+            "reversed_scene",
+            window.get_sort() - 1,
+            props,
+            WindowProperties.size(window.get_x_size(), window.get_y_size()),
+            GraphicsPipe.BF_refuse_window | GraphicsPipe.BF_resizeable,
+            window.get_gsg(),
+            window,
+        )
+        if buffer is None:
+            raise RuntimeError("no float-depth scene buffer could be made")
+        buffer.add_render_texture(
+            self._texture, GraphicsOutput.RTM_bind_or_copy, GraphicsOutput.RTP_color
+        )
+        buffer.set_clear_color_active(True)
+        buffer.set_clear_color(window.get_clear_color())
+        self._scene = NodePath("reversed_present")
+        lens = OrthographicLens()
+        lens.set_film_size(2.0, 2.0)
+        lens.set_near_far(-1.0, 1.0)
+        camera = self._scene.attach_new_node(Camera("reversed_present", lens))
+        maker = CardMaker("reversed_present")
+        maker.set_frame(-1.0, 1.0, -1.0, 1.0)
+        self._card = self._scene.attach_new_node(maker.generate())
+        self._card.set_texture(self._texture)
+        self._card.set_depth_test(False)
+        self._card.set_depth_write(False)
+        self._card.set_light_off()
+        left, right, bottom, top = self.app_region.get_dimensions()
+        self.present = window.make_display_region(left, right, bottom, top)
+        self.present.set_sort(self.app_region.get_sort())
+        self.present.set_camera(camera)
+        return buffer
+
+    @property
+    def float_depth(self) -> bool:
+        """Whether the output's depth buffer is a float one."""
+        return bool(self.output.get_fb_properties().get_float_depth())
+
+    @classmethod
+    def near_for(cls, height_above_ground: float, near: float) -> float:
+        """:returns: the near plane for a camera *height_above_ground* metres
+        over the nearest ground: :attr:`NEAR_SHARE` of it, within
+        [*near*, :attr:`MAX_NEAR`]"""
+        return min(max(cls.NEAR_SHARE * height_above_ground, near), cls.MAX_NEAR)
+
+    def update(self, far: float, height_above_ground: float) -> None:
+        """Per frame: the near plane for the height, the app lens's field of
+        view, the culling cut at *far* (the lens itself reaches infinity), the
+        scene buffer at the window's size."""
+        source = self.app.camLens
+        self.near = self.near_for(height_above_ground, self.min_near)
+        self.far = max(far, 2.0 * self.near)
+        for lens in (self.lens, self._cull_lens):
+            lens.set_fov(source.get_fov())
+            lens.set_aspect_ratio(source.get_aspect_ratio())
+        reversed_lens(self.lens, self.near)
+        self._cull_lens.set_near_far(self.near, self.far)
+        self.camera.node().set_cull_bounds(frustum_bounds(self._cull_lens))
+        if self.present is not None:
+            from panda3d.core import TextureStage
+
+            size = (self._window.get_x_size(), self._window.get_y_size())
+            if size != (self.output.get_x_size(), self.output.get_y_size()):
+                self.output.set_size(*size)
+            # The texture may be padded to powers of two.
+            self._card.set_tex_scale(
+                TextureStage.get_default(), self._texture.get_tex_scale()
+            )
+
+    def destroy(self) -> None:
+        """Remove the camera, its region and scene buffer; the app camera
+        draws again and ``uDepthMode`` is standard."""
+        if self.present is not None:
+            self._window.remove_display_region(self.present)
+            self.app.graphicsEngine.remove_window(self.output)
+            self._scene.remove_node()
+        else:
+            self.output.remove_display_region(self.region)
+        self.camera.remove_node()
+        self.app_region.set_active(True)
+        _DEPTH_MODE[0] = DEPTH_STANDARD

@@ -873,3 +873,23 @@ def test_the_bodies_centres_are_gathered_once():
     centres = world._body_centres
     world._nearest_indices(points)
     assert world._body_centres is centres
+
+
+def test_the_view_ranges_are_the_far_distance_and_the_height_over_the_ground():
+    """The reversed camera's per-frame inputs (FRAME_COST_PLAN.md, Task 6.7):
+    the far distance the split's far camera had, and the height over the
+    nearest body's highest ground (its near plane follows it; never more
+    than the camera's real height over the ground)."""
+    from world_builder.world import SPACE_FAR_M
+
+    body = _body()
+    world = _world(body)
+    top = PLANET_HEIGHT_BOUNDS[1]
+    for altitude in (1000.0, 50_000.0, 3.0e6):
+        origin = np.array([0.0, 0.0, R + altitude])
+        far, height = world.view_ranges(origin)
+        assert far == world.depth_ranges(origin)[1]
+        assert height == pytest.approx(altitude - top)
+    space = _world()
+    far, height = space.view_ranges(np.zeros(3))
+    assert far == SPACE_FAR_M and height == pytest.approx(SPACE_FAR_M)

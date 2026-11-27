@@ -7,6 +7,7 @@
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "../../atmosphere/shaders/sky_view.glsl"
 #pragma include "sky_common.glsl"
+#pragma include "../../shaders/depth_convention.glsl"
 
 uniform mat4 p3d_ModelViewProjectionMatrix;  // the sky sphere's
 uniform float uStarBrightness;
@@ -22,7 +23,7 @@ void main() {
     // The map's rotation is orthonormal: its transpose maps it back.
     vec3 dir = transpose(uStarRotation) * p3d_Vertex.xyz;
     gl_Position = p3d_ModelViewProjectionMatrix * vec4(dir, 1.0);
-    gl_Position.z = gl_Position.w * 0.999999;  // see sky.vert
+    gl_Position.z = depthFarZ(gl_Position.w);  // see sky.vert
     gl_ClipDistance[0] = 1.0;
     gl_PointSize = 3.0;
     vec3 transmittance, inscatter;

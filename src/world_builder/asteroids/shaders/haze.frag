@@ -11,6 +11,7 @@
 
 #pragma include "../../atmosphere/shaders/display.glsl"
 #pragma include "../../shadows/shaders/shadows.glsl"
+#pragma include "../../shaders/depth_convention.glsl"
 
 uniform mat4 p3d_ViewProjectionMatrix;
 uniform vec3 uCamRender;
@@ -88,7 +89,9 @@ void main() {
     vec3 dirRender = uFieldRot * dir;
     vec4 A = p3d_ViewProjectionMatrix * vec4(uCamRender, 1.0);
     vec4 B = p3d_ViewProjectionMatrix * vec4(dirRender, 0.0);
-    float tNear = -(A.z + A.w) / (B.z + B.w);
+    // (clip z = k w there: depth_convention.glsl)
+    float k = depthNearZ();
+    float tNear = -(A.z - k * A.w) / (B.z - k * B.w);
 
     // The interval this hull point closes: the one ending nearest it.
     vec2 s0, s1;

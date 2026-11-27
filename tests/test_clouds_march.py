@@ -366,7 +366,7 @@ def test_the_composite_is_no_farther_than_the_scene():
     # left at the lagging resolved distance (flying forward it put the clouds
     # behind the ground under them, and the depth test cut them).
     text = (SHADER.parent / "cloud_composite.frag").read_text()
-    assert "depth = min(depth, scene - 1e-6);" in text
+    assert "depth = depthNoFartherThan(depth, scene);" in text
     assert "uSceneDepthCut != 0" in text
 
 
@@ -868,9 +868,13 @@ def test_the_march_ends_at_either_range_and_the_cards_split_the_pixels():
     march = SHADER.read_text()
     # The near range's surface first, then the far range's, then the far plane.
     assert re.search(
-        r"nearDepth < 1\.0 \? unproject\(.*\)\s*:\s*farDepth < 1\.0 \? unprojectFar\(",
+        r"nearDrawn \? unproject\(.*\)\s*:\s*farDrawn \? unprojectFar\(",
         march,
         re.S,
+    )
+    assert (
+        "bool nearDrawn = depthDrawn(nearDepth), farDrawn = depthDrawn(farDepth);"
+        in march
     )
     assert "uNearDepthOn != 0 ? texelFetch(uSceneDepthNear" in march
     composite = (SHADER.parent / "cloud_composite.frag").read_text()
@@ -1028,3 +1032,105 @@ def test_the_light_volume_is_read_with_a_cubic_across_its_slices():
     assert "for (int i = 0; i < 4; i++)" in body
     assert "clamp(k + float(i - 1), first, first + per - 1.0)" in body
     assert "mix(lower, upper" not in body
+
+
+def test_one_march_runs_on_the_reversed_camera(window, executor):
+    """One camera over the whole range (FRAME_COST_PLAN.md, Task 6.6): the
+    march runs on its far range alone, through the reversed camera's lens;
+    its depth pass is reversed too (float depth, cleared to 0, "greater") and
+    its card tests "greater"; the near range never comes on."""
+    from panda3d.core import DepthTestAttrib
+
+    from world_builder.depth import ReversedDepthCamera
+
+    clouds = _clouds(window, executor)
+    depth = ReversedDepthCamera(window, near=1.0)
+    try:
+        clouds.use_split_depth(window, depth)
+        march = clouds.volume
+        (layer,) = march._layers
+        far_card, near_card = layer.composites
+        assert layer.far_lens is depth.lens
+        march._finish()
+        for _ in range(2):
+            depth.update(far=5.0e6, height_above_ground=3000.0)
+            march.update((0.0, 0.0, R + 300.0))  # in the slab
+            window.graphicsEngine.render_frame()
+        assert layer.active and layer.near_on[0] == 0
+        assert not layer.near_depth.buffer.is_active() and near_card.is_hidden()
+        assert not far_card.is_hidden()
+        assert layer._previous is not None  # the history runs
+        far = layer.far_depth
+        assert far.buffer.get_clear_depth() == 0.0
+        assert far.buffer.get_fb_properties().get_float_depth()
+        state = far.camera.node().get_initial_state()
+        greater = DepthTestAttrib.M_greater
+        assert state.get_attrib(DepthTestAttrib).get_mode() == greater
+        assert far_card.get_attrib(DepthTestAttrib).get_mode() == greater
+    finally:
+        clouds.remove()
+        depth.destroy()
+
+
+@pytest.mark.parametrize("reversed_view", [False, True])
+@pytest.mark.parametrize("distance", [10.0, 1.0e4, 1.0e6])
+def test_the_passes_read_the_scenes_distance_back(
+    window, executor, reversed_view, distance
+):
+    """A wall at a known distance: the ground pass (its g: the scene's
+    distance, km) finds it from the depth passes, under the split's standard
+    depth and under the reversed camera's (depth_convention.glsl)."""
+    from panda3d.core import CardMaker
+
+    from world_builder.depth import ReversedDepthCamera, SplitDepthCameras
+
+    window.camera.set_pos_hpr(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    maker = CardMaker("wall")
+    maker.set_frame(-distance, distance, -distance, distance)
+    wall = window.render.attach_new_node(maker.generate())
+    wall.set_pos(0.0, distance, 0.0)
+    clouds = _clouds(window, executor)
+    if reversed_view:
+        depth = ReversedDepthCamera(window, near=1.0)
+    else:
+        depth = SplitDepthCameras(window, near=1.0)
+    try:
+        clouds.use_split_depth(window, depth)
+        march = clouds.volume
+        (layer,) = march._layers
+        march._finish()
+        for _ in range(3):
+            if reversed_view:
+                depth.update(far=1.0e7, height_above_ground=0.0)
+            else:
+                depth.update(2000.0, 1.0e7)
+            march.update((0.0, 0.0, R + 300.0))
+            window.graphicsEngine.render_frame()
+        texture = layer.ground.texture
+        window.graphicsEngine.extract_texture_data(texture, window.win.get_gsg())
+        width, height = texture.get_x_size(), texture.get_y_size()
+        size = depth_size_of(march)
+        data = np.frombuffer(texture.get_ram_image_as("RG"), dtype=np.uint16)
+        if texture.get_component_type() == texture.T_half_float:
+            values = data.view(np.float16).astype(float)
+        else:
+            values = np.frombuffer(texture.get_ram_image_as("RG"), dtype=np.float32)
+        image = values.reshape(height, width, 2)
+        km = image[size[1] // 2, size[0] // 2, 1]
+        from world_builder.depth import DEPTH_REVERSED_11
+
+        # [-1, 1] reversed depth (macOS) keeps about a 24-bit range's
+        # precision: ~6e-8 d / near, 6 % at 1000 km with a 1 m near plane.
+        coarse = reversed_view and depth.mode == DEPTH_REVERSED_11
+        tolerance = max(0.01, 6e-8 * distance / 1.0) if coarse else 0.01
+        assert km == pytest.approx(distance / 1000.0, rel=tolerance)
+    finally:
+        clouds.remove()
+        depth.destroy()
+        wall.remove_node()
+
+
+def depth_size_of(march):
+    from world_builder.clouds.march import depth_size
+
+    return depth_size(march._size)

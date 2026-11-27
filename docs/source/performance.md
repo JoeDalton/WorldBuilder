@@ -2810,6 +2810,77 @@ frame (GPU-synced, so the GPU's share shows), three rounds, before / after, ms:
 pixels one level brighter or darker, beyond two levels as two shots of the same
 tree (0.011 % against 0.007 %).
 
+## 39. One reversed-Z camera instead of the split (#57 spike, 2026-11-27)
+
+A throw-away script (FRAME_COST_PLAN.md, Task 6) turned the demo's split
+cameras into one at run time, the sky, the terrain and the sea's reflection
+drawn (clouds and fields hidden; the reflection could not be: `Sea.update`
+turns its buffer back on whenever the sea is in view): the app's camera seeing
+both camera bits, its
+lens `set_near_far(inf, 1)` (Panda 1.10.16 makes that a reversed, infinite
+projection: near at +1, far at -1, mapped to 1 and 0 with
+`gl-depth-zero-to-one`), "greater" depth test, depth cleared to 0, culling to
+the split's own far distance (`frustum_bounds` of a finite copy of the lens),
+the scene in an offscreen buffer of its own (32-bit float depth; Panda's
+default framebuffer properties cannot be changed from code, so a game asks for
+it when it makes its window or scene buffer). The sky and its stars were pinned
+at the reversed far plane (depth 0, copies of their vertex stages) and drawn
+after the ground, "greater or equal" against the cleared 0; the sea's
+reflection camera got the same reversed lens and a depth cleared to 0.
+
+Two things the first try got wrong, kept as the migration's warnings:
+- *The sky drawn first without depth* let the stars (its child, in their own
+  bin after the ground) draw over the moon. Planets hid it: `stars.vert` drops
+  stars where a sky direction meets an atmosphere's ground, so only airless
+  bodies rely on the depth test. Pinned at depth 0 and depth-tested, the stars
+  stop at any body (moon from orbit: identical to the split's).
+- *The sea's reflection left standard* while "greater" sat on render: its
+  ground failed against its depth cleared to 1, and with the sky depth-tested
+  its sky too; the far sea reflected nothing and came out up to 25 levels
+  darker (6.6 % of the pixels at `ground`, 20 % at the tower). Every camera
+  that draws the scene with perspective must take the reversed convention at
+  once.
+
+**Frame** (pipelined, ms, two runs each, same per configuration):
+
+| pose | split | single, 0-1 depth | single, [-1, 1] (macOS) | macOS, scaled near |
+|---|---|---|---|---|
+| ground | 3.19 / 3.21 | 2.99 / 3.01 | 2.97 / 2.98 | 2.98 / 2.98 |
+| sunset | 3.31 / 3.32 | 3.12 / 3.13 | 3.12 / 3.13 | 3.10 / 3.11 |
+| tower (`29.74164 29.82320 2358 0 -8`) | 2.38 / 2.39 | 2.35 / 2.36 | 2.34 / 2.35 | 2.36 / 2.36 |
+| high | 1.72 / 1.73 | 1.68 / 1.69 | 1.69 / 1.69 | 1.69 / 1.69 |
+| orbit | 1.38 / 1.45 | 1.36 / 1.40 | 1.35 / 1.36 | 1.35 / 1.36 |
+
+**Culling** (PStats, per frame): the same Geoms and triangles from 20 km and
+orbit; at the ground 239 Geoms against 266 and 10 % fewer triangles (the chunks
+straddling the split no longer drawn twice), cull 1.02 to 0.70 ms, draw 2.61 to
+2.28 ms. Nothing missing in the shots.
+
+**Look**, against the split's shots: desktop within two shots' own noise
+everywhere (`ground` 0.035 %, `high` 0.008 %, tower 0.011 % of pixels, orbit and
+the moon from orbit identical; at `sunset` 0.56 %, the sun's glint on the sea,
+as between two runs of the same tree). The macOS path breaks only from orbit: the
+coasts and land speckle (0.93 % of pixels, up to 143 levels: the land, sea and
+skirts fighting for depth); a near plane of 1 % of the height above the ground
+(1 m to 1 km) takes it to 6 pixels.
+
+**Verdict: go.** A single camera is no slower anywhere and 0.2 ms faster at
+the ground with the sky and terrain alone; the full scene adds the clouds'
+near-range passes, the haze's second pass and the objects across the split.
+Migration plan: FRAME_COST_PLAN.md, Phase 2.
+
+**The demo on the reversed camera (Task 6.7a, 2026-11-27).** `load_world`
+now draws with one `ReversedDepthCamera`, its view in a float-depth scene
+buffer presented in the window (a window's framebuffer has no float depth: GLX
+offered 24 bits when asked for 32 float). Pipelined, 2560 x 1440, HIGH, two
+rounds each, ms (split / reversed): `ground` 4.92, 5.10 / 4.72, 4.85; `coast`
+4.84, 4.85 / 4.59, 4.64; `sunset` 5.24, 5.27 / 5.00, 5.05; `high` 2.79, 2.80 /
+2.81, 2.82; `orbit` 2.01, 2.03 / 2.05, 2.06. About 0.2-0.25 ms less low over
+the ground; 0.02-0.04 ms more high up and in orbit (the scene buffer's copy to
+the window). Shots against the split's: without clouds at most 0.035 % of
+pixels over 2 levels (two shots of one tree: 0.017-0.06 %); with clouds below
+their own run-to-run difference.
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

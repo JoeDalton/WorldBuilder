@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
 import time
 from pathlib import Path
 
@@ -45,6 +46,9 @@ def window_config(
     make (Panda picks the config with the most samples, x16 on a GTX 1070,
     whatever count is asked for), and it was most of the clouds' cost.
 
+    Clip control (``gl-depth-zero-to-one``) but on macOS: the world's
+    reversed camera keeps a float depth buffer's precision with it.
+
     No transform cache: the world moves around the camera, so every drawn
     node's net transform is new every frame and Panda's cache of composed
     transforms only filled up for its garbage collection to empty (1 ms a
@@ -66,6 +70,10 @@ def window_config(
         "depth-bits 24",
         "transform-cache false",
     ]
+    # The reversed camera's 0-1 depth (clip control): read when the GL
+    # context is made; macOS's OpenGL has none (depth.DEPTH_REVERSED_11).
+    if sys.platform != "darwin":
+        lines.append("gl-depth-zero-to-one #t")
     if not vsync:
         lines.append("sync-video false")
     if offscreen:

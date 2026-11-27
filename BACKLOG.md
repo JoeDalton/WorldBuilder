@@ -74,6 +74,19 @@ out:
   grazing the planet's limb is not reddened: the planet's shadow on the
   ring has a penumbra but no red edge.
 
+## Sky
+
+- **A black band at the horizon from low over ground below the base
+  radius** (found 2026-11-27 during the #57 spike; the same with the split
+  cameras and with one reversed-Z camera: 91,248 black pixels, rows 795-912 of
+  2560 x 1440, in both). On the ice planet at `--at -64.8560 -160.1385 7 -152
+  2` (`ice`, the world file's sun, a low one), 7 m above the base radius and
+  2,878 m above the ground around: between the sky and the terrain's horizon a
+  black strip. Likely the sky's ground test (`atmoHitsGround`) takes rays that
+  dip under the base sphere's horizon as hitting the ground, while the real
+  ground there is lower and those rays reach a farther, lower horizon: nothing
+  draws them. Not looked into further.
+
 ## Clouds (shadows' part F, #11)
 
 - **The far cloud deck's rim.** The billboards at the deck's distant rim

@@ -1,4 +1,6 @@
 #version 330
+
+#pragma include "../../shaders/depth_convention.glsl"
 // Lays the raymarch (clouds.march) over one depth range's pass, premultiplied
 // "over", at the cloud's own depth: the scene's depth test then hides it
 // behind anything nearer, pixel by pixel, at the view's resolution (a game's
@@ -44,7 +46,7 @@ bool nearSurfaceAt(ivec2 pixel) {
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             ivec2 tap = clamp(texel + ivec2(x, y), ivec2(0), last);
-            if (texelFetch(uNearDepth, tap, 0).r < 1.0) {
+            if (depthDrawn(texelFetch(uNearDepth, tap, 0).r)) {
                 return true;
             }
         }
@@ -65,12 +67,15 @@ void main() {
     if (cloud.a <= 0.0 || distance <= 0.0) {
         discard;
     }
-    vec4 near = p3d_ProjectionMatrixInverse * vec4(vNdc, -1.0, 1.0);
-    vec4 far = p3d_ProjectionMatrixInverse * vec4(vNdc, 1.0, 1.0);
+    // (p3d_ProjectionMatrix holds the GSG's 0-1 remap under clip control:
+    // its near plane is the convention's too, but at 0 in standard 0-1 depth,
+    // which no camera uses.)
+    vec4 near = p3d_ProjectionMatrixInverse * vec4(vNdc, depthNearZ(), 1.0);
+    vec4 far = p3d_ProjectionMatrixInverse * vec4(vNdc, depthFarNdc(), 1.0);
     vec3 dir = normalize(far.xyz / far.w - near.xyz / near.w);
     vec4 clip = p3d_ProjectionMatrix * vec4(dir * distance, 1.0);
-    // Just short of the cleared depth, or a cloud at the far plane fails the test.
-    float depth = clamp(clip.z / clip.w * 0.5 + 0.5, 0.0, 0.99999);
+    // Just off the cleared depth, or a cloud at the far plane fails the test.
+    float depth = depthOffClear(clamp(depthWindow(clip), 0.0, 1.0));
     // No farther than the scene the march stopped at: everything it returned
     // lies in front of it. The resolved distance lags the fresh samples (the
     // history's mix): flying forward the clouds come nearer each frame, the
@@ -79,7 +84,7 @@ void main() {
     // mountains sliding). The scene's depth does not lag.
     if (uSceneDepthCut != 0) {
         float scene = texelFetch(uSceneDepth, ivec2(gl_FragCoord.xy) / uDepthScale, 0).r;
-        depth = min(depth, scene - 1e-6);
+        depth = depthNoFartherThan(depth, scene);
     }
     gl_FragDepth = depth;
     fragColor = cloud;

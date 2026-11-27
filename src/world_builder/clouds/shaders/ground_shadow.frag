@@ -10,6 +10,7 @@
 // Out: r the sun's share the clouds leave, g the scene's distance there in
 // kilometres (a half float: a part in two thousand), -1 where the depth
 // passes drew nothing (the sky).
+#pragma include "../../shaders/depth_convention.glsl"
 #pragma include "../../atmosphere/shaders/atmosphere.glsl"
 #pragma include "cloud_field.glsl"
 
@@ -37,15 +38,16 @@ vec3 unproject(mat4 clipToRender, vec3 ndc) {
 void main() {
     ivec2 texel = ivec2(gl_FragCoord.xy);
     vec2 ndc = gl_FragCoord.xy / uViewSize * 2.0 - 1.0;
-    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, texel, 0).r : 1.0;
+    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, texel, 0).r
+                                        : depthClear();
     float farDepth = texelFetch(uSceneDepthFar, texel, 0).r;
-    bool near = nearDepth < 1.0;
+    bool near = depthDrawn(nearDepth);
     mat4 toRender = near ? uClipToRender : uClipToRenderFar;
-    vec3 end = unproject(toRender, vec3(ndc, (near ? nearDepth : farDepth) * 2.0 - 1.0));
+    vec3 end = unproject(toRender, vec3(ndc, depthNdc(near ? nearDepth : farDepth)));
     vec3 rel = end - uCamRender;
     // Taken out of any branch (derivatives): this pass's own footprint.
     float local = max(length(dFdx(rel)), length(dFdy(rel))) / float(uDepthScale);
-    if (!near && farDepth >= 1.0) {
+    if (!near && !depthDrawn(farDepth)) {
         fragColor = vec4(1.0, -1.0, 0.0, 1.0);  // the sky
         return;
     }

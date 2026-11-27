@@ -408,6 +408,119 @@ whether Panda 1.10's lenses and culling take a reversed projection cleanly
   clouds), each with its depth-convention tests in both conventions, and
   SpaceFlight's switch from the split cameras as the last.
 
+### Task 6 result: GO (2026-11-27, performance.md §39)
+
+Panda 1.10.16 takes `lens.set_near_far(inf, near)` as a reversed infinite
+projection; culling holds (the same Geoms from 20 km and orbit, fewer at the
+ground: no chunk drawn twice); desktop precision matches the split; the macOS
+path speckles only from orbit, fixed by the altitude-scaled near plane. Only
+sky + terrain: 0.2 ms less at the ground. Two findings shape the migration:
+- **Float depth needs the output made for it.** Panda's default framebuffer
+  properties cannot be changed from code: the scene's output (the game's window
+  via `openMainWindow(fbprops=...)`, or a scene buffer) must ask for
+  `float_depth` and 32 depth bits. `World` checks and logs when it did not
+  (then: 24-bit reversed, about the macOS path's precision).
+- **"Greater" goes on the perspective cameras' initial states, not on
+  render**: the objects' caster map (`shadows/casters.py`, orthographic, its own
+  buffer cleared to 1) draws the same graph and keeps "less".
+
+### Phase 2 migration tasks (6.1-6.8)
+
+Global for these tasks:
+- **Both conventions under test.** `tests/conftest.py` sets
+  `gl-depth-zero-to-one` from `WB_DEPTH_ZERO_TO_ONE` (default 1) before the
+  session's window; CI and the final check run the suite twice (`=1`, `=0`).
+- **One source of the convention:** `world_builder.depth.zero_to_one() -> bool`
+  (the PRC variable as the GSG took it) in Python, and in GLSL
+  `shaders/depth_convention.glsl` (`DEPTH_FAR_Z`, `float depthDistance(float
+  depth, float near)`), its `#define DEPTH_ZERO_TO_ONE` prepended by the
+  shader loader. No other file writes or decodes depth by itself.
+- Each task: failing test first, `pytest -n auto` and `invoke quality` green
+  under both conventions, CHANGELOG, a shot comparison (`terrain_shots.py`,
+  `compare_shots.py`) at ground, sunset, high, orbit against the split.
+
+#### Task 6.1: The single reversed camera (`world_builder/depth.py`)
+- `ReversedDepthCamera(app, near: float = 1.0)`: takes over `app.cam`
+  (mask: every camera bit the split's two cameras had), initial state
+  "greater", its display region clearing depth to 0;
+  `update(far: float, height_above_ground: float) -> None` sets the lens to
+  `(inf, clamp(0.01 * height, near, 1000))` and the cull bounds to
+  `frustum_bounds` of a finite copy reaching *far*; attributes `far`, `near`;
+  `float_depth: bool` (the output's properties); `destroy()` restores the
+  camera.
+- `reversed_lens(lens) -> Lens` and `zero_to_one() -> bool` helpers.
+- Tests: the projection maps near to 1 and far to 0 (or -1 under `=0`); the
+  cull bounds reach *far*; the near plane follows the height within [1 m,
+  1 km]; `destroy` restores mask and clear.
+
+#### Task 6.2: Sky and stars
+- Found in the spike: stars are kept off a planet by `stars.vert`
+  (`atmoHitsGround`), but off an airless body (the moon) only by the depth
+  test: drawn without depth they cover it. Pinned at depth 0 with "greater or
+  equal", after the ground, they are right everywhere (moon shot identical to
+  the split's). Test: a star direction behind the moon from orbit stays dark.
+- `sky.vert`, `stars.vert`: `gl_Position.z = DEPTH_FAR_Z * gl_Position.w`
+  (just inside the far plane in either convention), depth test "greater or
+  equal" (`sky.py`), the sky still drawn after the terrain.
+- Tests: the sky's state's depth test; shaders include
+  `depth_convention.glsl` and pin nothing else.
+
+#### Task 6.3: Terrain and the sea's reflection
+- Found in the spike: the reflection must switch in the same step as the main
+  camera. Left standard with "greater" anywhere above it, its ground and sky
+  fail their depth tests and the far sea (which reflects them) darkens by up
+  to 25 levels. The reversed state goes on each camera's initial state, never
+  on render.
+- The terrain needs nothing (Panda's projection). `ocean/sea.py`'s reflection
+  camera: a reversed copy of the lens, initial state "greater", its buffer
+  cleared to 0 and asking for float depth; its clip plane unchanged.
+- Tests: the reflection camera's lens and state; a coast shot against the split.
+
+#### Task 6.4: Objects, trees, casters
+- Models and trees draw through Panda's projection: no change. The caster
+  map keeps "less" and its own clear (test: its camera's state is not the
+  main one's).
+- Test: a model drawn in front of the terrain at 5 m and at 50 km sorts right
+  (offscreen render, read back).
+
+#### Task 6.5: Asteroids and their haze
+- `haze.vert`'s far clamp through `DEPTH_FAR_Z`; `haze.py`'s depth test
+  "greater or equal"; the haze's near-camera passes (`_near_passes`,
+  `set_split`, `uHazeSplit`, `uHazeToFar`) deleted.
+- Tests: the haze has one pass per bin; the rocks' veil without a split.
+
+#### Task 6.6: The clouds on one depth range
+- `clouds/march.py`: one depth pass (the far and near passes merged), one
+  card; `cloud_march.glsl`, `cloud_resolve.frag`, `cloud_composite.frag`
+  (its `gl_FragDepth`), `ground_shadow.frag` decode through `depthDistance`
+  and read one texture (`uSceneDepth`); `clouds/half_res.py`'s two layer
+  cameras become one; `use_split_depth` becomes `use_depth_camera`.
+- Tests: the existing march tests in both conventions; the depth pass's
+  decode against known distances (offscreen: a quad at 10 m, 10 km, 1000 km).
+
+#### Task 6.7: World wiring and removal of the split
+- **Split in two (2026-11-27):** 6.7a wires the world to the reversed camera
+  (done: `World.use_depth_camera`, `World.view_ranges`, `GameWorld`, a
+  float-depth scene buffer presented in the window, clip control in
+  `tools.window_config`); 6.7b removes the split (`SplitDepthCameras`, the
+  haze's near passes, the clouds' dormant near range). **Order: 6.7a, then
+  6.8 (SpaceFlight off the split), then 6.7b**, or 6.7b breaks SpaceFlight.
+- `GameWorld` builds `ReversedDepthCamera`; `World.depth_ranges` becomes
+  `World.far_distance` plus the height above the nearest ground;
+  `SplitDepthCameras`, `split_clear_of`, `camera_span`, the NEAR/FAR masks'
+  split meaning, and `MIN_SPLIT_M` deleted (the masks kept as aliases of the
+  one camera's for a release, logged as deprecated); docs (`world.md`, the
+  depth module's), CHANGELOG under "Changed" (breaking: games that built
+  `SplitDepthCameras` themselves).
+- Tests: `test_depth.py` rewritten for the new camera; `test_world.py`'s
+  split tests replaced.
+
+#### Task 6.8: SpaceFlight's switch (last; its repo)
+- Its window or scene buffer asks for float depth; its own uses of the
+  split (cameras, masks, post-process) move to the one camera; its
+  `bench_mission3.py` before and after (performance_backlog.md's Mission 3
+  table) and its shots.
+
 ### Task 7: The clouds read the single depth (after Task 6's migration)
 
 With one camera there is one depth buffer. The clouds' far depth pass

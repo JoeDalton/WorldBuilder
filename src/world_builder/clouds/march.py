@@ -66,6 +66,7 @@ from panda3d.core import (
     Camera,
     CardMaker,
     ColorBlendAttrib,
+    DepthTestAttrib,
     FrameBufferProperties,
     GraphicsOutput,
     GraphicsPipe,
@@ -190,13 +191,18 @@ from world_builder.clouds.weather import (
 from world_builder.depth import (
     CLOUD_FAR_BIT,
     CLOUD_NEAR_BIT,
+    DEPTH_REVERSED_01,
+    DEPTH_STANDARD,
     FAR_BIT,
     HIDE_FROM_CLOUD_PASS,
     HIDE_FROM_FAR,
     HIDE_FROM_NEAR,
     NEAR_BIT,
     REFLECTION_CAMERA_MASK,
+    ReversedDepthCamera,
     SplitDepthCameras,
+    depth_mode_input,
+    view_test,
 )
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
 from world_builder.terrain.chart import TangentFrame
@@ -1407,10 +1413,12 @@ def _buffer(
     size: tuple[int, int],
     sort: int,
     targets: dict[int, Texture],
+    float_depth: bool = False,
 ) -> GraphicsOutput:
     """An offscreen buffer drawing into *targets* (render texture plane ->
     texture): half-float colour and a half-float aux plane (the cloud's
-    distance, in kilometres), or a depth texture."""
+    distance, in kilometres), or a depth texture (a float one with
+    *float_depth*: the reversed camera's precision)."""
     props = FrameBufferProperties()
     if GraphicsOutput.RTP_color in targets:
         props.set_rgba_bits(16, 16, 16, 16)
@@ -1419,7 +1427,11 @@ def _buffer(
         props.set_rgba_bits(8, 8, 8, 8)
     if GraphicsOutput.RTP_aux_hrgba_0 in targets:
         props.set_aux_hrgba(1)
-    props.set_depth_bits(24 if GraphicsOutput.RTP_depth in targets else 0)
+    if GraphicsOutput.RTP_depth in targets:
+        props.set_depth_bits(32 if float_depth else 24)
+        props.set_float_depth(float_depth)
+    else:
+        props.set_depth_bits(0)
     buffer = app.graphicsEngine.make_output(
         app.pipe,
         name,
@@ -1493,6 +1505,29 @@ class _ResolveInputs:
         self.still = PTA_float.empty_array(1)
 
 
+#: OpenGL's [-1, 1] clip z to clip control's 0-1 (row vectors, as Panda's):
+#: z' = (z + w) / 2, what the GSG does to every projection under
+#: gl-depth-zero-to-one.
+_ZERO_TO_ONE = LMatrix4f(
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.5,
+    0.0,
+    0.0,
+    0.0,
+    0.5,
+    1.0,
+)
+
+
 class _DepthPass:
     """The scene's depth in one depth range, at the view's resolution, for
     the march to stop at (and, the near range's, for the composites to tell
@@ -1508,9 +1543,11 @@ class _DepthPass:
         view: tuple[int, int],
         sort: int,
         states: tuple[RenderState, RenderState],
+        depth_mode: int = DEPTH_STANDARD,
     ) -> None:
         self.lens = lens
         self.depth = _target(f"{name}_depth")
+        reversed_depth = depth_mode != DEPTH_STANDARD
         self.buffer = _buffer(
             app,
             output,
@@ -1518,11 +1555,16 @@ class _DepthPass:
             view,
             sort,
             {GraphicsOutput.RTP_depth: self.depth},
+            float_depth=reversed_depth,
         )
         self.buffer.set_clear_color_active(False)
         self.buffer.set_clear_depth_active(True)
+        self.buffer.set_clear_depth(0.0 if reversed_depth else 1.0)
+        initial, terrain = states
+        if reversed_depth:
+            initial = initial.set_attrib(DepthTestAttrib.make(view_test(depth_mode)))
         self.camera = pass_camera(
-            app, f"{name}_depth", lens, bit, *states, 1.0 / DEPTH_SCALE
+            app, f"{name}_depth", lens, bit, initial, terrain, 1.0 / DEPTH_SCALE
         )
         self.buffer.make_display_region().set_camera(self.camera)
 
@@ -1589,9 +1631,11 @@ class _MarchLayer:
         ground: Texture | None = None,
         recipes: bool = False,
         high: bool = False,
+        depth_mode: int = DEPTH_STANDARD,
     ) -> None:
         self.lens = near_lens
         self.far_lens = far_lens
+        self.depth_mode = depth_mode
         self.block = block
         self.gather = gather
         #: (still, moving): the block traced still and while moving
@@ -1612,6 +1656,7 @@ class _MarchLayer:
             depth_size(view),
             sort,
             states,
+            depth_mode,
         )
         self.near_depth = _DepthPass(
             app,
@@ -1622,6 +1667,7 @@ class _MarchLayer:
             depth_size(view),
             sort + 1,
             states,
+            depth_mode,
         )
         self.camera = self.near_depth.camera  # both follow the app's camera
         # Whether the near range's depth pass runs (the march and the cards
@@ -1708,7 +1754,7 @@ class _MarchLayer:
                 app, f"{name}_composite_{side}", self.colour, shown_to
             )
             card.set_shader(_shader("cloud_composite.vert", "cloud_composite.frag"))
-            card.set_depth_test(True)
+            card.set_attrib(DepthTestAttrib.make(view_test(depth_mode)))
             own = self.near_depth if side == "near" else self.far_depth
             card.set_shader_inputs(
                 uNearDepth=self.near_depth.depth,
@@ -1719,6 +1765,13 @@ class _MarchLayer:
                 uSceneDepthCut=self.scene_cut,
             )
             self.composites.append(card)
+        # The depth convention (depth_convention.glsl) on every pass that
+        # reads or writes depth: the shared mode the view's camera sets.
+        cards = [self.card, *(r.card for r in self.resolves), *self.composites]
+        if self.ground is not None:
+            cards.append(self.ground.card)
+        for card in cards:
+            card.set_shader_input("uDepthMode", depth_mode_input())
         # The per-frame inputs, bound once and written in place by update:
         # new values given as inputs would make each card a new render state
         # every frame. Until the first update they hold neutral values.
@@ -1897,7 +1950,17 @@ class _MarchLayer:
             history's jump limit grows with it)
         """
         projection = self.lens.get_projection_mat()
-        unproject = self.lens.get_projection_mat_inv()
+        far_unproject = self.far_lens.get_projection_mat_inv()
+        if self.depth_mode == DEPTH_REVERSED_01:
+            # The view's own clip space under clip control: the GSG's 0-1
+            # remap in, so a depth texel is its z as it is (exact for small
+            # reversed depths: depth_convention.glsl's depthNdc).
+            projection = projection * _ZERO_TO_ONE
+            far = LMatrix4f(self.far_lens.get_projection_mat()) * _ZERO_TO_ONE
+            far_unproject = LMatrix4f(far)
+            far_unproject.invert_in_place()
+        unproject = LMatrix4f(projection)
+        unproject.invert_in_place()
         placed = self.camera.get_mat(app.render)
         turned = LMatrix4f(placed)
         turned.set_row(3, LVecBase3f(0.0, 0.0, 0.0))
@@ -1905,7 +1968,7 @@ class _MarchLayer:
         rel_to_clip.invert_in_place()
         rel_to_clip = rel_to_clip * projection
         self._clip_to_render[0] = unproject * placed
-        self._clip_to_render_far[0] = self.far_lens.get_projection_mat_inv() * placed
+        self._clip_to_render_far[0] = far_unproject * placed
 
         valid = self._previous is not None
         previous = rel_to_clip
@@ -2366,7 +2429,8 @@ class CloudMarch:
         self._ground_on = PTA_int.empty_array(1)
         self._ground_binders: list[Any] = []
         self._app: Any = None
-        self._depth: SplitDepthCameras | None = None
+        self._depth: SplitDepthCameras | ReversedDepthCamera | None = None
+        self._single = False  # attached to a ReversedDepthCamera
         self._layers: list[_MarchLayer] = []
         self._size = (0, 0)
         self._visible = True
@@ -2471,16 +2535,22 @@ class CloudMarch:
         for node in self._nodes:
             node.set_shader_inputs(**inputs)
 
-    def attach(self, app: Any, depth: SplitDepthCameras) -> None:
-        """Build the march's passes, over both depth ranges of *depth* (see the
-        module). Build the split cameras first; call again after a new set.
+    def attach(self, app: Any, depth: SplitDepthCameras | ReversedDepthCamera) -> None:
+        """Build the march's passes, over both depth ranges of the split
+        cameras *depth* (see the module), or over the one reversed camera's
+        whole range (its far range's passes alone, through its lens). Build
+        the cameras first; call again after a new set.
 
         :param app: the ShowBase (``camera``, ``render``, ``graphicsEngine``,
             ``pipe``)
-        :param depth: the game's split cameras
+        :param depth: the game's split cameras or reversed camera
         """
         self.detach()
         self._app, self._depth = app, depth
+        self._single = isinstance(depth, ReversedDepthCamera)
+        mode = depth.mode if self._single else DEPTH_STANDARD
+        # The decks drawn in the sea's reflection: the view's test.
+        self.root.set_attrib(DepthTestAttrib.make(view_test(mode)))
         self._build_layers()
 
     def detach(self) -> None:
@@ -2496,12 +2566,17 @@ class CloudMarch:
         app, depth = self._app, self._depth
         self._size = self._view_size()
         block = block_of(self._settings.march_block)
+        if self._single:  # one lens for the view, its "near" range never on
+            near_lens = far_lens = depth.lens
+            mode = depth.mode
+        else:
+            near_lens, far_lens, mode = app.camLens, depth.far_lens, DEPTH_STANDARD
         layer = _MarchLayer(
             app,
             depth.output,
             "cloud_march",
-            app.camLens,
-            depth.far_lens,
+            near_lens,
+            far_lens,
             self._size,
             block,
             _FIRST_SORT,
@@ -2515,6 +2590,7 @@ class CloudMarch:
             ground=self._ground_texture,
             recipes=any(genus.recipe is not None for genus in self._genera),
             high=bool(self._high),
+            depth_mode=mode,
         )
         self._bind(layer.card)
         self._bind(layer.ground.card)
@@ -2525,7 +2601,7 @@ class CloudMarch:
         self._layers.append(layer)
 
     def _view_size(self) -> tuple[int, int]:
-        region = self._depth.near_region
+        region = self._depth.region if self._single else self._depth.near_region
         return (max(region.get_pixel_width(), 1), max(region.get_pixel_height(), 1))
 
     # ── settings ──────────────────────────────────────────────────────────
@@ -2900,8 +2976,12 @@ class CloudMarch:
             # The near range's depth pass and card run only when the slab
             # reaches into it.
             slab_distance = self._slab_distance(cam)
-            near_wanted = slab_distance <= self._depth.split * 1.01
-            self._split[0] = self._depth.split
+            if self._single:  # one range: its "far" passes cover all of it
+                near_wanted, split = False, 0.0
+            else:
+                split = self._depth.split
+                near_wanted = slab_distance <= split * 1.01
+            self._split[0] = split
             for layer in self._layers:
                 if near_wanted != layer.near:
                     layer.set_near(near_wanted)

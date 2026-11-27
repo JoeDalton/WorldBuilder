@@ -42,6 +42,7 @@ Positions are metres in the world frame; the game places its camera there.
 from __future__ import annotations
 
 import functools
+import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,7 +59,7 @@ from world_builder.config import (
     load_document,
     to_config,
 )
-from world_builder.depth import SplitDepthCameras
+from world_builder.depth import ReversedDepthCamera
 from world_builder.settings import WorldSettings
 from world_builder.terrain.planet import PlanetSpec
 from world_builder.world import (
@@ -95,6 +96,8 @@ SHIPPED_FIELDS = ("asteroid_cube", "asteroid_icy_ball", "ring")
 
 _TOP = {"sun", "sky", "space_ambient", "bodies", "fields"}
 _BODY_ONLY = {"planet", "mass", "density"}
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -291,15 +294,20 @@ class GameWorld:
     :ivar spec: what the file defined
     :ivar world: the :class:`World`: bodies, fields, sky, lights, gravity,
         collisions (see its docs)
-    :ivar depth: the split cameras
+    :ivar depth: the reversed camera (:class:`~world_builder.depth.ReversedDepthCamera`)
     """
 
     def __init__(self, app: Any, spec: WorldSpec, world: World) -> None:
         self.app = app
         self.spec = spec
         self.world = world
-        self.depth = SplitDepthCameras(app, near=1.0)
-        world.use_split_depth(self.depth)
+        self.depth = ReversedDepthCamera(app, near=1.0)
+        if not self.depth.float_depth:
+            LOGGER.warning(
+                "the window has no float depth buffer: depth precision is a "
+                "24-bit range's (open it with depth.float_depth_fbprops())"
+            )
+        world.use_depth_camera(self.depth)
 
     def body(self, name: str):
         """:returns: the built body called *name* (:meth:`World.body`)"""
@@ -316,7 +324,7 @@ class GameWorld:
         :param origin_world: the camera's position in the world frame, metres
             (float64; the camera itself stays at render's origin)
         """
-        self.depth.update(*self.world.depth_ranges(origin_world))
+        self.depth.update(*self.world.view_ranges(origin_world))
         self.world.update(origin_world, far=self.depth.far)
 
     def destroy(self) -> None:

@@ -78,7 +78,13 @@ from panda3d.core import (
 from world_builder.asteroids.distributions import interpolate
 from world_builder.asteroids.population import FAR_FADE
 from world_builder.asteroids.spec import Annulus, Box, FieldShape, FieldSpec, Sphere
-from world_builder.depth import HIDE_FROM_FAR, HIDE_FROM_NEAR
+from world_builder.depth import (
+    DEPTH_STANDARD,
+    HIDE_FROM_FAR,
+    HIDE_FROM_NEAR,
+    depth_mode_input,
+    far_plane_test,
+)
 from world_builder.sky.sky import SKY_BIN, ensure_sky_bin
 
 if TYPE_CHECKING:
@@ -557,7 +563,10 @@ class FieldHaze:
             )
         )
         node.set_depth_write(False)
-        node.set_attrib(DepthTestAttrib.make(DepthTestAttrib.M_less_equal))
+        # The hull's far vertices sit on the far plane (haze.vert): the
+        # camera's test with equality, by the shared depth mode.
+        node.set_shader_input("uDepthMode", depth_mode_input())
+        self.set_depth_mode(DEPTH_STANDARD)
         node.set_attrib(CullFaceAttrib.make(CullFaceAttrib.M_cull_none))
         node.set_attrib(
             ColorBlendAttrib.make(
@@ -646,6 +655,12 @@ class FieldHaze:
                 near.unstash()
             else:
                 near.stash()
+
+    def set_depth_mode(self, mode: int) -> None:
+        """The depth convention the view draws with
+        (:mod:`world_builder.depth`): the hull's far-plane test of *mode*.
+        Its shaders read the shared ``uDepthMode`` themselves."""
+        self.node.set_attrib(DepthTestAttrib.make(far_plane_test(mode)))
 
     def set_cover(self, cover: float) -> None:
         """The rocks' mean projected area over their bounding disc's."""

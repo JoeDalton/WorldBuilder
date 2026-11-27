@@ -1,4 +1,6 @@
 #version 330
+
+#pragma include "../../shaders/depth_convention.glsl"
 // The raymarch's full resolution (clouds.march), gathered over the frames:
 // cloud_march.frag traces one pixel of every uBlock.x x uBlock.y block a frame;
 // every pixel here blends this frame's samples around it (reconstructed
@@ -98,17 +100,18 @@ const float SKY_DISTANCE = 1.0e9;
 float sceneDistance(ivec2 viewPixel) {
     ivec2 depthPixel = viewPixel / uDepthScale;
     vec2 ndc = (vec2(viewPixel) + 0.5) / uViewSize * 2.0 - 1.0;
-    vec4 near = uClipToRender * vec4(ndc, -1.0, 1.0);
-    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, depthPixel, 0).r : 1.0;
+    vec4 near = uClipToRender * vec4(ndc, depthNearZ(), 1.0);
+    float nearDepth = uNearDepthOn != 0 ? texelFetch(uSceneDepthNear, depthPixel, 0).r
+                                        : depthClear();
     vec4 p;
-    if (nearDepth < 1.0) {
-        p = uClipToRender * vec4(ndc, nearDepth * 2.0 - 1.0, 1.0);
+    if (depthDrawn(nearDepth)) {
+        p = uClipToRender * vec4(ndc, depthNdc(nearDepth), 1.0);
     } else {
         float farDepth = texelFetch(uSceneDepthFar, depthPixel, 0).r;
-        if (farDepth >= 1.0) {
+        if (!depthDrawn(farDepth)) {
             return SKY_DISTANCE;
         }
-        p = uClipToRenderFar * vec4(ndc, farDepth * 2.0 - 1.0, 1.0);
+        p = uClipToRenderFar * vec4(ndc, depthNdc(farDepth), 1.0);
     }
     return length(p.xyz / p.w - near.xyz / near.w);
 }
@@ -118,8 +121,8 @@ float depthWeight(float other, float own) {
 }
 
 vec3 rayDir(vec2 ndc) {
-    vec4 near = uClipToRel * vec4(ndc, -1.0, 1.0);
-    vec4 far = uClipToRel * vec4(ndc, 1.0, 1.0);
+    vec4 near = uClipToRel * vec4(ndc, depthNearZ(), 1.0);
+    vec4 far = uClipToRel * vec4(ndc, depthFarNdc(), 1.0);
     return normalize(far.xyz / far.w - near.xyz / near.w);
 }
 

@@ -38,6 +38,7 @@ from panda3d.core import (
 
 from world_builder.atmosphere import Atmospheres, bind_defaults
 from world_builder.atmosphere.sky_view import SkyView, bind_sky_view_defaults
+from world_builder.depth import DEPTH_STANDARD, depth_mode_input, far_plane_test
 from world_builder.quality import REBUILD, QualityLevel, QualitySettings, knob
 from world_builder.shadows import SUN_ANGULAR_RADIUS
 from world_builder.shadows import bind_defaults as bind_shadow_defaults
@@ -173,7 +174,10 @@ class Sky:
         ensure_sky_bin()
         self.node.set_bin(SKY_BIN, 0)
         self.node.set_depth_write(False)
-        self.node.set_attrib(DepthTestAttrib.make(DepthTestAttrib.M_less_equal))
+        # Its vertices sit on the far plane (depth_convention.glsl): the
+        # camera's test with equality, by the shared depth mode.
+        self.node.set_shader_input("uDepthMode", depth_mode_input())
+        self.set_depth_mode(DEPTH_STANDARD)
         self.node.set_light_off()
         self.node.set_two_sided(True)
         bind_defaults(self.node)
@@ -234,6 +238,13 @@ class Sky:
     def settings(self) -> SkySettings:
         """What the sky costs (:meth:`set_settings`)."""
         return self._settings
+
+    def set_depth_mode(self, mode: int) -> None:
+        """The depth convention the view draws with
+        (:mod:`world_builder.depth`): the far-plane test of *mode* on the
+        sphere, its stars inheriting it. The shaders read the shared
+        ``uDepthMode`` themselves."""
+        self.node.set_attrib(DepthTestAttrib.make(far_plane_test(mode)))
 
     def set_settings(self, settings: SkySettings) -> None:
         """Change what the sky costs: the star share live, the glow's size

@@ -722,3 +722,49 @@ def test_sky_settings_thin_the_stars(showbase):
         assert np.all(np.diff(flux) <= 0)
     finally:
         sky.remove()
+
+
+def test_the_sea_reflection_follows_the_depth_mode(window, sea):
+    """With the reversed camera the mirror's camera is reversed too (its lens
+    infinite, "greater", depth cleared to 0), or its ground and sky fail their
+    depth tests and the far sea darkens (performance.md §39); back to the
+    split's depth it is as it was. Its clip plane stays."""
+    import math
+
+    from panda3d.core import ClipPlaneAttrib, DepthTestAttrib
+
+    from world_builder.depth import DEPTH_REVERSED_01, DEPTH_STANDARD
+
+    made, _, camera = sea
+    node = made.refl_cam_node
+    lens = node.get_lens()
+    near, far = lens.get_near(), lens.get_far()
+    made.set_depth_mode(DEPTH_REVERSED_01)
+    made.update(camera)
+    assert math.isinf(lens.get_near()) and lens.get_far() == pytest.approx(near)
+    state = node.get_initial_state()
+    assert state.get_attrib(DepthTestAttrib).get_mode() == DepthTestAttrib.M_greater
+    assert state.has_attrib(ClipPlaneAttrib)
+    assert made.refl_buffer.get_clear_depth() == 0.0
+    # culled at the old reach, not at infinity
+    bounds = node.get_cull_bounds()
+    reach = max(bounds.get_point(i).length() for i in range(8))
+    assert far <= reach < 4.0 * far
+    window.graphicsEngine.render_frame()
+    made.set_depth_mode(DEPTH_STANDARD)
+    assert (lens.get_near(), lens.get_far()) == pytest.approx((near, far))
+    state = node.get_initial_state()
+    assert not state.has_attrib(DepthTestAttrib) and state.has_attrib(ClipPlaneAttrib)
+    assert made.refl_buffer.get_clear_depth() == 1.0
+
+
+def test_a_rebuilt_reflection_keeps_the_depth_mode(window, sea):
+    from dataclasses import replace
+
+    from world_builder.depth import DEPTH_REVERSED_11, DEPTH_STANDARD
+
+    made, _, _ = sea
+    made.set_depth_mode(DEPTH_REVERSED_11)
+    made.set_settings(replace(made.settings, reflection_scale=0.5))
+    assert made.refl_buffer.get_clear_depth() == 0.0
+    made.set_depth_mode(DEPTH_STANDARD)
