@@ -85,7 +85,8 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 - The clouds' depth pass and what served only it: `clouds.passes.pass_states`
   and `pass_camera`, the terrain's depth-only stage (`depth_only_shader`,
   `terrain_depth.frag`, `PASS_TAG`), the trees' `pass_state` and
-  `IMPOSTOR_TAG`, `depth.CLOUD_NEAR_BIT`, `CLOUD_FAR_BIT`,
+  `IMPOSTOR_TAG` (and the impostors' coarser-target sprites:
+  `uPointScale`), `depth.CLOUD_NEAR_BIT`, `CLOUD_FAR_BIT`,
   `HIDE_FROM_CLOUD_PASS`.
 - `cloud_bench.py --passes` has no `-near` / `-depth` columns.
 

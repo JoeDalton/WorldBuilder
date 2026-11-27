@@ -227,7 +227,6 @@ class Trees:
         root.set_shader_input("uImpostors", table)
         root.set_shader_input("uFrames", self._frames)
         root.set_shader_input("uPixelScale", self._pixel_scale)
-        root.set_shader_input("uPointScale", 1.0)
 
     # ── per LOD pass ───────────────────────────────────────────────────────
 
