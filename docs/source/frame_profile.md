@@ -30,6 +30,16 @@ demo's printed camera lines as poses (`at1`, `at2`...).
     its samples at 8 against 2, scaled linearly to all 8.
   Parts overlap (atmo is inside terrain and sky), and a part's cost includes its
   CPU's when the frame is CPU-bound. Run to run: 0.3-0.5 ms.
+- **Serialized against pipelined.** The read back after each step makes the
+  GPU finish before the next step starts, so the default mode's frame is the
+  CPU's step *plus* the GPU's frame (11 ms at `ground` in November 2026, where
+  the game ran at 6.2). It ranks GPU parts against each other. A game's frame
+  overlaps the two and takes the slower: `--pipelined` times that (400 free
+  steps, then 100 synced ones for **step**). A frame close to its step is
+  CPU-bound; one above it, GPU-bound. `--terrain-passes` adds the terrain's
+  cost in each camera pass (`t_near`, `t_far`, `t_refl`, `t_cldnear`,
+  `t_cldfar`); **asteroids** is the fields' per-frame update. Run to run,
+  pipelined: 0.1-0.15 ms. Measurements: [performance.md §38](performance.md).
 - `scripts/flight_bench.py --flight low --trace`: the CPU's parts in flight.
 
 ## The frame, per pose (2560 x 1440, HIGH)

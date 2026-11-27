@@ -413,3 +413,30 @@ def test_the_haze_follows_the_drawing_scale():
     assert model.start(ppr, min_pixels, 1e9) == pytest.approx(
         RING.sizes.lo * 2.0 * ppr / (FADE_MIDDLE * min_pixels)
     )
+
+
+def test_the_missing_table_is_made_again_only_when_its_inputs_change(
+    window, ring, monkeypatch
+):
+    """What is missing at each distance depends on the pixel scale, the
+    smallest size drawn and the classes' limits, not on the camera: a frame
+    with the same three keeps the table (it cost ~0.3 ms a frame for a ring
+    seen from another planet)."""
+    haze = ring.haze
+    calls = []
+    real = haze.model.missing
+
+    def missing(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(haze.model, "missing", missing)
+    limits = np.array([1000.0] * len(haze.model.class_lo))
+    haze.update(np.array([1.0, 2.0, 3.0]), limits, 800.0, 2.0)
+    haze.update(np.array([5.0, 6.0, 7.0]), limits, 800.0, 2.0)
+    assert len(calls) == 1
+    assert tuple(haze._cam[0]) == (5.0, 6.0, 7.0)  # the camera still follows
+    haze.update(np.array([5.0, 6.0, 7.0]), limits * 2.0, 800.0, 2.0)
+    haze.update(np.array([5.0, 6.0, 7.0]), limits * 2.0, 900.0, 2.0)
+    haze.update(np.array([5.0, 6.0, 7.0]), limits * 2.0, 900.0, 3.0)
+    assert len(calls) == 4

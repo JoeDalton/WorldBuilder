@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/frame_profile.py --pipelined`: frames timed as a game runs them,
+  the CPU and the GPU overlapping (the frame is the slower of the two),
+  with the CPU's step still GPU-synced beside it. The default mode's frame
+  is the CPU and the GPU added together (11 ms at `ground` where the game
+  takes 6.2). `--terrain-passes` adds the terrain's cost per camera pass
+  (the main view's near and far cameras, the sea's reflection, the clouds'
+  two depth passes); a new part, `asteroids`, is the fields' per-frame
+  update (CPU only).
+
+### Changed
+
+- An asteroid field or ring out of the camera's reach does no per-frame work
+  for its rocks once it has let them go (`AsteroidField.out_of_reach`; its
+  haze still follows the camera). The demo's ring, around a planet 60,000 km
+  away, took ~1.1 ms of every frame on the home planet: frames 1.0-1.15 ms
+  shorter there (`ground` 6.20 to 5.14 ms, 2560 x 1440, HIGH).
+- A field's haze makes its table of the light of the rocks not drawn only
+  when the pixel scale, the smallest size drawn or the classes' limits
+  change, not every frame: 0.3 ms less a frame inside a field
+  (`asteroid_bench.py --field asteroid_cube`: cruise 2.11 to 1.77 ms).
+- The ground's materials (terrain and rocks drawn with its textures) no
+  longer read their normal, roughness and occlusion texture past 600 m,
+  where the normal map has faded out: each layer's mean roughness and
+  occlusion stand in (`MaterialSet.mean_rough_ao`, `uMeanRoughAO`). 0.17 ms
+  of GPU at `ground`, 0.36 ms at `sunset`; the far ground changes by one
+  level in 255 at most on 15 % of pixels.
 
 ## [0.5.0] 2026-11-22
 

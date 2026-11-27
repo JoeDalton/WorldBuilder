@@ -489,3 +489,15 @@ def test_placeholder_tiles_seamlessly():
         wrap = np.abs(image[0] - image[-1]).mean()
         inner = np.abs(np.diff(image, axis=0)).mean()
         assert wrap < 3.0 * inner
+
+
+def test_each_layer_has_its_mean_roughness_and_occlusion(tmp_path):
+    """Past the normal map's fade the ground takes each layer's mean
+    roughness and ambient occlusion instead of reading its texture: the means
+    of the packed channels, 0-1."""
+    m = materials.load_materials(tmp_path)
+    assert m.mean_rough_ao.shape == (len(BIOMES), 2)
+    packed = m.normal_rough_ao[..., 2:4].reshape(len(BIOMES), -1, 2)
+    np.testing.assert_allclose(
+        m.mean_rough_ao, packed.mean(axis=1) / 255.0, atol=1.0 / 255.0
+    )

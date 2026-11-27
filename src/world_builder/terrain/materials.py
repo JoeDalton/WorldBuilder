@@ -110,6 +110,8 @@ class MaterialSet:
     :ivar tile_m: (6,) metres per repeat
     :ivar mean_albedo: (6, 3) linear mean colour, drawn instead of the
         textures far away
+    :ivar mean_rough_ao: (6, 2) mean roughness and ambient occlusion, 0-1:
+        taken instead of the normal map's texture past its fade
     :ivar sources: per biome, a description of what was loaded
     """
 
@@ -117,6 +119,7 @@ class MaterialSet:
     normal_rough_ao: np.ndarray
     tile_m: np.ndarray
     mean_albedo: np.ndarray
+    mean_rough_ao: np.ndarray
     sources: dict[str, str]
 
 
@@ -195,7 +198,12 @@ def load_materials(
             ", ".join(f"{kind}={path.name}" for kind, path in sorted(maps.items()))
             or "placeholder"
         )
-    return MaterialSet(albedo_height, normal_rough_ao, tile_m, mean_albedo, sources)
+    mean_rough_ao = (
+        normal_rough_ao[..., 2:4].reshape(len(BIOMES), -1, 2).mean(axis=1) / 255.0
+    )
+    return MaterialSet(
+        albedo_height, normal_rough_ao, tile_m, mean_albedo, mean_rough_ao, sources
+    )
 
 
 # ── placeholders ───────────────────────────────────────────────────────────────

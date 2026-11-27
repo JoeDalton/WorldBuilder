@@ -96,7 +96,9 @@ ships' shadows (~0.4 ms), the cirrus (no change).
   pixels whose near segment meets the slab (a coarse test of the segment
   against the slab's shell, before the march) would leave the clouds as
   they are.
-- **Panda's state changes in the draw** (3 ms): shader inputs and textures
+- **Panda's state changes in the draw** (measured 2026-11-26, performance.md
+  §38: a transform shared by a cell's chunks saves ~0.2 ms, one node less per
+  chunk nothing; the cost is the draws' count, chunks times passes) (3 ms): shader inputs and textures
   set per draw. Fewer distinct states (the ships share their materials'
   textures; the terrain's chunks share one state) would cut them.
 - **The game's bots' flight model** (SpaceFlight, ~1.5 ms): every ship's

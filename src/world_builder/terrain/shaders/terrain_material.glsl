@@ -7,6 +7,8 @@
 uniform sampler2DArray uAlbedoH;  // sRGB albedo + height
 uniform sampler2DArray uNormRA;   // normal xy, roughness, ao
 uniform float uTileM[6];          // metres per texture repeat
+uniform vec2  uMeanRoughAO[6];    // each layer's mean roughness and occlusion:
+                                  // its uNormRA texels past the normal's fade
 uniform float uBlendDepth;        // biome transition softness: ~0.1 crisp
                                   // height-cut edges, >= 1 smooth crossfades
 
@@ -54,7 +56,10 @@ void layeredMaterial(float w[6], vec2 uv, float height, vec3 N, vec3 Tu, vec3 Tv
         float scale = 1.0 / uTileM[i];
         vec4 ah = mix(sampleLayer(uAlbedoH, uv, gx, gy, scale, i),
                       sampleLayer(uAlbedoH, uv, gx, gy, scale / MACRO_SCALE, i), macro);
-        vec4 nra = sampleLayer(uNormRA, uv, gx, gy, scale, i);
+        // Past the normal's fade only its roughness and occlusion are left,
+        // read from the texture's far mipmaps: their means instead (no fetch).
+        vec4 nra = normalFade > 0.0 ? sampleLayer(uNormRA, uv, gx, gy, scale, i)
+                                    : vec4(0.5, 0.5, uMeanRoughAO[i]);
         if (i == ROCK && tri.z < 0.98) {
             ah = ah * tri.z
                + sampleLayer(uAlbedoH, sideX, sxGx, sxGy, scale, i) * tri.x

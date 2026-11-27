@@ -2730,6 +2730,86 @@ read with a cubic B-spline, four reads instead of two. At 2560x1440 HIGH,
 frame / clouds: `genera_cb` 9.19 / 4.53 → 9.20 / 4.63 ms, the anvil pose
 8.49 / 5.54 → 8.33 / 5.37 ms (noise).
 
+## 38. The frame is CPU-bound: what the CPU spends it on (2026-11-26)
+
+RTX 3070, 5600X, 2560 x 1440, HIGH, offscreen, GPU at P0. The plan and its
+diagnosis: FRAME_COST_PLAN.md.
+
+**Pipelined, not serialized.** frame_profile.py's frames were GPU-synced, so
+its frame was the CPU's step plus the GPU's frame (11 ms at `ground`). Timed
+as a game runs (`--pipelined`), the frame was 6.2 ms there, equal to the CPU's
+step: the CPU bounds it. Skipping the asteroid fields' update (pure CPU) took
+the frame down by as much as the step (6.15 to 5.02 ms), so the GPU was under
+~5 ms. GPU work only pays below that.
+
+**Baseline** (`frame_profile.py --offscreen --pipelined --terrain-passes`, ms;
+the terrain's columns: hidden from one camera at a time):
+
+| pose | frame | step | terrain | t_near | t_far | t_refl | t_cldnear | t_cldfar | asteroids |
+|---|---|---|---|---|---|---|---|---|---|
+| ground | 6.20 | 6.69 | 2.71 | 0.18 | 0.81 | 0.71 | -0.23 | 0.44 | 1.00 |
+| coast | 6.02 | 6.48 | 2.64 | -0.15 | 0.86 | 0.62 | 0.16 | 1.04 | 1.14 |
+| sunset | 6.30 | 6.32 | 3.05 | 0.28 | 0.68 | 0.70 | 0.28 | 1.04 | 1.11 |
+| high | 3.85 | 3.84 | 0.91 | -0.02 | 0.26 | 0.00 | -0.05 | 0.54 | 1.13 |
+
+One run's per-pass parts are noisy (0.2-0.3 ms); an earlier run of the same
+split gave the clouds' far depth pass 0.85-0.95, the main far range 0.73, the
+reflection 0.55-0.6, the main near 0.1-0.3, the clouds' near depth 0.1-0.2.
+The terrain's cost is nearly all CPU: Panda's cull and draw per chunk per
+pass (PStats at `ground`: Draw 3.9 ms, Set State 1.85 of it; 531 Geoms, 1045
+transform changes a frame).
+
+**The asteroid ring, 60,000 km away: 1.0-1.15 ms a frame**, though nothing of
+it is drawn from the home planet. Its population walked its windows every
+frame (0.6 ms) and its haze remade its table of what is missing (0.4 ms).
+Now a field out of reach, its rocks let go, skips its population
+(`AsteroidField.out_of_reach`), and the haze keeps its table while the pixel
+scale, the smallest size and the limits hold (the camera is not an input):
+
+| pose | frame before | after |
+|---|---|---|
+| ground | 6.20 | 5.14 |
+| coast | 6.02 | 4.86 |
+| sunset | 6.30 | 5.33 |
+| high | 3.85 | 2.82 |
+
+Inside a field the haze's table is kept too (`asteroid_bench.py --field
+asteroid_cube --offscreen`, median frame ms, before / after): cruise 2.11 /
+1.77, sweep 1.96 / 1.62, outside 2.37 / 2.05.
+
+**Panda's per-chunk overhead: two cuts tried, neither kept** (a throw-away
+hack, `ground`, pipelined, two runs each, ms):
+
+- *A shared transform.* Each chunk's offset from its cell baked into its
+  vertices at upload, its node left at the identity, so the chunks of a cell
+  share the cell's transform (cell-relative float32 keeps ~2 mm at 32 km; the
+  trees' impostors given the offset instead): 5.01 / 5.00 to 4.83 / 4.81, and
+  4.66 / 4.62 to 4.44 / 4.53 with the vegetation off. About 0.2 ms, against the
+  shader changes it needs (the chunk-relative position from the chunk table)
+  and the impostors' placement: not worth it. Most of the per-draw cost is
+  not the transform.
+- *One node less per chunk* (the fine and coarse GeomNodes straight under the
+  cell, no chunk node between): 5.30 to 5.40, its step 5.02 to 5.70. Worse.
+
+A first try that modified the drawn chunks' vertex arrays in place gave 15 ms
+(every array re-sent each frame, 2729 transform changes): a harness artefact,
+noted so it is not repeated. What remains of the terrain's CPU is its draws'
+count: chunks times passes. Fewer passes (#57's single camera, the clouds
+reading the scene's depth) or fewer chunks (a split by roughness) are the
+levers.
+
+**The normal map's texture past its fade.** `layeredMaterial` read every
+layer's normal, roughness and occlusion texture at any distance, though the
+normal is faded out from 600 m; there its roughness and occlusion come from the
+texture's smallest mipmaps, about its mean. Now each layer's means
+(`MaterialSet.mean_rough_ao`) stand in and the fetch is skipped. Serialized
+frame (GPU-synced, so the GPU's share shows), three rounds, before / after, ms:
+`ground` 10.58 / 10.57, 10.80 / 10.52, 10.34 / 10.11; `sunset` 11.54 / 11.33,
+11.55 / 10.91, 11.17 / 10.94. The pipelined frame does not move (4.95-5.05 at
+`ground`): it is still the CPU's. Shots without clouds at `ground`: 15 % of
+pixels one level brighter or darker, beyond two levels as two shots of the same
+tree (0.011 % against 0.007 %).
+
 ## Not covered
 
 The sea's parts are measured in §16; its reflection pass re-renders the

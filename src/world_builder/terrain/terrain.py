@@ -54,6 +54,7 @@ from panda3d.core import (
     LVecBase3f,
     NodePath,
     PTA_float,
+    PTA_LVecBase2f,
     PTA_LVecBase3f,
     SamplerState,
     Shader,
@@ -891,13 +892,16 @@ class Terrain:
         root.set_shader_input("uNoise", make_noise_texture())
         tile = PTA_float.empty_array(len(m.tile_m))
         mean = PTA_LVecBase3f.empty_array(len(m.tile_m))
+        mean_ra = PTA_LVecBase2f.empty_array(len(m.tile_m))
         flat = PTA_LVecBase3f.empty_array(len(m.tile_m))
         for i in range(len(m.tile_m)):
             tile[i] = float(m.tile_m[i])
             mean[i] = LVecBase3f(*m.mean_albedo[i])
+            mean_ra[i] = LVecBase2f(*m.mean_rough_ao[i])
             flat[i] = LVecBase3f(*(BIOME_COLORS[i] ** 2.2))
         root.set_shader_input("uTileM", tile)
         root.set_shader_input("uMeanAlbedo", mean)
+        root.set_shader_input("uMeanRoughAO", mean_ra)
         root.set_shader_input("uFlatAlbedo", flat)
         root.set_shader_input("uTextured", 1)
         root.set_shader_input("uPbrGround", 1)

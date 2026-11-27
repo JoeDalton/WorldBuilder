@@ -31,3 +31,28 @@ def test_the_bench_scenes_are_the_world_simplified():
         assert bench.spec.radius == spec.radius and bench.spec.seed == spec.seed
     assert set(frame_profile.BENCH_SCENES) == {"bench-sea", "bench-dry"}
     assert frame_profile.BENCH_POSES == ("ground", "bench_1500", "bench_10000")
+
+
+def test_the_terrain_passes_are_the_cameras_bits():
+    """--terrain-passes hides the terrain from one camera at a time: the
+    main view's near and far cameras, the sea's reflection and the clouds'
+    two depth passes, by their own bits."""
+    from panda3d.core import BitMask32
+
+    from world_builder import depth
+
+    assert frame_profile.TERRAIN_PASSES == {
+        "t_near": BitMask32.bit(depth.NEAR_BIT),
+        "t_far": BitMask32.bit(depth.FAR_BIT),
+        "t_refl": depth.REFLECTION_CAMERA_MASK,
+        "t_cldnear": BitMask32.bit(depth.CLOUD_NEAR_BIT),
+        "t_cldfar": BitMask32.bit(depth.CLOUD_FAR_BIT),
+    }
+
+
+def test_the_pipelined_summary_is_median_and_p95_in_ms():
+    """The pipelined frame: the median and 95th percentile of the free-running
+    steps, seconds in, milliseconds out."""
+    frame, p95 = frame_profile._summary([0.004] * 19 + [0.010])
+    assert frame == 4.0
+    assert abs(p95 - 4.3) < 1e-9

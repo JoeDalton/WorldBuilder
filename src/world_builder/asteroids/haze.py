@@ -580,6 +580,8 @@ class FieldHaze:
         root.set_shader_input("uMissingLogSpan", math.log(MISSING_T1 / MISSING_T0))
         self._start = PTA_float.empty_array(1)
         root.set_shader_input("uHazeStart", self._start)
+        # update()'s inputs the table was last made from (None: make it)
+        self._missing_key = None
         self._distances = MISSING_T0 * (MISSING_T1 / MISSING_T0) ** np.linspace(
             0.0, 1.0, MISSING
         )
@@ -648,6 +650,7 @@ class FieldHaze:
     def set_cover(self, cover: float) -> None:
         """The rocks' mean projected area over their bounding disc's."""
         self.model.cover = float(cover)
+        self._missing_key = None  # the table again at the next update
 
     def set_albedo(self, materials, spec: FieldSpec) -> None:
         self.albedo = mean_rock_albedo(
@@ -670,6 +673,12 @@ class FieldHaze:
         :param pixels_per_radian: the main view's
         :param min_pixels: the smallest diameter drawn"""
         self._cam[0] = LVecBase3f(*camera)
+        # The table depends on these alone, not on the camera: kept while
+        # they hold (a field seen from afar: every frame).
+        key = (float(pixels_per_radian), float(min_pixels), tuple(map(float, limits)))
+        if key == self._missing_key:
+            return
+        self._missing_key = key
         for k, limit in enumerate(limits):
             self._limits[k] = float(min(limit, 1e30))
         missing = self.model.missing(
