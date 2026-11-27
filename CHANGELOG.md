@@ -45,13 +45,20 @@ steps below; FRAME_COST_PLAN.md, performance.md §38-40).
 
 ### Changed
 
+- Per-chunk Python in a terrain selection made one numpy pass: the
+  collision's reach (`TerrainCollision.update`) and the trees' box distances
+  (`Trees.update`), most of a selection's ~2 ms in SpaceFlight's Mission 3.
 - The air's march (`atmosphere.glsl`'s `atmoSegment`) runs its samples
   (`atmoStep`) in one of two loops: with the gathered eclipses, or with none,
   the eclipses' array then untouched (it cost 0.2-0.5 ms with no eclipse in
   view).
-- Per-chunk Python in a terrain selection made one numpy pass: the
-  collision's reach (`TerrainCollision.update`) and the trees' box distances
-  (`Trees.update`), most of a selection's ~2 ms in SpaceFlight's Mission 3.
+- `TerrainQuery` answers a single point in plain floats (the same chunk and
+  triangle as for many; the arrays' path where none is stored): the demo's
+  altimeter and a game's altitude every frame. `Swell` makes its native
+  struct once.
+- The demo's HUD is one text per line, each set only when it changed;
+  `WorldDemo.hide_hud()` hides it for shots (`terrain_shots.py`,
+  `motion_shots.py`, `tree_gallery.py`).
 - `World(light_period=N)` spreads the light's reckoning over its frames:
   `lights_at` runs in `LIGHT_STAGES` (3) stages (the air's light; the
   eclipses and the clouds' shadow; the rings' and the mountains' shadows),

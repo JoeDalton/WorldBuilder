@@ -402,7 +402,7 @@ def main() -> None:
             "pitch": demo.start.get("pitch", 0.0),
         }
     demo.setFrameRateMeter(False)
-    demo._hud.hide()
+    demo.hide_hud()
     for body in demo.bodies:
         if body.clouds is not None:
             body.clouds.set_debug(args.cloud_debug)

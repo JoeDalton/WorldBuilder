@@ -78,9 +78,11 @@ Ranked by what they would take off a game's frame.
   over through shared memory (`workers.SharedArray`, the other way),
   released on eviction and `set_spec`, orphans cleaned up.
 - **The mountain map's CPU twins** (~0.2 ms a frame in flight, the local
-  map's new nodes every ~50 m): reading back the few texels a twin needs
-  from the GPU's map (asynchronously, a frame late) would replace their
-  marches.
+  map's new nodes every ~50 m). Reading the GPU's map back instead of
+  marching its texels again: Panda 1.10 has no asynchronous read-back, and a
+  synchronous one (`extract_texture_data`, `RTM_copy_ram` on the bake) waits
+  for the GPU's queued frame, which can cost more than the marches. Measure a
+  bake's read-back on a quiet machine before choosing.
 
 Made 2026-11-27, not yet benchmarked (another agent loaded the machine):
 
@@ -93,21 +95,17 @@ Made 2026-11-27, not yet benchmarked (another agent loaded the machine):
   eclipse in view: ground 10.22 → 10.78 ms, orbit 2.25 → 2.44): the march's
   sample is a function (`atmoStep`) called from two loops, one reading the
   gathered eclipses, one with none; the eclipses' array only in the first.
+- **One point's terrain query** (the demo's altimeter, and SpaceFlight's
+  `Scene.altitude_m` every frame of a warp): plain floats instead of ~100
+  numpy calls (`TerrainQuery._interpolate_one`, the same triangle; the arrays'
+  path where no chunk is stored), and the swell's native struct made once per
+  `Swell`. The finest stored ancestor already answered before the planet.
+- **The demo's HUD**: one text per line, set only when it changed
+  (`WorldDemo.hide_hud` for shots). `--no-hud` still skips its refresh.
 
-To measure: `flight_bench.py --flight low --trace` for `_select`, the demo's
-`frame_profile.py --offscreen --pipelined` (`ground`, `orbit` for the
-eclipse), and Mission 3 (`bench_mission3.py`).
-
-Demo only (every benchmark runs the demo, no game pays them):
-
-- **The altimeter** (`WorldDemo._fly`, ~0.15 ms, spikes to ms): one point's
-  `TerrainQuery.height_at` a frame, ~100 numpy calls; with no stored chunk
-  over the point it evaluates the planet itself. A scalar path for one point,
-  the swell's struct cached per `Swell`, and the coarsest stored ancestor
-  instead of the planet would fix it.
-- **The HUD**: one multi-line text rebuilt every 0.2 s (~5 ms then); one
-  `TextNode` per line, updated when its text changes. `--no-hud` keeps it
-  out of the benchmarks.
+To measure: Mission 3 (`bench_mission3.py`, and the light schedule above),
+the demo's `frame_profile.py --offscreen --pipelined` (`ground`, `orbit` for
+the eclipse), `flight_bench.py --flight low --trace` for `_select`.
 
 ## Savings with a cost (the user's call)
 

@@ -220,6 +220,68 @@ def test_ocean_surface_is_solid_when_included(planet, chart):
     assert wet.material_at(offshore) == "water"
 
 
+def _one_and_many(query, point, generate=True):
+    """A point's height and normal by the one-point path, and by the arrays'
+    path (the same point twice)."""
+    h1, n1 = (
+        query.height_at(point, generate=generate),
+        query.normal_at(point, generate=generate),
+    )
+    pair = np.stack([point, point])
+    return (
+        (float(h1), np.asarray(n1)),
+        (
+            float(query.height_at(pair, generate=generate)[0]),
+            query.normal_at(pair, generate=generate)[0],
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "x, y, height",
+    [(0.0, 0.0, 300.0), (-4000.0, 2500.0, 50.0), (5000.0, 30000.0, 100.0)],
+)
+def test_one_point_is_queried_as_many_are(planet, chart, x, y, height):
+    """An altimeter's single point takes plain floats, not arrays: the same
+    triangle, the same height and normal, on land, at the coast, and on the
+    sea with its swell."""
+    from world_builder.ocean.swell import Swell
+
+    query = TerrainQuery(planet, include_ocean=True)
+    point = at(chart, x, y, height)
+    for swell in (None, Swell(20.0, 0.004, np.eye(3), np.eye(3)[[1, 2, 0]])):
+        query.swell = swell
+        (h1, n1), (h2, n2) = _one_and_many(query, point)
+        assert h1 == pytest.approx(h2, abs=1e-6)
+        np.testing.assert_allclose(n1, n2, atol=1e-9)
+
+
+def test_one_point_reads_a_stored_ancestor_as_many_do(planet, chart):
+    """Without its own chunk (no generating), the finest stored ancestor
+    answers in both paths."""
+    query = TerrainQuery(planet, include_ocean=False)
+    key = _key_near(planet, chart, 3, 1200.0, -800.0)
+    query.store[key] = generate_chunk(planet.spec, key)
+    point = at(chart, 1200.0, -800.0, 200.0)
+    (h1, n1), (h2, n2) = _one_and_many(query, point, generate=False)
+    assert h1 == pytest.approx(h2, abs=1e-6)
+    np.testing.assert_allclose(n1, n2, atol=1e-9)
+    assert list(query.store) == [key]
+
+
+@pytest.mark.parametrize(
+    "where", [(1.0, 1.0, 1.0), (1.0, -1e-9, 0.3), (0.2, 0.0, -1.0)]
+)
+def test_one_point_on_a_seam_or_a_corner(planet, where):
+    """Directions on a cube seam or corner pick the same face in both paths."""
+    query = TerrainQuery(planet, include_ocean=False)
+    d = np.asarray(where, float) / np.linalg.norm(where)
+    point = d * (planet.spec.radius + 5000.0)
+    (h1, n1), (h2, n2) = _one_and_many(query, point)
+    assert h1 == pytest.approx(h2, abs=1e-6)
+    np.testing.assert_allclose(n1, n2, atol=1e-9)
+
+
 def test_queries_without_chunks_fall_back_to_the_planet(planet):
     query = TerrainQuery(planet, include_ocean=False)
     point = TangentFrame.at(10.0, 10.0).up * (planet.spec.radius + 9000.0)

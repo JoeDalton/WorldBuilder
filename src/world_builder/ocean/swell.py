@@ -12,6 +12,7 @@ layers turn with time) and hands it to its terrain.
 from __future__ import annotations
 
 import ctypes
+import functools
 from dataclasses import dataclass
 
 import numpy as np
@@ -58,6 +59,12 @@ class Swell:
     shallow: float = 5.0
     deep: float = 60.0
 
+    @functools.cached_property
+    def _struct(self) -> _WbSwell:
+        """:meth:`as_struct`, made once (a query of a point or two a frame
+        made it anew each call)"""
+        return self.as_struct()
+
     def as_struct(self) -> _WbSwell:
         """:returns: it as swell.h's ``WbSwell`` (for ctypes)"""
         out = _WbSwell()
@@ -90,7 +97,7 @@ class Swell:
             return np.zeros(n)
         native = native_library()
         if native is not None:
-            return native.swell_heights(self.as_struct(), points, depths, max_freqs)
+            return native.swell_heights(self._struct, points, depths, max_freqs)
         factor = np.ones(n)
         if self.by_depth:
             t = np.clip((depths - self.shallow) / (self.deep - self.shallow), 0.0, 1.0)
