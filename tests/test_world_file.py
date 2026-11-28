@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 import world_builder
+from world_builder.asteroids.spec import KeepOut
 from world_builder.config import ConfigError
 from world_builder.shadows import SUN_ANGULAR_RADIUS
 from world_builder.world import SunLook
@@ -21,6 +22,7 @@ from world_builder.world_file import (
     load_planet,
     load_world,
     parse_world,
+    with_keep_outs,
     world_to_yaml,
 )
 
@@ -236,6 +238,30 @@ def window(showbase):
     if showbase.win is None:
         pytest.skip("no offscreen window")
     return showbase
+
+
+def test_a_levels_keep_outs_are_added_to_the_files(window):
+    from world_builder.settings import WorldSettings
+
+    own = parse_world(DEEP).fields[0].keep_outs
+    room = KeepOut((0.0, 0.0, 0.0), 50.0)
+    spec = with_keep_outs(parse_world(DEEP), {"cube": [room]})
+    assert spec.fields[0].keep_outs == (*own, room)
+    with pytest.raises(ConfigError, match="no field called.*nope"):
+        with_keep_outs(parse_world(DEEP), {"nope": [room]})
+    # By path or as a spec, the loaded world has them
+    for source in (DEEP, parse_world(DEEP)):
+        world = load_world(
+            window,
+            source,
+            keep_outs={"cube": [room]},
+            settings=WorldSettings.preset("low"),
+            backend="inline",
+        )
+        try:
+            assert world.spec.fields[0].keep_outs == (*own, room)
+        finally:
+            world.destroy()
 
 
 def test_deep_space_loads_and_updates(window):

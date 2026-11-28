@@ -22,8 +22,12 @@ An app without a window (`window-type none`: a game's headless runs) gets
 no depth camera (`.depth` is None) and no seas, which both draw through the
 window; the rest is built and updated as usual.
 
-`load_world(app, path, *, settings=None, backend="process", clock=None)`
-takes what is about running the world, not defining it: the quality
+`load_world(app, source, *, keep_outs=None, settings=None, backend="process",
+clock=None)` takes the file, or a `WorldSpec` (what `parse_world` returns: a
+game can change it and load it, no file in between), and what is about running
+the world, not defining it: the room a level keeps clear in some fields
+(`keep_outs={"field name": [KeepOut, ...]}`, added to the file's; an unknown
+field name is a `ConfigError`), the quality
 (`WorldSettings`), where chunks are generated, the game's clock, and any other
 `World` argument that is the game's (`lights`, `light_scale`, `light_period`).
 `parse_world(path)` reads a file without a window (to check it, or to read what

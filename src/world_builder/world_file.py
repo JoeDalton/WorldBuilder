@@ -44,13 +44,14 @@ from __future__ import annotations
 import functools
 import logging
 import math
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from world_builder.asteroids.spec import FieldSpec
+from world_builder.asteroids.spec import FieldSpec, KeepOut
 from world_builder.config import (
     ConfigError,
     Context,
@@ -84,6 +85,7 @@ __all__ = [
     "load_planet",
     "load_world",
     "parse_world",
+    "with_keep_outs",
     "world_to_yaml",
 ]
 
@@ -349,10 +351,35 @@ class GameWorld:
         self.world.destroy()
 
 
+def with_keep_outs(
+    spec: WorldSpec, keep_outs: Mapping[str, Sequence[KeepOut]]
+) -> WorldSpec:
+    """*spec* with more room kept clear in some of its fields.
+
+    :param keep_outs: field name -> the room to keep clear there, added to the
+        field's own (the file's)
+    :raises ConfigError: a name that is not one of the fields
+    """
+    names = {look.name for look in spec.fields}
+    unknown = sorted(set(keep_outs) - names)
+    if unknown:
+        raise ConfigError(
+            f"keep_outs: no field called {unknown} (the world has {sorted(names)})"
+        )
+    fields = tuple(
+        replace(look, keep_outs=(*look.keep_outs, *keep_outs[look.name]))
+        if look.name in keep_outs
+        else look
+        for look in spec.fields
+    )
+    return replace(spec, fields=fields)
+
+
 def load_world(
     app: Any,
-    source: Path | str,
+    source: Path | str | WorldSpec,
     *,
+    keep_outs: Mapping[str, Sequence[KeepOut]] | None = None,
     settings: WorldSettings | None = None,
     backend: str = "process",
     clock: Any = None,
@@ -361,7 +388,10 @@ def load_world(
     """Build the world a file defines around a game's camera.
 
     :param app: the ShowBase
-    :param source: the world file (YAML)
+    :param source: the world file (YAML), or a :class:`WorldSpec` (what
+        :func:`parse_world` returns, changed or built by the game)
+    :param keep_outs: room a level keeps clear in some fields, by field name,
+        added to the file's (see :func:`with_keep_outs`)
     :param settings: what every part costs; None = HIGH
     :param backend: where chunks and cloud tiles are generated
         (``"process"``, ``"thread"`` or ``"inline"``)
@@ -369,8 +399,11 @@ def load_world(
     :param world_args: any other argument of :class:`World` that is the
         game's (``lights``, ``light_scale``, ``light_period``)
     :returns: the loaded world
+    :raises ConfigError: a keep-out for a field the world does not have
     """
-    spec = parse_world(source)
+    spec = source if isinstance(source, WorldSpec) else parse_world(source)
+    if keep_outs:
+        spec = with_keep_outs(spec, keep_outs)
     # Before the world is built: the sea's reflection camera copies the lens.
     # (An app without a window has none.)
     if getattr(app, "camLens", None) is not None:

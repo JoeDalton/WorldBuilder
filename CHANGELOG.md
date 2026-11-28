@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.2] (unreleased)
 
+### Added
+- `load_world(..., keep_outs={field name: [KeepOut, ...]})` adds a level's room to the file's fields, and `load_world` takes a `WorldSpec` as well as a path (no temporary file round trip); `world_file.with_keep_outs(spec, keep_outs)` #65
+
 ### Changed
 - **Breaking:** a world file has no default values. A block that is there is
   written whole (a missing field is an error naming where it is); a block that
