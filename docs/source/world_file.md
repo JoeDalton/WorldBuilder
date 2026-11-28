@@ -29,6 +29,13 @@ phase: a generator that calls `step()` (a frame of the paused game) until
 game's loading animation, and returns True, or False if `timeout_s` ran out
 (logged). It sleeps a few milliseconds after a step that still loads, so the
 workers' results get through.
+`GameWorld.chart(name)` (`WorldSpec.chart(name)` reads it from a file, no window)
+is the body's `BodyChart`: levels write positions in chart metres (x east, y
+north of the planet's reference point, z above sea level), and
+`position(x, y, z)` turns them into world positions on the sphere, wherever the
+file puts the planet (a planet is never rotated: its east, north and up are not
+the world's axes); `vector`, `up_at` and `orientation(position, toward)` (a
+level orientation facing a point) go with it.
 An app without a window (`window-type none`: a game's headless runs) gets
 no depth camera (`.depth` is None) and no seas, which both draw through the
 window; the rest is built and updated as usual.

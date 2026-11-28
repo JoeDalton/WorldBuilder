@@ -63,6 +63,7 @@ from world_builder.config import (
 )
 from world_builder.depth import ReversedDepthCamera
 from world_builder.settings import WorldSettings
+from world_builder.terrain.chart import BodyChart
 from world_builder.terrain.planet import PlanetSpec
 from world_builder.world import (
     COLLISION_MASK,
@@ -123,6 +124,20 @@ class WorldSpec:
     sun: SunLook | None = None
     sky: SkyLook | None = None
     space_ambient: tuple[float, float, float] | None = None
+
+    def chart(self, body_name: str) -> BodyChart:
+        """The chart of a body of the world, placed where the file puts it
+        (no window needed): levels write positions in chart metres.
+
+        :raises KeyError: for a name that is not a body's
+        """
+        for body in self.bodies:
+            if body.name == body_name:
+                spec = body.spec
+                return BodyChart(
+                    spec.reference_lat, spec.reference_lon, spec.radius, body.position
+                )
+        raise KeyError(body_name)
 
 
 def parse_world(source: Path | str | dict) -> WorldSpec:
@@ -335,6 +350,11 @@ class GameWorld:
     def body(self, name: str):
         """:returns: the built body called *name* (:meth:`World.body`)"""
         return self.world.body(name)
+
+    def chart(self, body_name: str) -> BodyChart:
+        """:returns: the chart of a body, as the file places it
+        (:meth:`WorldSpec.chart`)"""
+        return self.spec.chart(body_name)
 
     def field(self, name: str):
         """:returns: the built field called *name* (:meth:`World.field`)"""

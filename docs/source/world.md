@@ -224,6 +224,11 @@ camera draws them once.
   and of one (`include_ocean` for bodies, `samples` for fields); each part
   gets its own. It returns `Collisions(bodies=[...], fields=[...])`;
   **`disable_collision()`** undoes both.
+- **`altitude_at(point, generate=False)`, `up_at(point)`**: the height above
+  the nearest body's ground (0 under it, infinite in open space; only what is
+  already generated unless `generate`) and "up", against the bodies' gravity there
+  (`up_at(point, g_constant=1.0, minimum=MIN_GRAVITY_NORM)` (0.1): None in open space or where
+  gravity is weaker than `minimum`, for the game to choose).
 - **`set_sun(direction)`**: moves the sun; every part follows.
 - **`light_at(point)`, `lights_at(points)`**: the light (direct, ambient)
   at one point or many, each by its nearest body, in the world's shadows;

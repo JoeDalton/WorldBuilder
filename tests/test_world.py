@@ -40,6 +40,7 @@ from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.world import (
     COLLISION_RANGE_FIELDS_M,
     LIGHT_STAGES,
+    MIN_GRAVITY_NORM,
     Body,
     BodyLook,
     CloudLook,
@@ -670,6 +671,45 @@ def test_collision_refuses_what_it_does_not_know():
         world.enable_collision("mask", bodies=["nope"])
     with pytest.raises(TypeError, match="speed"):
         world.enable_collision("mask", speed=1)
+
+
+def test_altitude_is_the_nearest_bodys():
+    planet = _body()
+    moon = _body("moon", MOON, position=(1e8, 0.0, 0.0))
+    world = _world(planet, moon)
+    planet.terrain.query.height_at.return_value = 2000.0
+    point = np.array([0.0, 0.0, R + 700.0 + 2000.0])
+
+    assert world.altitude_at(point) == pytest.approx(700.0)
+    relative = planet.terrain.query.height_at.call_args.args[0]
+    np.testing.assert_allclose(relative, point)
+    # Only what is already generated, unless asked
+    assert planet.terrain.query.height_at.call_args.kwargs == {"generate": False}
+    world.altitude_at(point, generate=True)
+    assert planet.terrain.query.height_at.call_args.kwargs == {"generate": True}
+    # Under the ground: 0
+    assert world.altitude_at(np.array([0.0, 0.0, R])) == 0.0
+
+
+def test_up_is_against_gravity_unless_negligible():
+    planet = _body(mass=9.8 * R**2)  # 9.8 m/s2 at the surface, G = 1
+    world = _world(planet)
+    near = np.array([0.6, 0.0, 0.8]) * (R + 10_000.0)
+    np.testing.assert_allclose(world.up_at(near), [0.6, 0.0, 0.8])
+    # The field is built once per G
+    first = world._gravity_fields[1.0]
+    world.up_at(near)
+    assert world._gravity_fields[1.0] is first
+    # Too weak far away (or by a higher threshold): no "up"
+    assert world.up_at(near * 1e6) is None  # below MIN_GRAVITY_NORM
+    assert MIN_GRAVITY_NORM == 0.1
+    assert world.up_at(near, minimum=100.0) is None
+
+
+def test_altitude_and_up_in_open_space():
+    world = _world()
+    assert world.altitude_at([1e6, 0.0, 0.0]) == np.inf
+    assert world.up_at([1e6, 0.0, 0.0]) is None
 
 
 def test_body_by_name():

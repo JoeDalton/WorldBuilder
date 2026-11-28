@@ -115,6 +115,9 @@ COLLISION_MASK = BitMask32.all_on()
 #: costs a check every frame), and how far the rocks are
 COLLISION_RANGE_BODIES_M = 10_000.0
 COLLISION_RANGE_FIELDS_M = 20_000.0
+#: A gravity weaker than this (norm of the raw vector, in the units of the
+#: bodies' masses and the gravity constant) gives no "up" (:meth:`World.up_at`)
+MIN_GRAVITY_NORM = 0.1
 #: The stages the light at the camera and the tracked nodes is reckoned in
 #: (``World(light_period=...)`` spreads them over its frames): the air's
 #: light; the eclipses and the clouds' shadow; the rings' and the mountains'
@@ -879,6 +882,53 @@ class World:
             self.bodies,
             key=lambda b: float(np.linalg.norm(point - b.position)) - b.radius,
         )
+
+    def altitude_at(self, point_world: ArrayLike, generate: bool = False) -> float:
+        """Height above the ground of the nearest body.
+
+        :param point_world: world frame, metres
+        :param generate: build the ground chunks the query needs rather than
+            answer from what is already generated (a query must not stall a
+            frame)
+        :returns: the height, metres (0 under the ground); infinite in open
+            space (no body)
+        """
+        if not self.bodies:
+            return math.inf
+        point = np.asarray(point_world, dtype=np.float64)
+        body = self.nearest(point)
+        relative = point - body.position
+        ground = float(body.terrain.query.height_at(relative, generate=generate))
+        return max(float(np.linalg.norm(relative)) - body.radius - ground, 0.0)
+
+    def up_at(
+        self,
+        point_world: ArrayLike,
+        g_constant: float = 1.0,
+        minimum: float = MIN_GRAVITY_NORM,
+    ) -> np.ndarray | None:
+        """Up at a point: against the bodies' gravity there
+        (:meth:`gravity_field`, built once per *g_constant*).
+
+        :param point_world: world frame, metres
+        :param g_constant: G, in the units of the bodies' masses
+        :param minimum: a gravity weaker than this (norm of the raw vector)
+            gives no "up" (:data:`MIN_GRAVITY_NORM`)
+        :returns: a unit vector; None in open space (no body) or where
+            gravity is negligible, for the game to choose
+        """
+        if not self.bodies:
+            return None
+        fields = self.__dict__.setdefault("_gravity_fields", {})
+        if g_constant not in fields:
+            fields[g_constant] = self.gravity_field(g_constant)
+        gravity = fields[g_constant].acceleration(
+            np.asarray(point_world, dtype=np.float64)
+        )
+        norm = float(np.linalg.norm(gravity))
+        if not np.isfinite(norm) or norm < minimum:
+            return None
+        return -gravity / norm
 
     def light_at(self, point_world: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
         """The light at a point, as the terrain's shader lights the ground

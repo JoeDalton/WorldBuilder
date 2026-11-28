@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.2] (unreleased)
 
 ### Added
+- `World.altitude_at(point)` and `World.up_at(point)` (against the bodies' gravity, None where it is negligible), and `GameWorld.chart(body)` / `WorldSpec.chart(body)`: a body's `BodyChart` (chart metres to world positions and level orientations) #65
 - `GameWorld.load_steps(step, quiet_s=0.5, timeout_s=60.0)`: a generator for a game's loading phase, stepping until the world has stayed loaded for a moment #65
 - All terrain is solid from the start: `World(collision_mask=...)` and `load_world(collision_mask=...)` (default: all bits; None = nothing solid) give every body's ground and sea and every field's rocks a `"terrain"` collision node, 10 km (bodies) and 20 km (fields) around the camera; the game enables nothing. A missing native library raises `NativeCollisionError` when the world is built. `World.enable_collision(into_mask, bodies=None, fields=None, **kw)` now only changes that (and covers fields; returns `Collisions(bodies, fields)`), `disable_collision` covers the fields #65
 - `GameWorld.views` (and `World.update(views=...)`): more cameras, a rear-view mirror's, that the asteroid fields and rings are drawn for #65
