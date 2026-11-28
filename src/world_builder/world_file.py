@@ -44,7 +44,8 @@ from __future__ import annotations
 import functools
 import logging
 import math
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,8 @@ from world_builder.world import (
 #: The camera's far plane before the first frame: the sea's reflection camera
 #: copies the lens when it is built, so it is set before the world.
 INITIAL_FAR_M = 600000.0
+#: Sleep this long after a loading step that still loads (:meth:`GameWorld.load_steps`)
+LOADING_PAUSE_S = 0.005
 
 __all__ = [
     "SHIPPED_FIELDS",
@@ -352,6 +355,56 @@ class GameWorld:
             return
         self.depth.update(self.world.far_distance(origin_world))
         self.world.update(origin_world, far=self.depth.far, views=views)
+
+    def load_steps(
+        self,
+        step: Callable[[], None],
+        quiet_s: float = 0.5,
+        timeout_s: float = 60.0,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        pause: Callable[[float], None] = time.sleep,
+    ) -> Generator[None, None, bool]:
+        """Hold a game's loading phase until the world has loaded around the
+        camera (ground not drawn yet is not solid): *step* once per
+        iteration, until :attr:`World.loading` has stayed False for *quiet_s*
+        (it flickers in flight, one quiet frame is not enough).
+
+        The generator yields once per step, for the game to advance a loading
+        animation by, and returns whether the world loaded (True) or
+        *timeout_s* ran out (False, logged: the game may start anyway)::
+
+            for _ in game_world.load_steps(step):
+                render_loading_frame()
+
+        :param step: advance the game by a frame: the game loop is paused
+            while it loads, so this is what runs a frame (it moves render's
+            origin and calls :meth:`update`)
+        :param quiet_s: how long :attr:`World.loading` must stay False, seconds
+        :param timeout_s: give up after this long, seconds
+        :param clock: real time, seconds
+        :param pause: sleeps, seconds: a few milliseconds after each step
+            that still loads, as the workers' results come back through a
+            thread of this process, which a loop that never sleeps starves
+        """
+        start = clock()
+        quiet_since = None
+        while True:
+            step()
+            now = clock()
+            if self.world.loading:
+                quiet_since = None
+                pause(LOADING_PAUSE_S)
+            elif quiet_since is None:
+                quiet_since = now
+            elif now - quiet_since >= quiet_s:
+                return True
+            if now - start >= timeout_s:
+                LOGGER.warning(
+                    f"world still loading after {timeout_s:.0f} s: giving up waiting"
+                )
+                return False
+            yield
 
     def destroy(self) -> None:
         """Remove the world and stop its workers."""

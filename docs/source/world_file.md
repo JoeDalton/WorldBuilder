@@ -23,6 +23,12 @@ NodePath): while one is in it, the asteroid fields and rings are drawn for it
 too (their rocks are held and drawn for every view), with no second update.
 The terrain, sea, trees and clouds are the main camera's alone. Add the
 camera when the mirror is shown, remove it when it is not.
+`GameWorld.load_steps(step, quiet_s=0.5, timeout_s=60.0)` is a game's loading
+phase: a generator that calls `step()` (a frame of the paused game) until
+`world.loading` has stayed False for `quiet_s`, yielding once per step for the
+game's loading animation, and returns True, or False if `timeout_s` ran out
+(logged). It sleeps a few milliseconds after a step that still loads, so the
+workers' results get through.
 An app without a window (`window-type none`: a game's headless runs) gets
 no depth camera (`.depth` is None) and no seas, which both draw through the
 window; the rest is built and updated as usual.

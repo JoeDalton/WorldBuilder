@@ -19,6 +19,7 @@ from world_builder.config import ConfigError
 from world_builder.shadows import SUN_ANGULAR_RADIUS
 from world_builder.world import SunLook
 from world_builder.world_file import (
+    GameWorld,
     load_field,
     load_planet,
     load_world,
@@ -239,6 +240,74 @@ def window(showbase):
     if showbase.win is None:
         pytest.skip("no offscreen window")
     return showbase
+
+
+# ── loading steps (no window: a stand-in world) ─────────────────────────────
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def _gate(loading, dt=0.125, **args):
+    """GameWorld.load_steps over a world whose loading flag follows *loading*,
+    one value per step (the last repeats), the clock advancing *dt* each.
+
+    :return: (yielded, steps taken, the clock, the pauses, the return value)
+    """
+    from types import SimpleNamespace
+
+    clock, states, pauses = _Clock(), iter(loading), []
+    world = SimpleNamespace(loading=True)
+    game = GameWorld.__new__(GameWorld)
+    game.world = world
+    steps = []
+
+    def step():
+        steps.append(1)
+        world.loading = next(states, loading[-1])
+        clock.now += dt
+
+    gen = game.load_steps(step, clock=clock, pause=pauses.append, **args)
+    yielded = 0
+    while True:
+        try:
+            next(gen)
+        except StopIteration as done:
+            return yielded, len(steps), clock, pauses, done.value
+        yielded += 1
+
+
+def test_load_steps_end_once_quiet_for_the_quiet_time():
+    yielded, steps, clock, _, loaded = _gate([True, True, False])
+    # Two loading steps, then quiet from the third (0.375 s) on
+    assert clock.now == 0.375 + 0.5 and loaded is True
+    assert yielded == steps - 1
+
+
+def test_one_quiet_frame_is_not_enough():
+    _, _, clock, _, _ = _gate([False, True, True, False], quiet_s=0.25)
+    assert clock.now == 0.5 + 0.25  # quiet again from the fourth step on
+
+
+def test_load_steps_yield_to_the_workers_only_while_loading():
+    from world_builder.world_file import LOADING_PAUSE_S
+
+    _, _, _, pauses, _ = _gate([True, True, False])
+    assert pauses == [LOADING_PAUSE_S] * 2
+
+
+def test_load_steps_give_up_after_the_timeout(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        _, _, clock, _, loaded = _gate([True], dt=1.0, timeout_s=10.0)
+    assert clock.now == pytest.approx(10.0) and loaded is False
+    assert "still loading" in caplog.text
 
 
 def test_a_levels_keep_outs_are_added_to_the_files(window):
