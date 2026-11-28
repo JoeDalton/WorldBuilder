@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.2] (unreleased)
+## Unreleased
+
+## [0.7.0] 2026-11-28
 
 ### Added
 - A game's translucent surfaces (shield bubbles) are hidden by the clouds in front of them: `World.track_translucent(node)` hands them the clouds composited each frame, and their shader fades itself by `cloud_cover.glsl`'s `cloudCoverBefore(gl_FragCoord.xy, distance)` (on Panda's model path once a World is built). `cover_off_in(camera)` for another view (the seas' reflections are done), `clouds.cover.no_cover(node)` for an untracked node, `clouds.cover.translucent_bubble` a reference surface (`demo_world.py --bubble`); a worked example in world.md (a smoke billboard, the blend modes) #65
