@@ -448,6 +448,11 @@ def test_a_world_loads_without_a_window():
     import subprocess
     import sys
 
+    from world_builder.terrain.native import library_path
+
+    if not library_path().exists():
+        # Every terrain is solid from the start: a world needs the library
+        pytest.skip("the native collision library is not built (invoke native)")
     worlds = [WORLDS / "tiny_world.yaml", DEEP]  # a sea; an asteroid field
     run = subprocess.run(
         [sys.executable, "-c", _WINDOWLESS, *map(str, worlds)],
