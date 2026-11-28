@@ -76,6 +76,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import tools  # noqa: E402
 from world_builder import load_world  # noqa: E402
 from world_builder.asteroids.spec import Annulus, Box, Sphere  # noqa: E402
+from world_builder.clouds.cover import translucent_bubble  # noqa: E402
 from world_builder.post import (  # noqa: E402
     BILINEAR,
     FSR1,
@@ -157,6 +158,8 @@ class WorldDemo(ShowBase):
         settings: WorldSettings | None = None,
         backend: str = "process",
         start: dict | None = None,
+        bubble: tuple[float, float] | None = None,
+        cover: bool = True,
     ) -> None:
         """
         :param path: the world file
@@ -165,6 +168,11 @@ class WorldDemo(ShowBase):
         :param start: where the camera starts: ``{body, lat, lon, alt,
             heading, pitch}`` or ``{position: (x, y, z), heading, pitch}``;
             None = :meth:`default_start`
+        :param bubble: a translucent bubble (``clouds.cover.translucent_bubble``)
+            this far ahead of the start, of this radius, metres: to see the
+            clouds in front of a game's translucent surfaces hide it
+        :param cover: the bubble is faded by the clouds in front of it
+            (``World.track_translucent``); False: as before (laid over them)
         """
         super().__init__()
         self.setFrameRateMeter(True)
@@ -191,6 +199,14 @@ class WorldDemo(ShowBase):
         self._hud_hidden = False
         self._hud_time = -1.0
         self.reset_camera()
+        self.bubble = None
+        if bubble is not None:
+            distance, radius = bubble
+            self.bubble = translucent_bubble(radius)
+            self.bubble.reparent_to(self.render)
+            self._bubble_world = self.cam_world + self._forward() * distance
+            if cover:
+                self.world.world.track_translucent(self.bubble)
         self.taskMgr.add(self._update, "world_demo_update")
 
     # ── start ──────────────────────────────────────────────────────────────
@@ -280,6 +296,8 @@ class WorldDemo(ShowBase):
         self._fly(dt)
         self.camera.set_pos(0.0, 0.0, 0.0)
         self.camera.set_quat(self.render, self._orientation)
+        if self.bubble is not None:
+            self.bubble.set_pos(*(self._bubble_world - self.cam_world))
         self.world.update(self.cam_world)  # the other line
         now = self._clock.get_frame_time()
         if now - self._hud_time >= HUD_PERIOD:
@@ -643,6 +661,19 @@ def main() -> None:
         help="quit after N frames and what is still loading",
     )
     parser.add_argument("--shot", default=None, help="save a picture at the end")
+    parser.add_argument(
+        "--bubble",
+        type=float,
+        nargs=2,
+        default=None,
+        metavar=("DISTANCE", "RADIUS"),
+        help="a translucent bubble this far ahead, of this radius (metres)",
+    )
+    parser.add_argument(
+        "--no-cover",
+        action="store_true",
+        help="the bubble not faded by the clouds in front of it",
+    )
     tools.add_quality_arguments(parser)
     args = parser.parse_args()
     tools.window_config(
@@ -653,6 +684,8 @@ def main() -> None:
         settings=tools.settings_from_args(args),
         backend=args.backend,
         start=start_from_args(args),
+        bubble=args.bubble,
+        cover=not args.no_cover,
     )
     print(tools.describe_window(demo))
     if args.frames is None:

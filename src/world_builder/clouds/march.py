@@ -1779,6 +1779,14 @@ class _MarchLayer:
                 attribs.append(card.get_attrib(ShaderAttrib))
             self._composite_attribs.append(attribs)
 
+    def cover_inputs(self, frame: int) -> tuple[Texture, Texture, tuple[float, float]]:
+        """The result composited on *frame* (the march's frame count): its
+        colour, its distance and the view's pixels per texel of theirs, for
+        a game's translucent surfaces (:mod:`world_builder.clouds.cover`)."""
+        resolve = self.resolves[frame % 2]
+        downscale = (1.0, 1.0) if self.gather else tuple(map(float, self.block))
+        return resolve.colour, resolve.distance, downscale
+
     @property
     def depth_buffers(self) -> list[GraphicsOutput]:
         """None any more: the view's own depth is read (Task 7)."""
@@ -2788,6 +2796,17 @@ class CloudMarch:
     def set_debug(self, flags: int) -> None:
         """Profiling switches (cloud_field.glsl's ``uCloudDebug`` bits)."""
         self._set_inputs(uCloudDebug=int(flags))
+
+    def cover_inputs(self) -> tuple[Texture, Texture, tuple[float, float]] | None:
+        """What a game's translucent surface reads of the clouds composited
+        this frame (:mod:`world_builder.clouds.cover`); None while none are
+        (hidden, not loaded, no depth camera)."""
+        if not self._visible:
+            return None
+        for layer in self._layers:
+            if layer.active:
+                return layer.cover_inputs(self._frame[0])
+        return None
 
     def set_visible(self, visible: bool) -> None:
         """Show or hide everything: the march (its passes stop) and the

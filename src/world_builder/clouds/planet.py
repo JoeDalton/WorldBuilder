@@ -468,6 +468,11 @@ class PlanetClouds:
         """
         self.volume.update(camera_world, camera_render)
 
+    def cover_inputs(self):
+        """The clouds composited this frame, for a game's translucent
+        surfaces (:meth:`march.CloudMarch.cover_inputs`); None while none are."""
+        return self.volume.cover_inputs()
+
     def remove(self) -> None:
         """Take the clouds off the scene and drop the volume's queued tiles."""
         self.volume.remove()

@@ -18,6 +18,13 @@ jobs:
           python-version: "3.x"
       - run: pip install poetry invoke poetry-dynamic-versioning
       - run: poetry install
+      - uses: actions/cache@v4
+        with:
+          path: .cache/native
+          key: native-deps-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch_native_deps.*') }}
+      # The native libraries: terrain collision (every World needs it: all
+      # terrain is solid) and the noise (the native-vs-numpy tests)
+      - run: invoke native
       - run: invoke coverage
         env:
           WB_TEST_TIME_SCALE: "2"  # coverage tracing slows the code
@@ -45,6 +52,11 @@ jobs:
           python-version: "3.x"
       - run: pip install poetry invoke poetry-dynamic-versioning
       - run: poetry install
+      - uses: actions/cache@v4
+        with:
+          path: .cache/native
+          key: native-deps-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch_native_deps.*') }}
+      - run: invoke native
       - run: invoke test
         env:
           WB_TEST_TIME_SCALE: ${{ matrix.time_scale || '1' }}

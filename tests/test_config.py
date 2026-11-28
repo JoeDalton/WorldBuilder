@@ -40,7 +40,15 @@ PLANET_FILES = (
 )
 FIELD_FILES = ("asteroid_cube", "asteroid_icy_ball", "ring")
 PLANET = load_planet("earthlike")
+CUBE = load_field("asteroid_cube")
+ANNULUS = Annulus(1.0, 2.0, 3.0)
+CLOUDS = CloudLook()
 PLACE = {"lat": 0, "lon": 0, "width": 1, "height": 1}
+
+
+def whole(obj, **given):
+    """The config of *obj* (a file has no defaults), with *given* on top."""
+    return {**to_config(obj), **given}
 
 
 def through_yaml(cls, obj, **kwargs):
@@ -107,42 +115,47 @@ def test_stamps_and_paints_keep_their_images_relative_to_the_file(tmp_path):
 def test_numbers_may_be_written_as_yaml_reads_them_as_text():
     """PyYAML reads 1e6 (no dot, no sign) as a string."""
     assert yaml.safe_load("1e6") == "1e6"
-    config = {"inner": "5e6", "outer": 1e7, "thickness": 4000}
-    assert from_config(Annulus, config) == Annulus(5e6, 1e7, 4000.0)
-
-
-def test_omitted_fields_take_their_defaults():
-    assert from_config(OceanLook, {"swell_amplitude": 3}) == OceanLook(
-        swell_amplitude=3.0
+    config = whole(Annulus(1.0, 2.0, 3.0), inner="5e6", outer=1e7, thickness=4000)
+    assert from_config(Annulus, config) == replace(
+        Annulus(1.0, 2.0, 3.0), inner=5e6, outer=1e7, thickness=4000.0
     )
+
+
+def test_no_field_has_a_default_in_a_file():
+    """Every field of a block is written; the dataclass' defaults are for code."""
+    config = whole(OceanLook())
+    assert from_config(OceanLook, config) == OceanLook()
+    for key in config:
+        short = {k: v for k, v in config.items() if k != key}
+        with pytest.raises(ConfigError, match=f"{key}: is required"):
+            from_config(OceanLook, short)
 
 
 @pytest.mark.parametrize(
     "cls,config,message",
     [
-        (OceanLook, {"swel_amplitude": 1.0}, "unknown keys.*swel_amplitude"),
+        (OceanLook, whole(OceanLook(), swel_amplitude=1.0), "unknown.*swel_amplitude"),
         (Annulus, {"inner": 1.0, "outer": 2.0}, "thickness: is required"),
-        (Annulus, {"inner": 3.0, "outer": 2.0, "thickness": 1.0}, "inner"),
-        (OceanLook, {"swell_amplitude": "big"}, "not a number"),
-        (OceanLook, {"wind_dir": [1.0]}, "needs 2 values"),
-        (CloudLook, {"cloud_type": "plasma"}, "not one of"),
-        (PLANET.__class__, {"name": "x", "sea_bias": 1.0}, "computed"),
+        (Annulus, whole(ANNULUS, inner=3.0, outer=2.0), "inner"),
+        (OceanLook, whole(OceanLook(), swell_amplitude="big"), "not a number"),
+        (OceanLook, whole(OceanLook(), wind_dir=[1.0]), "needs 2 values"),
+        (CloudLook, whole(CLOUDS, cloud_type="plasma"), "not one of"),
+        (PLANET.__class__, whole(PLANET, sea_bias=1.0), "computed"),
         (
             Stamp,
-            {"heightmap": "a.png", "placement": PLACE, "blend": "melt"},
+            {
+                "heightmap": "a.png",
+                "placement": {**PLACE, "rotation": 0.0},
+                "height_scale": 1.0,
+                "height_offset": 0.0,
+                "blend": "melt",
+                "falloff": 0.0,
+            },
             "blend",
         ),
-        (FieldSpec, {"shape": {"type": "cube"}}, "type 'cube'"),
-        (FieldSpec, {"shape": {"inner": 1}}, "needs a type"),
-        (
-            FieldSpec,
-            {
-                "shape": {"type": "sphere", "radius": 1.0},
-                "density": {"count_per_km3": 1.0},
-                "sizes": {"kind": "zipf"},
-            },
-            "kind 'zipf'",
-        ),
+        (FieldSpec, whole(CUBE, shape={"type": "cube"}), "type 'cube'"),
+        (FieldSpec, whole(CUBE, shape={"inner": 1}), "needs a type"),
+        (FieldSpec, whole(CUBE, sizes={"kind": "zipf"}), "kind 'zipf'"),
     ],
 )
 def test_errors_say_where(cls, config, message):
@@ -155,13 +168,15 @@ def test_errors_are_value_errors():
 
 
 def test_a_union_is_chosen_by_its_type_key():
+    base = whole(CUBE)
     field = from_config(
         FieldSpec,
         {
-            "shape": {"type": "box", "half_size": [1, 2, 3]},
-            "density": {"count_per_km3": 1.0},
+            **base,
+            "shape": {**base["shape"], "type": "box", "half_size": [1, 2, 3]},
             "sizes": {"kind": "uniform", "lo": 1, "hi": 2},
             "spin": {
+                **base["spin"],
                 "rate": {"kind": "uniform", "lo": 0.1, "hi": 0.2},
                 "axis": {"type": "around_axis", "axis": [0, 0, 1], "kappa": 4},
             },
@@ -176,7 +191,9 @@ def test_a_union_is_chosen_by_its_type_key():
 
 
 def test_a_file_link_is_the_file_with_the_keys_beside_it_on_top(tmp_path):
-    (tmp_path / "sea.yaml").write_text("swell_amplitude: 5\nfoam_depth: 1\n")
+    (tmp_path / "sea.yaml").write_text(
+        yaml.safe_dump(whole(OceanLook(), swell_amplitude=5, foam_depth=1))
+    )
     data = {"ocean": {"file": "sea.yaml", "foam_depth": 2}}
     ocean = from_config(OceanLook, expand(data, tmp_path)["ocean"], tmp_path)
     assert (ocean.swell_amplitude, ocean.foam_depth) == (5.0, 2.0)

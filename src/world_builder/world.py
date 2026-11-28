@@ -64,13 +64,14 @@ from __future__ import annotations
 import functools
 import math
 from collections.abc import Callable, Generator, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import (
     AmbientLight,
+    BitMask32,
     ClockObject,
     DirectionalLight,
     NodePath,
@@ -84,6 +85,8 @@ from world_builder.asteroids.haze import ring_depth
 from world_builder.asteroids.spec import Annulus, FieldSpec, KeepOut
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cloud import CloudType
+from world_builder.clouds.cover import TAG as COVER_TAG
+from world_builder.clouds.cover import CloudCover
 from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds, check_layers
@@ -108,6 +111,15 @@ from world_builder.terrain.workers import ChunkExecutor
 
 #: Open space (a world with no body): the view's far distance, metres.
 SPACE_FAR_M = 1.0e6
+#: The into mask of the terrain's collision nodes unless the game gives its own
+COLLISION_MASK = BitMask32.all_on()
+#: How far from the camera the ground is solid, metres (each chunk farther
+#: costs a check every frame), and how far the rocks are
+COLLISION_RANGE_BODIES_M = 10_000.0
+COLLISION_RANGE_FIELDS_M = 20_000.0
+#: A gravity weaker than this (norm of the raw vector, in the units of the
+#: bodies' masses and the gravity constant) gives no "up" (:meth:`World.up_at`)
+MIN_GRAVITY_NORM = 0.1
 #: The stages the light at the camera and the tracked nodes is reckoned in
 #: (``World(light_period=...)`` spreads them over its frames): the air's
 #: light; the eclipses and the clouds' shadow; the rings' and the mountains'
@@ -290,6 +302,18 @@ class FieldLook:
 
 
 @dataclass
+class Collisions:
+    """What :meth:`World.enable_collision` made.
+
+    :ivar bodies: the bodies' terrain collisions
+    :ivar fields: the fields' collision nodes
+    """
+
+    bodies: list[TerrainCollision]
+    fields: list[NodePath]
+
+
+@dataclass
 class Body:
     """A built body: its look and its parts.
 
@@ -372,22 +396,24 @@ class World:
         self,
         app: Any,
         bodies: Sequence[BodyLook],
-        sun: SunLook = SunLook(),
+        sun: SunLook | None = SunLook(),
         sky: SkyLook | None = None,
         settings: WorldSettings | None = None,
         lights: bool = True,
         light_scale: float = 1.0,
         clock: Callable[[], float] | None = None,
         backend: str = "process",
-        space_ambient: ArrayLike = (0.025, 0.025, 0.03),
+        space_ambient: ArrayLike | None = (0.025, 0.025, 0.03),
         fields: Sequence[FieldLook] = (),
         light_period: int = 1,
+        collision_mask: BitMask32 | None = COLLISION_MASK,
     ) -> None:
         """
         :param app: the ShowBase: its render, camera, lens and window
         :param bodies: the planets and moons; none for open space (the sky,
             the sun and the lights alone)
-        :param sun: the sun
+        :param sun: the sun; None = none (no direct light, no disc in the
+            sky, no shadow it casts: the world is lit by its ambient alone)
         :param sky: the sky; None = none (the game draws its own)
         :param settings: what every part costs; None = HIGH
         :param lights: put Panda3D's sun and ambient lights on render, as the
@@ -402,7 +428,7 @@ class World:
         :param backend: where chunks and cloud tiles are generated
             (:class:`ChunkExecutor`)
         :param space_ambient: the sky light where there is no body (open
-            space), linear
+            space), linear; None = none (black)
         :param fields: the asteroid fields and rings
         :param light_period: frames between two settings of the light at
             the camera and at the tracked nodes (:meth:`lights_at`, ~1 ms in
@@ -411,6 +437,13 @@ class World:
             lights keep their last values in between. They are reckoned
             again at once when the sun moves or the tracked nodes change.
             1 = all of it every frame
+        :param collision_mask: the into mask of the collision nodes every
+            terrain gets (bodies' ground and sea, fields' rocks): all of it is
+            solid to the game's collision traverser from the start, whatever
+            its kind (see :meth:`enable_collision`). The nodes are named
+            ``"terrain"``. None = nothing is solid
+        :raises NativeCollisionError: the native collision library is not
+            built for the running Panda3D (``invoke native``)
         :raises ValueError: two bodies (or fields) of one name, clouds
             without air, a high layer (the cirrus) not above the clouds or
             not inside the air, or an ocean on a dry planet
@@ -455,8 +488,19 @@ class World:
         #: The frame-rate cap (``WorldSettings.display``, off by default):
         #: Panda3D's global clock, process-wide.
         self.frame_cap = FrameCap(self.settings.display)
+        if sun is None:
+            # No sun: one that gives no light, and has no disc in the sky
+            sun = SunLook(
+                direction=(0.0, 0.0, 1.0),
+                color=(0.0, 0.0, 0.0),
+                angular_radius=SUN_ANGULAR_RADIUS,
+            )
+            if sky is not None:
+                sky = replace(sky, sun_radiance=(0.0, 0.0, 0.0))
         self._sun = self._unit(sun.direction)
         self._sun_color = np.asarray(sun.color, dtype=np.float64)
+        if space_ambient is None:
+            space_ambient = (0.0, 0.0, 0.0)
         self._space_ambient = np.asarray(space_ambient, dtype=np.float64)
         if clock is None:
             frame_clock = ClockObject.get_global_clock()
@@ -662,6 +706,9 @@ class World:
         self.light_scale = float(light_scale)
         #: The game's models lit where they are (:meth:`track_light`)
         self.tracked = TrackedLights(render)
+        #: The game's translucent surfaces and the clouds in front of them
+        #: (:meth:`track_translucent`)
+        self.cover = CloudCover()
         #: The model shader's inputs in open space (no body)
         self.space_models = self._model_lighting(0.9, None, None, None, light_scale)
         # The sky reflected in the models (ModelSettings' PBR_SKY): the
@@ -680,6 +727,12 @@ class World:
         self.camera_world = np.asarray(
             bodies[0].position if bodies else (0.0, 0.0, 0.0), dtype=np.float64
         )
+        if collision_mask is not None:
+            try:
+                self.enable_collision(collision_mask)
+            except BaseException:
+                self.destroy()
+                raise
 
     def _model_lighting(
         self,
@@ -834,6 +887,53 @@ class World:
             self.bodies,
             key=lambda b: float(np.linalg.norm(point - b.position)) - b.radius,
         )
+
+    def altitude_at(self, point_world: ArrayLike, generate: bool = False) -> float:
+        """Height above the ground of the nearest body.
+
+        :param point_world: world frame, metres
+        :param generate: build the ground chunks the query needs rather than
+            answer from what is already generated (a query must not stall a
+            frame)
+        :returns: the height, metres (0 under the ground); infinite in open
+            space (no body)
+        """
+        if not self.bodies:
+            return math.inf
+        point = np.asarray(point_world, dtype=np.float64)
+        body = self.nearest(point)
+        relative = point - body.position
+        ground = float(body.terrain.query.height_at(relative, generate=generate))
+        return max(float(np.linalg.norm(relative)) - body.radius - ground, 0.0)
+
+    def up_at(
+        self,
+        point_world: ArrayLike,
+        g_constant: float = 1.0,
+        minimum: float = MIN_GRAVITY_NORM,
+    ) -> np.ndarray | None:
+        """Up at a point: against the bodies' gravity there
+        (:meth:`gravity_field`, built once per *g_constant*).
+
+        :param point_world: world frame, metres
+        :param g_constant: G, in the units of the bodies' masses
+        :param minimum: a gravity weaker than this (norm of the raw vector)
+            gives no "up" (:data:`MIN_GRAVITY_NORM`)
+        :returns: a unit vector; None in open space (no body) or where
+            gravity is negligible, for the game to choose
+        """
+        if not self.bodies:
+            return None
+        fields = self.__dict__.setdefault("_gravity_fields", {})
+        if g_constant not in fields:
+            fields[g_constant] = self.gravity_field(g_constant)
+        gravity = fields[g_constant].acceleration(
+            np.asarray(point_world, dtype=np.float64)
+        )
+        norm = float(np.linalg.norm(gravity))
+        if not np.isfinite(norm) or norm < minimum:
+            return None
+        return -gravity / norm
 
     def light_at(self, point_world: ArrayLike) -> tuple[np.ndarray, np.ndarray]:
         """The light at a point, as the terrain's shader lights the ground
@@ -1006,6 +1106,30 @@ class World:
         """Back to the world's lights (the light at the camera)."""
         self.tracked.untrack(node)
 
+    def track_translucent(self, node: NodePath) -> None:
+        """Let a game's translucent surface (one that writes no depth and is
+        drawn after the clouds: a shield bubble) be hidden by the clouds in
+        front of it: its shader includes ``cloud_cover.glsl`` (on Panda's
+        model path from now) and fades itself by ``cloudCoverBefore``, whose
+        inputs every :meth:`update` sets on *node*: the clouds composited
+        that frame, of the body the camera is nearest (see
+        :mod:`world_builder.clouds.cover`).
+
+        :param node: the surface (its children read the same inputs)
+        """
+        self.cover.track(node)
+
+    def untrack_translucent(self, node: NodePath) -> None:
+        """Take the clouds' inputs off a node :meth:`track_translucent` gave
+        them to."""
+        self.cover.untrack(node)
+
+    def cover_off_in(self, camera: NodePath) -> None:
+        """No cloud cover in another view than the main one (a rear-view
+        mirror's camera): the clouds are marched for the main view's pixels
+        alone (:meth:`CloudCover.off_in`)."""
+        self.cover.off_in(camera)
+
     # ── changes ─────────────────────────────────────────────────────────────
 
     def set_sun(self, direction: ArrayLike) -> None:
@@ -1103,31 +1227,85 @@ class World:
             asteroids.haze.set_depth_mode(depth.mode)
 
     def enable_collision(
-        self, into_mask: Any, bodies: Iterable[str] | None = None, **kwargs: Any
-    ) -> list[TerrainCollision]:
-        """Make bodies' drawn terrain solid to the game's collision traverser
-        (:meth:`Terrain.enable_collision`).
+        self,
+        into_mask: Any,
+        bodies: Iterable[str] | None = None,
+        fields: Iterable[str] | None = None,
+        **kwargs: Any,
+    ) -> Collisions:
+        """Make the drawn terrain of bodies and the rocks of fields solid to
+        the game's collision traverser, as one world
+        (:meth:`Terrain.enable_collision`,
+        :meth:`AsteroidField.enable_collision`). The constructor already does
+        it for all of them (``collision_mask``): call this to change the mask
+        or the range, or to leave a body or field out.
 
         :param into_mask: the into mask of their collision nodes
-        :param bodies: their names; None = every body
-        :param kwargs: :meth:`Terrain.enable_collision`'s other arguments
-        :returns: their collisions, in the order of :attr:`bodies`
+        :param bodies: the names of the bodies; None = every body, () = none
+        :param fields: the names of the fields and rings; None = every field,
+            () = none
+        :param kwargs: what both take, given to both: ``name`` (the nodes'
+            name, for the game's event patterns; "terrain"), ``owner_tag``,
+            ``max_distance`` (:data:`COLLISION_RANGE_BODIES_M` and
+            :data:`COLLISION_RANGE_FIELDS_M`); and what only one takes:
+            ``include_ocean`` (bodies), ``samples`` (fields). Each part gets
+            only its own
+        :returns: what was made, in the order of :attr:`bodies` and
+            :attr:`fields`
+        :raises TypeError: an argument none of them takes
+        :raises ValueError: a name that is not a body's (or a field's)
         """
-        chosen = None if bodies is None else set(bodies)
-        return [
-            body.terrain.enable_collision(into_mask, **kwargs)
+        unknown = set(kwargs) - self._BODY_COLLISION - self._FIELD_COLLISION
+        if unknown:
+            raise TypeError(f"enable_collision: unexpected arguments {sorted(unknown)}")
+        for kind, names, built in (
+            ("body", bodies, [b.name for b in self.bodies]),
+            ("field", fields, [look.name for look in self._field_looks]),
+        ):
+            missing = sorted(set(names or ()) - set(built))
+            if missing:
+                raise ValueError(f"no {kind} called {missing} (there is {built})")
+        chosen_bodies = None if bodies is None else set(bodies)
+        chosen_fields = None if fields is None else set(fields)
+        kwargs.setdefault("name", "terrain")
+        body_args = {
+            "max_distance": COLLISION_RANGE_BODIES_M,
+            **{k: v for k, v in kwargs.items() if k in self._BODY_COLLISION},
+        }
+        field_args = {
+            "max_distance": COLLISION_RANGE_FIELDS_M,
+            **{k: v for k, v in kwargs.items() if k in self._FIELD_COLLISION},
+        }
+        made_bodies = [
+            body.terrain.enable_collision(into_mask, **body_args)
             for body in self.bodies
-            if chosen is None or body.name in chosen
+            if chosen_bodies is None or body.name in chosen_bodies
         ]
+        made_fields = [
+            built.enable_collision(into_mask, **field_args)
+            for look, built in zip(self._field_looks, self.fields)
+            if chosen_fields is None or look.name in chosen_fields
+        ]
+        return Collisions(made_bodies, made_fields)
+
+    _BODY_COLLISION = frozenset({"name", "owner_tag", "max_distance", "include_ocean"})
+    _FIELD_COLLISION = frozenset({"name", "owner_tag", "max_distance", "samples"})
 
     def disable_collision(self) -> None:
-        """Remove every body's collision node."""
+        """Remove every body's and every field's collision node."""
         for body in self.bodies:
             body.terrain.disable_collision()
+        for built in self.fields:
+            built.disable_collision()
 
     # ── per frame ───────────────────────────────────────────────────────────
 
-    def update(self, origin_world: ArrayLike, far: float | None = None) -> None:
+    def update(
+        self,
+        origin_world: ArrayLike,
+        far: float | None = None,
+        views: Sequence[NodePath] = (),
+    ) -> None:
         """Per frame, once the camera is placed: everything around it.
 
         :param origin_world: render's origin in the world frame (float64);
@@ -1135,6 +1313,10 @@ class World:
         :param far: the view's far distance this frame
             (:attr:`~world_builder.depth.ReversedDepthCamera.far`), metres.
             None = :meth:`far_distance`'s
+        :param views: more cameras (a rear-view mirror's) that see the
+            asteroid fields and rings: their rocks are held and drawn for
+            them too, not only for the main camera. The terrain, the sea,
+            the trees and the clouds are the main camera's alone
         """
         camera_render = self.camera_render()
         camera = np.asarray(origin_world, dtype=np.float64) + camera_render
@@ -1145,8 +1327,12 @@ class World:
             body.terrain.update(camera, camera_render, camera_forward=forward)
             if body.shadow_map is not None:
                 body.shadow_map.update(camera)  # the local map follows it
+        if views and self.fields:
+            cameras = [getattr(self.app, "cam", None), *views]
+        else:
+            cameras = None  # the app's
         for asteroids in self.fields:
-            asteroids.update(camera, camera_render)
+            asteroids.update(camera, camera_render, cameras=cameras)
         self.atmospheres.update(camera)
         self.shadows.update(camera)
         if self.sky is not None:
@@ -1166,6 +1352,15 @@ class World:
                     body.cloud_maps.update(camera, self._sun, steps)
                 if body.cloud_light is not None:
                     body.cloud_light.update(camera, self._sun)
+        if self.cover.nodes:
+            self.cover.update(self._cover_inputs(camera))
+            # The seas' reflections draw the surfaces with their own camera
+            # (rebuilt with the sea's settings): no cover there
+            for body in self.bodies:
+                if body.ocean is not None:
+                    refl = body.ocean.refl_cam
+                    if refl.node().get_tag_state_key() != COVER_TAG:
+                        self.cover.off_in(refl)
         for body in self.bodies:
             if body.ocean is not None:
                 body.ocean.update(camera)
@@ -1262,6 +1457,18 @@ class World:
         for i, (body, up) in enumerate(zip(seas, ups), start=1 + count):
             self._light_ocean(body, up, direct[i], ambient[i])
 
+    def _cover_inputs(self, camera: np.ndarray):
+        """The clouds a game's translucent surfaces read: those of the body
+        with clouds the camera is nearest (by sea level), as composited this
+        frame; None without."""
+        cloudy = [body for body in self.bodies if body.clouds is not None]
+        if not cloudy:
+            return None
+        body = min(
+            cloudy, key=lambda b: float(np.linalg.norm(camera - b.position)) - b.radius
+        )
+        return body.clouds.cover_inputs()
+
     def _shade_models(self, camera_render: np.ndarray, tracked: np.ndarray) -> None:
         """The tracked nodes drawn by the model shader: each given the inputs
         of the body nearest it (open space's without a body), this frame's.
@@ -1317,6 +1524,7 @@ class World:
     def destroy(self) -> None:
         """Remove every part and the lights, and stop the workers."""
         self.tracked.clear()
+        self.cover.clear()
         self.space_models.destroy()
         if self.casters is not None:
             self.casters.destroy()

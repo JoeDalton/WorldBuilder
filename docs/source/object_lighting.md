@@ -117,6 +117,15 @@ through one `model_<tier>.frag` per shading tier, see
   `TrackedLights` sets to the sky light where the model is (eclipses dim
   it), less `light_scale`. A node with no light at all would read 1: the
   shader is for tracked nodes.
+
+  **`light_scale` does not touch a shaded model.** The shader takes it
+  back off the ambient light (`p3d_LightModel.ambient / uLightScale`, and the
+  same for the sun the PBR ground bounce reads), and its direct sun comes from
+  the world (`modelSunlight`), not from the Panda3D sun light. So
+  `light_scale` only exists for the models drawn by Panda3D's fixed-function
+  lighting (`track_light(node)` without `shader=True`, or untracked nodes under
+  the world's lights on render): it is 1.0 for a game whose lit models all use
+  the shader, and is only lowered to keep the others from clipping.
 - **Then** the air between the camera and the model (`applyAtmospheres`),
   the body's exposure, and the ACES tonemap: the terrain's.
 

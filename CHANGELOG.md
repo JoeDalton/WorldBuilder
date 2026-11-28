@@ -5,7 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## Unreleased
+
+## [0.7.0] 2026-11-28
+
+### Added
+- A game's translucent surfaces (shield bubbles) are hidden by the clouds in front of them: `World.track_translucent(node)` hands them the clouds composited each frame, and their shader fades itself by `cloud_cover.glsl`'s `cloudCoverBefore(gl_FragCoord.xy, distance)` (on Panda's model path once a World is built). `cover_off_in(camera)` for another view (the seas' reflections are done), `clouds.cover.no_cover(node)` for an untracked node, `clouds.cover.translucent_bubble` a reference surface (`demo_world.py --bubble`); a worked example in world.md (a smoke billboard, the blend modes) #65
+- `World.altitude_at(point)` and `World.up_at(point)` (against the bodies' gravity, None where it is negligible), and `GameWorld.chart(body)` / `WorldSpec.chart(body)`: a body's `BodyChart` (chart metres to world positions and level orientations) #65
+- `GameWorld.load_steps(step, quiet_s=0.5, timeout_s=60.0)`: a generator for a game's loading phase, stepping until the world has stayed loaded for a moment #65
+- All terrain is solid from the start: `World(collision_mask=...)` and `load_world(collision_mask=...)` (default: all bits; None = nothing solid) give every body's ground and sea and every field's rocks a `"terrain"` collision node, 10 km (bodies) and 20 km (fields) around the camera; the game enables nothing. A missing native library raises `NativeCollisionError` when the world is built. `World.enable_collision(into_mask, bodies=None, fields=None, **kw)` now only changes that (and covers fields; returns `Collisions(bodies, fields)`), `disable_collision` covers the fields #65
+- `GameWorld.views` (and `World.update(views=...)`): more cameras, a rear-view mirror's, that the asteroid fields and rings are drawn for #65
+- `load_world(..., keep_outs={field name: [KeepOut, ...]})` adds a level's room to the file's fields, and `load_world` takes a `WorldSpec` as well as a path (no temporary file round trip); `world_file.with_keep_outs(spec, keep_outs)` #65
+
+### Changed
+- **Breaking:** a world file has no default values. A block that is there is
+  written whole (a missing field is an error naming where it is); a block that
+  is not there is not in the world: no `sun` is no sun (no direct light, no
+  disc in the sky), no `sky` is no skybox, no `space_ambient` is no ambient
+  light in open space. `WorldSpec` and `World` take `sun=None` and
+  `space_ambient=None` for this. The looks keep their defaults in code #65
 
 ## [0.6.1] 2026-11-28
 

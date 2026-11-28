@@ -11,15 +11,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from panda3d.core import Camera
 
 import world_builder
-from world_builder.config import ConfigError, to_config
+from world_builder.asteroids.spec import KeepOut
+from world_builder.config import ConfigError
+from world_builder.shadows import SUN_ANGULAR_RADIUS
 from world_builder.world import SunLook
 from world_builder.world_file import (
+    GameWorld,
     load_field,
     load_planet,
     load_world,
     parse_world,
+    with_keep_outs,
     world_to_yaml,
 )
 
@@ -106,8 +111,21 @@ def test_deep_space_is_the_cube_of_asteroids():
     assert world.bodies == ()
     (cube,) = world.fields
     assert cube.spec == load_field("asteroid_cube")
-    assert world.sun == SunLook(direction=(-0.45, -0.85, 0.3), color=(2.6, 2.5, 2.35))
+    assert world.sun == SunLook(
+        direction=(-0.45, -0.85, 0.3),
+        color=(2.6, 2.5, 2.35),
+        angular_radius=SUN_ANGULAR_RADIUS,
+    )
     assert world.space_ambient == (0.03, 0.03, 0.04)
+
+
+def test_a_file_has_no_defaults_for_its_world():
+    """No sun, no sky, no ambient in a file: none in the world."""
+    world = parse_world(moon_world(mass=1.0))
+    assert world.sun is None and world.sky is None and world.space_ambient is None
+    assert parse_world({"sun": None, "sky": None}).sun is None
+    text = yaml.safe_load(world_to_yaml(world))
+    assert not set(text) & {"sun", "sky", "space_ambient"}
 
 
 def test_a_world_file_has_no_run_time_values():
@@ -137,10 +155,15 @@ def test_load_planet_and_load_field_read_files_by_name_or_path():
 # ── the rules of a file ─────────────────────────────────────────────────────
 
 
+def moon_body(**body):
+    """The shipped moon's file, whole (a file has no defaults), as a body."""
+    data = yaml.safe_load((WORLDS / "moon.yaml").read_text())
+    data.pop("mass")
+    return {"name": "m", "position": [0.0, 0.0, 0.0], **data, **body}
+
+
 def moon_world(**body):
-    return {
-        "bodies": [{"name": "m", "planet": {"name": "m", "radius": 2e5}, **body}],
-    }
+    return {"bodies": [moon_body(**body)]}
 
 
 def test_a_body_has_a_mass_or_a_density():
@@ -158,9 +181,15 @@ def test_a_body_has_a_mass_or_a_density():
     [
         ({"quality": "high"}, "unknown keys.*quality"),
         ({"bodies": [{"name": "a", "mass": 1.0}]}, "planet: is required"),
+        (moon_world(mass=1, x=1), "unknown keys.*x"),
+        (moon_world(mass=1, exposure=None) | {"sun": {}}, "sun.direction: is required"),
         (
-            {"bodies": [{"name": "a", "mass": 1, "planet": {"name": "a"}, "x": 1}]},
-            "unknown keys.*x",
+            moon_world(mass=1) | {"sky": {"stars": None}},
+            "sky.star_intensity: is required",
+        ),
+        (
+            {"bodies": [moon_body(mass=1, planet={"name": "a"})]},
+            "planet.seed: is required",
         ),
         ({"fields": [{"name": "f", "spec": {}, "axis": [0, 0, 0]}]}, "zero vector"),
         (
@@ -175,16 +204,8 @@ def test_a_bad_world_says_what_and_where(world, message):
 
 
 def test_clouds_need_air_in_a_file_as_in_a_world(tmp_path):
-    text = {
-        "bodies": [
-            {
-                "name": "a",
-                "mass": 1.0,
-                "planet": {"name": "a"},
-                "clouds": {},
-            }
-        ]
-    }
+    clouds = yaml.safe_load((WORLDS / "kerbin.yaml").read_text())["clouds"]
+    text = moon_world(mass=1.0, clouds=clouds)
     # Parsing accepts it; the world refuses it when built (World's own check)
     world = parse_world(text)
     assert world.bodies[0].atmosphere is None and world.bodies[0].clouds is not None
@@ -192,11 +213,8 @@ def test_clouds_need_air_in_a_file_as_in_a_world(tmp_path):
 
 def test_a_game_keeps_its_world_anywhere(tmp_path):
     """The links and the images are looked for next to the world file."""
-    (tmp_path / "rock.yaml").write_text(
-        yaml.safe_dump(
-            {"planet": to_config(load_planet("moon")), "mass": 1.0},
-        )
-    )
+    rock = yaml.safe_load((WORLDS / "moon.yaml").read_text())
+    (tmp_path / "rock.yaml").write_text(yaml.safe_dump(rock))
     path = tmp_path / "mine.yaml"
     path.write_text("bodies:\n  - {name: rock, file: rock.yaml, position: [1, 2, 3]}\n")
     (rock,) = parse_world(path).bodies
@@ -222,6 +240,124 @@ def window(showbase):
     if showbase.win is None:
         pytest.skip("no offscreen window")
     return showbase
+
+
+# ── loading steps (no window: a stand-in world) ─────────────────────────────
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+def _gate(loading, dt=0.125, **args):
+    """GameWorld.load_steps over a world whose loading flag follows *loading*,
+    one value per step (the last repeats), the clock advancing *dt* each.
+
+    :return: (yielded, steps taken, the clock, the pauses, the return value)
+    """
+    from types import SimpleNamespace
+
+    clock, states, pauses = _Clock(), iter(loading), []
+    world = SimpleNamespace(loading=True)
+    game = GameWorld.__new__(GameWorld)
+    game.world = world
+    steps = []
+
+    def step():
+        steps.append(1)
+        world.loading = next(states, loading[-1])
+        clock.now += dt
+
+    gen = game.load_steps(step, clock=clock, pause=pauses.append, **args)
+    yielded = 0
+    while True:
+        try:
+            next(gen)
+        except StopIteration as done:
+            return yielded, len(steps), clock, pauses, done.value
+        yielded += 1
+
+
+def test_load_steps_end_once_quiet_for_the_quiet_time():
+    yielded, steps, clock, _, loaded = _gate([True, True, False])
+    # Two loading steps, then quiet from the third (0.375 s) on
+    assert clock.now == 0.375 + 0.5 and loaded is True
+    assert yielded == steps - 1
+
+
+def test_one_quiet_frame_is_not_enough():
+    _, _, clock, _, _ = _gate([False, True, True, False], quiet_s=0.25)
+    assert clock.now == 0.5 + 0.25  # quiet again from the fourth step on
+
+
+def test_load_steps_yield_to_the_workers_only_while_loading():
+    from world_builder.world_file import LOADING_PAUSE_S
+
+    _, _, _, pauses, _ = _gate([True, True, False])
+    assert pauses == [LOADING_PAUSE_S] * 2
+
+
+def test_load_steps_give_up_after_the_timeout(caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        _, _, clock, _, loaded = _gate([True], dt=1.0, timeout_s=10.0)
+    assert clock.now == pytest.approx(10.0) and loaded is False
+    assert "still loading" in caplog.text
+
+
+def test_a_levels_keep_outs_are_added_to_the_files(window):
+    from world_builder.settings import WorldSettings
+
+    own = parse_world(DEEP).fields[0].keep_outs
+    room = KeepOut((0.0, 0.0, 0.0), 50.0)
+    spec = with_keep_outs(parse_world(DEEP), {"cube": [room]})
+    assert spec.fields[0].keep_outs == (*own, room)
+    with pytest.raises(ConfigError, match="no field called.*nope"):
+        with_keep_outs(parse_world(DEEP), {"nope": [room]})
+    # By path or as a spec, the loaded world has them
+    for source in (DEEP, parse_world(DEEP)):
+        world = load_world(
+            window,
+            source,
+            keep_outs={"cube": [room]},
+            settings=WorldSettings.preset("low"),
+            backend="inline",
+        )
+        try:
+            assert world.spec.fields[0].keep_outs == (*own, room)
+        finally:
+            world.destroy()
+
+
+def test_game_world_views_reach_the_fields(window):
+    from world_builder.settings import WorldSettings
+
+    world = load_world(
+        window, DEEP, settings=WorldSettings.preset("low"), backend="inline"
+    )
+    mirror = window.render.attach_new_node(Camera("mirror"))
+    seen = []
+    field = world.field("cube")
+    real = field.update
+    field.update = lambda *args, cameras=None: (
+        seen.append(cameras) or real(*args, cameras=cameras)
+    )
+    try:
+        world.update(np.array([0.0, -9000.0, 500.0]))
+        world.views.append(mirror)
+        world.update(np.array([0.0, -9000.0, 500.0]))
+        world.views.clear()
+        world.update(np.array([0.0, -9000.0, 500.0]))
+        assert seen[0] is None and seen[2] is None
+        assert seen[1] == [window.cam, mirror]
+    finally:
+        mirror.remove_node()
+        world.destroy()
 
 
 def test_deep_space_loads_and_updates(window):
@@ -312,6 +448,11 @@ def test_a_world_loads_without_a_window():
     import subprocess
     import sys
 
+    from world_builder.terrain.native import library_path
+
+    if not library_path().exists():
+        # Every terrain is solid from the start: a world needs the library
+        pytest.skip("the native collision library is not built (invoke native)")
     worlds = [WORLDS / "tiny_world.yaml", DEEP]  # a sea; an asteroid field
     run = subprocess.run(
         [sys.executable, "-c", _WINDOWLESS, *map(str, worlds)],

@@ -44,13 +44,15 @@ from __future__ import annotations
 import functools
 import logging
 import math
-from dataclasses import dataclass, field
+import time
+from collections.abc import Callable, Generator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from world_builder.asteroids.spec import FieldSpec
+from world_builder.asteroids.spec import FieldSpec, KeepOut
 from world_builder.config import (
     ConfigError,
     Context,
@@ -61,8 +63,10 @@ from world_builder.config import (
 )
 from world_builder.depth import ReversedDepthCamera
 from world_builder.settings import WorldSettings
+from world_builder.terrain.chart import BodyChart
 from world_builder.terrain.planet import PlanetSpec
 from world_builder.world import (
+    COLLISION_MASK,
     BodyLook,
     FieldLook,
     SkyLook,
@@ -73,6 +77,8 @@ from world_builder.world import (
 #: The camera's far plane before the first frame: the sea's reflection camera
 #: copies the lens when it is built, so it is set before the world.
 INITIAL_FAR_M = 600000.0
+#: Sleep this long after a loading step that still loads (:meth:`GameWorld.load_steps`)
+LOADING_PAUSE_S = 0.005
 
 __all__ = [
     "SHIPPED_FIELDS",
@@ -84,6 +90,7 @@ __all__ = [
     "load_planet",
     "load_world",
     "parse_world",
+    "with_keep_outs",
     "world_to_yaml",
 ]
 
@@ -105,16 +112,32 @@ class WorldSpec:
 
     :ivar bodies: its planets and moons
     :ivar fields: its asteroid fields and rings
-    :ivar sun: its sun
-    :ivar sky: its sky (None: no sky; the file's ``sky: null``)
-    :ivar space_ambient: the sky light away from every body, linear
+    :ivar sun: its sun (None: no sun, no direct light; the file has no
+        ``sun`` or ``sun: null``)
+    :ivar sky: its sky (None: no skybox; the file has no ``sky`` or ``sky: null``)
+    :ivar space_ambient: the sky light away from every body, linear (None:
+        none; a file without ``space_ambient``)
     """
 
     bodies: tuple[BodyLook, ...] = ()
     fields: tuple[FieldLook, ...] = ()
-    sun: SunLook = field(default_factory=SunLook)
-    sky: SkyLook | None = field(default_factory=SkyLook)
-    space_ambient: tuple[float, float, float] = (0.025, 0.025, 0.03)
+    sun: SunLook | None = None
+    sky: SkyLook | None = None
+    space_ambient: tuple[float, float, float] | None = None
+
+    def chart(self, body_name: str) -> BodyChart:
+        """The chart of a body of the world, placed where the file puts it
+        (no window needed): levels write positions in chart metres.
+
+        :raises KeyError: for a name that is not a body's
+        """
+        for body in self.bodies:
+            if body.name == body_name:
+                spec = body.spec
+                return BodyChart(
+                    spec.reference_lat, spec.reference_lon, spec.radius, body.position
+                )
+        raise KeyError(body_name)
 
 
 def parse_world(source: Path | str | dict) -> WorldSpec:
@@ -141,12 +164,15 @@ def parse_world(source: Path | str | dict) -> WorldSpec:
     ctx = Context(base)
     kwargs: dict[str, Any] = {}
     if "sun" in data:
-        kwargs["sun"] = build(SunLook, data["sun"], ctx, "sun")
+        kwargs["sun"] = build(SunLook | None, data["sun"], ctx, "sun")
     if "sky" in data:
         kwargs["sky"] = build(SkyLook | None, data["sky"], ctx, "sky")
     if "space_ambient" in data:
         kwargs["space_ambient"] = build(
-            tuple[float, float, float], data["space_ambient"], ctx, "space_ambient"
+            tuple[float, float, float] | None,
+            data["space_ambient"],
+            ctx,
+            "space_ambient",
         )
     bodies = data.get("bodies") or []
     fields_ = data.get("fields") or []
@@ -267,13 +293,14 @@ def _z_to(axis: tuple[float, float, float], path: str) -> tuple[float, ...]:
 def world_to_yaml(spec: WorldSpec) -> str:
     """:returns: *spec* as one self-contained world file (no links; image
     paths absolute). Mostly to read what a world is made of."""
-    out: dict[str, Any] = {
-        "sun": to_config(spec.sun),
-        "sky": None if spec.sky is None else to_config(spec.sky),
-        "space_ambient": list(spec.space_ambient),
-        "bodies": [],
-        "fields": [],
-    }
+    out: dict[str, Any] = {}
+    if spec.sun is not None:
+        out["sun"] = to_config(spec.sun)
+    if spec.sky is not None:
+        out["sky"] = to_config(spec.sky)
+    if spec.space_ambient is not None:
+        out["space_ambient"] = list(spec.space_ambient)
+    out |= {"bodies": [], "fields": []}
     for body in spec.bodies:
         ctx = Context(planet=body.spec)
         dumped = to_config(body, ctx=ctx)
@@ -293,6 +320,10 @@ class GameWorld:
     :ivar spec: what the file defined
     :ivar world: the :class:`World`: bodies, fields, sky, lights, gravity,
         collisions (see its docs)
+    :ivar views: more cameras (camera NodePaths: a rear-view mirror's) the
+        asteroid fields and rings are drawn for, besides the game's own; the
+        game adds and removes them as they are shown (the list is read on
+        every :meth:`update`)
     :ivar depth: the reversed camera
         (:class:`~world_builder.depth.ReversedDepthCamera`); None in an app
         without a window (``window-type none``: a game's headless runs),
@@ -303,6 +334,7 @@ class GameWorld:
         self.app = app
         self.spec = spec
         self.world = world
+        self.views: list[Any] = []
         self.depth: ReversedDepthCamera | None = None
         if getattr(app, "win", None) is None:
             LOGGER.info("no window: the world is built without its depth camera")
@@ -319,6 +351,11 @@ class GameWorld:
         """:returns: the built body called *name* (:meth:`World.body`)"""
         return self.world.body(name)
 
+    def chart(self, body_name: str) -> BodyChart:
+        """:returns: the chart of a body, as the file places it
+        (:meth:`WorldSpec.chart`)"""
+        return self.spec.chart(body_name)
+
     def field(self, name: str):
         """:returns: the built field called *name* (:meth:`World.field`)"""
         return self.world.field(name)
@@ -329,12 +366,65 @@ class GameWorld:
 
         :param origin_world: the camera's position in the world frame, metres
             (float64; the camera itself stays at render's origin)
+
+        The asteroid fields are drawn for :attr:`views` too.
         """
+        views = tuple(self.views)
         if self.depth is None:
-            self.world.update(origin_world)
+            self.world.update(origin_world, views=views)
             return
         self.depth.update(self.world.far_distance(origin_world))
-        self.world.update(origin_world, far=self.depth.far)
+        self.world.update(origin_world, far=self.depth.far, views=views)
+
+    def load_steps(
+        self,
+        step: Callable[[], None],
+        quiet_s: float = 0.5,
+        timeout_s: float = 60.0,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        pause: Callable[[float], None] = time.sleep,
+    ) -> Generator[None, None, bool]:
+        """Hold a game's loading phase until the world has loaded around the
+        camera (ground not drawn yet is not solid): *step* once per
+        iteration, until :attr:`World.loading` has stayed False for *quiet_s*
+        (it flickers in flight, one quiet frame is not enough).
+
+        The generator yields once per step, for the game to advance a loading
+        animation by, and returns whether the world loaded (True) or
+        *timeout_s* ran out (False, logged: the game may start anyway)::
+
+            for _ in game_world.load_steps(step):
+                render_loading_frame()
+
+        :param step: advance the game by a frame: the game loop is paused
+            while it loads, so this is what runs a frame (it moves render's
+            origin and calls :meth:`update`)
+        :param quiet_s: how long :attr:`World.loading` must stay False, seconds
+        :param timeout_s: give up after this long, seconds
+        :param clock: real time, seconds
+        :param pause: sleeps, seconds: a few milliseconds after each step
+            that still loads, as the workers' results come back through a
+            thread of this process, which a loop that never sleeps starves
+        """
+        start = clock()
+        quiet_since = None
+        while True:
+            step()
+            now = clock()
+            if self.world.loading:
+                quiet_since = None
+                pause(LOADING_PAUSE_S)
+            elif quiet_since is None:
+                quiet_since = now
+            elif now - quiet_since >= quiet_s:
+                return True
+            if now - start >= timeout_s:
+                LOGGER.warning(
+                    f"world still loading after {timeout_s:.0f} s: giving up waiting"
+                )
+                return False
+            yield
 
     def destroy(self) -> None:
         """Remove the world and stop its workers."""
@@ -343,28 +433,66 @@ class GameWorld:
         self.world.destroy()
 
 
+def with_keep_outs(
+    spec: WorldSpec, keep_outs: Mapping[str, Sequence[KeepOut]]
+) -> WorldSpec:
+    """*spec* with more room kept clear in some of its fields.
+
+    :param keep_outs: field name -> the room to keep clear there, added to the
+        field's own (the file's)
+    :raises ConfigError: a name that is not one of the fields
+    """
+    names = {look.name for look in spec.fields}
+    unknown = sorted(set(keep_outs) - names)
+    if unknown:
+        raise ConfigError(
+            f"keep_outs: no field called {unknown} (the world has {sorted(names)})"
+        )
+    fields = tuple(
+        replace(look, keep_outs=(*look.keep_outs, *keep_outs[look.name]))
+        if look.name in keep_outs
+        else look
+        for look in spec.fields
+    )
+    return replace(spec, fields=fields)
+
+
 def load_world(
     app: Any,
-    source: Path | str,
+    source: Path | str | WorldSpec,
     *,
+    keep_outs: Mapping[str, Sequence[KeepOut]] | None = None,
     settings: WorldSettings | None = None,
     backend: str = "process",
     clock: Any = None,
+    collision_mask: Any = COLLISION_MASK,
     **world_args: Any,
 ) -> GameWorld:
     """Build the world a file defines around a game's camera.
 
     :param app: the ShowBase
-    :param source: the world file (YAML)
+    :param source: the world file (YAML), or a :class:`WorldSpec` (what
+        :func:`parse_world` returns, changed or built by the game)
+    :param keep_outs: room a level keeps clear in some fields, by field name,
+        added to the file's (see :func:`with_keep_outs`)
     :param settings: what every part costs; None = HIGH
     :param backend: where chunks and cloud tiles are generated
         (``"process"``, ``"thread"`` or ``"inline"``)
     :param clock: game time in seconds, a callable; None = Panda's frame time
+    :param collision_mask: the into mask of the collision nodes of every
+        terrain: bodies' ground and sea, fields' rocks, all solid from the
+        start (named ``"terrain"``; None = nothing is solid). The game only
+        gives its mask
     :param world_args: any other argument of :class:`World` that is the
         game's (``lights``, ``light_scale``, ``light_period``)
     :returns: the loaded world
+    :raises ConfigError: a keep-out for a field the world does not have
+    :raises NativeCollisionError: the native collision library is missing
+        (``invoke native``)
     """
-    spec = parse_world(source)
+    spec = source if isinstance(source, WorldSpec) else parse_world(source)
+    if keep_outs:
+        spec = with_keep_outs(spec, keep_outs)
     # Before the world is built: the sea's reflection camera copies the lens.
     # (An app without a window has none.)
     if getattr(app, "camLens", None) is not None:
@@ -376,6 +504,7 @@ def load_world(
         sky=spec.sky,
         settings=settings,
         clock=clock,
+        collision_mask=collision_mask,
         backend=backend,
         space_ambient=spec.space_ambient,
         fields=spec.fields,

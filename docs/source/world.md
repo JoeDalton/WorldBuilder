@@ -63,7 +63,7 @@ pool (`executor=world.executor`).
 
 Each look field is an argument of the same name of the part it configures,
 with the same default. A test checks this, so the looks never drift from the
-parts.
+parts. (A world *file* has no defaults: see `world_file.md`.)
 
 - **`BodyLook`**: one planet or moon.
   - `name`: what `World.body(name)` finds it by.
@@ -193,8 +193,117 @@ fills up for its garbage collection to empty: about 1 ms a frame in low
 flight (see [performance](performance.md) §19). The library sets no PRC of
 its own; `scripts/tools.window_config` does.
 
-A game's own translucent volumes, such as shield bubbles, need nothing: one
-camera draws them once.
+A game's own translucent volumes, such as shield bubbles, are drawn once by
+the one camera. The clouds write no depth, though, so a volume that writes none
+either (drawn after them) would be laid over a cloud in front of it:
+**`track_translucent(node)`** gives it the clouds composited each frame, and
+its shader fades itself by them with `cloud_cover.glsl`'s
+`cloudCoverBefore(gl_FragCoord.xy, distance)` (the opacity of the cloud between
+the camera and the fragment, `distance` metres away):
+
+```glsl
+#pragma include "cloud_cover.glsl"   // on Panda's model path once a World is built
+...
+alpha *= 1.0 - cloudCoverBefore(gl_FragCoord.xy, length(viewPos));
+```
+
+A dense cloud in front hides it, a thin one lets it through, one behind stays
+behind. The clouds are those of the body the camera is nearest. A node whose
+shader includes the file but no world tracks gets its inputs with no cloud from
+`clouds.cover.no_cover(node)` (`untrack_translucent` leaves those). The clouds are
+marched for the main view: `cover_off_in(camera)` switches the cover off in
+another one (a rear-view mirror; the seas' reflections are done for you).
+Limits: one distance per pixel (a volume inside a cloud is all in front of it or
+all behind), the cirrus decks are not covered. `clouds.cover.translucent_bubble`
+is a reference surface (`scripts/demo_world.py --bubble DISTANCE RADIUS`,
+`--no-cover` to compare).
+
+### Example: a smoke billboard behind the clouds
+
+A game's puff of smoke, a camera-facing card drawn with straight alpha. The
+world is loaded first: that puts `cloud_cover.glsl` on Panda's model path,
+where the fragment shader's `#pragma include` finds it.
+
+```python
+from panda3d.core import CardMaker, Shader, TransparencyAttrib
+from world_builder import load_world
+from world_builder.clouds.cover import no_cover
+
+game_world = load_world(app, "my_world.yaml")
+world = game_world.world
+
+maker = CardMaker("smoke")
+maker.set_frame(-50.0, 50.0, -50.0, 50.0)      # 100 m across
+smoke = app.render.attach_new_node(maker.generate())
+smoke.set_billboard_point_eye()
+smoke.set_transparency(TransparencyAttrib.M_alpha)
+smoke.set_depth_write(False)                    # translucent: tests depth, writes none
+smoke.set_bin("fixed", 60)                      # after the clouds' bin
+smoke.set_light_off()
+smoke.set_shader(Shader.load(Shader.SL_GLSL, vertex="smoke.vert", fragment="smoke.frag"))
+no_cover(smoke)                                 # inputs with no cloud: it draws untracked too
+world.track_translucent(smoke)                  # the clouds' inputs, set by every update
+
+world.cover_off_in(mirror_camera)               # a second view (a mirror): no cover there
+
+# Every frame, as for anything in the world: the camera stays at render's
+# origin, so the smoke is placed relative to it, then the world is updated.
+smoke.set_pos(*(smoke_world - camera_world))
+game_world.update(camera_world)
+
+# When the smoke is gone
+world.untrack_translucent(smoke)
+smoke.remove_node()
+```
+
+`smoke.vert` hands the fragment its distance from the camera (view space is
+metres from the eye):
+
+```glsl
+#version 330
+in vec4 p3d_Vertex;
+in vec2 p3d_MultiTexCoord0;
+uniform mat4 p3d_ModelViewProjectionMatrix;
+uniform mat4 p3d_ModelViewMatrix;
+out vec2 vUv;
+out float vDistance;
+void main() {
+    vUv = p3d_MultiTexCoord0;
+    vDistance = length((p3d_ModelViewMatrix * p3d_Vertex).xyz);
+    gl_Position = p3d_ModelViewProjectionMatrix * p3d_Vertex;
+}
+```
+
+`smoke.frag` fades by the cloud in front of each fragment:
+
+```glsl
+#version 330
+#pragma include "cloud_cover.glsl"
+in vec2 vUv;
+in float vDistance;
+out vec4 fragColor;
+void main() {
+    float puff = 1.0 - smoothstep(0.2, 0.5, length(vUv - 0.5));   // a soft disc
+    float alpha = 0.8 * puff;
+    alpha *= 1.0 - cloudCoverBefore(gl_FragCoord.xy, vDistance);
+    fragColor = vec4(vec3(0.35), alpha);
+}
+```
+
+What to scale depends on the blend:
+
+| Blend | Scale by `1 - cover` |
+|---|---|
+| straight alpha (`M_alpha`: smoke, a shield) | the alpha |
+| additive weighted by alpha (`INCOMING_ALPHA, ONE`: fire) | the alpha |
+| additive (`ONE, ONE`: a laser's glow) | the colour |
+| premultiplied (`ONE, ONE_MINUS_INCOMING_ALPHA`) | the colour and the alpha |
+
+The fragment's distance must be the one from the camera to that fragment in
+metres: from the view-space position as here, or `length(worldPos - eye)` with
+the eye from `p3d_ViewMatrixInverse[3]` (both in render's frame, whose units are
+metres). A node made of many particles (one geometry, animated in its vertex
+shader) is tracked once, as one node.
 
 ## Other members
 
@@ -209,8 +318,26 @@ camera draws them once.
 - **`loading`**: True while any terrain waits for ground, any clouds for
   tiles, or any field for its prototypes and the rocks in range. Wait for it to stay False for a moment before trusting the ground
   (see the terrain's loading phase in [Terrain](terrain.md)).
-- **`enable_collision(into_mask, bodies=None, **kw)`**: makes bodies' drawn
-  terrain solid to the game's collision traverser.
+- **Collision is on from the start.** Every body's ground (and sea) and every
+  field's rocks get a `"terrain"` collision node with the world's
+  `collision_mask` (a `World` argument, `load_world`'s too; default all bits;
+  None = nothing solid), within `COLLISION_RANGE_BODIES_M` (10 km) and
+  `COLLISION_RANGE_FIELDS_M` (20 km) of the camera. The game sets up nothing
+  else. A missing native library (`invoke native`) is a `NativeCollisionError`
+  at construction.
+- **`enable_collision(into_mask, bodies=None, fields=None, **kw)`**: changes
+  that (another mask or range, a body or field left out): bodies' drawn
+  terrain and fields' rocks, solid to the game's collision
+  traverser, under one `name` (`bodies`/`fields`: names, None = all, () =
+  none). `kw` are the arguments of both (`name`, `owner_tag`, `max_distance`)
+  and of one (`include_ocean` for bodies, `samples` for fields); each part
+  gets its own. It returns `Collisions(bodies=[...], fields=[...])`;
+  **`disable_collision()`** undoes both.
+- **`altitude_at(point, generate=False)`, `up_at(point)`**: the height above
+  the nearest body's ground (0 under it, infinite in open space; only what is
+  already generated unless `generate`) and "up", against the bodies' gravity there
+  (`up_at(point, g_constant=1.0, minimum=MIN_GRAVITY_NORM)` (0.1): None in open space or where
+  gravity is weaker than `minimum`, for the game to choose).
 - **`set_sun(direction)`**: moves the sun; every part follows.
 - **`light_at(point)`, `lights_at(points)`**: the light (direct, ambient)
   at one point or many, each by its nearest body, in the world's shadows;

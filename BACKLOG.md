@@ -94,28 +94,12 @@ out:
   per billboard) darken some of them, which makes them stand out a little
   more at dusk (`dusk_in_clouds`).
 
-- **A game's translucent volumes over the clouds** (SpaceFlight's shields,
-  reported 2026-11-27; there before the depth work). The clouds are laid
-  over the view as a premultiplied card that writes no depth
-  (`cloud_composite.frag`); a translucent volume that writes none either
-  (the shield: depth write off, bin `fixed` 60, after the clouds) is blended
-  over whatever cloud is on screen, a cloud in front of it included.
-  Drawing it before the clouds would fail the other way (a cloud behind it
-  laid over it). Lead: the march already keeps, per pixel, the cloud's
-  premultiplied colour and coverage and its distance from the camera (km;
-  0 none): the resolve's `colour` and `distance` targets in `march.py`
-  (`_Resolve`; the composite swaps between two each frame), which
-  `cloud_composite.frag` reads. WorldBuilder would hand a game those two textures (and their
-  downscale, `uDownscale`) through the world (per body's clouds, the one
-  drawn) and a GLSL helper, e.g. `cloudCoverBefore(fragCoord, distance)`:
-  the cloud's alpha where its distance is short of *distance*, else 0. The
-  shield's shader scales its colour and alpha by `1 - cover`: a dense cloud
-  in front hides it, a thin one lets it through, a cloud behind it stays
-  behind. Left: the cloud slightly dimmed where a shield overlaps it in
-  front (`(1 - cover * a)` on the cloud's term instead of 1); one distance
-  per pixel (the cloud's representative one, not its front), so a shield
-  inside a cloud is all in front or all behind; cirrus decks (`deck.py`,
-  their own bins) not covered.
+- **A translucent volume in front of a cloud** (`World.track_translucent`,
+  `cloud_cover.glsl`): the cloud behind a shield is not dimmed where the shield
+  overlaps it (`(1 - cover * a)` on the cloud's term); one distance per pixel
+  (the cloud's representative one, not its front), so a shield inside a cloud
+  is all in front or all behind; cirrus decks (`deck.py`, their own bins) not
+  covered.
 
 ## The raymarch (MARCH_PLAN)
 

@@ -13,12 +13,13 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from panda3d.core import LPoint3f, NodePath, Shader, ShaderAttrib
+from panda3d.core import BitMask32, Camera, LPoint3f, NodePath, Shader, ShaderAttrib
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
 from world_builder.asteroids.spec import Annulus, Density, FieldSpec, ShapeSpec
 from world_builder.atmosphere import AtmosphereParams
+from world_builder.clouds.cover import CloudCover
 from world_builder.clouds.genera import HIGH_SLAB
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.depth import (
@@ -38,7 +39,9 @@ from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.world import (
+    COLLISION_RANGE_FIELDS_M,
     LIGHT_STAGES,
+    MIN_GRAVITY_NORM,
     Body,
     BodyLook,
     CloudLook,
@@ -212,6 +215,8 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world._sun_color = np.array([2.0, 2.0, 2.0])
     world._space_ambient = np.array([0.1, 0.2, 0.3])
     world.fields = []
+    world._field_looks = []
+    world.cover = CloudCover()
     world._field_looks = []
     world.light_period = 1
     world._light_age = 0
@@ -610,10 +615,123 @@ def test_collision_for_the_chosen_bodies():
     planet, moon = _body(), _body("moon", MOON)
     world = _world(planet, moon)
     world.enable_collision("mask", bodies=["planet"], max_distance=5.0)
-    planet.terrain.enable_collision.assert_called_once_with("mask", max_distance=5.0)
+    planet.terrain.enable_collision.assert_called_once_with(
+        "mask", name="terrain", max_distance=5.0
+    )
     moon.terrain.enable_collision.assert_not_called()
     world.enable_collision("mask")
     moon.terrain.enable_collision.assert_called_once()
+
+
+def _field_stub(name):
+    field = MagicMock()
+    field.enable_collision.return_value = f"{name} node"
+    return field
+
+
+def test_collision_covers_the_fields_with_one_name():
+    planet = _body()
+    world = _world(planet)
+    ring, cube = _field_stub("ring"), _field_stub("cube")
+    world.fields = [ring, cube]
+    world._field_looks = [SimpleNamespace(name="ring"), SimpleNamespace(name="cube")]
+
+    made = world.enable_collision(
+        "mask", name="terrain", max_distance=7.0, include_ocean=False, samples=3
+    )
+
+    planet.terrain.enable_collision.assert_called_once_with(
+        "mask", name="terrain", max_distance=7.0, include_ocean=False
+    )
+    for field in (ring, cube):
+        field.enable_collision.assert_called_once_with(
+            "mask", name="terrain", max_distance=7.0, samples=3
+        )
+    assert made.fields == ["ring node", "cube node"]
+    assert made.bodies == [planet.terrain.enable_collision.return_value]
+
+    ring.enable_collision.reset_mock()
+    cube.enable_collision.reset_mock()
+    world.enable_collision("mask", bodies=(), fields=["cube"])
+    ring.enable_collision.assert_not_called()
+    cube.enable_collision.assert_called_once_with(
+        "mask", name="terrain", max_distance=COLLISION_RANGE_FIELDS_M
+    )
+    world.enable_collision("mask", fields=())
+    assert cube.enable_collision.call_count == 1
+
+    world.disable_collision()
+    ring.disable_collision.assert_called_once()
+    planet.terrain.disable_collision.assert_called_once()
+
+
+def test_collision_refuses_what_it_does_not_know():
+    world = _world(_body())
+    with pytest.raises(ValueError, match="no field called.*nope"):
+        world.enable_collision("mask", fields=["nope"])
+    with pytest.raises(ValueError, match="no body called.*nope"):
+        world.enable_collision("mask", bodies=["nope"])
+    with pytest.raises(TypeError, match="speed"):
+        world.enable_collision("mask", speed=1)
+
+
+def test_altitude_is_the_nearest_bodys():
+    planet = _body()
+    moon = _body("moon", MOON, position=(1e8, 0.0, 0.0))
+    world = _world(planet, moon)
+    planet.terrain.query.height_at.return_value = 2000.0
+    point = np.array([0.0, 0.0, R + 700.0 + 2000.0])
+
+    assert world.altitude_at(point) == pytest.approx(700.0)
+    relative = planet.terrain.query.height_at.call_args.args[0]
+    np.testing.assert_allclose(relative, point)
+    # Only what is already generated, unless asked
+    assert planet.terrain.query.height_at.call_args.kwargs == {"generate": False}
+    world.altitude_at(point, generate=True)
+    assert planet.terrain.query.height_at.call_args.kwargs == {"generate": True}
+    # Under the ground: 0
+    assert world.altitude_at(np.array([0.0, 0.0, R])) == 0.0
+
+
+def test_up_is_against_gravity_unless_negligible():
+    planet = _body(mass=9.8 * R**2)  # 9.8 m/s2 at the surface, G = 1
+    world = _world(planet)
+    near = np.array([0.6, 0.0, 0.8]) * (R + 10_000.0)
+    np.testing.assert_allclose(world.up_at(near), [0.6, 0.0, 0.8])
+    # The field is built once per G
+    first = world._gravity_fields[1.0]
+    world.up_at(near)
+    assert world._gravity_fields[1.0] is first
+    # Too weak far away (or by a higher threshold): no "up"
+    assert world.up_at(near * 1e6) is None  # below MIN_GRAVITY_NORM
+    assert MIN_GRAVITY_NORM == 0.1
+    assert world.up_at(near, minimum=100.0) is None
+
+
+def test_altitude_and_up_in_open_space():
+    world = _world()
+    assert world.altitude_at([1e6, 0.0, 0.0]) == np.inf
+    assert world.up_at([1e6, 0.0, 0.0]) is None
+
+
+def test_translucent_surfaces_read_the_nearest_cloudy_bodys_clouds():
+    planet = _body()
+    moon = _body("moon", MOON, position=(1e8, 0.0, 0.0))
+    airless = _body("rock", MOON, position=(2e8, 0.0, 0.0))
+    planet.clouds = MagicMock()
+    moon.clouds = MagicMock()
+    world = _world(planet, moon, airless)
+    near_moon = np.array([1e8, 0.0, 3e5])
+    assert world._cover_inputs(near_moon) is moon.clouds.cover_inputs.return_value
+    # The nearest body has no clouds: the nearest that has
+    near_rock = np.array([2e8, 0.0, 3e5])
+    assert world._cover_inputs(near_rock) is moon.clouds.cover_inputs.return_value
+    assert _world()._cover_inputs(near_rock) is None
+    node = NodePath("shield")
+    world.track_translucent(node)
+    assert world.cover.nodes == [node]
+    world.untrack_translucent(node)
+    assert world.cover.nodes == []
 
 
 def test_body_by_name():
@@ -814,6 +932,130 @@ def test_open_space_builds_and_draws(window):
     finally:
         world.destroy()
     assert world.sky is None or world.sky.node.is_empty()
+
+
+def test_a_world_without_sun_nor_ambient_gives_no_light(window):
+    """sun=None, space_ambient=None (a file's missing keys): the lights at
+    the camera are black, and the sky draws no sun."""
+    world = World(
+        window,
+        bodies=[],
+        sun=None,
+        sky=SkyLook(),
+        settings=WorldSettings.preset("low"),
+        backend="inline",
+        space_ambient=None,
+    )
+    try:
+        for _ in range(2):
+            world.update(np.array([5e6, 0.0, 0.0]), far=1e6)
+            window.graphicsEngine.render_frame()
+        sun = np.array(world.sun_light.node().get_color())[:3]
+        ambient = np.array(world.ambient_light.node().get_color())[:3]
+        np.testing.assert_array_equal(sun, 0.0)
+        np.testing.assert_array_equal(ambient, 0.0)
+    finally:
+        world.destroy()
+
+
+def test_extra_views_see_the_fields_too(window):
+    """update(views=...) gives the fields the main camera and the others (a
+    rear-view mirror's); without, the app's alone."""
+    world = World(
+        window,
+        bodies=[],
+        sun=SunLook(direction=(0.3, -0.8, 0.5)),
+        settings=WorldSettings.preset("low"),
+        backend="inline",
+        fields=[FieldLook("ring", RING, far=200_000.0)],
+    )
+    seen = []
+    field = world.field("ring")
+    real = field.update
+    field.update = lambda *args, cameras=None: (
+        seen.append(cameras) or real(*args, cameras=cameras)
+    )
+    mirror = window.render.attach_new_node(Camera("mirror"))
+    try:
+        world.update(np.zeros(3), far=1e6)
+        world.update(np.zeros(3), far=1e6, views=[mirror])
+        assert seen[0] is None
+        assert seen[1] == [window.cam, mirror]
+    finally:
+        mirror.remove_node()
+        world.destroy()
+
+
+def test_every_terrain_is_solid_from_the_start(window):
+    """Bodies' ground and fields' rocks get a "terrain" collision node with
+    the world's mask, no call needed; None leaves them out."""
+    native = pytest.importorskip("world_builder.terrain.native")
+    mask = BitMask32.bit(3)
+
+    def build(**args):
+        return World(
+            window,
+            bodies=[BodyLook("moon", MOON, mass=7.35e22)],
+            sun=SunLook(),
+            settings=WorldSettings.preset("low"),
+            backend="inline",
+            fields=[FieldLook("ring", RING, position=(1e7, 0.0, 0.0))],
+            **args,
+        )
+
+    try:
+        world = build(collision_mask=mask)
+    except native.NativeCollisionError as error:
+        pytest.skip(f"No native collision: {error}")
+    try:
+        ground = world.body("moon").terrain.collision
+        rocks = world.field("ring").collision
+        assert ground is not None and rocks is not None
+        assert ground.node.name == rocks.node.name == "terrain"
+        assert ground.node.node().get_into_collide_mask() == mask
+        assert rocks.node.node().get_into_collide_mask() == mask
+        world.disable_collision()
+        assert world.body("moon").terrain.collision is None
+        assert world.field("ring").collision is None
+    finally:
+        world.destroy()
+    world = build(collision_mask=None)
+    try:
+        assert world.body("moon").terrain.collision is None
+        assert world.field("ring").collision is None
+    finally:
+        world.destroy()
+
+
+def test_a_missing_native_library_stops_the_load(window, monkeypatch):
+    """Solid terrain is not optional: no library, no world (and nothing left
+    behind)."""
+    from world_builder.terrain.terrain import Terrain
+
+    native = pytest.importorskip("world_builder.terrain.native")
+
+    def missing(*args, **kwargs):
+        raise native.NativeCollisionError("not built")
+
+    monkeypatch.setattr(Terrain, "enable_collision", missing)
+    with pytest.raises(native.NativeCollisionError):
+        World(
+            window,
+            bodies=[BodyLook("moon", MOON, mass=7.35e22)],
+            sun=SunLook(),
+            settings=WorldSettings.preset("low"),
+            backend="inline",
+        )
+    # ... unless nothing is to be solid
+    world = World(
+        window,
+        bodies=[BodyLook("moon", MOON, mass=7.35e22)],
+        sun=SunLook(),
+        settings=WorldSettings.preset("low"),
+        backend="inline",
+        collision_mask=None,
+    )
+    world.destroy()
 
 
 def test_a_ring_in_open_space(window):

@@ -18,12 +18,35 @@ camera on it and returns a `GameWorld`: `.world` (the `World`), `.depth`,
 `.spec` (what the file defined), `.body(name)`, `.field(name)`, `update` and
 `destroy`. The camera stays the game's: it sits at render's origin, and the
 game gives `update` its position in the world frame (float64, metres).
+`GameWorld.views` is a list of more cameras (a rear-view mirror's camera
+NodePath): while one is in it, the asteroid fields and rings are drawn for it
+too (their rocks are held and drawn for every view), with no second update.
+The terrain, sea, trees and clouds are the main camera's alone. Add the
+camera when the mirror is shown, remove it when it is not.
+`GameWorld.load_steps(step, quiet_s=0.5, timeout_s=60.0)` is a game's loading
+phase: a generator that calls `step()` (a frame of the paused game) until
+`world.loading` has stayed False for `quiet_s`, yielding once per step for the
+game's loading animation, and returns True, or False if `timeout_s` ran out
+(logged). It sleeps a few milliseconds after a step that still loads, so the
+workers' results get through.
+`GameWorld.chart(name)` (`WorldSpec.chart(name)` reads it from a file, no window)
+is the body's `BodyChart`: levels write positions in chart metres (x east, y
+north of the planet's reference point, z above sea level), and
+`position(x, y, z)` turns them into world positions on the sphere, wherever the
+file puts the planet (a planet is never rotated: its east, north and up are not
+the world's axes); `vector`, `up_at` and `orientation(position, toward)` (a
+level orientation facing a point) go with it.
 An app without a window (`window-type none`: a game's headless runs) gets
 no depth camera (`.depth` is None) and no seas, which both draw through the
 window; the rest is built and updated as usual.
 
-`load_world(app, path, *, settings=None, backend="process", clock=None)`
-takes what is about running the world, not defining it: the quality
+`load_world(app, source, *, keep_outs=None, settings=None, backend="process",
+clock=None, collision_mask=...)` takes the file, or a `WorldSpec` (what `parse_world` returns: a
+game can change it and load it, no file in between), and what is about running
+the world, not defining it: the room a level keeps clear in some fields
+(`keep_outs={"field name": [KeepOut, ...]}`, added to the file's; an unknown
+field name is a `ConfigError`), every terrain's into mask for collisions (`collision_mask`: bodies' ground and
+fields' rocks are all solid from the start, nothing to enable), the quality
 (`WorldSettings`), where chunks are generated, the game's clock, and any other
 `World` argument that is the game's (`lights`, `light_scale`, `light_period`).
 `parse_world(path)` reads a file without a window (to check it, or to read what
@@ -52,7 +75,7 @@ type or a value the library refuses is a `ValueError` naming where it is
 ```yaml
 sun: {direction: [x, y, z], color: [r, g, b], angular_radius: ..}   # toward the sun
 sky: {stars: {...}, star_intensity, star_brightness, nebula: {...}, sun_radiance,
-      exposure, star_hpr, star_adaptation}        # SkyLook; null = no sky
+      exposure, star_hpr, star_adaptation}        # SkyLook; absent or null = no skybox
 space_ambient: [r, g, b]                          # sky light away from every body
 bodies:
   - name: planet                    # what GameWorld.body(name) finds it by
