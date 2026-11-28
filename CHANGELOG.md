@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] 2026-11-28
+
+### Changed
+- Render scale can go as low as 0.33 for Ultra Performance
+- SCALE_PRESETS exposed
+
 ## [0.6.0] 2026-11-28
 
 Frame time at 2560 x 1440, HIGH, as a game runs it (CPU and GPU overlapping,

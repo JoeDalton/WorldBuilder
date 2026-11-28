@@ -15,6 +15,8 @@ from world_builder.post.settings import (
     FSR1,
     FSR_MODES,
     MIN_SCALE,
+    SCALE_PRESETS,
+    ULTRA_PERFORMANCE,
     RenderSettings,
 )
 
@@ -25,5 +27,7 @@ __all__ = [
     "MIN_SCALE",
     "PostChain",
     "RenderSettings",
+    "SCALE_PRESETS",
+    "ULTRA_PERFORMANCE",
     "target_texture",
 ]

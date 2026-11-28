@@ -37,7 +37,8 @@ Controls (AZERTY; the keys are where they are for the left hand)::
     R / END    back to the start
     F1 - F5, F7, F8   cycle terrain, atmosphere, sky, clouds, ocean, shadows,
                models quality;  F6 all
-    F9         cycle the render scale: native, then FSR 1's modes (0.77 to 0.5)
+    F9         cycle the render scale: native, FSR 1's modes (0.77 to 0.5),
+               ultra performance (0.33)
     F10        FSR 1 on / off (else bilinear)
     F11        cycle MSAA (off, 2, 4, 8, 16)     F12   FXAA on / off
     U / I      FSR 1 sharper / softer (RCAS, 0.1 stop steps)
@@ -78,7 +79,7 @@ from world_builder.asteroids.spec import Annulus, Box, Sphere  # noqa: E402
 from world_builder.post import (  # noqa: E402
     BILINEAR,
     FSR1,
-    FSR_MODES,
+    SCALE_PRESETS,
     RenderSettings,
 )
 from world_builder.quality import QualityLevel  # noqa: E402
@@ -120,8 +121,8 @@ QUALITY_KEYS = (
     ("f8", "models"),
 )
 QUALITY_ALL_KEY = "f6"
-#: F9 cycles these render scales: native, then FSR 1's modes.
-RENDER_SCALES = (1.0, *FSR_MODES.values())
+#: F9 cycles these render scales: native, FSR 1's modes, ultra performance.
+RENDER_SCALES = tuple(SCALE_PRESETS.values())
 #: F11 cycles these.
 MSAA_STEPS = (0, 2, 4, 8, 16)
 

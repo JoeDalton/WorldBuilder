@@ -14,7 +14,7 @@ draw the view at the window's size with no anti-aliasing, as before.
 
 | Id | Label | Applies | Range or choices | Default |
 |---|---|---|---|---|
-| `scale` | Render scale | rebuild | 0.5 to 1 | 1 |
+| `scale` | Render scale | rebuild | 0.33 to 1 | 1 |
 | `msaa` | MSAA | rebuild | Off, 2x, 4x, 8x, 16x | Off |
 | `fxaa` | FXAA | rebuild | on / off | off |
 | `upscaler` | Upscaler | rebuild | Bilinear, FSR 1 | Bilinear |
@@ -22,7 +22,10 @@ draw the view at the window's size with no anti-aliasing, as before.
 
 - **`scale`:** the view is drawn at `round(region × scale)` pixels per axis.
   `FSR_MODES` holds AMD's names for 0.77, 0.67, 0.59 and 0.5 (ultra quality,
-  quality, balanced, performance).
+  quality, balanced, performance). `SCALE_PRESETS` is a menu's list: native,
+  those four, and ultra performance (0.33, `ULTRA_PERFORMANCE`: a 3x upscale,
+  FSR 2's ratio). FSR 1 is designed for upscales of at most 2x, so at 0.33
+  the image is softer, but the hardware draws a ninth of the pixels.
 - **`msaa`:** the scene buffer's samples. The driver may grant fewer;
   `ReversedDepthCamera.describe()` shows what it got. `msaa` Off keeps the
   window's own samples, which is none in the demo.
@@ -152,7 +155,7 @@ keys:
 
 | Key | Action |
 |---|---|
-| F9 | cycle the scale: native, then FSR 1's four modes |
+| F9 | cycle the scale: native, FSR 1's four modes, ultra performance (0.33) |
 | F10 | FSR 1 on or off |
 | F11 | cycle MSAA: off, 2, 4, 8, 16 |
 | F12 | FXAA on or off |

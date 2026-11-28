@@ -22,6 +22,8 @@ from world_builder.post import (
     FSR1,
     FSR_MODES,
     MIN_SCALE,
+    SCALE_PRESETS,
+    ULTRA_PERFORMANCE,
     PostChain,
     RenderSettings,
 )
@@ -59,6 +61,16 @@ def test_the_fsr_modes_are_within_the_scale_range():
     for scale in FSR_MODES.values():
         assert MIN_SCALE <= scale < 1.0
         RenderSettings(scale=scale)  # strict: in range
+
+
+def test_the_scale_presets_run_from_native_to_ultra_performance():
+    """A menu's list, best first: native, AMD's FSR 1 modes (2x at most),
+    then ultra performance (3x), the least scale."""
+    scales = list(SCALE_PRESETS.values())
+    assert scales == sorted(scales, reverse=True)
+    assert scales[0] == 1.0 and scales[-1] == ULTRA_PERFORMANCE == MIN_SCALE
+    assert scales[1:-1] == list(FSR_MODES.values())
+    assert min(FSR_MODES.values()) == 0.5
 
 
 def test_the_render_section_is_kept_by_every_preset_and_saved():
@@ -206,6 +218,7 @@ CHAINS = {
     "fsr_forced_fxaa": RenderSettings(scale=0.67, upscaler=FSR1),
     "fsr_over_msaa": RenderSettings(scale=0.5, upscaler=FSR1, msaa=4),
     "fsr_native": RenderSettings(upscaler=FSR1),
+    "fsr_ultra_performance": RenderSettings(scale=ULTRA_PERFORMANCE, upscaler=FSR1),
 }
 
 
@@ -223,7 +236,9 @@ def test_a_flat_view_stays_flat(window, target, name):
     assert np.all(np.abs(image - 128 / 255) <= 1.5 / 255), name
 
 
-@pytest.mark.parametrize("name", ["fsr_forced_fxaa", "fsr_over_msaa", "fsr_native"])
+@pytest.mark.parametrize(
+    "name", ["fsr_forced_fxaa", "fsr_over_msaa", "fsr_native", "fsr_ultra_performance"]
+)
 def test_pure_black_and_white_make_no_nan(window, target, name):
     """FSR 1's reciprocals over a black or a white neighbourhood (0 / 0
     unguarded): the flat parts stay exactly black and white, the edge
