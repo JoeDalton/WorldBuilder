@@ -30,8 +30,21 @@ FSR_MODES: dict[str, float] = {
     "Performance": 0.5,
 }
 
-#: The least render scale: FSR 1 is made for upscales up to 2x per axis.
-MIN_SCALE = 0.5
+#: Ultra performance: a 3x upscale per axis (FSR 2 and later's ratio). Past
+#: FSR 1's design limit (2x), for hardware that cannot draw more.
+ULTRA_PERFORMANCE = 0.33
+
+#: The render scales a menu offers, best first: native, AMD's FSR 1 modes,
+#: then ultra performance. Labels as a menu shows them.
+SCALE_PRESETS: dict[str, float] = {
+    "Native": 1.0,
+    **FSR_MODES,
+    "Ultra performance": ULTRA_PERFORMANCE,
+}
+
+#: The least render scale: ultra performance's (FSR 1 is made for upscales up
+#: to 2x per axis, 0.5; below it the image softens further).
+MIN_SCALE = ULTRA_PERFORMANCE
 
 
 @dataclass(frozen=True)
@@ -55,7 +68,7 @@ class RenderSettings(QualitySettings):
         kept=True,
         help="The view's resolution over the window's, per axis: fewer pixels "
         "drawn (the clouds' march follows it), upscaled to the window. "
-        "The HUD stays at the window's.",
+        "The HUD stays at the window's. FSR 1 is made for 0.5 and up.",
     )
     msaa: int = knob(
         0,

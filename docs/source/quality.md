@@ -245,7 +245,7 @@ No presets: every knob is kept by LOW to ULTRA. See
 
 | Id | Label | Applies | Range or choices | Default |
 |---|---|---|---|---|
-| `scale` | Render scale | rebuild | 0.5 to 1 | 1 |
+| `scale` | Render scale | rebuild | 0.33 to 1 | 1 |
 | `msaa` | MSAA | rebuild | Off, 2x, 4x, 8x, 16x | Off |
 | `fxaa` | FXAA | rebuild | on / off | off |
 | `upscaler` | Upscaler | rebuild | Bilinear, FSR 1 | Bilinear |
