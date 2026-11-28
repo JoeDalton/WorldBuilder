@@ -18,6 +18,11 @@ camera on it and returns a `GameWorld`: `.world` (the `World`), `.depth`,
 `.spec` (what the file defined), `.body(name)`, `.field(name)`, `update` and
 `destroy`. The camera stays the game's: it sits at render's origin, and the
 game gives `update` its position in the world frame (float64, metres).
+`GameWorld.views` is a list of more cameras (a rear-view mirror's camera
+NodePath): while one is in it, the asteroid fields and rings are drawn for it
+too (their rocks are held and drawn for every view), with no second update.
+The terrain, sea, trees and clouds are the main camera's alone. Add the
+camera when the mirror is shown, remove it when it is not.
 An app without a window (`window-type none`: a game's headless runs) gets
 no depth camera (`.depth` is None) and no seas, which both draw through the
 window; the rest is built and updated as usual.

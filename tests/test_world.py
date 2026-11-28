@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from panda3d.core import LPoint3f, NodePath, Shader, ShaderAttrib
+from panda3d.core import Camera, LPoint3f, NodePath, Shader, ShaderAttrib
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
@@ -837,6 +837,34 @@ def test_a_world_without_sun_nor_ambient_gives_no_light(window):
         np.testing.assert_array_equal(sun, 0.0)
         np.testing.assert_array_equal(ambient, 0.0)
     finally:
+        world.destroy()
+
+
+def test_extra_views_see_the_fields_too(window):
+    """update(views=...) gives the fields the main camera and the others (a
+    rear-view mirror's); without, the app's alone."""
+    world = World(
+        window,
+        bodies=[],
+        sun=SunLook(direction=(0.3, -0.8, 0.5)),
+        settings=WorldSettings.preset("low"),
+        backend="inline",
+        fields=[FieldLook("ring", RING, far=200_000.0)],
+    )
+    seen = []
+    field = world.field("ring")
+    real = field.update
+    field.update = lambda *args, cameras=None: (
+        seen.append(cameras) or real(*args, cameras=cameras)
+    )
+    mirror = window.render.attach_new_node(Camera("mirror"))
+    try:
+        world.update(np.zeros(3), far=1e6)
+        world.update(np.zeros(3), far=1e6, views=[mirror])
+        assert seen[0] is None
+        assert seen[1] == [window.cam, mirror]
+    finally:
+        mirror.remove_node()
         world.destroy()
 
 

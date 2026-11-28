@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import yaml
+from panda3d.core import Camera
 
 import world_builder
 from world_builder.asteroids.spec import KeepOut
@@ -262,6 +263,32 @@ def test_a_levels_keep_outs_are_added_to_the_files(window):
             assert world.spec.fields[0].keep_outs == (*own, room)
         finally:
             world.destroy()
+
+
+def test_game_world_views_reach_the_fields(window):
+    from world_builder.settings import WorldSettings
+
+    world = load_world(
+        window, DEEP, settings=WorldSettings.preset("low"), backend="inline"
+    )
+    mirror = window.render.attach_new_node(Camera("mirror"))
+    seen = []
+    field = world.field("cube")
+    real = field.update
+    field.update = lambda *args, cameras=None: (
+        seen.append(cameras) or real(*args, cameras=cameras)
+    )
+    try:
+        world.update(np.array([0.0, -9000.0, 500.0]))
+        world.views.append(mirror)
+        world.update(np.array([0.0, -9000.0, 500.0]))
+        world.views.clear()
+        world.update(np.array([0.0, -9000.0, 500.0]))
+        assert seen[0] is None and seen[2] is None
+        assert seen[1] == [window.cam, mirror]
+    finally:
+        mirror.remove_node()
+        world.destroy()
 
 
 def test_deep_space_loads_and_updates(window):

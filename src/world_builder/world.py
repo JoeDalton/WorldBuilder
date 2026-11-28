@@ -1139,7 +1139,12 @@ class World:
 
     # ── per frame ───────────────────────────────────────────────────────────
 
-    def update(self, origin_world: ArrayLike, far: float | None = None) -> None:
+    def update(
+        self,
+        origin_world: ArrayLike,
+        far: float | None = None,
+        views: Sequence[NodePath] = (),
+    ) -> None:
         """Per frame, once the camera is placed: everything around it.
 
         :param origin_world: render's origin in the world frame (float64);
@@ -1147,6 +1152,10 @@ class World:
         :param far: the view's far distance this frame
             (:attr:`~world_builder.depth.ReversedDepthCamera.far`), metres.
             None = :meth:`far_distance`'s
+        :param views: more cameras (a rear-view mirror's) that see the
+            asteroid fields and rings: their rocks are held and drawn for
+            them too, not only for the main camera. The terrain, the sea,
+            the trees and the clouds are the main camera's alone
         """
         camera_render = self.camera_render()
         camera = np.asarray(origin_world, dtype=np.float64) + camera_render
@@ -1157,8 +1166,12 @@ class World:
             body.terrain.update(camera, camera_render, camera_forward=forward)
             if body.shadow_map is not None:
                 body.shadow_map.update(camera)  # the local map follows it
+        if views and self.fields:
+            cameras = [getattr(self.app, "cam", None), *views]
+        else:
+            cameras = None  # the app's
         for asteroids in self.fields:
-            asteroids.update(camera, camera_render)
+            asteroids.update(camera, camera_render, cameras=cameras)
         self.atmospheres.update(camera)
         self.shadows.update(camera)
         if self.sky is not None:

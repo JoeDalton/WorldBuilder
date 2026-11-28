@@ -301,6 +301,10 @@ class GameWorld:
     :ivar spec: what the file defined
     :ivar world: the :class:`World`: bodies, fields, sky, lights, gravity,
         collisions (see its docs)
+    :ivar views: more cameras (camera NodePaths: a rear-view mirror's) the
+        asteroid fields and rings are drawn for, besides the game's own; the
+        game adds and removes them as they are shown (the list is read on
+        every :meth:`update`)
     :ivar depth: the reversed camera
         (:class:`~world_builder.depth.ReversedDepthCamera`); None in an app
         without a window (``window-type none``: a game's headless runs),
@@ -311,6 +315,7 @@ class GameWorld:
         self.app = app
         self.spec = spec
         self.world = world
+        self.views: list[Any] = []
         self.depth: ReversedDepthCamera | None = None
         if getattr(app, "win", None) is None:
             LOGGER.info("no window: the world is built without its depth camera")
@@ -337,12 +342,15 @@ class GameWorld:
 
         :param origin_world: the camera's position in the world frame, metres
             (float64; the camera itself stays at render's origin)
+
+        The asteroid fields are drawn for :attr:`views` too.
         """
+        views = tuple(self.views)
         if self.depth is None:
-            self.world.update(origin_world)
+            self.world.update(origin_world, views=views)
             return
         self.depth.update(self.world.far_distance(origin_world))
-        self.world.update(origin_world, far=self.depth.far)
+        self.world.update(origin_world, far=self.depth.far, views=views)
 
     def destroy(self) -> None:
         """Remove the world and stop its workers."""

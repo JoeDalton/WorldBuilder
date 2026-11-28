@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.2] (unreleased)
 
 ### Added
+- `GameWorld.views` (and `World.update(views=...)`): more cameras, a rear-view mirror's, that the asteroid fields and rings are drawn for #65
 - `load_world(..., keep_outs={field name: [KeepOut, ...]})` adds a level's room to the file's fields, and `load_world` takes a `WorldSpec` as well as a path (no temporary file round trip); `world_file.with_keep_outs(spec, keep_outs)` #65
 
 ### Changed
