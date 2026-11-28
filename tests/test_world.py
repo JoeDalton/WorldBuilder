@@ -816,6 +816,30 @@ def test_open_space_builds_and_draws(window):
     assert world.sky is None or world.sky.node.is_empty()
 
 
+def test_a_world_without_sun_nor_ambient_gives_no_light(window):
+    """sun=None, space_ambient=None (a file's missing keys): the lights at
+    the camera are black, and the sky draws no sun."""
+    world = World(
+        window,
+        bodies=[],
+        sun=None,
+        sky=SkyLook(),
+        settings=WorldSettings.preset("low"),
+        backend="inline",
+        space_ambient=None,
+    )
+    try:
+        for _ in range(2):
+            world.update(np.array([5e6, 0.0, 0.0]), far=1e6)
+            window.graphicsEngine.render_frame()
+        sun = np.array(world.sun_light.node().get_color())[:3]
+        ambient = np.array(world.ambient_light.node().get_color())[:3]
+        np.testing.assert_array_equal(sun, 0.0)
+        np.testing.assert_array_equal(ambient, 0.0)
+    finally:
+        world.destroy()
+
+
 def test_a_ring_in_open_space(window):
     """A world of a ring alone: built on the world's pool and settings,
     loaded, drawn (rocks and haze), set, and gone after destroy."""

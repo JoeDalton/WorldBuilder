@@ -52,7 +52,7 @@ type or a value the library refuses is a `ValueError` naming where it is
 ```yaml
 sun: {direction: [x, y, z], color: [r, g, b], angular_radius: ..}   # toward the sun
 sky: {stars: {...}, star_intensity, star_brightness, nebula: {...}, sun_radiance,
-      exposure, star_hpr, star_adaptation}        # SkyLook; null = no sky
+      exposure, star_hpr, star_adaptation}        # SkyLook; absent or null = no skybox
 space_ambient: [r, g, b]                          # sky light away from every body
 bodies:
   - name: planet                    # what GameWorld.body(name) finds it by

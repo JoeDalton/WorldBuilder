@@ -64,7 +64,7 @@ from __future__ import annotations
 import functools
 import math
 from collections.abc import Callable, Generator, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -372,14 +372,14 @@ class World:
         self,
         app: Any,
         bodies: Sequence[BodyLook],
-        sun: SunLook = SunLook(),
+        sun: SunLook | None = SunLook(),
         sky: SkyLook | None = None,
         settings: WorldSettings | None = None,
         lights: bool = True,
         light_scale: float = 1.0,
         clock: Callable[[], float] | None = None,
         backend: str = "process",
-        space_ambient: ArrayLike = (0.025, 0.025, 0.03),
+        space_ambient: ArrayLike | None = (0.025, 0.025, 0.03),
         fields: Sequence[FieldLook] = (),
         light_period: int = 1,
     ) -> None:
@@ -387,7 +387,8 @@ class World:
         :param app: the ShowBase: its render, camera, lens and window
         :param bodies: the planets and moons; none for open space (the sky,
             the sun and the lights alone)
-        :param sun: the sun
+        :param sun: the sun; None = none (no direct light, no disc in the
+            sky, no shadow it casts: the world is lit by its ambient alone)
         :param sky: the sky; None = none (the game draws its own)
         :param settings: what every part costs; None = HIGH
         :param lights: put Panda3D's sun and ambient lights on render, as the
@@ -402,7 +403,7 @@ class World:
         :param backend: where chunks and cloud tiles are generated
             (:class:`ChunkExecutor`)
         :param space_ambient: the sky light where there is no body (open
-            space), linear
+            space), linear; None = none (black)
         :param fields: the asteroid fields and rings
         :param light_period: frames between two settings of the light at
             the camera and at the tracked nodes (:meth:`lights_at`, ~1 ms in
@@ -455,8 +456,19 @@ class World:
         #: The frame-rate cap (``WorldSettings.display``, off by default):
         #: Panda3D's global clock, process-wide.
         self.frame_cap = FrameCap(self.settings.display)
+        if sun is None:
+            # No sun: one that gives no light, and has no disc in the sky
+            sun = SunLook(
+                direction=(0.0, 0.0, 1.0),
+                color=(0.0, 0.0, 0.0),
+                angular_radius=SUN_ANGULAR_RADIUS,
+            )
+            if sky is not None:
+                sky = replace(sky, sun_radiance=(0.0, 0.0, 0.0))
         self._sun = self._unit(sun.direction)
         self._sun_color = np.asarray(sun.color, dtype=np.float64)
+        if space_ambient is None:
+            space_ambient = (0.0, 0.0, 0.0)
         self._space_ambient = np.asarray(space_ambient, dtype=np.float64)
         if clock is None:
             frame_clock = ClockObject.get_global_clock()

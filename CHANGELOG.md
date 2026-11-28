@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.2] (unreleased)
+
+### Changed
+- **Breaking:** a world file has no default values. A block that is there is
+  written whole (a missing field is an error naming where it is); a block that
+  is not there is not in the world: no `sun` is no sun (no direct light, no
+  disc in the sky), no `sky` is no skybox, no `space_ambient` is no ambient
+  light in open space. `WorldSpec` and `World` take `sun=None` and
+  `space_ambient=None` for this. The looks keep their defaults in code #65
 
 ## [0.6.1] 2026-11-28
 

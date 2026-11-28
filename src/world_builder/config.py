@@ -7,9 +7,10 @@ new field of a look is a new key with no code here); the one-line rules::
 
     key: value                    a number, string, bool or null
     key: [a, b, c]                a tuple (lists become tuples, recursively)
-    key: {field: value, ...}      a dataclass (omitted fields take its default;
-                                  an unknown key or a missing required one is
-                                  an error naming where it is)
+    key: {field: value, ...}      a dataclass (every field is written: there are
+                                  no defaults in a file, a missing or unknown
+                                  key is an error naming where it is; null
+                                  says "none" for an optional field)
     key: {file: other.yaml}       the content of other.yaml, which sits in the
                                   same folder as the world file; keys beside
                                   ``file`` replace the file's own
@@ -40,7 +41,7 @@ import re
 import types
 import typing
 from collections.abc import Mapping
-from dataclasses import MISSING, dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -405,7 +406,7 @@ def _build_dataclass(cls: type, value: Any, ctx: Context, path: str) -> Any:
             kwargs[fname] = read
             if name == "CloudLook" and fname == "weather":
                 ctx.weather = read
-        elif f.default is MISSING and f.default_factory is MISSING:
+        else:
             raise ConfigError(f"{where}: is required")
     try:
         obj = cls(**kwargs)

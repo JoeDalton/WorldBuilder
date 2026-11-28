@@ -44,7 +44,7 @@ from __future__ import annotations
 import functools
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -105,16 +105,18 @@ class WorldSpec:
 
     :ivar bodies: its planets and moons
     :ivar fields: its asteroid fields and rings
-    :ivar sun: its sun
-    :ivar sky: its sky (None: no sky; the file's ``sky: null``)
-    :ivar space_ambient: the sky light away from every body, linear
+    :ivar sun: its sun (None: no sun, no direct light; the file has no
+        ``sun`` or ``sun: null``)
+    :ivar sky: its sky (None: no skybox; the file has no ``sky`` or ``sky: null``)
+    :ivar space_ambient: the sky light away from every body, linear (None:
+        none; a file without ``space_ambient``)
     """
 
     bodies: tuple[BodyLook, ...] = ()
     fields: tuple[FieldLook, ...] = ()
-    sun: SunLook = field(default_factory=SunLook)
-    sky: SkyLook | None = field(default_factory=SkyLook)
-    space_ambient: tuple[float, float, float] = (0.025, 0.025, 0.03)
+    sun: SunLook | None = None
+    sky: SkyLook | None = None
+    space_ambient: tuple[float, float, float] | None = None
 
 
 def parse_world(source: Path | str | dict) -> WorldSpec:
@@ -141,12 +143,15 @@ def parse_world(source: Path | str | dict) -> WorldSpec:
     ctx = Context(base)
     kwargs: dict[str, Any] = {}
     if "sun" in data:
-        kwargs["sun"] = build(SunLook, data["sun"], ctx, "sun")
+        kwargs["sun"] = build(SunLook | None, data["sun"], ctx, "sun")
     if "sky" in data:
         kwargs["sky"] = build(SkyLook | None, data["sky"], ctx, "sky")
     if "space_ambient" in data:
         kwargs["space_ambient"] = build(
-            tuple[float, float, float], data["space_ambient"], ctx, "space_ambient"
+            tuple[float, float, float] | None,
+            data["space_ambient"],
+            ctx,
+            "space_ambient",
         )
     bodies = data.get("bodies") or []
     fields_ = data.get("fields") or []
@@ -267,13 +272,14 @@ def _z_to(axis: tuple[float, float, float], path: str) -> tuple[float, ...]:
 def world_to_yaml(spec: WorldSpec) -> str:
     """:returns: *spec* as one self-contained world file (no links; image
     paths absolute). Mostly to read what a world is made of."""
-    out: dict[str, Any] = {
-        "sun": to_config(spec.sun),
-        "sky": None if spec.sky is None else to_config(spec.sky),
-        "space_ambient": list(spec.space_ambient),
-        "bodies": [],
-        "fields": [],
-    }
+    out: dict[str, Any] = {}
+    if spec.sun is not None:
+        out["sun"] = to_config(spec.sun)
+    if spec.sky is not None:
+        out["sky"] = to_config(spec.sky)
+    if spec.space_ambient is not None:
+        out["space_ambient"] = list(spec.space_ambient)
+    out |= {"bodies": [], "fields": []}
     for body in spec.bodies:
         ctx = Context(planet=body.spec)
         dumped = to_config(body, ctx=ctx)

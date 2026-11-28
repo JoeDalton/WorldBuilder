@@ -63,7 +63,7 @@ pool (`executor=world.executor`).
 
 Each look field is an argument of the same name of the part it configures,
 with the same default. A test checks this, so the looks never drift from the
-parts.
+parts. (A world *file* has no defaults: see `world_file.md`.)
 
 - **`BodyLook`**: one planet or moon.
   - `name`: what `World.body(name)` finds it by.
