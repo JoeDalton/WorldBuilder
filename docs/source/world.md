@@ -209,8 +209,21 @@ camera draws them once.
 - **`loading`**: True while any terrain waits for ground, any clouds for
   tiles, or any field for its prototypes and the rocks in range. Wait for it to stay False for a moment before trusting the ground
   (see the terrain's loading phase in [Terrain](terrain.md)).
-- **`enable_collision(into_mask, bodies=None, **kw)`**: makes bodies' drawn
-  terrain solid to the game's collision traverser.
+- **Collision is on from the start.** Every body's ground (and sea) and every
+  field's rocks get a `"terrain"` collision node with the world's
+  `collision_mask` (a `World` argument, `load_world`'s too; default all bits;
+  None = nothing solid), within `COLLISION_RANGE_BODIES_M` (10 km) and
+  `COLLISION_RANGE_FIELDS_M` (20 km) of the camera. The game sets up nothing
+  else. A missing native library (`invoke native`) is a `NativeCollisionError`
+  at construction.
+- **`enable_collision(into_mask, bodies=None, fields=None, **kw)`**: changes
+  that (another mask or range, a body or field left out): bodies' drawn
+  terrain and fields' rocks, solid to the game's collision
+  traverser, under one `name` (`bodies`/`fields`: names, None = all, () =
+  none). `kw` are the arguments of both (`name`, `owner_tag`, `max_distance`)
+  and of one (`include_ocean` for bodies, `samples` for fields); each part
+  gets its own. It returns `Collisions(bodies=[...], fields=[...])`;
+  **`disable_collision()`** undoes both.
 - **`set_sun(direction)`**: moves the sun; every part follows.
 - **`light_at(point)`, `lights_at(points)`**: the light (direct, ambient)
   at one point or many, each by its nearest body, in the world's shadows;

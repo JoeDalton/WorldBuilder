@@ -64,6 +64,7 @@ from world_builder.depth import ReversedDepthCamera
 from world_builder.settings import WorldSettings
 from world_builder.terrain.planet import PlanetSpec
 from world_builder.world import (
+    COLLISION_MASK,
     BodyLook,
     FieldLook,
     SkyLook,
@@ -391,6 +392,7 @@ def load_world(
     settings: WorldSettings | None = None,
     backend: str = "process",
     clock: Any = None,
+    collision_mask: Any = COLLISION_MASK,
     **world_args: Any,
 ) -> GameWorld:
     """Build the world a file defines around a game's camera.
@@ -404,10 +406,16 @@ def load_world(
     :param backend: where chunks and cloud tiles are generated
         (``"process"``, ``"thread"`` or ``"inline"``)
     :param clock: game time in seconds, a callable; None = Panda's frame time
+    :param collision_mask: the into mask of the collision nodes of every
+        terrain: bodies' ground and sea, fields' rocks, all solid from the
+        start (named ``"terrain"``; None = nothing is solid). The game only
+        gives its mask
     :param world_args: any other argument of :class:`World` that is the
         game's (``lights``, ``light_scale``, ``light_period``)
     :returns: the loaded world
     :raises ConfigError: a keep-out for a field the world does not have
+    :raises NativeCollisionError: the native collision library is missing
+        (``invoke native``)
     """
     spec = source if isinstance(source, WorldSpec) else parse_world(source)
     if keep_outs:
@@ -423,6 +431,7 @@ def load_world(
         sky=spec.sky,
         settings=settings,
         clock=clock,
+        collision_mask=collision_mask,
         backend=backend,
         space_ambient=spec.space_ambient,
         fields=spec.fields,

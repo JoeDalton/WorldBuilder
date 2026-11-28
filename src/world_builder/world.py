@@ -71,6 +71,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 from panda3d.core import (
     AmbientLight,
+    BitMask32,
     ClockObject,
     DirectionalLight,
     NodePath,
@@ -108,6 +109,12 @@ from world_builder.terrain.workers import ChunkExecutor
 
 #: Open space (a world with no body): the view's far distance, metres.
 SPACE_FAR_M = 1.0e6
+#: The into mask of the terrain's collision nodes unless the game gives its own
+COLLISION_MASK = BitMask32.all_on()
+#: How far from the camera the ground is solid, metres (each chunk farther
+#: costs a check every frame), and how far the rocks are
+COLLISION_RANGE_BODIES_M = 10_000.0
+COLLISION_RANGE_FIELDS_M = 20_000.0
 #: The stages the light at the camera and the tracked nodes is reckoned in
 #: (``World(light_period=...)`` spreads them over its frames): the air's
 #: light; the eclipses and the clouds' shadow; the rings' and the mountains'
@@ -290,6 +297,18 @@ class FieldLook:
 
 
 @dataclass
+class Collisions:
+    """What :meth:`World.enable_collision` made.
+
+    :ivar bodies: the bodies' terrain collisions
+    :ivar fields: the fields' collision nodes
+    """
+
+    bodies: list[TerrainCollision]
+    fields: list[NodePath]
+
+
+@dataclass
 class Body:
     """A built body: its look and its parts.
 
@@ -382,6 +401,7 @@ class World:
         space_ambient: ArrayLike | None = (0.025, 0.025, 0.03),
         fields: Sequence[FieldLook] = (),
         light_period: int = 1,
+        collision_mask: BitMask32 | None = COLLISION_MASK,
     ) -> None:
         """
         :param app: the ShowBase: its render, camera, lens and window
@@ -412,6 +432,13 @@ class World:
             lights keep their last values in between. They are reckoned
             again at once when the sun moves or the tracked nodes change.
             1 = all of it every frame
+        :param collision_mask: the into mask of the collision nodes every
+            terrain gets (bodies' ground and sea, fields' rocks): all of it is
+            solid to the game's collision traverser from the start, whatever
+            its kind (see :meth:`enable_collision`). The nodes are named
+            ``"terrain"``. None = nothing is solid
+        :raises NativeCollisionError: the native collision library is not
+            built for the running Panda3D (``invoke native``)
         :raises ValueError: two bodies (or fields) of one name, clouds
             without air, a high layer (the cirrus) not above the clouds or
             not inside the air, or an ocean on a dry planet
@@ -692,6 +719,12 @@ class World:
         self.camera_world = np.asarray(
             bodies[0].position if bodies else (0.0, 0.0, 0.0), dtype=np.float64
         )
+        if collision_mask is not None:
+            try:
+                self.enable_collision(collision_mask)
+            except BaseException:
+                self.destroy()
+                raise
 
     def _model_lighting(
         self,
@@ -1115,27 +1148,76 @@ class World:
             asteroids.haze.set_depth_mode(depth.mode)
 
     def enable_collision(
-        self, into_mask: Any, bodies: Iterable[str] | None = None, **kwargs: Any
-    ) -> list[TerrainCollision]:
-        """Make bodies' drawn terrain solid to the game's collision traverser
-        (:meth:`Terrain.enable_collision`).
+        self,
+        into_mask: Any,
+        bodies: Iterable[str] | None = None,
+        fields: Iterable[str] | None = None,
+        **kwargs: Any,
+    ) -> Collisions:
+        """Make the drawn terrain of bodies and the rocks of fields solid to
+        the game's collision traverser, as one world
+        (:meth:`Terrain.enable_collision`,
+        :meth:`AsteroidField.enable_collision`). The constructor already does
+        it for all of them (``collision_mask``): call this to change the mask
+        or the range, or to leave a body or field out.
 
         :param into_mask: the into mask of their collision nodes
-        :param bodies: their names; None = every body
-        :param kwargs: :meth:`Terrain.enable_collision`'s other arguments
-        :returns: their collisions, in the order of :attr:`bodies`
+        :param bodies: the names of the bodies; None = every body, () = none
+        :param fields: the names of the fields and rings; None = every field,
+            () = none
+        :param kwargs: what both take, given to both: ``name`` (the nodes'
+            name, for the game's event patterns; "terrain"), ``owner_tag``,
+            ``max_distance`` (:data:`COLLISION_RANGE_BODIES_M` and
+            :data:`COLLISION_RANGE_FIELDS_M`); and what only one takes:
+            ``include_ocean`` (bodies), ``samples`` (fields). Each part gets
+            only its own
+        :returns: what was made, in the order of :attr:`bodies` and
+            :attr:`fields`
+        :raises TypeError: an argument none of them takes
+        :raises ValueError: a name that is not a body's (or a field's)
         """
-        chosen = None if bodies is None else set(bodies)
-        return [
-            body.terrain.enable_collision(into_mask, **kwargs)
+        unknown = set(kwargs) - self._BODY_COLLISION - self._FIELD_COLLISION
+        if unknown:
+            raise TypeError(f"enable_collision: unexpected arguments {sorted(unknown)}")
+        for kind, names, built in (
+            ("body", bodies, [b.name for b in self.bodies]),
+            ("field", fields, [look.name for look in self._field_looks]),
+        ):
+            missing = sorted(set(names or ()) - set(built))
+            if missing:
+                raise ValueError(f"no {kind} called {missing} (there is {built})")
+        chosen_bodies = None if bodies is None else set(bodies)
+        chosen_fields = None if fields is None else set(fields)
+        kwargs.setdefault("name", "terrain")
+        body_args = {
+            "max_distance": COLLISION_RANGE_BODIES_M,
+            **{k: v for k, v in kwargs.items() if k in self._BODY_COLLISION},
+        }
+        field_args = {
+            "max_distance": COLLISION_RANGE_FIELDS_M,
+            **{k: v for k, v in kwargs.items() if k in self._FIELD_COLLISION},
+        }
+        made_bodies = [
+            body.terrain.enable_collision(into_mask, **body_args)
             for body in self.bodies
-            if chosen is None or body.name in chosen
+            if chosen_bodies is None or body.name in chosen_bodies
         ]
+        made_fields = [
+            built.enable_collision(into_mask, **field_args)
+            for look, built in zip(self._field_looks, self.fields)
+            if chosen_fields is None or look.name in chosen_fields
+        ]
+        return Collisions(made_bodies, made_fields)
+
+    _BODY_COLLISION = frozenset({"name", "owner_tag", "max_distance", "include_ocean"})
+    _FIELD_COLLISION = frozenset({"name", "owner_tag", "max_distance", "samples"})
 
     def disable_collision(self) -> None:
-        """Remove every body's collision node."""
+        """Remove every body's and every field's collision node."""
         for body in self.bodies:
             body.terrain.disable_collision()
+        for built in self.fields:
+            built.disable_collision()
 
     # ── per frame ───────────────────────────────────────────────────────────
 

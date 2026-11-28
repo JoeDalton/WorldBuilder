@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.2] (unreleased)
 
 ### Added
+- All terrain is solid from the start: `World(collision_mask=...)` and `load_world(collision_mask=...)` (default: all bits; None = nothing solid) give every body's ground and sea and every field's rocks a `"terrain"` collision node, 10 km (bodies) and 20 km (fields) around the camera; the game enables nothing. A missing native library raises `NativeCollisionError` when the world is built. `World.enable_collision(into_mask, bodies=None, fields=None, **kw)` now only changes that (and covers fields; returns `Collisions(bodies, fields)`), `disable_collision` covers the fields #65
 - `GameWorld.views` (and `World.update(views=...)`): more cameras, a rear-view mirror's, that the asteroid fields and rings are drawn for #65
 - `load_world(..., keep_outs={field name: [KeepOut, ...]})` adds a level's room to the file's fields, and `load_world` takes a `WorldSpec` as well as a path (no temporary file round trip); `world_file.with_keep_outs(spec, keep_outs)` #65
 

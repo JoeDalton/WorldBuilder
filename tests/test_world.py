@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from panda3d.core import Camera, LPoint3f, NodePath, Shader, ShaderAttrib
+from panda3d.core import BitMask32, Camera, LPoint3f, NodePath, Shader, ShaderAttrib
 
 from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
@@ -38,6 +38,7 @@ from world_builder.terrain.chart import TangentFrame
 from world_builder.terrain.planet import PLANET_HEIGHT_BOUNDS
 from world_builder.terrain.quadtree import UNKNOWN_BOUNDS
 from world_builder.world import (
+    COLLISION_RANGE_FIELDS_M,
     LIGHT_STAGES,
     Body,
     BodyLook,
@@ -212,6 +213,7 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world._sun_color = np.array([2.0, 2.0, 2.0])
     world._space_ambient = np.array([0.1, 0.2, 0.3])
     world.fields = []
+    world._field_looks = []
     world._field_looks = []
     world.light_period = 1
     world._light_age = 0
@@ -610,10 +612,64 @@ def test_collision_for_the_chosen_bodies():
     planet, moon = _body(), _body("moon", MOON)
     world = _world(planet, moon)
     world.enable_collision("mask", bodies=["planet"], max_distance=5.0)
-    planet.terrain.enable_collision.assert_called_once_with("mask", max_distance=5.0)
+    planet.terrain.enable_collision.assert_called_once_with(
+        "mask", name="terrain", max_distance=5.0
+    )
     moon.terrain.enable_collision.assert_not_called()
     world.enable_collision("mask")
     moon.terrain.enable_collision.assert_called_once()
+
+
+def _field_stub(name):
+    field = MagicMock()
+    field.enable_collision.return_value = f"{name} node"
+    return field
+
+
+def test_collision_covers_the_fields_with_one_name():
+    planet = _body()
+    world = _world(planet)
+    ring, cube = _field_stub("ring"), _field_stub("cube")
+    world.fields = [ring, cube]
+    world._field_looks = [SimpleNamespace(name="ring"), SimpleNamespace(name="cube")]
+
+    made = world.enable_collision(
+        "mask", name="terrain", max_distance=7.0, include_ocean=False, samples=3
+    )
+
+    planet.terrain.enable_collision.assert_called_once_with(
+        "mask", name="terrain", max_distance=7.0, include_ocean=False
+    )
+    for field in (ring, cube):
+        field.enable_collision.assert_called_once_with(
+            "mask", name="terrain", max_distance=7.0, samples=3
+        )
+    assert made.fields == ["ring node", "cube node"]
+    assert made.bodies == [planet.terrain.enable_collision.return_value]
+
+    ring.enable_collision.reset_mock()
+    cube.enable_collision.reset_mock()
+    world.enable_collision("mask", bodies=(), fields=["cube"])
+    ring.enable_collision.assert_not_called()
+    cube.enable_collision.assert_called_once_with(
+        "mask", name="terrain", max_distance=COLLISION_RANGE_FIELDS_M
+    )
+    world.enable_collision("mask", fields=())
+    assert cube.enable_collision.call_count == 1
+
+    world.disable_collision()
+    ring.disable_collision.assert_called_once()
+    planet.terrain.disable_collision.assert_called_once()
+
+
+def test_collision_refuses_what_it_does_not_know():
+    world = _world(_body())
+    with pytest.raises(ValueError, match="no field called.*nope"):
+        world.enable_collision("mask", fields=["nope"])
+    with pytest.raises(ValueError, match="no body called.*nope"):
+        world.enable_collision("mask", bodies=["nope"])
+    with pytest.raises(TypeError, match="speed"):
+        world.enable_collision("mask", speed=1)
 
 
 def test_body_by_name():
@@ -866,6 +922,78 @@ def test_extra_views_see_the_fields_too(window):
     finally:
         mirror.remove_node()
         world.destroy()
+
+
+def test_every_terrain_is_solid_from_the_start(window):
+    """Bodies' ground and fields' rocks get a "terrain" collision node with
+    the world's mask, no call needed; None leaves them out."""
+    native = pytest.importorskip("world_builder.terrain.native")
+    mask = BitMask32.bit(3)
+
+    def build(**args):
+        return World(
+            window,
+            bodies=[BodyLook("moon", MOON, mass=7.35e22)],
+            sun=SunLook(),
+            settings=WorldSettings.preset("low"),
+            backend="inline",
+            fields=[FieldLook("ring", RING, position=(1e7, 0.0, 0.0))],
+            **args,
+        )
+
+    try:
+        world = build(collision_mask=mask)
+    except native.NativeCollisionError as error:
+        pytest.skip(f"No native collision: {error}")
+    try:
+        ground = world.body("moon").terrain.collision
+        rocks = world.field("ring").collision
+        assert ground is not None and rocks is not None
+        assert ground.node.name == rocks.node.name == "terrain"
+        assert ground.node.node().get_into_collide_mask() == mask
+        assert rocks.node.node().get_into_collide_mask() == mask
+        world.disable_collision()
+        assert world.body("moon").terrain.collision is None
+        assert world.field("ring").collision is None
+    finally:
+        world.destroy()
+    world = build(collision_mask=None)
+    try:
+        assert world.body("moon").terrain.collision is None
+        assert world.field("ring").collision is None
+    finally:
+        world.destroy()
+
+
+def test_a_missing_native_library_stops_the_load(window, monkeypatch):
+    """Solid terrain is not optional: no library, no world (and nothing left
+    behind)."""
+    from world_builder.terrain.terrain import Terrain
+
+    native = pytest.importorskip("world_builder.terrain.native")
+
+    def missing(*args, **kwargs):
+        raise native.NativeCollisionError("not built")
+
+    monkeypatch.setattr(Terrain, "enable_collision", missing)
+    with pytest.raises(native.NativeCollisionError):
+        World(
+            window,
+            bodies=[BodyLook("moon", MOON, mass=7.35e22)],
+            sun=SunLook(),
+            settings=WorldSettings.preset("low"),
+            backend="inline",
+        )
+    # ... unless nothing is to be solid
+    world = World(
+        window,
+        bodies=[BodyLook("moon", MOON, mass=7.35e22)],
+        sun=SunLook(),
+        settings=WorldSettings.preset("low"),
+        backend="inline",
+        collision_mask=None,
+    )
+    world.destroy()
 
 
 def test_a_ring_in_open_space(window):
