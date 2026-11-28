@@ -218,6 +218,93 @@ all behind), the cirrus decks are not covered. `clouds.cover.translucent_bubble`
 is a reference surface (`scripts/demo_world.py --bubble DISTANCE RADIUS`,
 `--no-cover` to compare).
 
+### Example: a smoke billboard behind the clouds
+
+A game's puff of smoke, a camera-facing card drawn with straight alpha. The
+world is loaded first: that puts `cloud_cover.glsl` on Panda's model path,
+where the fragment shader's `#pragma include` finds it.
+
+```python
+from panda3d.core import CardMaker, Shader, TransparencyAttrib
+from world_builder import load_world
+from world_builder.clouds.cover import no_cover
+
+game_world = load_world(app, "my_world.yaml")
+world = game_world.world
+
+maker = CardMaker("smoke")
+maker.set_frame(-50.0, 50.0, -50.0, 50.0)      # 100 m across
+smoke = app.render.attach_new_node(maker.generate())
+smoke.set_billboard_point_eye()
+smoke.set_transparency(TransparencyAttrib.M_alpha)
+smoke.set_depth_write(False)                    # translucent: tests depth, writes none
+smoke.set_bin("fixed", 60)                      # after the clouds' bin
+smoke.set_light_off()
+smoke.set_shader(Shader.load(Shader.SL_GLSL, vertex="smoke.vert", fragment="smoke.frag"))
+no_cover(smoke)                                 # inputs with no cloud: it draws untracked too
+world.track_translucent(smoke)                  # the clouds' inputs, set by every update
+
+world.cover_off_in(mirror_camera)               # a second view (a mirror): no cover there
+
+# Every frame, as for anything in the world: the camera stays at render's
+# origin, so the smoke is placed relative to it, then the world is updated.
+smoke.set_pos(*(smoke_world - camera_world))
+game_world.update(camera_world)
+
+# When the smoke is gone
+world.untrack_translucent(smoke)
+smoke.remove_node()
+```
+
+`smoke.vert` hands the fragment its distance from the camera (view space is
+metres from the eye):
+
+```glsl
+#version 330
+in vec4 p3d_Vertex;
+in vec2 p3d_MultiTexCoord0;
+uniform mat4 p3d_ModelViewProjectionMatrix;
+uniform mat4 p3d_ModelViewMatrix;
+out vec2 vUv;
+out float vDistance;
+void main() {
+    vUv = p3d_MultiTexCoord0;
+    vDistance = length((p3d_ModelViewMatrix * p3d_Vertex).xyz);
+    gl_Position = p3d_ModelViewProjectionMatrix * p3d_Vertex;
+}
+```
+
+`smoke.frag` fades by the cloud in front of each fragment:
+
+```glsl
+#version 330
+#pragma include "cloud_cover.glsl"
+in vec2 vUv;
+in float vDistance;
+out vec4 fragColor;
+void main() {
+    float puff = 1.0 - smoothstep(0.2, 0.5, length(vUv - 0.5));   // a soft disc
+    float alpha = 0.8 * puff;
+    alpha *= 1.0 - cloudCoverBefore(gl_FragCoord.xy, vDistance);
+    fragColor = vec4(vec3(0.35), alpha);
+}
+```
+
+What to scale depends on the blend:
+
+| Blend | Scale by `1 - cover` |
+|---|---|
+| straight alpha (`M_alpha`: smoke, a shield) | the alpha |
+| additive weighted by alpha (`INCOMING_ALPHA, ONE`: fire) | the alpha |
+| additive (`ONE, ONE`: a laser's glow) | the colour |
+| premultiplied (`ONE, ONE_MINUS_INCOMING_ALPHA`) | the colour and the alpha |
+
+The fragment's distance must be the one from the camera to that fragment in
+metres: from the view-space position as here, or `length(worldPos - eye)` with
+the eye from `p3d_ViewMatrixInverse[3]` (both in render's frame, whose units are
+metres). A node made of many particles (one geometry, animated in its vertex
+shader) is tracked once, as one node.
+
 ## Other members
 
 - **`far_distance(origin_world)`**: how far the view reaches, over every body
