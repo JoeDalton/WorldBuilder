@@ -193,8 +193,30 @@ fills up for its garbage collection to empty: about 1 ms a frame in low
 flight (see [performance](performance.md) §19). The library sets no PRC of
 its own; `scripts/tools.window_config` does.
 
-A game's own translucent volumes, such as shield bubbles, need nothing: one
-camera draws them once.
+A game's own translucent volumes, such as shield bubbles, are drawn once by
+the one camera. The clouds write no depth, though, so a volume that writes none
+either (drawn after them) would be laid over a cloud in front of it:
+**`track_translucent(node)`** gives it the clouds composited each frame, and
+its shader fades itself by them with `cloud_cover.glsl`'s
+`cloudCoverBefore(gl_FragCoord.xy, distance)` (the opacity of the cloud between
+the camera and the fragment, `distance` metres away):
+
+```glsl
+#pragma include "cloud_cover.glsl"   // on Panda's model path once a World is built
+...
+alpha *= 1.0 - cloudCoverBefore(gl_FragCoord.xy, length(viewPos));
+```
+
+A dense cloud in front hides it, a thin one lets it through, one behind stays
+behind. The clouds are those of the body the camera is nearest. A node whose
+shader includes the file but no world tracks gets its inputs with no cloud from
+`clouds.cover.no_cover(node)` (`untrack_translucent` leaves those). The clouds are
+marched for the main view: `cover_off_in(camera)` switches the cover off in
+another one (a rear-view mirror; the seas' reflections are done for you).
+Limits: one distance per pixel (a volume inside a cloud is all in front of it or
+all behind), the cirrus decks are not covered. `clouds.cover.translucent_bubble`
+is a reference surface (`scripts/demo_world.py --bubble DISTANCE RADIUS`,
+`--no-cover` to compare).
 
 ## Other members
 

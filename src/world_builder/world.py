@@ -85,6 +85,8 @@ from world_builder.asteroids.haze import ring_depth
 from world_builder.asteroids.spec import Annulus, FieldSpec, KeepOut
 from world_builder.atmosphere import AtmosphereParams, Atmospheres, in_shadow
 from world_builder.clouds.cloud import CloudType
+from world_builder.clouds.cover import TAG as COVER_TAG
+from world_builder.clouds.cover import CloudCover
 from world_builder.clouds.genera import GeneraSpec
 from world_builder.clouds.light_volume import CloudLightVolumes
 from world_builder.clouds.planet import PlanetClouds, check_layers
@@ -704,6 +706,9 @@ class World:
         self.light_scale = float(light_scale)
         #: The game's models lit where they are (:meth:`track_light`)
         self.tracked = TrackedLights(render)
+        #: The game's translucent surfaces and the clouds in front of them
+        #: (:meth:`track_translucent`)
+        self.cover = CloudCover()
         #: The model shader's inputs in open space (no body)
         self.space_models = self._model_lighting(0.9, None, None, None, light_scale)
         # The sky reflected in the models (ModelSettings' PBR_SKY): the
@@ -1101,6 +1106,30 @@ class World:
         """Back to the world's lights (the light at the camera)."""
         self.tracked.untrack(node)
 
+    def track_translucent(self, node: NodePath) -> None:
+        """Let a game's translucent surface (one that writes no depth and is
+        drawn after the clouds: a shield bubble) be hidden by the clouds in
+        front of it: its shader includes ``cloud_cover.glsl`` (on Panda's
+        model path from now) and fades itself by ``cloudCoverBefore``, whose
+        inputs every :meth:`update` sets on *node*: the clouds composited
+        that frame, of the body the camera is nearest (see
+        :mod:`world_builder.clouds.cover`).
+
+        :param node: the surface (its children read the same inputs)
+        """
+        self.cover.track(node)
+
+    def untrack_translucent(self, node: NodePath) -> None:
+        """Take the clouds' inputs off a node :meth:`track_translucent` gave
+        them to."""
+        self.cover.untrack(node)
+
+    def cover_off_in(self, camera: NodePath) -> None:
+        """No cloud cover in another view than the main one (a rear-view
+        mirror's camera): the clouds are marched for the main view's pixels
+        alone (:meth:`CloudCover.off_in`)."""
+        self.cover.off_in(camera)
+
     # ── changes ─────────────────────────────────────────────────────────────
 
     def set_sun(self, direction: ArrayLike) -> None:
@@ -1323,6 +1352,15 @@ class World:
                     body.cloud_maps.update(camera, self._sun, steps)
                 if body.cloud_light is not None:
                     body.cloud_light.update(camera, self._sun)
+        if self.cover.nodes:
+            self.cover.update(self._cover_inputs(camera))
+            # The seas' reflections draw the surfaces with their own camera
+            # (rebuilt with the sea's settings): no cover there
+            for body in self.bodies:
+                if body.ocean is not None:
+                    refl = body.ocean.refl_cam
+                    if refl.node().get_tag_state_key() != COVER_TAG:
+                        self.cover.off_in(refl)
         for body in self.bodies:
             if body.ocean is not None:
                 body.ocean.update(camera)
@@ -1419,6 +1457,18 @@ class World:
         for i, (body, up) in enumerate(zip(seas, ups), start=1 + count):
             self._light_ocean(body, up, direct[i], ambient[i])
 
+    def _cover_inputs(self, camera: np.ndarray):
+        """The clouds a game's translucent surfaces read: those of the body
+        with clouds the camera is nearest (by sea level), as composited this
+        frame; None without."""
+        cloudy = [body for body in self.bodies if body.clouds is not None]
+        if not cloudy:
+            return None
+        body = min(
+            cloudy, key=lambda b: float(np.linalg.norm(camera - b.position)) - b.radius
+        )
+        return body.clouds.cover_inputs()
+
     def _shade_models(self, camera_render: np.ndarray, tracked: np.ndarray) -> None:
         """The tracked nodes drawn by the model shader: each given the inputs
         of the body nearest it (open space's without a body), this frame's.
@@ -1474,6 +1524,7 @@ class World:
     def destroy(self) -> None:
         """Remove every part and the lights, and stop the workers."""
         self.tracked.clear()
+        self.cover.clear()
         self.space_models.destroy()
         if self.casters is not None:
             self.casters.destroy()

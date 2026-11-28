@@ -19,6 +19,7 @@ from world_builder.asteroids.distributions import Distribution
 from world_builder.asteroids.field import AsteroidField
 from world_builder.asteroids.spec import Annulus, Density, FieldSpec, ShapeSpec
 from world_builder.atmosphere import AtmosphereParams
+from world_builder.clouds.cover import CloudCover
 from world_builder.clouds.genera import HIGH_SLAB
 from world_builder.clouds.planet import PlanetClouds
 from world_builder.depth import (
@@ -215,6 +216,7 @@ def _world(*bodies, camera_render=(0.0, 0.0, 0.0), sky=True):
     world._space_ambient = np.array([0.1, 0.2, 0.3])
     world.fields = []
     world._field_looks = []
+    world.cover = CloudCover()
     world._field_looks = []
     world.light_period = 1
     world._light_age = 0
@@ -710,6 +712,26 @@ def test_altitude_and_up_in_open_space():
     world = _world()
     assert world.altitude_at([1e6, 0.0, 0.0]) == np.inf
     assert world.up_at([1e6, 0.0, 0.0]) is None
+
+
+def test_translucent_surfaces_read_the_nearest_cloudy_bodys_clouds():
+    planet = _body()
+    moon = _body("moon", MOON, position=(1e8, 0.0, 0.0))
+    airless = _body("rock", MOON, position=(2e8, 0.0, 0.0))
+    planet.clouds = MagicMock()
+    moon.clouds = MagicMock()
+    world = _world(planet, moon, airless)
+    near_moon = np.array([1e8, 0.0, 3e5])
+    assert world._cover_inputs(near_moon) is moon.clouds.cover_inputs.return_value
+    # The nearest body has no clouds: the nearest that has
+    near_rock = np.array([2e8, 0.0, 3e5])
+    assert world._cover_inputs(near_rock) is moon.clouds.cover_inputs.return_value
+    assert _world()._cover_inputs(near_rock) is None
+    node = NodePath("shield")
+    world.track_translucent(node)
+    assert world.cover.nodes == [node]
+    world.untrack_translucent(node)
+    assert world.cover.nodes == []
 
 
 def test_body_by_name():
